@@ -39,11 +39,49 @@ struct BackdropU { float4 content; float2 canvas; float angle; int count; int ki
 
 constant float kBayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
 
+static float bayer2(float2 a) { a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
+static float bayer4(float2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+static float bayer8(float2 a) { return bayer4(0.5 * a) * 0.25 + bayer2(a); }
+static float fieldHash(int x, int y, int z) {
+    uint h = uint(x) * 0x27d4eb2du ^ uint(y) * 0x165667b1u ^ uint(z) * 0x1b873593u;
+    h = (h ^ (h >> 15)) * 0x85ebca6bu;
+    h = (h ^ (h >> 13)) * 0xc2b2ae35u;
+    return float(h ^ (h >> 16)) * (1.0 / 4294967296.0);
+}
+static float fieldNoise(float3 p) {
+    int3 i = int3(floor(p));
+    float3 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    float a = mix(mix(fieldHash(i.x, i.y, i.z), fieldHash(i.x + 1, i.y, i.z), f.x),
+                  mix(fieldHash(i.x, i.y + 1, i.z), fieldHash(i.x + 1, i.y + 1, i.z), f.x), f.y);
+    float b = mix(mix(fieldHash(i.x, i.y, i.z + 1), fieldHash(i.x + 1, i.y, i.z + 1), f.x),
+                  mix(fieldHash(i.x, i.y + 1, i.z + 1), fieldHash(i.x + 1, i.y + 1, i.z + 1), f.x), f.y);
+    return mix(a, b, f.z);
+}
+
 fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)]], constant float4 *cols [[buffer(1)]],
                            texture2d<float> wall [[texture(0)]]) {
     float2 uv = in.px / u.canvas;
     float3 c = cols[0].rgb;
-    if (u.kind == 3) {
+    if (u.kind == 6) {
+        float cell = max(1.0, u.cell);
+        float2 grid = floor(in.px / cell);
+        float2 p = (grid * cell) / u.canvas;
+        p.x *= u.canvas.x / u.canvas.y;
+        float v = u.density + 0.20 * sin(dot(p, normalize(float2(0.55, 1.0))) * 5.2 - u.time * 0.11)
+                            + 0.12 * sin(dot(p, normalize(float2(1.0, 0.28))) * 8.4 + u.time * 0.07);
+        c = v > bayer8(grid) ? cols[1].rgb : cols[0].rgb;
+    } else if (u.kind == 7) {
+        float pitch = max(3.0, u.cell);
+        float2 grid = floor(in.px / pitch), local = fract(in.px / pitch);
+        float step = pitch / u.canvas.y;
+        float nx = grid.x * step * 1.4 - u.time * 0.09, ny = grid.y * step * 2.6;
+        float warp = fieldNoise(float3(nx * 0.6 + 11.0, ny * 0.6, u.time * 0.05));
+        float value = 0.65 * fieldNoise(float3(nx + warp * 1.2, ny, u.time * 0.12))
+                    + 0.35 * fieldNoise(float3(nx * 2.3 + 7.0, ny * 2.3, u.time * 0.2 + 3.0));
+        bool dash = local.x >= 0.14 && local.x < 0.86 && local.y >= 0.30 && local.y < 0.70;
+        bool hatch = int(grid.x - grid.y) % 3 != 0;
+        c = dash && hatch && value >= 0.5 ? cols[1].rgb : cols[0].rgb;
+    } else if (u.kind == 3) {
         // Two flat tones ordered-dithered under a slow diagonal wave. Display-rate phase; export always sends 0.
         float cell = max(2.0, u.cell);
         float2 g = floor(in.px / cell);
