@@ -30,8 +30,9 @@ public struct OffsetFrameSource: FrameSource {
 
 private let idCounter = OSAllocatedUnfairLock(initialState: UInt64(0))
 
-/// Sequential reader with a small LRU. Forward playback never seeks; backward or far jumps restart the reader 0.5 s early
-/// (master keyframe interval <= 0.5 s). Blocking decode calls run on the actor's executor, never on the main thread.
+/// Sequential reader with a small LRU. Screen recordings are variable frame rate (ScreenCaptureKit only emits frames when pixels
+/// change), so a "held" frame can be many seconds older than `t`. Forward playback never seeks; backward / far jumps restart the
+/// reader 1 s early and, if no frame <= t is found, rewind further (4x each time) until the held frame is found.
 public actor ReaderFrameSource: FrameSource {
     private final class Entry {
         let id: UInt64, pts: Double, pb: CVPixelBuffer
@@ -41,7 +42,6 @@ public actor ReaderFrameSource: FrameSource {
     private let asset: AVURLAsset
     private let track: AVAssetTrack
     private let cache: CVMetalTextureCache
-    private let frameDur: Double
     private var reader: AVAssetReader?
     private var out: AVAssetReaderTrackOutput?
     private var cur: Entry?, peek: Entry?
@@ -50,17 +50,30 @@ public actor ReaderFrameSource: FrameSource {
     public init(url: URL, device: MTLDevice) async throws {
         let a = AVURLAsset(url: url)
         guard let tr = try await a.loadTracks(withMediaType: .video).first else { throw FrameSourceError.noTrack }
-        let fr = try await tr.load(.nominalFrameRate)
         var c: CVMetalTextureCache?
         CVMetalTextureCacheCreate(nil, nil, device, nil, &c)
         guard let c else { throw FrameSourceError.read("texture cache") }
-        asset = a; track = tr; cache = c; frameDur = 1 / Double(max(fr, 1))
+        asset = a; track = tr; cache = c
     }
 
     public func frame(atSource t0: Double) async throws -> SourceFrame {
         let t = max(t0, 0)
         if let e = lru.last(where: { $0.pts <= t && t < $0.end }) { return try make(e) }
-        if reader == nil || cur == nil || t < cur!.pts || t > cur!.pts + 2.0 { try restart(at: t) }
+        if reader == nil || cur == nil || t < cur!.pts || t - cur!.pts > 8.0 { try restart(at: max(0, t - 1.0)) }
+        var back = 1.0
+        for _ in 0..<4 {
+            advance(to: t)
+            if cur != nil { break }
+            if t - back <= 0 { break }                          // already started at 0: nothing earlier exists
+            back *= 4
+            try restart(at: max(0, t - back))
+        }
+        guard let c = cur ?? peek else { throw FrameSourceError.read("no frames") }
+        return try make(c)
+    }
+
+    /// Consumes frames while the next one is still <= t, then pins `cur.end` to the next frame's pts (or infinity at EOF).
+    private func advance(to t: Double) {
         while true {
             if peek == nil { peek = readNext() }
             guard let p = peek, p.pts <= t else { break }
@@ -68,14 +81,11 @@ public actor ReaderFrameSource: FrameSource {
             cur = p; peek = nil
             lru.append(p); if lru.count > 8 { lru.removeFirst() }
         }
-        guard let c = cur ?? peek else { throw FrameSourceError.read("no frames") }
-        c.end = peek.map { $0 === c ? .infinity : $0.pts } ?? .infinity
-        return try make(c)
+        if let c = cur { c.end = peek?.pts ?? .infinity }
     }
 
-    private func restart(at t: Double) throws {
+    private func restart(at start: Double) throws {
         reader?.cancelReading()
-        for e in lru where e.end == .infinity { e.end = e.pts + frameDur * 1.5 }
         let r = try AVAssetReader(asset: asset)
         let o = AVAssetReaderTrackOutput(track: track, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -83,7 +93,7 @@ public actor ReaderFrameSource: FrameSource {
             kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()])
         o.alwaysCopiesSampleData = false
         r.add(o)
-        r.timeRange = CMTimeRange(start: CMTime(seconds: max(0, t - 0.5), preferredTimescale: 600), duration: .positiveInfinity)
+        r.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600), duration: .positiveInfinity)
         guard r.startReading() else { throw FrameSourceError.read(r.error?.localizedDescription ?? "startReading failed") }
         reader = r; out = o; cur = nil; peek = nil
     }
