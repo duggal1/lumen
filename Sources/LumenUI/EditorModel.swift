@@ -47,6 +47,8 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     private var revision = 1
     private var replanTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
+    private var mixTask: Task<Void, Never>?
+    private var playbackTask: Task<Void, Never>?
     private let player = PreviewAudioPlayer()
 
     init(session: ProjectSession, renderer: Renderer, timeline: Timeline) {
@@ -106,22 +108,48 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     }
 
     private func remix() {
+        let resume = clock.playing
+        if resume { pause() }
+        playbackTask?.cancel()
+        let previous = mixTask
+        previous?.cancel()
         let tl = timeline, mixer = session.mixer, player = player
-        Task.detached(priority: .utility) { player.load(mixer.mix(tl)) }
+        mixTask = Task { [weak self] in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            let audio = await Task.detached(priority: .userInitiated) { mixer.mix(tl) }.value
+            guard !Task.isCancelled else { return }
+            await Task.detached(priority: .userInitiated) { player.load(audio) }.value
+            guard !Task.isCancelled else { return }
+            if resume { self?.play() }
+        }
     }
 
     // MARK: Transport
 
     func seek(_ t: Double) {
+        let wasPlaying = clock.playing
+        playbackTask?.cancel()
         let c = min(max(t, 0), duration); playhead = c; clock.seek(c)
-        if clock.playing { player.play(from: c, atHostSeconds: HostClock.now() + 0.03) }
+        if wasPlaying { play() }
     }
     func play() {
-        let h = HostClock.now() + 0.03, t = playhead >= duration - 0.02 ? 0 : playhead
-        clock.start(from: t, at: h, dur: duration); player.play(from: t, atHostSeconds: h)
+        playbackTask?.cancel()
+        let ready = mixTask
+        playbackTask = Task { [weak self] in
+            await ready?.value
+            guard !Task.isCancelled, let self else { return }
+            let t = self.playhead >= self.duration - 0.02 ? 0 : self.playhead
+            let h = self.player.play(from: t, atHostSeconds: HostClock.now() + 0.03)
+            self.clock.start(from: t, at: h, dur: self.duration)
+        }
     }
-    func pause() { clock.pause(at: HostClock.now()); player.stop(); playhead = clock.time(at: HostClock.now()) }
+    func pause() {
+        playbackTask?.cancel()
+        clock.pause(at: HostClock.now()); player.stop(); playhead = clock.time(at: HostClock.now())
+    }
     func togglePlay() { clock.playing ? pause() : play() }
+
     func tick(_ t: Double) { playhead = t; if clock.playing, t >= duration - 0.001 { pause() } }
 
     // MARK: Zoom segments
