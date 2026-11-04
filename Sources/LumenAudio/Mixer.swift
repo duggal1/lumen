@@ -152,10 +152,9 @@ public final class AudioMixer: @unchecked Sendable {
             hasProgram = true
         }
 
-        var rng = SplitMix64(seed: 7), last: [Int: Int] = [:]
         for cue in d.cues {
-            let (buf, jit) = bank.render(cue.kind, rng: &rng, last: &last)
-            let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + jit) / 20)), s0 = Int(cue.t * fs)
+            let (buf, gain) = bank.render(cue.kind, clickTone: a.clickTone)
+            let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + gain) / 20)), s0 = Int(cue.t * fs)
             for (k, v) in buf.enumerated() where s0 + k >= 0 && s0 + k < n {
                 L[s0 + k] += v * amp; R[s0 + k] += v * amp
             }
