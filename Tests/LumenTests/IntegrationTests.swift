@@ -116,7 +116,7 @@ import LumenExport
     reader.add(outputTrack)
     #expect(reader.startReading())
     var frameCount = 0
-    while outputTrack.copyNextSampleBuffer() != nil { frameCount += 1 }
+    while let sample = outputTrack.copyNextSampleBuffer() { frameCount += CMSampleBufferGetNumSamples(sample) }
     #expect(frameCount == 30)
     let geometry = Geometry(canvas: SIMD2(180, 320), src: SIMD2(320, 180), style: timeline.style)
     #expect(abs(geometry.content.z / geometry.content.w - 16.0 / 9) < 0.03)
