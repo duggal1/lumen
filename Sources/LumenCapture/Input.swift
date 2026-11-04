@@ -50,6 +50,7 @@ extension StockCursor {
         guard let c = NSCursor.currentSystem, let h = Self.hash(c) else { return 0 }
         if let s = stock[h] { return s }
         if let s = custom[h] { return s }
+        guard customs.count < 24 else { return 0 }
         let id = UInt16(1000 + customs.count)
         custom[h] = id
         if let tiff = c.image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) {
@@ -82,6 +83,8 @@ public final class InputRecorder: @unchecked Sendable {
     private let shape = OSAllocatedUnfairLock<UInt16>(initialState: 0)
     private let loop = OSAllocatedUnfairLock<CFRunLoop?>(uncheckedState: nil)
     private let axFrames = OSAllocatedUnfairLock<[AXFrame]>(initialState: [])
+    private let axTrusted = OSAllocatedUnfairLock(initialState: false)
+    private let axQ = DispatchQueue(label: "lumen.ax", qos: .utility)
     private var tap: CFMachPort?
     private var fh: FileHandle?
     private var timer: DispatchSourceTimer?
@@ -97,6 +100,7 @@ public final class InputRecorder: @unchecked Sendable {
         FileManager.default.createFile(atPath: url.path, contents: EventCodec.header())
         fh = try FileHandle(forWritingTo: url); try fh?.seekToEnd()
         running.withLock { $0 = true }
+        axTrusted.withLock { $0 = AXIsProcessTrusted() }
         let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp,
                                     .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel, .keyDown, .keyUp, .flagsChanged]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << CGEventMask($1.rawValue)) }
@@ -139,6 +143,7 @@ public final class InputRecorder: @unchecked Sendable {
         loop.withLock { if let l = $0 { CFRunLoopStop(l) } }
         timer?.cancel()
         writeQ.sync { flush(); try? fh?.close() }
+        axQ.sync { }
         catalog.writeJSON(to: url.deletingLastPathComponent().appendingPathComponent("cursors.json"))
         if let d = try? JSONEncoder().encode(axFrames.withLock { $0 }) { try? d.write(to: axURL) }
     }
@@ -149,11 +154,18 @@ public final class InputRecorder: @unchecked Sendable {
         if !b.isEmpty { try? fh?.write(contentsOf: Data(b)) }
     }
 
+    private static func hostTime(_ ts: UInt64) -> Double {
+        let now = HostClock.now()
+        let ticks = HostClock.seconds(machTicks: ts), nanos = Double(ts) / 1e9
+        let best = abs(ticks - now) <= abs(nanos - now) ? ticks : nanos
+        return abs(best - now) < 1.0 ? best : now
+    }
+
     fileprivate func handle(_ type: CGEventType, _ e: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }; return
         }
-        var ev = InputEvent(t: clock.hostSeconds(eventTimestamp: e.timestamp))
+        var ev = InputEvent(t: Self.hostTime(e.timestamp))
         let loc = e.location                                   // Quartz global space: already top-left origin
         ev.x = Float((loc.x - origin.x) * scale); ev.y = Float((loc.y - origin.y) * scale)
         ev.cursorShape = shape.withLock { $0 }
@@ -163,7 +175,7 @@ public final class InputRecorder: @unchecked Sendable {
         case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged: ev.kind = .drag
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             ev.kind = .down; ev.button = UInt8(truncatingIfNeeded: e.getIntegerValueField(.mouseEventButtonNumber))
-            ev.axFrameIndex = probeAX(loc)
+            ev.axFrameIndex = reserveAX(loc)
         case .leftMouseUp, .rightMouseUp, .otherMouseUp:
             ev.kind = .up; ev.button = UInt8(truncatingIfNeeded: e.getIntegerValueField(.mouseEventButtonNumber))
         case .scrollWheel: ev.kind = .scroll
@@ -178,19 +190,25 @@ public final class InputRecorder: @unchecked Sendable {
         ring.push(ev)
     }
 
-    /// Optional AX probe on mouse-down; 1-based index into ax.json, 0 = none.
-    private func probeAX(_ p: CGPoint) -> UInt32 {
-        guard AXIsProcessTrusted() else { return 0 }
+    private func reserveAX(_ p: CGPoint) -> UInt32 {
+        guard axTrusted.withLock({ $0 }) else { return 0 }
+        let idx = axFrames.withLock { $0.append(AXFrame(x: 0, y: 0, w: 0, h: 0)); return $0.count }
+        axQ.async { [self] in
+            if let f = queryAX(p) { axFrames.withLock { if idx >= 1, idx <= $0.count { $0[idx - 1] = f } } }
+        }
+        return UInt32(idx)
+    }
+
+    private func queryAX(_ p: CGPoint) -> AXFrame? {
         let sys = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(sys, 0.05)
+        AXUIElementSetMessagingTimeout(sys, 0.1)
         var el: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(sys, Float(p.x), Float(p.y), &el) == .success, let el else { return 0 }
+        guard AXUIElementCopyElementAtPosition(sys, Float(p.x), Float(p.y), &el) == .success, let el else { return nil }
         var pv: CFTypeRef?, sv: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pv) == .success,
-              AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sv) == .success else { return 0 }
+              AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sv) == .success else { return nil }
         var pos = CGPoint.zero, size = CGSize.zero
-        guard AXValueGetValue(pv as! AXValue, .cgPoint, &pos), AXValueGetValue(sv as! AXValue, .cgSize, &size) else { return 0 }
-        let f = AXFrame(x: (pos.x - origin.x) * scale, y: (pos.y - origin.y) * scale, w: size.width * scale, h: size.height * scale)
-        return axFrames.withLock { $0.append(f); return UInt32($0.count) }
+        guard AXValueGetValue(pv as! AXValue, .cgPoint, &pos), AXValueGetValue(sv as! AXValue, .cgSize, &size) else { return nil }
+        return AXFrame(x: (pos.x - origin.x) * scale, y: (pos.y - origin.y) * scale, w: size.width * scale, h: size.height * scale)
     }
 }
