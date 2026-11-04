@@ -7,7 +7,20 @@ git add .
 git commit -m "message"
 git push
 ```
-No matter how small the change. No batching. No "this doesn't need its own commit."
+**MANDATORY: Commit Every Single Change. No Exceptions.**
+
+You MUST create a separate Git commit for **EVERY SINGLE CHANGE** you make, no matter how small.
+
+- Every file modification gets its own commit.
+- Every function change gets its own commit.
+- Every individual code change gets its own commit.
+- Never batch multiple changes into a single commit.
+- Never skip a commit because a change seems trivial, insignificant, or too small to warrant one.
+- Never decide that a change doesn't deserve its own commit.
+
+**One change = One commit. Always.**
+
+This is an absolute requirement. No exceptions, no judgment calls, no batching. Commit immediately after each individual change before moving on to the next.
 
 Do NOT create a branch unless explicitly asked. Do NOT open a PR or merge unless explicitly asked. Branching and merging by default is slow — `main` is the default target, every time.
 
