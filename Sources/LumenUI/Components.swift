@@ -46,7 +46,9 @@ struct LIconButton: View {
     var body: some View {
         Button(action: action) { Image(systemName: icon).font(.system(size: 12)).frame(width: 28, height: 28)
             .background(RoundedRectangle(cornerRadius: 8).fill(hover ? Tok.controlHover : .clear)) }
-            .buttonStyle(.plain).foregroundStyle(Tok.text).onHover { hover = $0 }.pointerStyle(.link).accessibilityLabel(label)
+            .buttonStyle(.plain).foregroundStyle(Tok.text).onHover { hover = $0 }
+            .animation(hover ? Motion.hoverIn : Motion.hoverOut, value: hover)
+            .pointerStyle(.link).accessibilityLabel(label)
     }
 }
 

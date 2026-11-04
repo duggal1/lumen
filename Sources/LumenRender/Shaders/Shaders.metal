@@ -51,7 +51,7 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
         float t = (kBayer[iy * 4 + ix] + 0.5) / 16.0;
         float2 d = float2(cos(u.angle), sin(u.angle));
         float s = dot(uv - 0.5, d) / max(abs(d.x) + abs(d.y), 1e-3) + 0.5;
-        float wave = 0.5 + 0.5 * sin((s * 2.0 - u.time * 0.09) * 6.2831853);
+        float wave = 0.5 + 0.5 * sin((s * 3.0 - u.time * 0.35) * 6.2831853);
         float field = smoothstep(0.08, 0.92, wave);
         float ink = field * clamp(u.density * 1.8, 0.0, 1.0);
         c = ink > t ? cols[1].rgb : cols[0].rgb;
