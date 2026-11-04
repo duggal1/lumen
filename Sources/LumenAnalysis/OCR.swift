@@ -27,7 +27,7 @@ private final class OCRJob: @unchecked Sendable {
     private let patterns: [String]
     private let entropyThreshold: Double
     private let fps: Double
-    private let readerLock = OSAllocatedUnfairLock<AVAssetReader?>(uncheckedState: nil)
+    private let readerLock = OSAllocatedUnfairLock<ReaderHandle?>(uncheckedState: nil)
     private let cancelled = OSAllocatedUnfairLock(initialState: false)
 
     init(asset: AVAsset, track: AVAssetTrack, offset: Double, salt: UInt64, patterns: [String], entropyThreshold: Double, fps: Double) {
@@ -37,12 +37,13 @@ private final class OCRJob: @unchecked Sendable {
 
     func cancel() {
         cancelled.withLock { $0 = true }
-        readerLock.withLock { $0?.cancelReading() }
+        readerLock.withLock { $0?.reader.cancelReading() }
     }
 
     func run() throws -> [OCRDetection] {
         let reader = try AVAssetReader(asset: asset)
-        readerLock.withLock { $0 = reader }
+        let handle = ReaderHandle(reader)
+        readerLock.withLock { $0 = handle }
         if cancelled.withLock({ $0 }) { reader.cancelReading(); throw CancellationError() }
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
