@@ -116,10 +116,7 @@ public final class InputRecorder: @unchecked Sendable {
             CFRunLoopRun()
         }
         th.qualityOfService = .userInteractive; th.start()
-        let tm = DispatchSource.makeTimerSource(queue: writeQ)
-        tm.schedule(deadline: .now() + 0.25, repeating: 0.25)
-        tm.setEventHandler { @Sendable [self] in flush() }
-        tm.resume(); timer = tm
+        startFlushTimer()
         Task { @MainActor [weak self] in           // cursor shape poll @ 30 Hz
             while let self, self.running.withLock({ $0 }) {
                 let cursorShape = self.catalog.classify()
@@ -127,6 +124,13 @@ public final class InputRecorder: @unchecked Sendable {
                 try? await Task.sleep(for: .milliseconds(33))
             }
         }
+    }
+
+    func startFlushTimer() {
+        let tm = DispatchSource.makeTimerSource(queue: writeQ)
+        tm.schedule(deadline: .now() + 0.25, repeating: 0.25)
+        tm.setEventHandler { @Sendable [self] in flush() }
+        tm.resume(); timer = tm
     }
 
     @MainActor public func stop() {
