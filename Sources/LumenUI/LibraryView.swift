@@ -51,7 +51,7 @@ public struct LibraryRoot: View {
                 ("Screen Recording", Permissions.screen, { Permissions.requestScreen(); Permissions.open("ScreenCapture") }, "ScreenCapture"),
                 ("Input Monitoring", Permissions.input, { Permissions.requestInput(); Permissions.open("ListenEvent") }, "ListenEvent"),
                 ("Microphone", Permissions.mic, { Task { await Permissions.requestMedia() } }, "Microphone"),
-                ("Accessibility (optional)", Permissions.accessibility, { Permissions.requestAccessibility() }, "Accessibility"),
+                ("Accessibility (optional)", Permissions.accessibility, { Permissions.requestAccessibility(); Permissions.open("Accessibility") }, "Accessibility"),
             ]
             if rows.contains(where: { !$0.1 }) {
                 VStack(spacing: 0) {
