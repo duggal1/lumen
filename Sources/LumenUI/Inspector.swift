@@ -8,8 +8,6 @@ struct Inspector: View {
     let model: EditorModel
     enum Tab: String, CaseIterable { case look = "Look", cursor = "Cursor", camera = "Camera", audio = "Audio", webcam = "Webcam", export = "Export" }
     @State private var tab = Tab.look
-    @State private var valid: [ExportPreset] = []
-    @State private var presetName = "1080p60-h264"
     @State private var presets = EditorModel.loadPresets()
     @State private var newName = ""
 
@@ -27,7 +25,6 @@ struct Inspector: View {
                 }
             }.padding(20)
         }.frame(width: Metrics.inspector).background(Tok.bg)
-        .task { valid = await Task.detached { ExportCapabilityMatrix.shared.valid(ExportPresets.all) }.value }
     }
 
     private func icon(_ t: Tab) -> String {
@@ -205,22 +202,19 @@ struct Inspector: View {
 
     private var export: some View {
         let m = model
-        let opts = (valid.isEmpty ? [ExportPresets.parse("1080p60-h264")!] : valid).map { ($0.name, $0.name, "film") }
         return VStack(alignment: .leading, spacing: 16) {
-            Row(label: "Preset") { LDropdown(sel: $presetName, options: opts).frame(width: 170) }
             switch m.exportState {
             case .idle, .done:
                 LButton(title: "Export video", icon: "square.and.arrow.up", kind: .primary, height: 32) {
-                    if let p = ExportPresets.parse(presetName) { m.export(p) }
+                    m.exportVideo()
                 }
-                LButton(title: "Export GIF", icon: "photo.on.rectangle", height: 32) { m.export(ExportPresets.all[0], gif: true) }
                 if case .done(let u) = m.exportState { Text("Saved \(u.lastPathComponent)").font(AppType.caption).foregroundStyle(Tok.text2) }
             case .running(let p):
                 Text("\(Int(p * 100))%").font(AppType.metric).foregroundStyle(Tok.text)
                 LButton(title: "Cancel", kind: .quiet) { m.cancelExport() }
             case .failed(let why):
                 Text(why).font(AppType.caption).foregroundStyle(Tok.statusBad)
-                LButton(title: "Retry", kind: .secondary) { if let p = ExportPresets.parse(presetName) { m.export(p) } }
+                LButton(title: "Retry", kind: .secondary) { m.exportVideo() }
             }
             if let n = m.notice { Text(n).font(AppType.caption).foregroundStyle(Tok.text2) }
         }.card()

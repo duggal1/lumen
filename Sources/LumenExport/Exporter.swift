@@ -78,6 +78,9 @@ public enum Exporter {
         guard let d = tl.derived else { throw ExportError.noTimeline }
         let aspect = tl.style.canvas.ratio
         let (preset, notice) = ExportCapabilityMatrix.shared.resolve(p, aspect: aspect)
+        guard preset.height == p.height, ExportCapabilityMatrix.shared.supports(preset, aspect: aspect) else {
+            throw ExportError.writer("This Mac cannot encode the selected resolution. Choose another resolution.")
+        }
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
         let h = preset.height, w = preset.width(aspect: aspect), fps = preset.fps
         let total = max(Int(ceil(d.outputDuration * Double(fps) - 1e-8)), 1)

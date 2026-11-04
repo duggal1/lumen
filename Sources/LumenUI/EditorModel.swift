@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import os
 import LumenCore
 import LumenProject
@@ -192,16 +193,39 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         if p.runModal() == .OK, let u = p.url { edit { $0.audio.musicPath = u.path } }
     }
 
-    func export(_ preset: ExportPreset, gif: Bool = false) {
-        let p = NSSavePanel(); p.nameFieldStringValue = session.meta.name + (gif ? ".gif" : preset.codec == .prores ? ".mov" : ".mp4")
-        guard p.runModal() == .OK, let url = p.url else { return }
+    func exportVideo() {
+        let panel = NSSavePanel()
+        let rawName = session.meta.name
+        let name = rawName.lowercased().hasSuffix(".lumen") ? String(rawName.dropLast(6)) : rawName
+        panel.nameFieldStringValue = AppModel.displayName(name) + ".mp4"
+        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.allowsOtherFileTypes = false
+        panel.isExtensionHidden = false
+
+        let resolution = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 190, height: 26), pullsDown: false)
+        resolution.addItems(withTitles: ["1080p", "1440p (2K)", "2160p (4K)"])
+        resolution.selectItem(at: 0)
+        let label = NSTextField(labelWithString: "Resolution")
+        let accessory = NSStackView(views: [label, resolution])
+        accessory.orientation = .horizontal
+        accessory.alignment = .centerY
+        accessory.spacing = 12
+        panel.accessoryView = accessory
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let heights = [1080, 1440, 2160]
+        guard heights.indices.contains(resolution.indexOfSelectedItem), url.pathExtension.lowercased() == "mp4" else {
+            exportState = .failed("Choose an MP4 filename and resolution.")
+            return
+        }
+        let height = heights[resolution.indexOfSelectedItem]
+        let preset = ExportPreset(name: "\(height)p30-h264", codec: .h264, height: height, fps: 30)
         let tl = timeline, s = session
+        notice = nil
         exportState = .running(0); exportTask?.cancel()
         exportTask = Task { [weak self] in
             let report: @Sendable (ExportProgress) -> Void = { pr in Task { @MainActor in self?.exportState = .running(Double(pr.frame) / Double(pr.total)); if let n = pr.notice { self?.notice = n } } }
             do {
-                if gif { try await Exporter.gif(session: s, timeline: tl, to: url, progress: report) }
-                else { try await Exporter.run(session: s, timeline: tl, preset: preset, to: url, progress: report) }
+                try await Exporter.run(session: s, timeline: tl, preset: preset, to: url, progress: report)
                 self?.exportState = .done(url)
             } catch is CancellationError { self?.exportState = .idle } catch { self?.exportState = .failed("\(error)") }
         }
