@@ -59,7 +59,8 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         if !started {
             guard writer.startWriting() else { return }
             writer.startSession(atSourceTime: sb.presentationTimeStamp); started = true
-            first.withLock { $0 = sb.presentationTimeStamp.seconds }
+            let seconds = sb.presentationTimeStamp.seconds
+            first.withLock { $0 = seconds }
         }
         if input?.isReadyForMoreMediaData == true { input?.append(sb) }
     }
