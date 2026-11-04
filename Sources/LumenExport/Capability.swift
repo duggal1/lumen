@@ -179,7 +179,8 @@ public final class ExportCapabilityMatrix: @unchecked Sendable {
         let st = VTCompressionSessionEncodeFrame(s, imageBuffer: pb, presentationTimeStamp: .zero,
                                                  duration: CMTime(value: 1, timescale: CMTimeScale(fps)),
                                                  frameProperties: nil, infoFlagsOut: nil) { status, _, buf in
-            ok.withLock { $0 = status == noErr && buf != nil }
+            let succeeded = status == noErr && buf != nil
+            ok.withLock { $0 = succeeded }
         }
         VTCompressionSessionCompleteFrames(s, untilPresentationTimeStamp: .invalid)
         return st == noErr && ok.withLock { $0 }
