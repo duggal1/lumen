@@ -15,11 +15,11 @@
     </filter>
   </defs>
   <g filter="url(#arrowShadow)">
-    <g transform="translate(512 512) scale(3.6) translate(-52 -72)">
+    <g transform="translate(512 512) scale(5.4) translate(-52 -72)">
       <use href="#arrow" fill="#000" stroke="#000"/>
     </g>
   </g>
-  <g transform="translate(512 512) scale(3.6) translate(-52 -72)">
+  <g transform="translate(512 512) scale(5.4) translate(-52 -72)">
     <use href="#arrow" fill="url(#fill)" stroke="url(#fill)"/>
   </g>
 </svg>
