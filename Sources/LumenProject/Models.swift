@@ -217,6 +217,8 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+public enum ClickSound: String, Codable, CaseIterable, Sendable { case mouse, subtle }
+
 public struct AudioPlan: Codable, Equatable, Sendable {
     public var micClean = true
     public var micMode: MicMode = .standard
@@ -225,6 +227,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var outputGainDb = 0.0
     public var targetLUFS = -14.0
     public var clickSounds = true, whooshes = true, keySounds = false
+    public var clickTone: ClickSound = .mouse
     public var sfxGainDb = -20.0
     public var musicPath: String?
     public var musicGainDb = -18.0
@@ -234,7 +237,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var speedRampMinIdle = 4.0, speedRampMaxSpeed = 8.0
     public var lanes: [AudioLane] = []
     enum CodingKeys: String, CodingKey {
-        case outputGainDb, micClean, micMode, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFS, clickSounds, whooshes, keySounds, sfxGainDb, musicPath
+        case outputGainDb, micClean, micMode, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFS, clickSounds, whooshes, keySounds, clickTone, sfxGainDb, musicPath
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
     public init() {}
@@ -244,7 +247,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         micClean = c.opt(.micClean, micClean); micMode = c.opt(.micMode, micMode); micGainDb = c.opt(.micGainDb, micGainDb)
         systemGainDb = c.opt(.systemGainDb, systemGainDb); declick = c.opt(.declick, declick); declickDepthDb = c.opt(.declickDepthDb, declickDepthDb)
         targetLUFS = c.opt(.targetLUFS, targetLUFS); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = c.opt(.whooshes, whooshes)
-        keySounds = c.opt(.keySounds, keySounds); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)
+        keySounds = c.opt(.keySounds, keySounds); clickTone = c.opt(.clickTone, clickTone); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)
         musicPath = try? c.decodeIfPresent(String.self, forKey: .musicPath)
         musicGainDb = c.opt(.musicGainDb, musicGainDb); duckDepthDb = c.opt(.duckDepthDb, duckDepthDb); duckAttack = c.opt(.duckAttack, duckAttack)
         duckRelease = c.opt(.duckRelease, duckRelease); muteMicInRamps = c.opt(.muteMicInRamps, muteMicInRamps)
