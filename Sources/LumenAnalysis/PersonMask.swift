@@ -4,17 +4,6 @@ import Accelerate
 import Vision
 import os
 
-public struct PersonMaskInfo: Codable, Sendable, Equatable {
-    public var file: String
-    public var width: Int
-    public var height: Int
-    public var fps: Double
-    public var frames: Int
-    public init(file: String, width: Int, height: Int, fps: Double, frames: Int) {
-        self.file = file; self.width = width; self.height = height; self.fps = fps; self.frames = frames
-    }
-}
-
 public enum PersonMaskAnalyzer {
     public static func analyze(url: URL, output: URL, offset: Double = 0, fps: Double = 30, maxDimension: Int = 720) async throws -> PersonMaskInfo {
         let asset = AVURLAsset(url: url)
