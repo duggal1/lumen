@@ -3,6 +3,7 @@ import AppKit
 import LumenCore
 import LumenProject
 import LumenExport
+import LumenAudio
 
 struct Inspector: View {
     let model: EditorModel
@@ -170,12 +171,19 @@ struct Inspector: View {
             VStack(spacing: 0) {
                 ToggleRow(label: "Clean mic", on: m.bind(\.audio.micClean))
                 ToggleRow(label: "Click sounds", on: m.bind(\.audio.clickSounds))
+                if m.timeline.audio.clickSounds {
+                    Row(label: "Click tone") {
+                        LDropdown(sel: m.bind(\.audio.clickTone),
+                                  options: [(ClickSound.mouse, "Mouse", "cursorarrow.click"),
+                                            (.subtle, "Subtle", "cursorarrow.click")]).frame(width: 130)
+                    }
+                }
                 ToggleRow(label: "Zoom whooshes", on: m.bind(\.audio.whooshes))
                 ToggleRow(label: "Key sounds", on: m.bind(\.audio.keySounds))
                 ToggleRow(label: "Speed up idle spans", on: m.bind(\.audio.speedRampsAuto))
             }.card()
             VStack(spacing: 0) {
-                Row(label: "Music") { LButton(title: m.timeline.audio.musicPath == nil ? "Import…" : "Replace…", icon: "music.note") { m.importMusic() } }
+                MusicPicker(model: m)
                 if m.timeline.audio.musicPath != nil {
                     SliderRow(label: "Music level", v: m.bind(\.audio.musicGainDb), range: -30...(-6), fmt: { "\(Int($0)) dB" })
                     Row(label: "Remove music") { LButton(title: "Remove", icon: "trash", kind: .quiet) { m.edit { $0.audio.musicPath = nil } } }
