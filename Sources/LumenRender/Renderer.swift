@@ -35,7 +35,7 @@ public struct Geometry: Sendable {
         let cv = SIMD2<Double>(Double(c.x), Double(c.y)), pad = style.padding * cv.x
         let aw = cv.x - 2 * pad, ah = cv.y - 2 * pad, sa = src.x / max(src.y, 1)
         let base = min(aw, ah * sa)
-        let w = base * min(max(style.contentScale, 0.3), 1.6), h = w / sa
+        let w = base * min(max(style.contentScale, 0.3), 2.0), h = w / sa
         canvas = cv; self.src = src
         content = SIMD4(((cv.x - w) / 2).rounded(), ((cv.y - h) / 2).rounded(), w.rounded(), h.rounded())
         ui = cv.x / 1440; radius = style.cornerRadius * ui
@@ -231,8 +231,10 @@ public final class Renderer: @unchecked Sendable {
 
         // 1. backdrop cache (style or size change only)
         if tl.style.background == .wallpaper { loadWallpaperIfNeeded() }
+        let animated = tl.style.background == .dither || tl.style.background == .wave || tl.style.background == .field
+        let backgroundTime = animated ? (r.quality == .export ? r.t : r.uiTime) : 0
         let key = BackdropKey(style: tl.style, size: cs, wall: tl.style.background == .wallpaper ? wallID : "",
-                              phase: tl.style.background == .dither ? r.uiTime : 0)
+                              phase: backgroundTime)
         if backdropKey != key {
             backdropKey = key
             let pd = MTLRenderPassDescriptor()
@@ -250,6 +252,8 @@ public final class Renderer: @unchecked Sendable {
                 case .wallpaper: 4
                 case .canvas: 5
                 case .solid: 2
+                case .wave: 6
+                case .field: 7
                 }
                 if st.background == .wallpaper, let wallTex { e.setFragmentTexture(wallTex, index: 0) }
                 frag(e, BackdropU(content: SIMD4<Float>(g.content), canvas: canvasF, angle: Float(st.gradientAngle * .pi / 180),
@@ -257,7 +261,7 @@ public final class Renderer: @unchecked Sendable {
                                   radius: Float(g.radius), shadow: Float(st.shadow), scale: Float(g.ui * 1.33),
                                   cell: Float(max(2, st.ditherCell * g.ui)), density: Float(st.ditherDensity),
                                   hasWall: st.background == .wallpaper && wallTex != nil ? 1 : 0,
-                                  time: Float(r.uiTime)))
+                                  time: Float(backgroundTime)))
                 cols.withUnsafeBytes { e.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()
