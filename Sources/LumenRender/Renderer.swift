@@ -37,7 +37,7 @@ public struct Geometry: Sendable {
         let transform = ZoomTransform(canvas: c, source: src, style: style)
         canvas = transform.canvas; self.src = src
         content = transform.videoRect
-        ui = cv.x / 1440; radius = style.cornerRadius * ui
+        ui = canvas.x / 1440; radius = style.cornerRadius * ui
     }
     /// Source px -> canvas px for a given camera.
     public func toCanvas(_ p: SIMD2<Double>, cam: SIMD2<Double>, scale: Double) -> SIMD2<Double> {
