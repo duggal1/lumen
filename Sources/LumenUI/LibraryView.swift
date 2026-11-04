@@ -112,6 +112,10 @@ public struct MenuBarContent: View {
     @Environment(\.openWindow) private var openWindow
     public init(_ app: AppModel) { self.app = app }
     public var body: some View {
+        if app.phase != .idle {
+            Text(app.recordingStatus)
+            Button("Show recording controls") { app.showRecordingControls() }
+        }
         Button(app.phase == .recording ? "Stop recording" : "Start recording") { app.toggle() }.keyboardShortcut("r", modifiers: [.command, .shift])
         Button("Open Lumen") { openWindow(id: "library"); NSApp.activate(ignoringOtherApps: true) }
         Divider()
