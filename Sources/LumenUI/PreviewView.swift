@@ -68,7 +68,8 @@ struct PreviewView: NSViewRepresentable {
 /// Drag a rectangle on the preview to frame the selected zoom segment (maps through the live camera back to source coords).
 struct FocusOverlay: View {
     let model: EditorModel
-    @State private var a: CGPoint?, b: CGPoint?
+    @State private var a: CGPoint?
+    @State private var b: CGPoint?
     var body: some View {
         GeometryReader { g in
             ZStack {
