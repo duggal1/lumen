@@ -12,9 +12,9 @@ import LumenExport
 final class PlaybackClock: @unchecked Sendable {
     private struct S { var playing = false; var t0 = 0.0; var h0 = 0.0; var dur = 0.0 }
     private let s = OSAllocatedUnfairLock(initialState: S())
-    func time(at h: Double) -> Double { s.withLock { $0.playing ? min($0.t0 + h - $0.h0, $0.dur) : $0.t0 } }
+    func time(at h: Double) -> Double { s.withLock { $0.playing ? min($0.t0 + max(h - $0.h0, 0), $0.dur) : $0.t0 } }
     func start(from t: Double, at h: Double, dur: Double) { s.withLock { $0 = S(playing: true, t0: t, h0: h, dur: dur) } }
-    func pause(at h: Double) { s.withLock { if $0.playing { $0.t0 = min($0.t0 + h - $0.h0, $0.dur); $0.playing = false } } }
+    func pause(at h: Double) { s.withLock { if $0.playing { $0.t0 = min($0.t0 + max(h - $0.h0, 0), $0.dur); $0.playing = false } } }
     func seek(_ t: Double) { s.withLock { $0.t0 = t; $0.h0 = HostClock.now() } }
     var playing: Bool { s.withLock { $0.playing } }
 }
