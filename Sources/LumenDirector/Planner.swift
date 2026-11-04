@@ -125,8 +125,11 @@ enum ZoomPlanner {
             scale = max((scale * 10).rounded() / 10, 1.1)
             let fits = (maxX - minX) * scale <= 0.8 * W && (maxY - minY) * scale <= 0.8 * H
             let focus: Focus = (fits && fit >= p.minTrigger) ? .fixed(x: (minX + maxX) / 2 / W, y: (minY + maxY) / 2 / H) : .follow
-            let s = max(tm.trimStart, c.first!.t)
-            let e = min(tm.trimEnd, max(c.last!.t + p.tail, s + p.minHold))
+            // Start the camera move before the first interaction. The CameraSolver
+            // finishes its auto transition at the click, not after it.
+            let anticipation = clamp(p.leadIn, 0.15, 0.30)
+            let s = max(tm.trimStart, c.first!.t - anticipation)
+            let e = min(tm.trimEnd, max(c.last!.t + max(p.tail, 0.8), s + p.minHold))
             guard e > s, !avoid.contains(where: { $0.lowerBound < e && $0.upperBound > s }) else { continue }
             segs.append(Seg(s: s, e: e, scale: scale, focus: focus))
         }
