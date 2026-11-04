@@ -106,6 +106,7 @@ public final class InputRecorder: @unchecked Sendable {
                                         callback: cb, userInfo: Unmanaged.passUnretained(self).toOpaque()) else { throw CaptureError.writer("event tap denied (Input Monitoring)") }
         tap = t
         let th = Thread { [self] in
+            guard let t = self.tap else { return }
             let src = CFMachPortCreateRunLoopSource(nil, t, 0)
             loop.withLock { $0 = CFRunLoopGetCurrent() }
             CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)
