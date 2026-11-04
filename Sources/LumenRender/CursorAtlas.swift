@@ -10,33 +10,164 @@ public struct CustomCursor: Sendable { public var id: UInt16; public var png: Da
 
 public enum CursorLibrary {
     private struct Row: Codable { var id: UInt16; var png: Data; var hotX: Double; var hotY: Double }
-    /// Reads cursors.json written by CursorCatalog (hotspots in points).
     public static func load(from url: URL) -> [CustomCursor] {
         guard let d = try? Data(contentsOf: url), let rows = try? JSONDecoder().decode([Row].self, from: d) else { return [] }
         return rows.map { CustomCursor(id: $0.id, png: $0.png, hot: [$0.hotX, $0.hotY]) }
     }
 }
 
-/// Vector cursor art rasterized at 4x into a mip-mapped texture array. Each layer is a 32 pt box (128 px), top-left origin.
+/// Minimal SVG path parser (M L H V C S Q A Z, absolute + relative) -> CGPath, in the SVG's own units.
+enum SVGPath {
+    static func parse(_ d: String) -> CGPath {
+        let s = Array(d.utf8)
+        var i = 0
+        let out = CGMutablePath()
+        var cur = CGPoint.zero, start = CGPoint.zero
+        var lastC: CGPoint?, lastQ: CGPoint?
+        var cmd: UInt8 = 0
+        func isSep(_ c: UInt8) -> Bool { c == 32 || c == 44 || c == 10 || c == 9 || c == 13 }
+        func isDigit(_ c: UInt8) -> Bool { c >= 48 && c <= 57 }
+        func skip() { while i < s.count && isSep(s[i]) { i += 1 } }
+        func num() -> CGFloat? {
+            skip()
+            guard i < s.count else { return nil }
+            var j = i
+            if s[j] == 45 || s[j] == 43 { j += 1 }
+            var dot = false, digits = false
+            while j < s.count {
+                if isDigit(s[j]) { digits = true; j += 1 }
+                else if s[j] == 46 && !dot { dot = true; j += 1 }
+                else { break }
+            }
+            guard digits else { return nil }
+            if j < s.count, s[j] == 101 || s[j] == 69 {
+                var k = j + 1
+                if k < s.count, s[k] == 45 || s[k] == 43 { k += 1 }
+                if k < s.count, isDigit(s[k]) { while k < s.count && isDigit(s[k]) { k += 1 }; j = k }
+            }
+            let v = Double(String(decoding: s[i..<j], as: UTF8.self)) ?? 0
+            i = j
+            return CGFloat(v)
+        }
+        func flag() -> Bool? {
+            skip()
+            guard i < s.count, s[i] == 48 || s[i] == 49 else { return nil }
+            let v = s[i] == 49
+            i += 1
+            return v
+        }
+        while true {
+            skip()
+            guard i < s.count else { break }
+            let ch = s[i]
+            if (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) { cmd = ch; i += 1 } else if cmd == 0 { break }
+            let rel = cmd >= 97
+            let up = rel ? cmd - 32 : cmd
+            func P(_ x: CGFloat, _ y: CGFloat) -> CGPoint { rel ? CGPoint(x: cur.x + x, y: cur.y + y) : CGPoint(x: x, y: y) }
+            let keepC = up == UInt8(ascii: "C") || up == UInt8(ascii: "S")
+            let keepQ = up == UInt8(ascii: "Q")
+            switch up {
+            case UInt8(ascii: "M"):
+                guard let x = num(), let y = num() else { return out }
+                let p = P(x, y); out.move(to: p); cur = p; start = p
+                cmd = rel ? UInt8(ascii: "l") : UInt8(ascii: "L")
+            case UInt8(ascii: "L"):
+                guard let x = num(), let y = num() else { return out }
+                let p = P(x, y); out.addLine(to: p); cur = p
+            case UInt8(ascii: "H"):
+                guard let x = num() else { return out }
+                let p = CGPoint(x: rel ? cur.x + x : x, y: cur.y); out.addLine(to: p); cur = p
+            case UInt8(ascii: "V"):
+                guard let y = num() else { return out }
+                let p = CGPoint(x: cur.x, y: rel ? cur.y + y : y); out.addLine(to: p); cur = p
+            case UInt8(ascii: "C"):
+                guard let a = num(), let b = num(), let c = num(), let d2 = num(), let x = num(), let y = num() else { return out }
+                let c1 = P(a, b), c2 = P(c, d2), p = P(x, y)
+                out.addCurve(to: p, control1: c1, control2: c2); lastC = c2; cur = p
+            case UInt8(ascii: "S"):
+                guard let c = num(), let d2 = num(), let x = num(), let y = num() else { return out }
+                let c1 = lastC.map { CGPoint(x: 2 * cur.x - $0.x, y: 2 * cur.y - $0.y) } ?? cur
+                let c2 = P(c, d2), p = P(x, y)
+                out.addCurve(to: p, control1: c1, control2: c2); lastC = c2; cur = p
+            case UInt8(ascii: "Q"):
+                guard let a = num(), let b = num(), let x = num(), let y = num() else { return out }
+                let c = P(a, b), p = P(x, y)
+                out.addQuadCurve(to: p, control: c); lastQ = c; cur = p
+            case UInt8(ascii: "A"):
+                guard let rx = num(), let ry = num(), let rot = num(), let large = flag(), let sweep = flag(), let x = num(), let y = num() else { return out }
+                let p = P(x, y)
+                arc(out, from: cur, rx: rx, ry: ry, rot: rot, large: large, sweep: sweep, to: p); cur = p
+            case UInt8(ascii: "Z"):
+                out.closeSubpath(); cur = start; cmd = 0
+            default:
+                return out
+            }
+            if !keepC { lastC = nil }
+            if !keepQ { lastQ = nil }
+        }
+        _ = lastQ
+        return out
+    }
+
+    private static func arc(_ path: CGMutablePath, from p0: CGPoint, rx rx0: CGFloat, ry ry0: CGFloat, rot: CGFloat,
+                            large: Bool, sweep: Bool, to p1: CGPoint) {
+        if p0 == p1 { return }
+        var rx = abs(rx0), ry = abs(ry0)
+        if rx == 0 || ry == 0 { path.addLine(to: p1); return }
+        let phi = rot * .pi / 180, cp = cos(phi), sp = sin(phi)
+        let dx = (p0.x - p1.x) / 2, dy = (p0.y - p1.y) / 2
+        let x1 = cp * dx + sp * dy, y1 = -sp * dx + cp * dy
+        let lam = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry)
+        if lam > 1 { let k = lam.squareRoot(); rx *= k; ry *= k }
+        let num = rx * rx * ry * ry - rx * rx * y1 * y1 - ry * ry * x1 * x1
+        let den = rx * rx * y1 * y1 + ry * ry * x1 * x1
+        guard den > 0 else { path.addLine(to: p1); return }
+        let co = (large == sweep ? CGFloat(-1) : CGFloat(1)) * max(0, num / den).squareRoot()
+        let cxp = co * rx * y1 / ry, cyp = -co * ry * x1 / rx
+        let cx = cp * cxp - sp * cyp + (p0.x + p1.x) / 2
+        let cy = sp * cxp + cp * cyp + (p0.y + p1.y) / 2
+        let th1 = atan2((y1 - cyp) / ry, (x1 - cxp) / rx)
+        let th2 = atan2((-y1 - cyp) / ry, (-x1 - cxp) / rx)
+        var dth = th2 - th1
+        if !sweep && dth > 0 { dth -= 2 * .pi } else if sweep && dth < 0 { dth += 2 * .pi }
+        let n = max(Int(ceil(abs(dth) / (.pi / 2))), 1)
+        let d = dth / CGFloat(n), t = 4 / 3 * tan(d / 4)
+        func map(_ u: CGFloat, _ v: CGFloat) -> CGPoint { CGPoint(x: cx + rx * cp * u - ry * sp * v, y: cy + rx * sp * u + ry * cp * v) }
+        var a = th1
+        for _ in 0..<n {
+            let b = a + d
+            path.addCurve(to: map(cos(b), sin(b)),
+                          control1: map(cos(a) - t * sin(a), sin(a) + t * cos(a)),
+                          control2: map(cos(b) + t * sin(b), sin(b) - t * cos(b)))
+            a = b
+        }
+    }
+}
+
+/// Vector cursor art rasterized at 8x into a mip-mapped texture array. Each layer is a 32 pt box (256 px), top-left origin.
+/// Every layer is the custom Lumen arrow, except the hand shapes, which use the custom Lumen hand.
 public final class CursorAtlas {
     public struct Entry { public var layer: Int; public var hot: SIMD2<Double> }   // hot normalized to the layer
     public let texture: MTLTexture
     private var map: [UInt16: Entry] = [:]
-    static let px = 128, pts = 32.0
+    static let px = 256, pts = 32.0
+
+    static let arrowD = "M9.80282 4.62973 15.8364 6.99069C19.3164 8.35243 21.0564 9.03329 20.9987 10.1133 20.941 11.1934 19.1251 11.6886 15.4933 12.6791 14.412 12.974 13.8713 13.1215 13.4964 13.4963 13.1215 13.8712 12.9741 14.4119 12.6791 15.4933 11.6887 19.125 11.1934 20.9409 10.1134 20.9986 9.03335 21.0563 8.35249 19.3163 6.99075 15.8363L4.62979 9.80276C3.20411 6.15934 2.49127 4.33764 3.41448 3.41442 4.3377 2.49121 6.15941 3.20405 9.80282 4.62973Z"
+    static let handD = "M224,104v50.93c0,46.2-36.85,84.55-83,85.06A83.71,83.71,0,0,1,80.6,215.4C58.79,192.33,34.15,136,34.15,136a16,16,0,0,1,6.53-22.23c7.66-4,17.1-.84,21.4,6.62l21,36.44a6.09,6.09,0,0,0,6,3.09l.12,0A8.19,8.19,0,0,0,96,151.74V32a16,16,0,0,1,16.77-16c8.61.4,15.23,7.82,15.23,16.43V104a8,8,0,0,0,8.53,8,8.17,8.17,0,0,0,7.47-8.25V88a16,16,0,0,1,16.77-16c8.61.4,15.23,7.82,15.23,16.43V112a8,8,0,0,0,8.53,8,8.17,8.17,0,0,0,7.47-8.25v-7.28c0-8.61,6.62-16,15.23-16.43A16,16,0,0,1,224,104Z"
 
     public init?(device: MTLDevice, queue: MTLCommandQueue, pack: CursorPack, customs: [CustomCursor]) {
-        let ids = StockCursor.allCases.map(\.rawValue) + customs.map(\.id)
+        _ = customs                                             // captured system bitmaps are intentionally not rendered
+        let ids = StockCursor.allCases.map(\.rawValue)
         let d = MTLTextureDescriptor()
         d.textureType = .type2DArray; d.pixelFormat = .rgba8Unorm
-        d.width = Self.px; d.height = Self.px; d.arrayLength = ids.count; d.mipmapLevelCount = 8
+        d.width = Self.px; d.height = Self.px; d.arrayLength = ids.count; d.mipmapLevelCount = 9
         d.usage = [.shaderRead, .renderTarget]
         guard let t = device.makeTexture(descriptor: d) else { return nil }
         texture = t
         for (i, id) in ids.enumerated() {
-            var hot = SIMD2<Double>(2, 2)
+            var hot = SIMD2<Double>(3.5, 3.5)
             let bytes = Self.raster { c in
                 if let s = StockCursor(rawValue: id) { hot = Self.art(c, pack, s) }
-                else if let cc = customs.first(where: { $0.id == id }) { hot = Self.drawCustom(c, cc) }
             }
             t.replace(region: MTLRegionMake2D(0, 0, Self.px, Self.px), mipmapLevel: 0, slice: i, withBytes: bytes,
                       bytesPerRow: Self.px * 4, bytesPerImage: Self.px * Self.px * 4)
@@ -55,81 +186,60 @@ public final class CursorAtlas {
             guard let c = CGContext(data: p.baseAddress, width: px, height: px, bitsPerComponent: 8, bytesPerRow: px * 4,
                                     space: CGColorSpace(name: CGColorSpace.displayP3)!,
                                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-            c.translateBy(x: 0, y: CGFloat(px)); c.scaleBy(x: 4, y: -4)          // top-left origin, units = points
+            let k = CGFloat(px) / CGFloat(pts)
+            c.translateBy(x: 0, y: CGFloat(px)); c.scaleBy(x: k, y: -k)          // top-left origin, units = points
             c.setLineJoin(.round); c.setLineCap(.round)
             draw(c)
         }
         return buf
     }
 
-    private static func drawCustom(_ c: CGContext, _ cc: CustomCursor) -> SIMD2<Double> {
-        guard let img = NSImage(data: cc.png), let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return cc.hot }
-        let k = img.size.width > 36 ? 0.5 : 1.0                                   // assume 2x when the PNG carries no DPI
-        let w = img.size.width * k, h = img.size.height * k, fit = min(1, pts / max(w, h))
-        c.saveGState()
-        c.translateBy(x: 0, y: h * fit); c.scaleBy(x: fit, y: -fit)
-        c.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        c.restoreGState()
-        return cc.hot * fit
-    }
-
     /// Returns the hotspot in points.
     private static func art(_ c: CGContext, _ pack: CursorPack, _ s: StockCursor) -> SIMD2<Double> {
-        let ink = CGColor(gray: 0.05, alpha: 1), paper = CGColor(gray: 1, alpha: 1)
-        c.setShadow(offset: CGSize(width: 0, height: -4), blur: 8, color: CGColor(gray: 0, alpha: 0.45))
-        func outline(_ p: CGPath, _ fill: CGColor, _ stroke: CGColor, _ w: CGFloat) {
-            c.addPath(p); c.setFillColor(fill); c.setStrokeColor(stroke); c.setLineWidth(w); c.drawPath(using: .fillStroke)
+        let ink = CGColor(srgbRed: 0.11, green: 0.098, blue: 0.09, alpha: 1)      // #1c1917
+        let paper = CGColor(gray: 1, alpha: 1)
+        func shadowed(_ body: () -> Void) {
+            c.saveGState()
+            c.setShadow(offset: CGSize(width: 0, height: -10), blur: 18, color: CGColor(gray: 0, alpha: 0.35))
+            c.beginTransparencyLayer(auxiliaryInfo: nil)
+            body()
+            c.endTransparencyLayer()
+            c.restoreGState()
         }
-        func line(_ p: CGPath, _ w: CGFloat) {                                      // paper halo under ink
-            c.addPath(p); c.setStrokeColor(paper); c.setLineWidth(w + 2.2); c.strokePath()
-            c.addPath(p); c.setStrokeColor(ink); c.setLineWidth(w); c.strokePath()
+        func glyph(_ d: String, tip: CGPoint, hot: CGPoint, scale: CGFloat, stroke: CGFloat) -> SIMD2<Double> {
+            let p = SVGPath.parse(d)
+            var t = CGAffineTransform(translationX: hot.x - tip.x * scale, y: hot.y - tip.y * scale).scaledBy(x: scale, y: scale)
+            if let q = p.copy(using: &t) {
+                shadowed {
+                    c.addPath(q); c.setFillColor(ink); c.setStrokeColor(paper); c.setLineWidth(stroke); c.setLineJoin(.round)
+                    c.drawPath(using: .fillStroke)
+                }
+            }
+            return [Double(hot.x), Double(hot.y)]
         }
         if pack == .dot {
-            outline(CGPath(ellipseIn: CGRect(x: 11, y: 11, width: 10, height: 10), transform: nil), ink, paper, 1.8); return [16, 16]
+            shadowed {
+                c.addEllipse(in: CGRect(x: 11, y: 11, width: 10, height: 10)); c.setFillColor(ink); c.setStrokeColor(paper); c.setLineWidth(1.8)
+                c.drawPath(using: .fillStroke)
+            }
+            return [16, 16]
         }
         if pack == .ring {
-            let p = CGPath(ellipseIn: CGRect(x: 7, y: 7, width: 18, height: 18), transform: nil); line(p, 1.6); return [16, 16]
+            shadowed {
+                c.addEllipse(in: CGRect(x: 7, y: 7, width: 18, height: 18))
+                c.setStrokeColor(paper); c.setLineWidth(3.8); c.strokePath()
+                c.addEllipse(in: CGRect(x: 7, y: 7, width: 18, height: 18))
+                c.setStrokeColor(ink); c.setLineWidth(1.6); c.strokePath()
+            }
+            return [16, 16]
         }
         switch s {
-        case .arrow, .contextMenu:
-            let p = CGMutablePath()
-            p.move(to: CGPoint(x: 2, y: 2)); p.addLine(to: CGPoint(x: 2, y: 21)); p.addLine(to: CGPoint(x: 7, y: 16.5))
-            p.addLine(to: CGPoint(x: 10.5, y: 24)); p.addLine(to: CGPoint(x: 13.5, y: 22.5)); p.addLine(to: CGPoint(x: 10, y: 15.5))
-            p.addLine(to: CGPoint(x: 16.5, y: 15.5)); p.closeSubpath()
-            switch pack {
-            case .minimal: outline(p, paper, ink, 1.1)
-            case .pro: outline(p, paper, ink, 1.7)
-            default: outline(p, ink, paper, 1.5)
-            }
-            return [2, 2]
-        case .iBeam:
-            let p = CGMutablePath()
-            p.move(to: CGPoint(x: 16, y: 6)); p.addLine(to: CGPoint(x: 16, y: 26))
-            p.move(to: CGPoint(x: 12.5, y: 6)); p.addLine(to: CGPoint(x: 19.5, y: 6))
-            p.move(to: CGPoint(x: 12.5, y: 26)); p.addLine(to: CGPoint(x: 19.5, y: 26)); line(p, 1.4); return [16, 16]
-        case .pointingHand:
-            let p = CGMutablePath()
-            p.addRoundedRect(in: CGRect(x: 9, y: 3, width: 4.4, height: 15), cornerWidth: 2.2, cornerHeight: 2.2)
-            p.addRoundedRect(in: CGRect(x: 7, y: 14, width: 16, height: 11), cornerWidth: 3.5, cornerHeight: 3.5)
-            outline(p, paper, ink, 1.2); return [11.2, 3.5]
-        case .openHand, .closedHand:
-            outline(CGPath(roundedRect: CGRect(x: 8, y: 11, width: 16, height: 13), cornerWidth: 4, cornerHeight: 4, transform: nil), paper, ink, 1.3)
-            return [16, 17]
-        case .crosshair:
-            let p = CGMutablePath()
-            p.move(to: CGPoint(x: 16, y: 5)); p.addLine(to: CGPoint(x: 16, y: 27)); p.move(to: CGPoint(x: 5, y: 16)); p.addLine(to: CGPoint(x: 27, y: 16))
-            line(p, 1.2); return [16, 16]
-        case .resizeLeftRight, .resizeUpDown:
-            c.saveGState()
-            if s == .resizeUpDown { c.translateBy(x: 32, y: 0); c.rotate(by: .pi / 2) }
-            let pts: [(CGFloat, CGFloat)] = [(4, 16), (10, 10), (10, 14), (22, 14), (22, 10), (28, 16), (22, 22), (22, 18), (10, 18), (10, 22)]
-            let p = CGMutablePath(); p.move(to: CGPoint(x: pts[0].0, y: pts[0].1))
-            for q in pts.dropFirst() { p.addLine(to: CGPoint(x: q.0, y: q.1)) }
-            p.closeSubpath(); outline(p, ink, paper, 1.3); c.restoreGState(); return [16, 16]
-        case .notAllowed:
-            let p = CGMutablePath()
-            p.addEllipse(in: CGRect(x: 7, y: 7, width: 18, height: 18))
-            p.move(to: CGPoint(x: 10, y: 10)); p.addLine(to: CGPoint(x: 22, y: 22)); line(p, 2.4); return [16, 16]
+        case .pointingHand, .openHand, .closedHand:
+            // 256-unit hand, ~24 pt tall, fingertip is the hotspot
+            return glyph(handD, tip: CGPoint(x: 112, y: 16), hot: CGPoint(x: 12, y: 3.5), scale: 24.0 / 224.0, stroke: 2.0)
+        default:
+            // 24-unit arrow at 1.4x (about 25 pt tall), tip is the hotspot
+            return glyph(arrowD, tip: CGPoint(x: 3.2, y: 3.2), hot: CGPoint(x: 3.5, y: 3.5), scale: 1.4, stroke: 2.1)
         }
     }
 }
