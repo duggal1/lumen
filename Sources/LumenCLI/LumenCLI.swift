@@ -62,7 +62,9 @@ struct Render: AsyncParsableCommand {
     @Argument var project: String
     @Option var preset = "1080p60-h264"
     @Option var out = "out.mp4"
+    @Flag(name: .long) var benchmark = false
     func run() async throws {
+        if benchmark { setenv("LUMEN_BENCHMARK", "1", 1) }
         guard let p = ExportPresets.parse(preset) else { throw ValidationError("unknown preset \(preset). Try `lumen-cli probe`.") }
         let (s, tl) = try await openProject(project)
         try await Exporter.run(session: s, timeline: tl, preset: p, to: URL(fileURLWithPath: out)) { pr in
