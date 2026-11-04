@@ -165,7 +165,7 @@ public enum Exporter {
                            progress: @escaping @Sendable (ExportProgress) -> Void) async throws {
         guard let d = tl.derived else { throw ExportError.noTimeline }
         let w = 800, h = (Int((Double(w) / tl.style.canvas.ratio).rounded()) + 1) & ~1, fps = 15
-        let total = max(Int(d.outputDuration * Double(fps)), 1)
+        let total = max(Int(ceil(d.outputDuration * Double(fps) - 1e-8)), 1)
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, total, nil) else { throw ExportError.writer("gif") }
         CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
