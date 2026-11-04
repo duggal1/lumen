@@ -6,6 +6,11 @@ public struct FaceSample: Sendable {
     public var t: Double, cx: Float, cy: Float, h: Float
     public init(t: Double, cx: Float, cy: Float, h: Float) { self.t = t; self.cx = cx; self.cy = cy; self.h = h }
 }
+/// Pixel-activity centroid (device / imported clips with no input events). Source seconds, source px.
+public struct ActivityPoint: Sendable {
+    public var t: Double, x: Double, y: Double
+    public init(t: Double, x: Double, y: Double) { self.t = t; self.x = x; self.y = y }
+}
 public struct DirectorInput: Sendable {
     public var events: [InputEvent]
     public var source: SourceInfo
@@ -13,9 +18,11 @@ public struct DirectorInput: Sendable {
     public var ax: [AXFrame]
     public var face: [FaceSample]
     public var webcamAspect: Float
+    public var activity: [ActivityPoint]
     public init(events: [InputEvent], source: SourceInfo, vad: [ClosedRange<Double>] = [], ax: [AXFrame] = [],
-                face: [FaceSample] = [], webcamAspect: Float = 16.0 / 9) {
-        self.events = events; self.source = source; self.vad = vad; self.ax = ax; self.face = face; self.webcamAspect = webcamAspect
+                face: [FaceSample] = [], webcamAspect: Float = 16.0 / 9, activity: [ActivityPoint] = []) {
+        self.events = events; self.source = source; self.vad = vad; self.ax = ax; self.face = face
+        self.webcamAspect = webcamAspect; self.activity = activity
     }
 }
 
@@ -26,7 +33,7 @@ public enum Director {
         let src = input.source
         var tm = t.timeMap
         if tm.sourceDuration != src.duration && tm.trimEnd <= 0 {
-            tm = TimeMap(sourceDuration: src.duration, trimStart: 0, trimEnd: src.duration, ramps: tm.ramps)
+            tm = TimeMap(sourceDuration: src.duration, trimStart: 0, trimEnd: src.duration, ramps: tm.ramps, cuts: tm.cuts)
         }
         // time map first: camera runs in output time
         if t.audio.speedRampsAuto {
@@ -35,23 +42,27 @@ public enum Director {
         }
         t.timeMap = tm
         if t.camera.autoZoom {
-            t.camera.maxScale = t.camera.preset == .fixed ? t.camera.maxScale : t.camera.preset.maxScale
-            t.zoom = t.zoom.filter { $0.origin == .manual }
-                + ZoomPlanner.plan(events: input.events, ax: input.ax, src: src, p: t.camera, tm: tm)
+            let manual = t.zoom.filter { $0.origin == .manual }
+            let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
+            t.zoom = (manual + ZoomPlanner.plan(events: input.events, ax: input.ax, activity: input.activity, src: src, p: t.camera,
+                                                tm: tm, avoid: avoid)).sorted { $0.start < $1.start }
         }
-        let (cursor, clicks) = CursorPipeline.run(events: input.events, st: t.cursor, tm: tm, src: src)
+        let (cursor, clicks) = CursorPipeline.run(events: input.events, taps: t.overlays.taps, st: t.cursor, tm: tm, src: src)
         let size = SIMD2(Double(src.width), Double(src.height))
-        let cam = CameraSolver.solve(zoom: t.zoom, cursor: cursor, p: t.camera, src: size, outDur: tm.outputDuration)
+        let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size, outDur: tm.outputDuration, loop: t.cursor.loop)
 
         var cues: [SFXCue] = []
         if t.audio.clickSounds { cues += clicks.map { SFXCue(t: $0.t, kind: .click, gainDb: 0) } }
         if t.audio.keySounds {
-            cues += input.events.filter { $0.kind == .keyDown }.map { SFXCue(t: tm.output(atSource: $0.t), kind: .key, gainDb: -6) }
+            cues += input.events.filter { $0.kind == .keyDown && !tm.isCut($0.t) }
+                .map { SFXCue(t: tm.output(atSource: $0.t), kind: .key, gainDb: -6) }
         }
         if t.audio.whooshes {
             for z in t.zoom {
+                let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
+                guard b - a > 0.2 else { continue }
                 let g = min(-12 + 6 * (z.scale - 1), 0)
-                cues.append(SFXCue(t: z.start, kind: .whooshIn, gainDb: g)); cues.append(SFXCue(t: z.end, kind: .whooshOut, gainDb: g))
+                cues.append(SFXCue(t: a, kind: .whooshIn, gainDb: g)); cues.append(SFXCue(t: b, kind: .whooshOut, gainDb: g))
             }
         }
         cues.sort { $0.t < $1.t }
@@ -89,6 +100,7 @@ public struct ClickRing: Sendable { public var position: SIMD2<Float>; public va
 public struct FrameState: Sendable {
     public var cameraCenter: SIMD2<Float>     // source px
     public var cameraScale: Float
+    public var cameraTilt: SIMD2<Float> = .zero       // (yaw, pitch) degrees; renderer homography consumes this in Part 5
     public var cursor: CursorSample
     public var clickFX: [ClickRing]
     public var webcamCrop: SIMD4<Float>       // uv x, y, w, h
@@ -112,7 +124,7 @@ extension Timeline {
     /// Pure function of (self, t). Microseconds. Safe to call from any thread.
     public func evaluate(at t0: Double) -> FrameState {
         guard let d = derived else {
-            return FrameState(cameraCenter: .zero, cameraScale: 1,
+            return FrameState(cameraCenter: .zero, cameraScale: 1, cameraTilt: .zero,
                               cursor: CursorSample(position: .zero, velocity: .zero, opacity: 0, press: 1, shape: 0),
                               clickFX: [], webcamCrop: [0, 0, 1, 1], sourceTime: 0)
         }
@@ -120,6 +132,7 @@ extension Timeline {
         let c = d.camera, u = d.cursor
         let cam = SIMD2<Float>(hm(c.nx, c.vx, f) * Float(d.sourceSize.x), hm(c.ny, c.vy, f) * Float(d.sourceSize.y))
         let scale = exp(hm(c.lz, c.vz, f))
+        let tilt = SIMD2<Float>(cr(c.yaw, f), cr(c.pitch, f))
         let pos = SIMD2<Float>(cr(u.x, f), cr(u.y, f))
         let vel = SIMD2<Float>(cr(u.x, f + 1) - cr(u.x, f - 1), cr(u.y, f + 1) - cr(u.y, f - 1)) * Float(gridRate / 2)
         let cs = CursorSample(position: pos, velocity: vel, opacity: cf(cr(u.opacity, f), 0, 1), press: cr(u.press, f),
@@ -144,7 +157,7 @@ extension Timeline {
         }
         let cw = min(ch / ar, 1)
         let crop = SIMD4<Float>(cf(cx - cw / 2, 0, 1 - cw), cf(cy - ch / 2, 0, 1 - ch), cw, ch)
-        return FrameState(cameraCenter: cam, cameraScale: scale, cursor: cs, clickFX: rings, webcamCrop: crop,
+        return FrameState(cameraCenter: cam, cameraScale: scale, cameraTilt: tilt, cursor: cs, clickFX: rings, webcamCrop: crop,
                           sourceTime: timeMap.source(atOutput: t))
     }
 }
