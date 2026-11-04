@@ -56,9 +56,12 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     }
 
     static func open(url: URL) async throws -> EditorModel {
-        let r = try Renderer()
-        let (s, tl) = try await ProjectSession.open(ProjectBundle(url: url), device: r.device)
-        var out = s.derive(tl, revision: 0)
+        let (r, s, derived) = try await Task.detached(priority: .userInitiated) {
+            let renderer = try Renderer()
+            let (session, timeline) = try await ProjectSession.open(ProjectBundle(url: url), device: renderer.device)
+            return (renderer, session, session.derive(timeline, revision: 0))
+        }.value
+        var out = derived
         if out.style.background == .gradient || out.style.background == .mesh {
             out.style.background = .dither
             out.style.colors = DitherPalettes.all[0].1
