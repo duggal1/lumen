@@ -14,7 +14,7 @@ import LumenProject
 }
 
 enum CameraSolver {
-    private struct Shot { var start: Double, end: Double, lz: Double, focus: Focus, ease: Double }
+    private struct Shot { var start: Double, end: Double, lz: Double, focus: Focus, ease: Double, automatic: Bool }
     private struct Key { var t: Double; var shot: Int }
 
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams, src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
@@ -29,7 +29,7 @@ enum CameraSolver {
         }
         let shots: [Shot] = zoom.filter { $0.end - $0.start > 0.1 && $0.scale > 1.001 && $0.start < outDur }
             .sorted { $0.start < $1.start }
-            .map { Shot(start: max($0.start, 0), end: min($0.end, outDur), lz: log(min($0.scale, 8)), focus: $0.focus, ease: $0.easing?.omegaScale ?? 1) }
+            .map { Shot(start: max($0.start, 0), end: min($0.end, outDur), lz: log(min($0.scale, 8)), focus: $0.focus, ease: $0.easing?.omegaScale ?? 1, automatic: $0.origin == .auto) }
         func staticCenter(_ s: Shot, _ t: Double) -> SIMD2<Double> {
             switch s.focus {
             case .fixed(let x, let y): return SIMD2(x, y)
@@ -44,6 +44,11 @@ enum CameraSolver {
             let pan = min(hypot(cB.x - cA.x, cB.y - cA.y) / exp(-max(lzA, lzB)), 2)
             let zm = min(abs(lzB - lzA) / 0.693, 1.5)
             let ease = to >= 0 ? shots[to].ease : from >= 0 ? shots[from].ease : 1
+            // An auto shot begins before its click. Reach full scale at that
+            // interaction; manual shots retain their chosen easing.
+            if to >= 0 && shots[to].automatic {
+                return max(0.015, min(p.leadIn, 0.30) * max(0.1, 1 / tm.speed(atOutput: t)))
+            }
             return base * (0.75 + 0.2 * zm + 0.2 * pan) / ease
         }
         var keys = [Key(t: 0, shot: -1)]
@@ -84,9 +89,8 @@ enum CameraSolver {
             let a = k0.shot, b = k1.shot
             let lzA = a >= 0 ? shots[a].lz : 0, lzB = b >= 0 ? shots[b].lz : 0
             let lz = lerp(lzA, lzB, pr)
-            var lzc = lz
-            for sh in shots { if sh.start - 1.0 > t { break }; if t <= sh.end { lzc = max(lzc, sh.lz) } }
-            let sc = exp(lzc), half = p.deadZone / sc, hw = 0.5 / sc
+            // Scale and clamp must use the SAME zoom value at every frame.
+            let sc = exp(lz), half = p.deadZone / sc, hw = 0.5 / sc
             let cur = cursorN(t)
             for k in 0..<2 {
                 let d = cur[k] - tgt[k]
