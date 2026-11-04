@@ -60,12 +60,14 @@ struct ExportInspector: View {
                           options: ExportQuality.allCases.map { ($0, $0.rawValue, "slider.horizontal.3") })
                     .frame(width: 132)
             }
-            Row(label: "Audio") { LToggle(on: model.exportBinding(\.includeAudio), label: "Include audio") }
-            if settings.includeAudio {
-                Row(label: "Bitrate") {
-                    LDropdown(sel: model.exportBinding(\.audioBitrate),
-                              options: [128, 192, 256, 320].map { ($0 * 1000, "\($0) kbps", "waveform") })
-                        .frame(width: 132)
+            Row(label: "Audio") {
+                HStack(spacing: Space.s2) {
+                    LToggle(on: model.exportBinding(\.includeAudio), label: "Include audio")
+                    if settings.includeAudio {
+                        LDropdown(sel: model.exportBinding(\.audioBitrate),
+                                  options: [128, 192, 256, 320].map { ($0 * 1000, "\($0) kbps", "waveform") })
+                            .frame(width: 110)
+                    }
                 }
             }
         }.card()
