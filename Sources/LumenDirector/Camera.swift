@@ -14,7 +14,7 @@ import LumenProject
 }
 
 enum CameraSolver {
-    private struct Shot { var start: Double, end: Double, lz: Double, focus: Focus }
+    private struct Shot { var start: Double, end: Double, lz: Double, focus: Focus, ease: Double }
     private struct Key { var t: Double; var shot: Int }
 
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams, src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
@@ -29,7 +29,7 @@ enum CameraSolver {
         }
         let shots: [Shot] = zoom.filter { $0.end - $0.start > 0.1 && $0.scale > 1.001 && $0.start < outDur }
             .sorted { $0.start < $1.start }
-            .map { Shot(start: max($0.start, 0), end: min($0.end, outDur), lz: log(min($0.scale, 8)), focus: $0.focus) }
+            .map { Shot(start: max($0.start, 0), end: min($0.end, outDur), lz: log(min($0.scale, 8)), focus: $0.focus, ease: $0.easing?.omegaScale ?? 1) }
         func staticCenter(_ s: Shot, _ t: Double) -> SIMD2<Double> {
             switch s.focus {
             case .fixed(let x, let y): return SIMD2(x, y)
@@ -43,7 +43,8 @@ enum CameraSolver {
             let cB = to >= 0 ? staticCenter(shots[to], t) : SIMD2(0.5, 0.5)
             let pan = min(hypot(cB.x - cA.x, cB.y - cA.y) / exp(-max(lzA, lzB)), 2)
             let zm = min(abs(lzB - lzA) / 0.693, 1.5)
-            return base * (0.75 + 0.2 * zm + 0.2 * pan)
+            let ease = to >= 0 ? shots[to].ease : from >= 0 ? shots[from].ease : 1
+            return base * (0.75 + 0.2 * zm + 0.2 * pan) / ease
         }
         var keys = [Key(t: 0, shot: -1)]
         var lastT = 0.0, lastShot = -1
