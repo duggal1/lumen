@@ -38,3 +38,14 @@ import LumenAudio
     #expect(abs((quieter.lufs - reference.lufs) + 12) < 0.3)
     #expect(quieter.truePeakDb <= -1)
 }
+
+@Test func cleanupPreservesContinuousVoiceAndReducesQuietNoise() {
+    let voice = (0..<48000).map { Float(0.1 * sin(Double($0) * 2 * .pi * 440 / 48000)) }
+    let cleanVoice = SpectralGate().process(voice)
+    func energy(_ samples: [Float]) -> Double { samples.reduce(0) { $0 + Double($1) * Double($1) } }
+    #expect(energy(cleanVoice) > energy(voice) * 0.8)
+    let noise = voice.map { $0 * 0.01 }
+    let cleanNoise = SpectralGate().process(noise)
+    #expect(cleanNoise.count == noise.count)
+    #expect(energy(cleanNoise) < energy(noise) * 0.2)
+}
