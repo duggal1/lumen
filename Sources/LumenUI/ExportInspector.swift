@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import LumenExport
+import LumenProject
 
 /// Three meaning-based groups. The stage remains primary; export lives in the inspector.
 struct ExportInspector: View {
