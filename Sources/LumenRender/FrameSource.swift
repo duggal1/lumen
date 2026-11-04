@@ -20,6 +20,13 @@ public protocol FrameSource: Sendable {
 
 public enum FrameSourceError: Error { case noTrack, read(String) }
 
+/// Metal devices are thread-safe references supplied by the system. Keep the
+/// device identity in a sendable wrapper while crossing into the decoder actor.
+public struct SendableMetalDevice: @unchecked Sendable {
+    public let value: any MTLDevice
+    public init(_ value: any MTLDevice) { self.value = value }
+}
+
 /// Shifts a source clock (used for the webcam track, which starts after the screen track).
 public struct OffsetFrameSource: FrameSource {
     let base: any FrameSource
@@ -47,11 +54,11 @@ public actor ReaderFrameSource: FrameSource {
     private var cur: Entry?, peek: Entry?
     private var lru: [Entry] = []
 
-    public init(url: URL, device: MTLDevice) async throws {
+    public init(url: URL, device: SendableMetalDevice) async throws {
         let a = AVURLAsset(url: url)
         guard let tr = try await a.loadTracks(withMediaType: .video).first else { throw FrameSourceError.noTrack }
         var c: CVMetalTextureCache?
-        CVMetalTextureCacheCreate(nil, nil, device, nil, &c)
+        CVMetalTextureCacheCreate(nil, nil, device.value, nil, &c)
         guard let c else { throw FrameSourceError.read("texture cache") }
         asset = a; track = tr; cache = c
     }
