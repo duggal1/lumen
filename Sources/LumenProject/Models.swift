@@ -107,6 +107,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
 public struct AudioPlan: Codable, Equatable, Sendable {
     public var micClean = true
     public var targetLUFS = -14.0
+    public var outputGainDb = 0.0
     public var clickSounds = true, whooshes = true, keySounds = false
     public var sfxGainDb = -20.0
     public var musicPath: String?
@@ -116,6 +117,27 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var speedRampsAuto = true
     public var speedRampMinIdle = 2.0, speedRampMaxSpeed = 8.0
     public init() {}
+    enum CodingKeys: String, CodingKey { case micClean, targetLUFS, outputGainDb, clickSounds, whooshes, keySounds, sfxGainDb, musicPath, musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        micClean = try c.decodeIfPresent(Bool.self, forKey: .micClean) ?? micClean
+        targetLUFS = try c.decodeIfPresent(Double.self, forKey: .targetLUFS) ?? targetLUFS
+        outputGainDb = try c.decodeIfPresent(Double.self, forKey: .outputGainDb) ?? outputGainDb
+        clickSounds = try c.decodeIfPresent(Bool.self, forKey: .clickSounds) ?? clickSounds
+        whooshes = try c.decodeIfPresent(Bool.self, forKey: .whooshes) ?? whooshes
+        keySounds = try c.decodeIfPresent(Bool.self, forKey: .keySounds) ?? keySounds
+        sfxGainDb = try c.decodeIfPresent(Double.self, forKey: .sfxGainDb) ?? sfxGainDb
+        musicPath = try c.decodeIfPresent(String.self, forKey: .musicPath)
+        musicGainDb = try c.decodeIfPresent(Double.self, forKey: .musicGainDb) ?? musicGainDb
+        duckDepthDb = try c.decodeIfPresent(Double.self, forKey: .duckDepthDb) ?? duckDepthDb
+        duckAttack = try c.decodeIfPresent(Double.self, forKey: .duckAttack) ?? duckAttack
+        duckRelease = try c.decodeIfPresent(Double.self, forKey: .duckRelease) ?? duckRelease
+        muteMicInRamps = try c.decodeIfPresent(Bool.self, forKey: .muteMicInRamps) ?? muteMicInRamps
+        speedRampsAuto = try c.decodeIfPresent(Bool.self, forKey: .speedRampsAuto) ?? speedRampsAuto
+        speedRampMinIdle = try c.decodeIfPresent(Double.self, forKey: .speedRampMinIdle) ?? speedRampMinIdle
+        speedRampMaxSpeed = try c.decodeIfPresent(Double.self, forKey: .speedRampMaxSpeed) ?? speedRampMaxSpeed
+    }
+
 }
 
 public struct WebcamLayout: Codable, Equatable, Sendable {
