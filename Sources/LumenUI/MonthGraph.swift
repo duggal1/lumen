@@ -1,87 +1,71 @@
 import SwiftUI
 
-/// Recording activity across the current and following calendar months.
+/// One week of recorded activity, with navigation to other weeks.
 struct MonthGraph: View {
     let minutes: [Date: Double]
     @Binding var hovered: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selected: Date?
+    @State private var weekOffset = 0
 
     private static let calendar = Calendar.current
-    private let rowHeight: CGFloat = 28
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
+    private let rowHeight: CGFloat = 48
 
-    private var months: [Date] {
+    private var days: [Date] {
         let cal = Self.calendar
-        let first = cal.date(from: cal.dateComponents([.year, .month], from: .now)) ?? cal.startOfDay(for: .now)
-        return [first, cal.date(byAdding: .month, value: 1, to: first) ?? first]
+        let start = cal.dateInterval(of: .weekOfYear, for: .now)?.start ?? cal.startOfDay(for: .now)
+        guard let week = cal.date(byAdding: .weekOfYear, value: weekOffset, to: start) else { return [] }
+        return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: week) }
     }
-    private var ceiling: Double {
-        let values = minutes.values.filter { $0 > 0 }.sorted()
-        guard !values.isEmpty else { return 10 }
-        return max(values[Int((Double(values.count - 1) * 0.9).rounded(.up))], 10)
+
+    private var weekLabel: String {
+        guard let first = days.first, let last = days.last else { return "" }
+        return "\(first.formatted(.dateTime.month(.abbreviated).day())) – \(last.formatted(.dateTime.month(.abbreviated).day()))"
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: Space.s6) {
-            ForEach(months, id: \.self) { month in
-                monthGrid(month)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: Space.s2) {
+            HStack(spacing: Space.s1) {
+                Text(weekLabel).font(AppType.caption).foregroundStyle(Tok.text2)
+                Spacer()
+                LIconButton(icon: "chevron.left", label: "Previous week") { changeWeek(-1) }
+                LIconButton(icon: "chevron.right", label: "Next week") { changeWeek(1) }
             }
+            HStack(spacing: 0) {
+                ForEach(days, id: \.self) { day in
+                    dayButton(day)
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.control))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Recording activity, this month and next")
+        .accessibilityLabel("Weekly recording activity")
     }
 
-    private func monthGrid(_ month: Date) -> some View {
-        let cal = Self.calendar
-        let offset = (cal.component(.weekday, from: month) - cal.firstWeekday + 7) % 7
-        let count = cal.range(of: .day, in: .month, for: month)?.count ?? 0
-        let slots = ((offset + count + 6) / 7) * 7
-        return VStack(alignment: .leading, spacing: Space.s2) {
-            Text(month.formatted(.dateTime.month(.wide)))
-                .font(AppType.label).foregroundStyle(Tok.text)
-            LazyVGrid(columns: columns, spacing: 0) {
-                ForEach(0..<7, id: \.self) { weekday in
-                    let index = (cal.firstWeekday - 1 + weekday) % 7
-                    Text(cal.veryShortWeekdaySymbols[index])
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .frame(maxWidth: .infinity).frame(height: rowHeight)
-                        .accessibilityHidden(true)
-                }
-                ForEach(0..<slots, id: \.self) { slot in
-                    let day = slot - offset
-                    if day >= 0, day < count, let date = cal.date(byAdding: .day, value: day, to: month) {
-                        dayButton(date)
-                    } else {
-                        Color.clear.frame(height: rowHeight).accessibilityHidden(true)
-                    }
-                }
-            }
-        }
+    private func changeWeek(_ amount: Int) {
+        weekOffset += amount
+        selected = nil
+        hovered = nil
     }
 
     private func dayButton(_ day: Date) -> some View {
         let future = day > Self.calendar.startOfDay(for: .now)
         let value = minutes[day] ?? 0
         let active = selected == day || hovered == day
-        let dotSize = future ? 4 : value > 0 ? (value / ceiling > 0.5 ? 16 : 12) : 6
         return Button {
             selected = selected == day ? nil : day
             hovered = selected
         } label: {
-            ZStack {
-                if active {
-                    RoundedRectangle(cornerRadius: Radius.field).fill(Tok.control)
-                        .frame(width: rowHeight, height: rowHeight)
-                }
-                PixelDot(color: value > 0 && !future ? Tok.accent : Tok.controlPressed, size: dotSize)
-                if Self.calendar.isDateInToday(day) {
-                    Rectangle().fill(Tok.text).frame(width: 2, height: 2)
-                }
+            VStack(spacing: Space.s1) {
+                PixelDot(color: value > 0 && !future ? Tok.accent : .white, size: 10)
+                Text(day.formatted(.dateTime.weekday(.abbreviated)))
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+                    .lineLimit(1)
             }
-            .frame(maxWidth: .infinity).frame(height: rowHeight).contentShape(Rectangle())
+            .frame(maxWidth: .infinity).frame(height: rowHeight)
+            .background(RoundedRectangle(cornerRadius: Radius.field).fill(active ? Tok.controlHover : .clear))
+            .contentShape(Rectangle())
         }
         .buttonStyle(ActivityPressStyle())
         .pointerStyle(.link)

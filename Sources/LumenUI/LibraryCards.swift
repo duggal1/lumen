@@ -55,7 +55,7 @@ struct ActivityCard: View {
             let minutes = Int((app.minutesByDay[Calendar.current.startOfDay(for: d)] ?? 0).rounded())
             return "\(d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())): \(minutes) min"
         }
-        return "Recorded time, this month and next"
+        return "Select a day to see recorded time"
     }
 
     var body: some View {
