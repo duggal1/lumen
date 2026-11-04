@@ -12,11 +12,12 @@ public struct DirectorInput: Sendable {
     public var activity: [ActivityPoint]
     public var transcript: Transcript?
     public var ocr: [OCRDetection]
+    public var personMask: PersonMaskInfo?
     public init(events: [InputEvent], source: SourceInfo, vad: [ClosedRange<Double>] = [], ax: [AXFrame] = [],
                 face: [FaceSample] = [], webcamAspect: Float = 16.0 / 9, activity: [ActivityPoint] = [],
-                transcript: Transcript? = nil, ocr: [OCRDetection] = []) {
+                transcript: Transcript? = nil, ocr: [OCRDetection] = [], personMask: PersonMaskInfo? = nil) {
         self.events = events; self.source = source; self.vad = vad; self.ax = ax; self.face = face
-        self.webcamAspect = webcamAspect; self.activity = activity; self.transcript = transcript; self.ocr = ocr
+        self.webcamAspect = webcamAspect; self.activity = activity; self.transcript = transcript; self.ocr = ocr; self.personMask = personMask
     }
 }
 
@@ -86,7 +87,7 @@ public enum Director {
         t.derived = DerivedTracks(revision: revision, sourceSize: size, outputDuration: tm.outputDuration, cursor: cursor, camera: cam,
                                   clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm, camera: cam, layout: t.webcam),
                                   webcamAspect: input.webcamAspect, layout: layout, placement: placement,
-                                  captions: captions, autoMasks: autoMasks)
+                                  captions: captions, autoMasks: autoMasks, personMask: input.personMask)
         return t
     }
 }
