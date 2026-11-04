@@ -2,9 +2,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 config="${CONFIGURATION:-release}"
+mkdir -p .build
+lock="$PWD/.build/lumen-package.lock"
+if ! mkdir "$lock" 2>/dev/null; then
+    echo 'Another Lumen packaging job is running.' >&2
+    exit 1
+fi
+staging="$(mktemp -d "$PWD/.build/lumen-package.XXXXXX")"
+trap 'rm -rf "$staging"; rmdir "$lock"' EXIT
 swift build -c "$config"
 bin_dir="$(swift build -c "$config" --show-bin-path)"
-app="$PWD/.build/Lumen.app"
+destination="$PWD/.build/Lumen.app"
+app="$staging/Lumen.app"
 if pgrep -x Lumen >/dev/null; then
     echo 'Quit Lumen before packaging. Replacing a running app invalidates macOS permission requests.' >&2
     exit 1
@@ -20,7 +29,7 @@ if ! find "$app/Contents/Resources" -name default.metallib -print -quit | /usr/b
     echo 'Missing default.metallib. Install the Metal toolchain with xcodebuild -downloadComponent MetalToolchain.' >&2
     exit 1
 fi
-icon_dir="$PWD/.build/Lumen.iconset"
+icon_dir="$staging/Lumen.iconset"
 mkdir -p "$icon_dir"
 swift - App/public/assets/brand/logo/lumen-icon.png "$icon_dir" <<'SWIFT'
 import AppKit
@@ -58,4 +67,18 @@ fi
 codesign --force --sign "$signing_identity" --identifier com.lumen.studio "$app"
 codesign --verify --strict "$app"
 plutil -lint "$app/Contents/Info.plist"
-echo "Built $app"
+if pgrep -x Lumen >/dev/null; then
+    echo 'Lumen was opened during packaging. Quit it before installing the new build.' >&2
+    exit 1
+fi
+swift - "$app" "$destination" <<'SWIFT'
+import Foundation
+import Darwin
+let source = CommandLine.arguments[1], destination = CommandLine.arguments[2]
+let result = FileManager.default.fileExists(atPath: destination)
+    ? renameatx_np(AT_FDCWD, source, AT_FDCWD, destination, UInt32(RENAME_SWAP))
+    : rename(source, destination)
+guard result == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+SWIFT
+codesign --verify --strict "$destination"
+echo "Built $destination"
