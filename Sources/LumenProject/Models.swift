@@ -374,62 +374,6 @@ public struct TimeMap: Codable, Equatable, Sendable {
     public func speed(atOutput t: Double) -> Double { (source(atOutput: t + 0.01) - source(atOutput: t)) / 0.01 }
 }
 
-// MARK: Derived (never persisted)
-
-public struct CursorTrack: Sendable, Equatable {
-    public var x: [Float], y: [Float], opacity: [Float], press: [Float]
-    public var shape: [UInt16]
-    public init(count: Int) {
-        x = .init(repeating: 0, count: count); y = x; opacity = .init(repeating: 1, count: count)
-        press = .init(repeating: 1, count: count); shape = .init(repeating: 0, count: count)
-    }
-}
-public struct CameraTrack: Sendable, Equatable {
-    public var nx: [Float], ny: [Float], lz: [Float], vx: [Float], vy: [Float], vz: [Float]
-    public var yaw: [Float], pitch: [Float]             // degrees
-    public init(count: Int) {
-        nx = .init(repeating: 0.5, count: count); ny = nx; lz = .init(repeating: 0, count: count); vx = lz; vy = lz; vz = lz; yaw = lz; pitch = lz
-    }
-}
-public struct ClickFX: Sendable, Equatable {
-    public var t: Double
-    public var x: Float
-    public var y: Float
-    public init(t: Double, x: Float, y: Float) { self.t = t; self.x = x; self.y = y }
-}
-public struct SFXCue: Sendable, Equatable {
-    public enum Kind: Sendable { case click, whooshIn, whooshOut, key }
-    public var t: Double; public var kind: Kind; public var gainDb: Double
-    public init(t: Double, kind: Kind, gainDb: Double) { self.t = t; self.kind = kind; self.gainDb = gainDb }
-}
-public struct DerivedTracks: Sendable, Equatable {
-    public var revision: Int
-    public var sourceSize: SIMD2<Double>
-    public var outputDuration: Double
-    public var cursor: CursorTrack
-    public var camera: CameraTrack
-    public var clicks: [ClickFX]
-    public var cues: [SFXCue]
-    public var duck: [Float]            // 100 Hz, output time
-    public var face: [SIMD3<Float>]     // 30 Hz (cx, cy, height), normalized to webcam image
-    public var webcamAspect: Float
-    public init(revision: Int, sourceSize: SIMD2<Double>, outputDuration: Double, cursor: CursorTrack,
-                camera: CameraTrack, clicks: [ClickFX], cues: [SFXCue], duck: [Float], face: [SIMD3<Float>],
-                webcamAspect: Float) {
-        self.revision = revision
-        self.sourceSize = sourceSize
-        self.outputDuration = outputDuration
-        self.cursor = cursor
-        self.camera = camera
-        self.clicks = clicks
-        self.cues = cues
-        self.duck = duck
-        self.face = face
-        self.webcamAspect = webcamAspect
-    }
-    public static func == (a: Self, b: Self) -> Bool { a.revision == b.revision }
-}
-
 public struct Timeline: Sendable, Codable, Equatable {
     public var schemaVersion = 2
     public var timeMap: TimeMap
