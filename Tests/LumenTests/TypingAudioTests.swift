@@ -11,7 +11,7 @@ import LumenAudio
     timeline.audio.speedRampsAuto = false
     let events = [InputEvent(t: 1, kind: .down, x: 800, y: 400), InputEvent(t: 5, kind: .keyDown, keyCode: 0), InputEvent(t: 5.2, kind: .keyDown, keyCode: 1)]
     let out = Director.derive(timeline, input: DirectorInput(events: events, source: source), revision: 1)
-    #expect(out.zoom.contains { $0.start >= 5 - 1e-9 && $0.end > 5.2 })
+    #expect(out.zoom.contains { $0.start >= 4.7 && $0.start <= 5 && $0.end > 5.2 })
 }
 
 @Test func missingAudioSettingsDecodeWithDefaults() throws {
