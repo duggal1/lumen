@@ -138,7 +138,7 @@ public struct SpectralGate: Denoiser {
         guard n > 4 else { return x }
         var db = [Double](repeating: -120, count: n)
         for f in 0..<n { var s = 0.0; for i in 0..<hop { let v = Double(x[f * hop + i]); s += v * v }; db[f] = 10 * log10(s / Double(hop) + 1e-12) }
-        let thr = db.sorted()[n / 10] + 8
+        let thr = min(db.sorted()[n / 10] + 8, -40)
         var g = [Double](repeating: 1, count: n), cur = 1.0
         for f in 0..<n {
             let target = db[f] > thr ? 1.0 : pow(10, -18.0 / 20)
