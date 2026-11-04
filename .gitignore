@@ -1,1 +1,6 @@
 .build/
+
+# New local audio drops stay out of Git. Existing committed MP3 files
+# remain tracked until deliberately migrated; ignore rules do not untrack them.
+App/public/assets/*.mp3
+App/public/assets/music/**/*.mp3
