@@ -50,6 +50,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     private var exportTask: Task<Void, Never>?
     private var mixTask: Task<Void, Never>?
     private var playbackTask: Task<Void, Never>?
+    private var wantsPlayback = false
     private let player = PreviewAudioPlayer()
 
     init(session: ProjectSession, renderer: Renderer, timeline: Timeline) {
@@ -109,8 +110,9 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     }
 
     private func remix() {
-        let resume = clock.playing
-        if resume { pause() }
+        let resume = wantsPlayback
+        if clock.playing { pause() }
+        wantsPlayback = resume
         playbackTask?.cancel()
         let previous = mixTask
         previous?.cancel()
@@ -122,34 +124,36 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             guard !Task.isCancelled else { return }
             await Task.detached(priority: .userInitiated) { player.load(audio) }.value
             guard !Task.isCancelled else { return }
-            if resume { self?.play() }
+            if let self, self.wantsPlayback { self.play() }
         }
     }
 
     // MARK: Transport
 
     func seek(_ t: Double) {
-        let wasPlaying = clock.playing
+        let wasPlaying = wantsPlayback
         playbackTask?.cancel()
         let c = min(max(t, 0), duration); playhead = c; clock.seek(c)
         if wasPlaying { play() }
     }
     func play() {
+        wantsPlayback = true
         playbackTask?.cancel()
         let ready = mixTask
         playbackTask = Task { [weak self] in
             await ready?.value
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled, let self, self.wantsPlayback else { return }
             let t = self.playhead >= self.duration - 0.02 ? 0 : self.playhead
             let h = self.player.play(from: t, atHostSeconds: HostClock.now() + 0.03)
             self.clock.start(from: t, at: h, dur: self.duration)
         }
     }
     func pause() {
+        wantsPlayback = false
         playbackTask?.cancel()
         clock.pause(at: HostClock.now()); player.stop(); playhead = clock.time(at: HostClock.now())
     }
-    func togglePlay() { clock.playing ? pause() : play() }
+    func togglePlay() { wantsPlayback ? pause() : play() }
 
     func tick(_ t: Double) { playhead = t; if clock.playing, t >= duration - 0.001 { pause() } }
 
