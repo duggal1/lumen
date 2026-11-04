@@ -33,6 +33,9 @@ struct Analyze: AsyncParsableCommand {
         try jsonOut([
             "name": s.meta.name, "sourceSize": [s.meta.source.width, s.meta.source.height], "fps": s.meta.source.fps,
             "sourceDuration": s.meta.source.duration, "outputDuration": tl.timeMap.outputDuration, "droppedFrames": s.meta.droppedFrames,
+            "eventTimeRange": [ev.first?.t ?? -1, ev.last?.t ?? -1],
+            "eventsInsideVideo": ev.filter { $0.t >= 0 && $0.t <= s.meta.source.duration }.count,
+            "clickTimes": ev.filter { $0.kind == .down }.map { $0.t },
             "events": ["total": ev.count, "moves": ev.filter { $0.kind == .move }.count, "clicks": ev.filter { $0.kind == .down }.count,
                        "keys": ev.filter { $0.kind == .keyDown }.count, "scrolls": ev.filter { $0.kind == .scroll }.count],
             "zoomSegments": tl.zoom.map { ["start": $0.start, "end": $0.end, "scale": $0.scale, "origin": $0.origin.rawValue] },
