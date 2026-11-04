@@ -35,7 +35,7 @@ static float rectMask(float2 px, float4 rect, float r) {
 
 // ---- Backdrop (cached): dither / wallpaper / gradient / mesh / solid + two-layer shadow
 struct BackdropU { float4 content; float2 canvas; float angle; int count; int kind;
-                   float radius; float shadow; float scale; float cell; float density; int hasWall; float time; };
+                   float radius; float shadow; float scale; float cell; float density; int hasWall; float time; float4 pointer; };
 
 constant float kBayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
 
@@ -67,6 +67,10 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
         float2 grid = floor(in.px / cell);
         float2 p = (grid * cell) / u.canvas;
         p.x *= u.canvas.x / u.canvas.y;
+        if (u.pointer.z > 0.001) {
+            float2 dm = p - float2(u.pointer.x * u.canvas.x / u.canvas.y, u.pointer.y);
+            p += dm * exp(-dot(dm, dm) * 10.0) * 0.22 * u.pointer.z;
+        }
         float v = u.density + 0.20 * sin(dot(p, normalize(float2(0.55, 1.0))) * 5.2 - u.time * 0.11)
                             + 0.12 * sin(dot(p, normalize(float2(1.0, 0.28))) * 8.4 + u.time * 0.07);
         c = v > bayer8(grid) ? cols[1].rgb : cols[0].rgb;
