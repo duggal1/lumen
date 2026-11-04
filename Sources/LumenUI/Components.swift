@@ -234,3 +234,117 @@ struct ToggleRow: View {
     let label: String; @Binding var on: Bool
     var body: some View { Row(label: label) { LToggle(on: $on, label: label) } }
 }
+
+// MARK: Action menu trigger
+
+/// 12 pt ellipsis in a 28 target. Every menu item carries a prefix icon.
+struct LActionMenuButton: View {
+    var label = "More"
+    let items: [MenuHost.Item]
+    @Environment(MenuHost.self) private var host
+    @State private var hover = false
+    @State private var frame = CGRect.zero
+
+    var body: some View {
+        Button {
+            host.show(items, anchor: frame, minWidth: 200)
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 12)).frame(width: 28, height: 28)
+                .background(RoundedRectangle(cornerRadius: Radius.field).fill(hover || host.isOpen ? Tok.controlHover : .clear))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Tok.text)
+        .onHover { hover = $0 }
+        .pointerStyle(.link)
+        .accessibilityLabel(label)
+        .background(GeometryReader { g in
+            Color.clear
+                .onAppear { frame = g.frame(in: .named("root")) }
+                .onChange(of: g.frame(in: .named("root"))) { _, f in frame = f }
+        })
+    }
+}
+
+// MARK: Dialog (480 wide, lens, real Cancel and confirm)
+
+struct LDialog<Content: View>: View {
+    let title: String
+    var subtitle: String?
+    let confirmTitle: String
+    var confirmEnabled = true
+    let cancel: () -> Void
+    let confirm: () -> Void
+    @ViewBuilder var content: Content
+    @State private var shown = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        ZStack {
+            Tok.modalScrim.ignoresSafeArea().onTapGesture { }
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top, spacing: 12) {
+                    PixelLens(cell: 2).padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
+                        if let subtitle { Text(subtitle).font(AppType.caption).foregroundStyle(Tok.text2) }
+                    }
+                    Spacer(minLength: 0)
+                }
+                VStack(alignment: .leading, spacing: 16) { content }.padding(.top, 24)
+                HStack(spacing: 8) {
+                    Spacer()
+                    LButton(title: "Cancel", kind: .secondary, height: 32, action: cancel)
+                    LButton(title: confirmTitle, kind: .primary, height: 32, action: confirm)
+                        .disabled(!confirmEnabled)
+                }.padding(.top, 24)
+            }
+            .padding(24)
+            .frame(width: 480)
+            .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
+            .scaleEffect(shown ? 1 : 0.97)
+            .offset(y: shown ? 0 : 6)
+            .opacity(shown ? 1 : 0)
+        }
+        .focusable()
+        .focused($focused)
+        .focusEffectDisabled()
+        .onAppear { focused = true; withAnimation(.easeOut(duration: 0.16)) { shown = true } }
+        .onKeyPress(.escape) { cancel(); return .handled }
+        .onKeyPress(.return) { if confirmEnabled { confirm() }; return .handled }
+        .accessibilityAddTraits(.isModal)
+    }
+}
+
+// MARK: Toast (system glass capsule, 40 tall, one quiet action)
+
+struct UndoToast: View {
+    let text: String
+    let actionTitle: String
+    let action: () -> Void
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(text).font(AppType.body).foregroundStyle(Tok.text)
+            Button(action: action) {
+                Text(actionTitle).font(AppType.label).foregroundStyle(Tok.text)
+                    .padding(.horizontal, 10).frame(height: 24).background(Capsule().fill(Tok.washStrong))
+            }.buttonStyle(.plain).pointerStyle(.link)
+        }
+        .padding(.leading, 16).padding(.trailing, 8).frame(height: 40)
+        .background(.ultraThinMaterial, in: Capsule())
+        .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: Chip
+
+struct LChip: View {
+    let text: String
+    var mono = true
+    var body: some View {
+        Text(text)
+            .font(mono ? AppType.mono : AppType.body)
+            .foregroundStyle(Tok.text)
+            .padding(.horizontal, 10).frame(height: 28)
+            .background(Capsule().fill(Tok.control))
+    }
+}
