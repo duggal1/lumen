@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import AVFoundation
 import LumenCapture
 
@@ -9,101 +10,238 @@ public struct LibraryRoot: View {
 
     public var body: some View {
         MenuRoot {
-            VStack(alignment: .leading, spacing: 0) {
-                PageTitle(text: "Lumen").padding(.horizontal, 32).frame(height: 52, alignment: .center)
-                HStack(alignment: .top, spacing: 32) {
-                    VStack(spacing: 16) { permissions; record }.frame(width: 340)
-                    projectList
-                }.padding(32)
-            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Tok.bg)
+            LibrarySurface(app: app)
         }
-        .frame(minWidth: 880, minHeight: 560)
+        .frame(minWidth: Metrics.minW, minHeight: Metrics.minH)
         .onAppear { app.onFinished = { openWindow(value: $0) } }
-    }
-
-    private var record: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if app.phase != .idle {
-                Text(app.recordingStatus).font(AppType.title).foregroundStyle(Tok.text).padding(.bottom, 16)
-                if app.phase == .recording {
-                    LButton(title: "Show recording controls", icon: "rectangle.on.rectangle", kind: .secondary) {
-                        app.showRecordingControls()
-                    }.padding(.bottom, 16)
-                }
-            }
-            LSegmented(sel: Bindable(app).kind, items: AppModel.SourceKind.allCases.map { ($0, $0.rawValue.capitalized) }).padding(.bottom, 8)
-            switch app.kind {
-            case .display:
-                Row(label: "Display", icon: "display") { LDropdown(sel: Bindable(app).displayID, options: app.displays.map { ($0.id, $0.name, "display") }).frame(width: 160) }
-            case .window:
-                Row(label: "Window", icon: "macwindow") { LDropdown(sel: Bindable(app).windowID, options: app.windows.map { ($0.id, $0.name, "macwindow") }).frame(width: 160) }
-            case .region:
-                Row(label: "Region", icon: "viewfinder") { Text("Drag after Record").font(AppType.caption).foregroundStyle(Tok.text2) }
-            }
-            Row(label: "Frame rate", icon: "speedometer") { LSegmented(sel: Bindable(app).fps, items: [(30, "30"), (60, "60"), (120, "120")]).frame(width: 140) }
-            Row(label: "Microphone", icon: "mic") { LToggle(on: Bindable(app).mic, label: "Microphone") }
-            Row(label: "System audio", icon: "speaker.wave.2") { LToggle(on: Bindable(app).system, label: "System audio") }
-            Row(label: "Webcam", icon: "camera") { LToggle(on: Bindable(app).webcam, label: "Webcam") }
-            Row(label: "Live preview", icon: "bolt") { LToggle(on: Bindable(app).livePreview, label: "Live preview") }
-            LButton(title: app.phase == .idle ? "Record" : "Stop", icon: app.phase == .idle ? "record.circle" : "stop.fill", kind: .primary, height: 32) { app.toggle() }
-                .padding(.top, 8).disabled(app.phase != .idle && app.phase != .recording)
-            if let e = app.error {
-                HStack { Text(e).font(AppType.caption).foregroundStyle(Tok.statusBad); Spacer(); LButton(title: "Retry", kind: .quiet) { app.toggle() } }.padding(.top, 8)
-            }
-        }.card()
-    }
-
-    private var permissions: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
-            let rows: [(String, Bool, () -> Void, String)] = [
-                ("Screen Recording", Permissions.screen, { Permissions.requestScreen(); Permissions.open("ScreenCapture") }, "ScreenCapture"),
-                ("Input Monitoring", Permissions.input, { Permissions.requestInput(); Permissions.open("ListenEvent") }, "ListenEvent"),
-                ("Microphone", Permissions.mic, { Task { await Permissions.requestMedia() } }, "Microphone"),
-                ("Accessibility (optional)", Permissions.accessibility, { Permissions.requestAccessibility(); Permissions.open("Accessibility") }, "Accessibility"),
-            ]
-            if rows.contains(where: { !$0.1 }) {
-                VStack(spacing: 0) {
-                    ForEach(rows, id: \.0) { r in
-                        HStack(spacing: 12) {
-                            PixelBitmap(rows: r.1 ? Bitmap.check : Bitmap.bang, cell: 2, color: r.1 ? Tok.statusOK : Tok.text2).frame(width: 20)
-                            Text(r.0).font(AppType.label); Spacer()
-                            if !r.1 { LButton(title: "Grant", kind: .secondary, height: 24, action: r.2) }
-                        }.frame(minHeight: 40)
-                    }
-                }.card()
-            }
-        }
-    }
-
-    private var projectList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Recordings").font(AppType.title)
-            if app.projects.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    PixelStop(cell: 4)
-                    Text("Nothing here yet. Press ⌘⇧R to record.").font(AppType.body).foregroundStyle(Tok.text2)
-                }.padding(.top, 24)
-            } else {
-                ScrollView { VStack(spacing: 2) { ForEach(app.projects) { p in ProjectRowView(p: p) { openWindow(value: p.url) } } } }
-            }
-        }.frame(maxWidth: .infinity, alignment: .topLeading)
     }
 }
 
-private struct ProjectRowView: View {
-    let p: AppModel.ProjectRow; let open: () -> Void
-    @State private var hover = false
+private struct LibrarySurface: View {
+    let app: AppModel
+    @Environment(MenuHost.self) private var menu
+    @Environment(\.openWindow) private var openWindow
+    @State private var showRecord = false
+    @State private var undo: PendingDelete?
+    @State private var undoTask: Task<Void, Never>?
+
+    private struct PendingDelete: Identifiable {
+        let id = UUID()
+        let row: AppModel.ProjectRow
+        let trashURL: URL
+    }
+
     var body: some View {
-        Button(action: open) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(p.name).font(AppType.label).foregroundStyle(Tok.text)
-                    Text(p.size).font(AppType.caption).foregroundStyle(Tok.text2)
+        VStack(spacing: 0) {
+            pageBar
+            ScrollView {
+                VStack(alignment: .leading, spacing: Metrics.sectionGap) {
+                    subtitle
+                    if let problem = permissionNotice { notice(problem.text, action: problem.action) }
+                    if let error = app.error { failure(error) }
+                    LedgerCard(app: app)
+                    ActivityCard(app: app)
+                    RecentRecordings(app: app, open: open, reveal: reveal, delete: delete)
+                    WhereYouRecord()
                 }
-                Spacer()
-                Text(p.date.formatted(.dateTime.hour().minute())).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
-            }.padding(.horizontal, 12).frame(height: 56).background(RoundedRectangle(cornerRadius: 12).fill(hover ? Tok.control : .clear))
-        }.buttonStyle(.plain).onHover { hover = $0 }.pointerStyle(.link)
+                .padding(Metrics.pagePad)
+                .frame(maxWidth: Metrics.wide, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Tok.bg)
+        .overlay { if showRecord { recordDialog.transition(.opacity) } }
+        .overlay(alignment: .bottom) {
+            if let undo {
+                UndoToast(text: "Deleted \(undo.row.name).", actionTitle: "Undo") { restore(undo) }
+                    .padding(.bottom, Space.s6)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: undo?.id)
+    }
+
+    // MARK: Page bar
+
+    private var pageBar: some View {
+        HStack(alignment: .bottom, spacing: Space.s4) {
+            PageTitle(text: "Library")
+            Spacer(minLength: Space.s4)
+            primaryAction
+        }
+        .padding(.horizontal, Metrics.pagePad)
+        .frame(height: Metrics.pageBar, alignment: .bottom)
+    }
+
+    @ViewBuilder private var primaryAction: some View {
+        switch app.phase {
+        case .idle:
+            LButton(title: "Record", icon: "record.circle", kind: permissionNotice == nil ? .primary : .secondary) {
+                showRecord = true
+            }
+        case .recording:
+            HStack(spacing: Space.s3) {
+                PixelStop(cell: 2)
+                Text(time(app.stats?.elapsed ?? 0)).font(AppType.label.monospacedDigit()).foregroundStyle(Tok.text)
+                LButton(title: "Stop", icon: "stop.fill", kind: .primary) { app.toggle() }
+            }
+        case .preparing:
+            HStack(spacing: Space.s2) { PixelWait(); Text("Preparing…").font(AppType.body).foregroundStyle(Tok.text2) }
+        case .countdown(let n):
+            Text("Starting in \(n)").font(AppType.label).foregroundStyle(Tok.text)
+        case .finishing:
+            HStack(spacing: Space.s2) { PixelWait(); Text("Saving…").font(AppType.body).foregroundStyle(Tok.text2) }
+        }
+    }
+
+    private var subtitle: some View {
+        Text("\(Int(app.recordedToday / 60)) min recorded today. Raw footage stays on this Mac.")
+            .font(AppType.body).tracking(-0.1).foregroundStyle(Tok.text2)
+    }
+
+    // MARK: Permission and failure rows
+
+    private var permissionNotice: (text: String, action: () -> Void)? {
+        if !Permissions.screen {
+            return ("Screen recording is off.", { Permissions.requestScreen(); Permissions.open("ScreenCapture") })
+        }
+        if !Permissions.input {
+            return ("Input Monitoring is off.", { Permissions.requestInput(); Permissions.open("ListenEvent") })
+        }
+        if app.mic && !Permissions.mic {
+            return ("Microphone is off.", { Task { await Permissions.requestMedia() }; Permissions.open("Microphone") })
+        }
+        return nil
+    }
+
+    private func notice(_ text: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: Space.s3) {
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 14)).foregroundStyle(Tok.text2)
+            Text(text).font(AppType.label).foregroundStyle(Tok.text)
+            Spacer(minLength: Space.s4)
+            LButton(title: "Open Settings", kind: .primary, height: 24, action: action)
+        }
+        .padding(.horizontal, Space.s3)
+        .frame(height: 40)
+        .background(RoundedRectangle(cornerRadius: Radius.nested).fill(Tok.control))
+    }
+
+    private func failure(_ error: String) -> some View {
+        HStack(spacing: Space.s3) {
+            PixelBitmap(rows: Bitmap.failed, cell: 2, color: Tok.statusBad)
+            Text(error).font(AppType.body).foregroundStyle(Tok.statusBad).lineLimit(2)
+            Spacer(minLength: Space.s4)
+            LButton(title: "Retry", kind: .quiet, height: 24) { app.error = nil; app.toggle() }
+        }
+        .padding(.horizontal, Space.s3)
+        .frame(minHeight: 40)
+        .background(RoundedRectangle(cornerRadius: Radius.nested).fill(Tok.control))
+    }
+
+    // MARK: Record dialog
+
+    private var recordDialog: some View {
+        LDialog(title: "New recording", subtitle: "Choose what to capture.", confirmTitle: "Record",
+                confirmEnabled: canRecord, cancel: { showRecord = false },
+                confirm: { showRecord = false; app.toggle() }) {
+            LSegmented(sel: Bindable(app).kind,
+                       items: AppModel.SourceKind.allCases.map { ($0, label($0)) },
+                       track: Tok.control, thumb: Tok.controlHover)
+            switch app.kind {
+            case .display:
+                field("Display") {
+                    LDropdown(sel: Bindable(app).displayID,
+                              options: app.displays.map { ($0.id, $0.name, "display") })
+                }
+            case .window:
+                field("Window") {
+                    LDropdown(sel: Bindable(app).windowID,
+                              options: app.windows.map { ($0.id, $0.name, "macwindow") })
+                }
+            case .region:
+                Text("Drag to choose an area after you press Record.").font(AppType.caption).foregroundStyle(Tok.text2)
+            }
+            HStack(spacing: Space.s4) {
+                Text("Frame rate").font(AppType.label).foregroundStyle(Tok.text)
+                Spacer(minLength: Space.s4)
+                LSegmented(sel: Bindable(app).fps, items: [(30, "30"), (60, "60"), (120, "120")],
+                           track: Tok.control, thumb: Tok.controlHover)
+                    .frame(width: 180)
+            }
+            .frame(height: 32)
+            compactToggle("Microphone", Bindable(app).mic)
+            compactToggle("System audio", Bindable(app).system)
+            compactToggle("Webcam", Bindable(app).webcam)
+            Text(preview).font(AppType.caption).foregroundStyle(Tok.text2)
+                .contentTransition(.opacity)
+        }
+        .onAppear { menu.close() }
+    }
+
+    private func compactToggle(_ label: String, _ on: Binding<Bool>) -> some View {
+        HStack(spacing: Space.s4) {
+            Text(label).font(AppType.label).foregroundStyle(Tok.text)
+            Spacer(minLength: Space.s4)
+            LToggle(on: on, label: label)
+        }
+        .frame(height: 32)
+    }
+
+    private func field<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: Space.s1) {
+            Text(label).font(AppType.caption).foregroundStyle(Tok.text2)
+            content()
+        }
+    }
+
+    private var canRecord: Bool {
+        app.kind != .window || app.windowID != 0
+    }
+
+    private var preview: String {
+        switch app.kind {
+        case .display: return "Full display at \(app.fps) fps."
+        case .window: return "The selected window at \(app.fps) fps."
+        case .region: return "Drag to choose an area after you press Record."
+        }
+    }
+
+    private func label(_ kind: AppModel.SourceKind) -> String {
+        switch kind { case .display: "Display"; case .window: "Window"; case .region: "Area" }
+    }
+
+    // MARK: Actions
+
+    private func open(_ url: URL) {
+        openWindow(value: url)
+    }
+
+    private func reveal(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func delete(_ row: AppModel.ProjectRow) {
+        guard let trashURL = app.trash(row) else { return }
+        let pending = PendingDelete(row: row, trashURL: trashURL)
+        undo = pending
+        undoTask?.cancel()
+        undoTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled, undo?.id == pending.id else { return }
+            undo = nil
+        }
+    }
+
+    private func restore(_ pending: PendingDelete) {
+        undoTask?.cancel()
+        app.restore(pending.row, from: pending.trashURL)
+        undo = nil
+    }
+
+    private func time(_ t: Double) -> String {
+        String(format: "%d:%02d", Int(t) / 60, Int(t) % 60)
     }
 }
 
@@ -111,14 +249,15 @@ public struct MenuBarContent: View {
     let app: AppModel
     @Environment(\.openWindow) private var openWindow
     public init(_ app: AppModel) { self.app = app }
+
     public var body: some View {
         if app.phase != .idle {
             Text(app.recordingStatus)
             Button("Show recording controls") { app.showRecordingControls() }
         }
-        Button(app.phase == .recording ? "Stop recording" : "Start recording") { app.toggle() }.keyboardShortcut("r", modifiers: [.command, .shift])
+        Button(app.phase == .recording ? "Stop recording" : "Start recording") { app.toggle() }
+            .keyboardShortcut("r", modifiers: [.option, .command])
         Button("Open Lumen") { openWindow(id: "library"); NSApp.activate(ignoringOtherApps: true) }
-        Divider()
         Button("Quit Lumen") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 }
