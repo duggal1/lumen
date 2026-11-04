@@ -185,7 +185,8 @@ public final class AudioMixer: @unchecked Sendable {
 /// Preview playback of a pre-mixed buffer, started in lock-step with the host clock. `load` is safe from any thread.
 public final class PreviewAudioPlayer: @unchecked Sendable {
     private let engine = AVAudioEngine(), node = AVAudioPlayerNode()
-    private let mixed = OSAllocatedUnfairLock<MixedAudio?>(initialState: nil)
+    private struct Buffer: @unchecked Sendable { let value: AVAudioPCMBuffer }
+    private let mixed = OSAllocatedUnfairLock<(audio: MixedAudio?, buffer: Buffer?)>(initialState: (nil, nil))
     private let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 2, interleaved: false)!
 
     public init() {
@@ -193,20 +194,39 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
         engine.connect(node, to: engine.mainMixerNode, format: fmt)
     }
 
-    public func load(_ m: MixedAudio?) { mixed.withLock { $0 = m } }
+    public func load(_ m: MixedAudio?) {
+        var prepared: Buffer?
+        if let m, !m.l.isEmpty, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(m.l.count)) {
+            b.frameLength = AVAudioFrameCount(m.l.count)
+            m.l.withUnsafeBufferPointer { b.floatChannelData![0].update(from: $0.baseAddress!, count: m.l.count) }
+            m.r.withUnsafeBufferPointer { b.floatChannelData![1].update(from: $0.baseAddress!, count: m.r.count) }
+            prepared = Buffer(value: b)
+        }
+        mixed.withLock { $0 = (m, prepared) }
+    }
 
     /// Starts playback of output-time `t` at `atHostSeconds` (HostClock seconds).
-    public func play(from t: Double, atHostSeconds h: Double) {
+    @discardableResult public func play(from t: Double, atHostSeconds h: Double) -> Double {
         node.stop()
-        guard let m = mixed.withLock({ $0 }) else { return }
+        let snapshot = mixed.withLock { $0 }
+        guard let m = snapshot.audio else { return max(h, HostClock.now() + 0.03) }
         let s = min(max(Int(t * 48000), 0), m.l.count), cnt = m.l.count - s
-        guard cnt > 0, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(cnt)) else { return }
-        b.frameLength = AVAudioFrameCount(cnt)
-        m.l.withUnsafeBufferPointer { b.floatChannelData![0].update(from: $0.baseAddress! + s, count: cnt) }
-        m.r.withUnsafeBufferPointer { b.floatChannelData![1].update(from: $0.baseAddress! + s, count: cnt) }
-        if !engine.isRunning { do { try engine.start() } catch { return } }
+        guard cnt > 0 else { return max(h, HostClock.now() + 0.03) }
+        let b: AVAudioPCMBuffer
+        if s == 0, let prepared = snapshot.buffer {
+            b = prepared.value
+        } else {
+            guard let tail = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(cnt)) else { return max(h, HostClock.now() + 0.03) }
+            tail.frameLength = AVAudioFrameCount(cnt)
+            m.l.withUnsafeBufferPointer { tail.floatChannelData![0].update(from: $0.baseAddress! + s, count: cnt) }
+            m.r.withUnsafeBufferPointer { tail.floatChannelData![1].update(from: $0.baseAddress! + s, count: cnt) }
+            b = tail
+        }
+        if !engine.isRunning { do { try engine.start() } catch { return max(h, HostClock.now() + 0.03) } }
         node.scheduleBuffer(b, at: nil, options: .interrupts, completionHandler: nil)
-        node.play(at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: h)))
+        let start = max(h, HostClock.now() + 0.03)
+        node.play(at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: start)))
+        return start
     }
 
     public func stop() { node.stop() }
