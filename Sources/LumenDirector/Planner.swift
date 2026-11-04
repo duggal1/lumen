@@ -4,6 +4,7 @@ import LumenProject
 
 enum SpeedRamps {
     static func plan(events: [InputEvent], vad: [ClosedRange<Double>], tm: TimeMap, audio: AudioPlan, backing: Double) -> [SpeedRamp] {
+        let minIdle = max(audio.speedRampMinIdle, 4.0)          // short idles are normal pauses, never speed them up
         var act: [Double] = [tm.trimStart]
         var lx = -1e6, ly = -1e6
         for e in events {
@@ -14,10 +15,12 @@ enum SpeedRamps {
             }
         }
         act.append(tm.trimEnd)
+        act = act.filter { $0 >= tm.trimStart && $0 <= tm.trimEnd }.sorted()
         var out: [SpeedRamp] = []
+        guard act.count > 1 else { return out }
         for i in 0..<(act.count - 1) {
             let a = act[i], b = act[i + 1]
-            guard b - a >= audio.speedRampMinIdle else { continue }
+            guard b - a >= minIdle else { continue }
             if vad.contains(where: { $0.upperBound > a && $0.lowerBound < b }) { continue }
             let speed = min(audio.speedRampMaxSpeed, (b - a) / 0.8)
             if speed >= 1.5 { out.append(SpeedRamp(start: a + 0.25, end: b - 0.25, speed: speed)) }
@@ -35,19 +38,26 @@ enum ZoomPlanner {
         if p.preset == .fixed {
             return [ZoomSegment(start: 0, end: tm.outputDuration, scale: p.maxScale, focus: .follow, origin: .auto)]
         }
+        // Ignore the tail: the Stop click / stop hotkey are recorded right before the end and must never trigger a zoom.
+        let cutoff = tm.trimEnd - 0.8
         var pts: [Pt] = []
         var lastClick = (x: W / 2, y: H / 2), lastDrag = -1.0
-        for e in events {
+        for e in events where e.t >= tm.trimStart && e.t <= cutoff {
             let x = Double(e.x), y = Double(e.y)
             switch e.kind {
             case .down:
                 lastClick = (x, y); pts.append(Pt(t: e.t, x: x, y: y))
                 if e.axFrameIndex > 0, Int(e.axFrameIndex) <= ax.count {
                     let f = ax[Int(e.axFrameIndex) - 1]
-                    pts.append(Pt(t: e.t, x: f.x, y: f.y)); pts.append(Pt(t: e.t, x: f.x + f.w, y: f.y + f.h))
+                    // Big containers (windows, web areas) would blow the focus box up to the whole screen and cancel the zoom.
+                    if f.w > 8, f.h > 8, f.w <= 0.5 * W, f.h <= 0.5 * H {
+                        pts.append(Pt(t: e.t, x: f.x, y: f.y)); pts.append(Pt(t: e.t, x: f.x + f.w, y: f.y + f.h))
+                    }
                 }
             case .drag: if e.t - lastDrag > 0.1 { pts.append(Pt(t: e.t, x: x, y: y)); lastDrag = e.t }
-            case .keyDown: pts.append(Pt(t: e.t, x: lastClick.x, y: lastClick.y))
+            case .keyDown:
+                guard e.flags & 0x14 == 0 else { break }        // cmd / ctrl chords are shortcuts, not typing
+                pts.append(Pt(t: e.t, x: lastClick.x, y: lastClick.y))
             case .scroll: pts.append(Pt(t: e.t, x: x, y: y))
             default: break
             }
@@ -66,13 +76,15 @@ enum ZoomPlanner {
             let xs = c.map(\.x), ys = c.map(\.y)
             let minX = xs.min()!, maxX = xs.max()!, minY = ys.min()!, maxY = ys.max()!
             let bw = (maxX - minX) + 0.24 * W, bh = (maxY - minY) + 0.24 * H          // 12% padding each side
-            var scale = clamp(0.8 * min(W / bw, H / bh), 1, p.maxScale)
-            scale = (scale * 10).rounded() / 10
-            guard scale >= p.minTrigger else { continue }
+            let fit = 0.8 * min(W / bw, H / bh)
             let spread = hypot(maxX - minX, maxY - minY) / diag
+            // Every click cluster zooms. A wide cluster still gets a real zoom (and follows the cursor) instead of being skipped.
+            var scale = fit >= p.minTrigger ? min(fit, p.maxScale) : min(max(1.5, p.minTrigger), p.maxScale)
+            scale = max((scale * 10).rounded() / 10, 1.1)
             let focus: Focus = spread > 0.25 ? .follow : .fixed(x: (minX + maxX) / 2 / W, y: (minY + maxY) / 2 / H)
             let s = max(tm.trimStart, c.first!.t - p.leadIn)                            // lead-in before first event
             let e = min(tm.trimEnd, max(c.last!.t + p.tail, s + p.minHold))
+            guard e > s else { continue }
             segs.append(Seg(s: s, e: e, scale: scale, focus: focus))
         }
         // pan-through: don't zoom out if the next cluster starts soon
@@ -81,8 +93,10 @@ enum ZoomPlanner {
                 segs[i].e = max(segs[i + 1].s, segs[i].s + 0.3)
             }
         }
-        return segs.map {
-            ZoomSegment(start: tm.output(atSource: $0.s), end: tm.output(atSource: $0.e), scale: $0.scale, focus: $0.focus, origin: .auto)
+        return segs.compactMap {
+            let a = tm.output(atSource: $0.s), b = tm.output(atSource: $0.e)
+            guard b - a > 0.2 else { return nil }
+            return ZoomSegment(start: a, end: b, scale: $0.scale, focus: $0.focus, origin: .auto)
         }
     }
 }
