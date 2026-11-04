@@ -22,6 +22,10 @@ struct PreviewView: NSViewRepresentable {
     private let busy = OSAllocatedUnfairLock(initialState: false)
     private var lastKey: (Int, Double, Int, Int, Int) = (-1, -1, 0, 0, 0)
     private let t0 = CACurrentMediaTime()
+    private var pointer = SIMD3<Double>(0.5, 0.5, 0)
+    private var pointerTarget = SIMD3<Double>(0.5, 0.5, 0)
+    private var lastPointerTime = 0.0
+    private var pointerTrackingArea: NSTrackingArea?
 
     init(model: EditorModel) {
         self.model = model; super.init(frame: .zero)
@@ -37,8 +41,25 @@ struct PreviewView: NSViewRepresentable {
     override func viewDidMoveToWindow() {
         link?.invalidate(); link = nil
         guard window != nil else { return }
+        window?.acceptsMouseMovedEvents = true
         let l = displayLink(target: self, selector: #selector(tick(_:)))
         l.add(to: .main, forMode: .common); link = l
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTrackingArea { removeTrackingArea(pointerTrackingArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved], owner: self)
+        addTrackingArea(area); pointerTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
+    override func mouseExited(with event: NSEvent) { pointerTarget.z = 0 }
+    override func mouseMoved(with event: NSEvent) {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        pointerTarget = SIMD3(Double(min(max(point.x / bounds.width, 0), 1)),
+                              Double(min(max(1 - point.y / bounds.height, 0), 1)), 1)
     }
     override func layout() {
         super.layout()
@@ -54,19 +75,24 @@ struct PreviewView: NSViewRepresentable {
         // The dither field is a living surface: redraw every display tick. Static backgrounds stay cache-stable.
         let animated = (tl.style.background == .dither || tl.style.background == .wave || tl.style.background == .field)
             && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let dt = lastPointerTime > 0 ? min(max(l.targetTimestamp - lastPointerTime, 0), 0.1) : 0
+        lastPointerTime = l.targetTimestamp
+        pointer += (pointerTarget - pointer) * (1 - exp(-dt * 7))
         let uiTime = animated ? (model.clock.playing ? t : l.targetTimestamp - t0) : 0
         let phase = animated ? Int(uiTime * 240) : 0
         let key = (ver, t, Int(ds.width), Int(ds.height), phase)
         guard key != lastKey, ds.width > 2, busy.withLock({ let b = $0; $0 = true; return !b }) else { return }
         lastKey = key
         let renderer = model.renderer, session = model.session, layer = Unsafe(v: metal), busy = busy
+        let pointerValue = animated ? SIMD4(Float(pointer.x), Float(pointer.y), Float(pointer.z), 0) : .zero
         Task.detached(priority: .userInitiated) {
             defer { busy.withLock { $0 = false } }
             let s = tl.timeMap.source(atOutput: t)
             guard let sf = try? await session.screen.frame(atSource: s) else { return }
             let wf = tl.webcam != nil ? try? await session.webcam?.frame(atSource: s) : nil
             let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: SIMD2(Int(ds.width), Int(ds.height)), fps: 60,
-                                    backingScale: session.meta.source.backingScale, quality: .preview, uiTime: uiTime)
+                                    backingScale: session.meta.source.backingScale, quality: .preview, uiTime: uiTime,
+                                    pointer: pointerValue)
             renderer.draw(req, to: layer.v)
         }
     }
