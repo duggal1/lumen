@@ -126,8 +126,21 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         case .window(let wid):
             guard let w = content.windows.first(where: { $0.windowID == wid }) else { throw CaptureError.noSource }
             filter = SCContentFilter(desktopIndependentWindow: w)
-            scale = 2; origin = w.frame.origin       // window mode: cursor mapped to the window frame at start
-            pw = Int(w.frame.width * scale) & ~1; ph = Int(w.frame.height * scale) & ~1
+            // A window can be captured on a non-Retina or secondary screen.
+            // Use the backing scale of the display containing most of the window.
+            let hostDisplay = content.displays.max { lhs, rhs in
+                let a = CGDisplayBounds(lhs.displayID).intersection(w.frame)
+                let b = CGDisplayBounds(rhs.displayID).intersection(w.frame)
+                return a.width * a.height < b.width * b.height
+            }
+            if let id = hostDisplay?.displayID, let mode = CGDisplayCopyDisplayMode(id) {
+                scale = Double(mode.pixelWidth) / Double(mode.width)
+            } else {
+                scale = 1
+            }
+            origin = w.frame.origin
+            pw = Int((w.frame.width * scale).rounded()) & ~1
+            ph = Int((w.frame.height * scale).rounded()) & ~1
         }
         let fps = min(cfg.fps, maxFPS)
         sc.width = pw; sc.height = ph
