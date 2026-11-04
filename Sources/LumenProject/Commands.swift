@@ -34,6 +34,9 @@ public enum Command: Codable, Sendable {
     case addZoom(ZoomSegment), addZoomAtPlayhead(duration: Double, scale: Double), moveZoom(UUID, start: Double, end: Double)
     case setZoomScale(UUID, Double), setZoomFocus(UUID, Focus), setZoomEasing(UUID, ZoomEasing?), deleteZoom(UUID), setZoomPreset(ZoomPreset)
     case setStyle(Style), setCursor(CursorStyle), setCamera(CameraParams), setAudio(AudioPlan), setWebcam(WebcamLayout?), setCaptions(CaptionPlan)
+    case setPrivacy(PrivacyPlan)
+    case deleteWords([Int]), restoreWords([Int]), editWord(index: Int, text: String)
+    case setCaptionsEnabled(Bool)
     case setLayout(LayoutSegment), deleteLayout(UUID), setLayoutSettings(LayoutKind, LayoutSettings)
     case addMask(Mask), addMaskAtPlayhead(x: Double, y: Double, w: Double, h: Double, mode: MaskMode)
     case approveMasks([UUID]), rejectMasks([UUID]), deleteMask(UUID)
@@ -96,6 +99,11 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
     case .setAudio(let s): t.audio = s; return [.timeMap, .audio, .zoom, .camera]
     case .setWebcam(let w): t.webcam = w; return [.webcam, .layout]
     case .setCaptions(let p): t.captions = p; return [.captions]
+    case .setPrivacy(let p): t.overlays.privacy = p; return .masks
+    case .deleteWords(let ix): t.captions.deletedWords = Array(Set(t.captions.deletedWords).union(ix)).sorted(); return .replan
+    case .restoreWords(let ix): t.captions.deletedWords.removeAll { ix.contains($0) }; return .replan
+    case .editWord(let i, let s): t.captions.textEdits[String(i)] = s; return .captions
+    case .setCaptionsEnabled(let b): t.captions.enabled = b; return .captions
 
     case .setLayout(let seg):
         if let i = t.layouts.firstIndex(where: { $0.id == seg.id }) { t.layouts[i] = seg } else { t.layouts.append(seg) }
@@ -109,9 +117,17 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         let e = min(playSrc + 3, tm.trimEnd)
         t.overlays.masks.append(Mask(start: playSrc, end: e, mode: mode, keys: [MaskKey(t: playSrc, x: x, y: y, w: w, h: h)])); return .masks
     case .approveMasks(let ids):
-        for i in t.overlays.masks.indices where ids.contains(t.overlays.masks[i].id) { t.overlays.masks[i].approved = true }
+        for i in t.overlays.masks.indices where ids.contains(t.overlays.masks[i].id) {
+            t.overlays.masks[i].approved = true
+            t.overlays.privacy.decisions[t.overlays.masks[i].id.uuidString] = true
+        }
         return .masks
-    case .rejectMasks(let ids): t.overlays.masks.removeAll { ids.contains($0.id) }; return .masks
+    case .rejectMasks(let ids):
+        for id in ids where t.overlays.masks.first(where: { $0.id == id })?.origin == .auto {
+            t.overlays.privacy.decisions[id.uuidString] = false
+        }
+        t.overlays.masks.removeAll { ids.contains($0.id) }
+        return .masks
     case .deleteMask(let id): t.overlays.masks.removeAll { $0.id == id }; return .masks
     case .addHighlight(let h): t.overlays.highlights.append(h); return .masks
     case .deleteHighlight(let id): t.overlays.highlights.removeAll { $0.id == id }; return .masks
