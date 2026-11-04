@@ -2,15 +2,6 @@ import Foundation
 import LumenCore
 import LumenProject
 
-public struct FaceSample: Sendable {
-    public var t: Double, cx: Float, cy: Float, h: Float
-    public init(t: Double, cx: Float, cy: Float, h: Float) { self.t = t; self.cx = cx; self.cy = cy; self.h = h }
-}
-/// Pixel-activity centroid (device / imported clips with no input events). Source seconds, source px.
-public struct ActivityPoint: Sendable {
-    public var t: Double, x: Double, y: Double
-    public init(t: Double, x: Double, y: Double) { self.t = t; self.x = x; self.y = y }
-}
 public struct DirectorInput: Sendable {
     public var events: [InputEvent]
     public var source: SourceInfo
@@ -19,10 +10,13 @@ public struct DirectorInput: Sendable {
     public var face: [FaceSample]
     public var webcamAspect: Float
     public var activity: [ActivityPoint]
+    public var transcript: Transcript?
+    public var ocr: [OCRDetection]
     public init(events: [InputEvent], source: SourceInfo, vad: [ClosedRange<Double>] = [], ax: [AXFrame] = [],
-                face: [FaceSample] = [], webcamAspect: Float = 16.0 / 9, activity: [ActivityPoint] = []) {
+                face: [FaceSample] = [], webcamAspect: Float = 16.0 / 9, activity: [ActivityPoint] = [],
+                transcript: Transcript? = nil, ocr: [OCRDetection] = []) {
         self.events = events; self.source = source; self.vad = vad; self.ax = ax; self.face = face
-        self.webcamAspect = webcamAspect; self.activity = activity
+        self.webcamAspect = webcamAspect; self.activity = activity; self.transcript = transcript; self.ocr = ocr
     }
 }
 
@@ -50,6 +44,13 @@ public enum Director {
         let (cursor, clicks) = CursorPipeline.run(events: input.events, taps: t.overlays.taps, st: t.cursor, tm: tm, src: src)
         let size = SIMD2(Double(src.width), Double(src.height))
         let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size, outDur: tm.outputDuration, loop: t.cursor.loop)
+        let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad, outDur: tm.outputDuration)
+        let layoutSpans = LayoutSolver.spans(t, tm, hasWebcam: t.webcam != nil)
+        let layout = LayoutSolver.solve(t, spans: layoutSpans.spans, fallback: layoutSpans.fallback, src: size,
+                                        webcamAspect: Double(input.webcamAspect), placement: placement, outDur: tm.outputDuration)
+        let autoMasks = MaskTracks.build(input.ocr, plan: t.overlays.privacy, src: src)
+        let captions = CaptionPlanner.plan(words: input.transcript?.words ?? [], tm: tm, p: t.captions, aspect: t.style.aspectRatio,
+                                           kindAt: layout.kind(at:), cornerAt: placement.corner(at:))
 
         var cues: [SFXCue] = []
         if t.audio.clickSounds { cues += clicks.map { SFXCue(t: $0.t, kind: .click, gainDb: 0) } }
@@ -84,7 +85,8 @@ public enum Director {
         }
         t.derived = DerivedTracks(revision: revision, sourceSize: size, outputDuration: tm.outputDuration, cursor: cursor, camera: cam,
                                   clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm, camera: cam, layout: t.webcam),
-                                  webcamAspect: input.webcamAspect)
+                                  webcamAspect: input.webcamAspect, layout: layout, placement: placement,
+                                  captions: captions, autoMasks: autoMasks)
         return t
     }
 }
@@ -105,6 +107,22 @@ public struct FrameState: Sendable {
     public var clickFX: [ClickRing]
     public var webcamCrop: SIMD4<Float>       // uv x, y, w, h
     public var sourceTime: Double
+    public var layout: ResolvedLayout
+    public var layoutKind: LayoutKind
+    public var webcamCorner: WebcamLayout.Corner?
+    public var webcamOpacity: Float
+    public var caption: CaptionChunk?
+    public var emphasis: EmphasisFrame
+
+    public init(cameraCenter: SIMD2<Float>, cameraScale: Float, cameraTilt: SIMD2<Float> = .zero,
+                cursor: CursorSample, clickFX: [ClickRing], webcamCrop: SIMD4<Float>, sourceTime: Double,
+                layout: ResolvedLayout = .full, layoutKind: LayoutKind = .screenOnly, webcamCorner: WebcamLayout.Corner? = nil,
+                webcamOpacity: Float = 1, caption: CaptionChunk? = nil, emphasis: EmphasisFrame = EmphasisFrame()) {
+        self.cameraCenter = cameraCenter; self.cameraScale = cameraScale; self.cameraTilt = cameraTilt; self.cursor = cursor
+        self.clickFX = clickFX; self.webcamCrop = webcamCrop; self.sourceTime = sourceTime; self.layout = layout
+        self.layoutKind = layoutKind; self.webcamCorner = webcamCorner; self.webcamOpacity = webcamOpacity
+        self.caption = caption; self.emphasis = emphasis
+    }
 }
 
 @inline(__always) private func cr(_ a: [Float], _ f: Double) -> Float {
@@ -150,14 +168,20 @@ extension Timeline {
         // webcam crop: face-aware or centered square
         let ar = max(d.webcamAspect, 0.1)
         var ch: Float = 1, cx: Float = 0.5, cy: Float = 0.5
-        if !d.face.isEmpty {
+        let layoutKind = d.layout.kind(at: t)
+        if layoutSettings[layoutKind].autoFrame, !d.face.isEmpty {
             let fp = t * faceGridRate, i0 = min(Int(fp), d.face.count - 1), i1 = min(i0 + 1, d.face.count - 1)
             let fc = d.face[i0] + (d.face[i1] - d.face[i0]) * Float(fp - Double(i0))
             cx = fc.x; cy = fc.y; ch = cf(fc.z, 0.25, 1)
         }
         let cw = min(ch / ar, 1)
         let crop = SIMD4<Float>(cf(cx - cw / 2, 0, 1 - cw), cf(cy - ch / 2, 0, 1 - ch), cw, ch)
+        let sourceTime = timeMap.source(atOutput: t)
+        let emphasis = Emphasis.evaluate(overlays: overlays, autoMasks: d.autoMasks, sourceTime: sourceTime,
+                                         cursor: pos, sourceSize: d.sourceSize)
         return FrameState(cameraCenter: cam, cameraScale: scale, cameraTilt: tilt, cursor: cs, clickFX: rings, webcamCrop: crop,
-                          sourceTime: timeMap.source(atOutput: t))
+                          sourceTime: sourceTime, layout: d.layout.sample(at: t), layoutKind: layoutKind,
+                          webcamCorner: d.placement.corner(at: t), webcamOpacity: d.placement.visibility(at: t),
+                          caption: d.captions.first { t >= $0.start && t < $0.end }, emphasis: emphasis)
     }
 }
