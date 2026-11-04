@@ -355,7 +355,7 @@ public final class Renderer: @unchecked Sendable {
         // cursor
         let cs = st.cursor
         if cs.opacity > 0.01, let atlas, let ent = atlas.entry(cs.shape) {
-            let S = 32 * r.backingScale * tl.cursor.size * pxPerSrc * pow(sc, 1 - tl.cursor.zoomCompensation) * Double(cs.press)
+            let S = 32 * r.backingScale * tl.cursor.size * pxPerSrc * pow(sc, 1 - tl.cursor.effectiveCompensation) * Double(cs.press)
             let c = g.toCanvas(SIMD2<Double>(Double(cs.position.x), Double(cs.position.y)), cam: cam, scale: sc)
             e.setRenderPipelineState(pCursor)
             quad(e, SIMD4<Float>(Float(c.x - ent.hot.x * S), Float(c.y - ent.hot.y * S), Float(S), Float(S)), canvasF)
