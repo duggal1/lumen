@@ -103,7 +103,7 @@ struct Frame: AsyncParsableCommand {
     @Option var width = 1920
     func run() async throws {
         let (s, tl) = try await openProject(project)
-        let h = (Int((Double(width) / tl.style.canvas.ratio).rounded()) + 1) & ~1
+        let h = (Int((Double(width) / tl.style.aspectRatio).rounded()) + 1) & ~1
         let r = try Renderer(); r.setCustomCursors(s.cursors)
         let pb = try await FrameImage.render(renderer: r, session: s, timeline: tl, t: t, canvas: SIMD2(width, h))
         try FrameImage.writePNG(pb, to: URL(fileURLWithPath: out)); print("wrote \(out)")
