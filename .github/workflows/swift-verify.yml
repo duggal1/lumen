@@ -1,0 +1,32 @@
+name: Swift verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Environment
+        run: |
+          swift --version
+          xcodebuild -version
+      - name: Install Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+      - name: Build debug
+        run: swift build
+      - name: Run unit and integration tests
+        run: swift test
+      - name: Build release and package app
+        run: bash Tools/make-app.sh
+      - name: Verify packaged audio and signature
+        run: |
+          codesign --verify --strict .build/Lumen.app
+          test -f .build/Lumen.app/Contents/Resources/Audio/mouse-click.mp3
+          test -f .build/Lumen.app/Contents/Resources/Audio/zoom-in-whoosh.mp3
+          test -f .build/Lumen.app/Contents/Resources/Audio/music/credits.csv
