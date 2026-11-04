@@ -100,14 +100,14 @@ public final class InputRecorder: @unchecked Sendable {
         let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp,
                                     .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel, .keyDown, .keyUp, .flagsChanged]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << CGEventMask($1.rawValue)) }
-        let cb: CGEventTapCallBack = { _, type, event, refcon in
+        let cb: CGEventTapCallBack = { @Sendable _, type, event, refcon in
             if let refcon { Unmanaged<InputRecorder>.fromOpaque(refcon).takeUnretainedValue().handle(type, event) }
             return Unmanaged.passUnretained(event)
         }
         guard let t = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: mask,
                                         callback: cb, userInfo: Unmanaged.passUnretained(self).toOpaque()) else { throw CaptureError.writer("event tap denied (Input Monitoring)") }
         tap = t
-        let th = Thread { [self] in
+        let th = Thread { @Sendable [self] in
             guard let t = self.tap else { return }
             let src = CFMachPortCreateRunLoopSource(nil, t, 0)
             loop.withLock { $0 = CFRunLoopGetCurrent() }
@@ -118,7 +118,7 @@ public final class InputRecorder: @unchecked Sendable {
         th.qualityOfService = .userInteractive; th.start()
         let tm = DispatchSource.makeTimerSource(queue: writeQ)
         tm.schedule(deadline: .now() + 0.25, repeating: 0.25)
-        tm.setEventHandler { [self] in flush() }
+        tm.setEventHandler { @Sendable [self] in flush() }
         tm.resume(); timer = tm
         Task { @MainActor [weak self] in           // cursor shape poll @ 30 Hz
             while let self, self.running.withLock({ $0 }) {
