@@ -155,7 +155,7 @@ public actor AnalysisService {
         } catch { return (nil, error.localizedDescription) }
     }
 
-    private func cached<Value: Codable & Sendable, Parameters: Encodable>(url: URL, directory: URL, analyzer: String, version: Int,
+    private func cached<Value: Codable & Sendable, Parameters: Encodable & Sendable>(url: URL, directory: URL, analyzer: String, version: Int,
                                                                            parameters: Parameters,
                                                                            produce: () async throws -> Value) async -> (Value?, String?) {
         do {
@@ -176,8 +176,8 @@ public actor AnalysisService {
     }
 }
 
-private struct FaceParameters: Codable { var offset: Double; var fps: Double }
-private struct ActivityParameters: Codable { var offset: Double; var fps: Double }
+private struct FaceParameters: Codable, Sendable { var offset: Double; var fps: Double }
+private struct ActivityParameters: Codable, Sendable { var offset: Double; var fps: Double }
 private struct OCRParameters: Codable { var salt: UInt64; var patterns: [String]; var entropyThreshold: Double; var fps: Double }
 private struct SpeechParameters: Codable { var locale: String; var vocabulary: [String]; var offset: Double }
 private struct PersonMaskParameters: Codable { var offset: Double; var fps: Double; var maxDimension: Int }
