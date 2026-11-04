@@ -15,7 +15,8 @@ final class LiveHub: @unchecked Sendable {
     init(source: LiveFrameSource) { self.source = source }
     func frame(_ pb: CVPixelBuffer) {
         source.submit(pb)
-        cam.withLock { if $0 == nil { $0 = LiveCamera(source: SIMD2(Double(CVPixelBufferGetWidth(pb)), Double(CVPixelBufferGetHeight(pb)))) } }
+        let size = SIMD2(Double(CVPixelBufferGetWidth(pb)), Double(CVPixelBufferGetHeight(pb)))
+        cam.withLock { if $0 == nil { $0 = LiveCamera(source: size) } }
     }
     func event(_ e: InputEvent) { cam.withLock { $0?.ingest(e) } }
     func step(to t: Double) -> FrameState? { cam.withLock { $0?.step(to: t) } }
