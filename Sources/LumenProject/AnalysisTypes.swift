@@ -35,3 +35,12 @@ public struct ActivityPoint: Codable, Sendable {
     public var t: Double, x: Double, y: Double
     public init(t: Double, x: Double, y: Double) { self.t = t; self.x = x; self.y = y }
 }
+
+/// Location and sampling details for a cached person-mask plane sequence.
+public struct PersonMaskInfo: Codable, Sendable, Equatable {
+    public var file: String
+    public var width: Int, height: Int, fps: Double, frames: Int
+    public init(file: String, width: Int, height: Int, fps: Double, frames: Int) {
+        self.file = file; self.width = width; self.height = height; self.fps = fps; self.frames = frames
+    }
+}
