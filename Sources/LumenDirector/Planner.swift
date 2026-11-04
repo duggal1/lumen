@@ -124,7 +124,14 @@ enum ZoomPlanner {
             var scale = clamp(fit, p.minScale, p.maxScale)
             scale = max((scale * 10).rounded() / 10, 1.1)
             let fits = (maxX - minX) * scale <= 0.8 * W && (maxY - minY) * scale <= 0.8 * H
-            let focus: Focus = (fits && fit >= p.minTrigger) ? .fixed(x: (minX + maxX) / 2 / W, y: (minY + maxY) / 2 / H) : .follow
+            // AX element bounds inform how far to zoom, never where to point.
+            // Popup and menu element frames can be much larger than the click
+            // target; focusing their bounding-box center shifts the viewport.
+            let anchors = c.filter { $0.w > 0 }
+            let mass = max(anchors.reduce(0) { $0 + $1.w }, 1)
+            let fx = anchors.reduce(0) { $0 + $1.x * $1.w } / mass
+            let fy = anchors.reduce(0) { $0 + $1.y * $1.w } / mass
+            let focus: Focus = (fits && fit >= p.minTrigger) ? .fixed(x: fx / W, y: fy / H) : .follow
             // Start the camera move before the first interaction. The CameraSolver
             // finishes its auto transition at the click, not after it.
             let anticipation = clamp(p.leadIn, 0.15, 0.30)
