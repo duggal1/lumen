@@ -27,7 +27,7 @@ struct PixelStop: View {
     var body: some View {
         Canvas { c, _ in
             for j in 0..<3 { for i in 0..<3 {
-                cellFill(&c, CGRect(x: i * 2, y: j * 2, width: 2, height: 2), i == 1 && j == 1 ? Tok.text : Tok.accent)
+                cellFill(&c, CGRect(x: CGFloat(i * 2), y: CGFloat(j * 2), width: 2, height: 2), i == 1 && j == 1 ? Tok.text : Tok.accent)
             } }
         }.frame(width: 6, height: 6)
     }

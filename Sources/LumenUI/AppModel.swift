@@ -1,0 +1,178 @@
+import SwiftUI
+import AppKit
+import AVFoundation
+import ScreenCaptureKit
+import Carbon.HIToolbox
+import LumenCore
+import LumenProject
+import LumenCapture
+
+@MainActor @Observable public final class AppModel {
+    public enum Phase: Equatable { case idle, preparing, countdown(Int), recording, finishing }
+    enum SourceKind: String, CaseIterable { case display, window, region }
+    struct ProjectRow: Identifiable { var id: URL { url }; let url: URL; let name: String; let date: Date; let size: String }
+
+    public var phase = Phase.idle
+    var kind = SourceKind.display, displayID = CGMainDisplayID(), windowID: CGWindowID = 0
+    var fps = 60, mic = true, system = false, webcam = false
+    var displays: [(id: CGDirectDisplayID, name: String)] = [], windows: [(id: CGWindowID, name: String)] = []
+    var error: String?, stats: CaptureStats?, projects: [ProjectRow] = []
+    public var onFinished: ((URL) -> Void)?
+    public let library: URL
+    private let session = RecordingSession()
+    private var hud: HUDController?, hotKey: HotKey?, poll: Task<Void, Never>?
+
+    public init() {
+        library = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
+        try? FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        refresh()
+        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(cmdKey | shiftKey)) { [weak self] in Task { @MainActor in self?.toggle() } }
+    }
+
+    func refresh() {
+        displays = NSScreen.screens.compactMap { s in
+            (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID).map { ($0, s.localizedName) }
+        }
+        let urls = (try? FileManager.default.contentsOfDirectory(at: library, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        projects = urls.filter { $0.pathExtension == "lumen" }.map { u in
+            let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            var meta = "—"
+            if let f = try? ProjectBundle(url: u).load() { meta = "\(f.meta.source.width)×\(f.meta.source.height) · \(Int(f.meta.source.duration)) s" }
+            return ProjectRow(url: u, name: u.deletingPathExtension().lastPathComponent, date: d, size: meta)
+        }.sorted { $0.date > $1.date }
+        Task {
+            let c = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            windows = (c?.windows ?? []).filter { $0.isOnScreen && ($0.title?.isEmpty == false) && $0.owningApplication?.bundleIdentifier != Bundle.main.bundleIdentifier }
+                .map { ($0.windowID, "\($0.owningApplication?.applicationName ?? "") — \($0.title ?? "")") }
+            if windowID == 0 { windowID = windows.first?.id ?? 0 }
+        }
+    }
+
+    public func toggle() {
+        switch phase { case .idle: Task { await start() }; case .recording: Task { await stop() }; default: break }
+    }
+
+    func start() async {
+        error = nil
+        guard Permissions.screen else { Permissions.requestScreen(); error = "Screen Recording is off. Grant it, then relaunch Lumen."; return }
+        guard Permissions.input else { Permissions.requestInput(); error = "Input Monitoring is off. Grant it, then relaunch Lumen."; return }
+        if mic || webcam { await Permissions.requestMedia() }
+        var cfg: RecordingConfig
+        switch kind {
+        case .display: cfg = RecordingConfig(source: .display(displayID))
+        case .window: cfg = RecordingConfig(source: .window(windowID))
+        case .region:
+            guard let r = await RegionSelector.pick() else { return }
+            cfg = RecordingConfig(source: .region(r.display, r.rect))
+        }
+        cfg.fps = fps; cfg.mic = mic && Permissions.mic; cfg.systemAudio = system
+        cfg.webcamDeviceID = webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
+        phase = .preparing
+        hud = HUDController(self); hud?.show()                  // before prepare(): the filter excludes our own windows
+        do {
+            try await session.prepare(cfg, library: library)
+            for n in [3, 2, 1] { phase = .countdown(n); try await Task.sleep(for: .seconds(1)) }
+            try await session.start(); phase = .recording
+            poll = Task { while !Task.isCancelled { stats = await session.stats(); try? await Task.sleep(for: .milliseconds(250)) } }
+        } catch { fail(error) }
+    }
+
+    func stop() async {
+        phase = .finishing; poll?.cancel()
+        do {
+            let b = try await session.stop()
+            hud?.close(); hud = nil; phase = .idle; refresh(); onFinished?(b.url)
+        } catch { fail(error) }
+    }
+
+    private func fail(_ e: Error) { poll?.cancel(); hud?.close(); hud = nil; phase = .idle; error = "Recording failed. \(e)" }
+}
+
+// MARK: Global hotkey (Carbon, no dependency)
+
+final class HotKey: @unchecked Sendable {
+    nonisolated(unsafe) private static var handler: (() -> Void)?
+    private var ref: EventHotKeyRef?
+    init(keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) {
+        Self.handler = handler
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in HotKey.handler?(); return noErr }, 1, &spec, nil, nil)
+        RegisterEventHotKey(keyCode, modifiers, EventHotKeyID(signature: OSType(0x4C554D4E), id: 1), GetApplicationEventTarget(), 0, &ref)
+    }
+}
+
+// MARK: Region selector (borderless overlay, drag to select, Esc cancels)
+
+@MainActor enum RegionSelector {
+    static func pick() async -> (display: CGDirectDisplayID, rect: CGRect)? {
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main,
+              let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
+        return await withCheckedContinuation { (c: CheckedContinuation<(display: CGDirectDisplayID, rect: CGRect)?, Never>) in
+            let w = KeyWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            w.level = .screenSaver; w.isOpaque = false; w.backgroundColor = .clear; w.ignoresMouseEvents = false
+            let v = RegionView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            v.finish = { rect in
+                w.orderOut(nil)
+                c.resume(returning: rect.map { (id, CGRect(x: $0.minX, y: screen.frame.height - $0.maxY, width: $0.width, height: $0.height)) })   // AppKit -> top-left
+            }
+            w.contentView = v; w.makeKeyAndOrderFront(nil); w.makeFirstResponder(v); NSCursor.crosshair.push()
+        }
+    }
+}
+private final class KeyWindow: NSWindow { override var canBecomeKey: Bool { true } }
+private final class RegionView: NSView {
+    var finish: ((CGRect?) -> Void)?
+    private var a: CGPoint?, b: CGPoint?
+    private var rect: CGRect? { guard let a, let b else { return nil }; return CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y)) }
+    override var acceptsFirstResponder: Bool { true }
+    override func mouseDown(with e: NSEvent) { a = convert(e.locationInWindow, from: nil); b = a; needsDisplay = true }
+    override func mouseDragged(with e: NSEvent) { b = convert(e.locationInWindow, from: nil); needsDisplay = true }
+    override func mouseUp(with e: NSEvent) { NSCursor.pop(); finish?(rect.flatMap { $0.width > 40 && $0.height > 40 ? $0 : nil }) }
+    override func keyDown(with e: NSEvent) { if e.keyCode == 53 { NSCursor.pop(); finish?(nil) } }
+    override func draw(_ dirty: NSRect) {
+        NSColor.black.withAlphaComponent(0.35).setFill(); bounds.fill()
+        guard let r = rect else { return }
+        NSColor.clear.setFill(); r.fill(using: .copy)
+        let s = "\(Int(r.width)) × \(Int(r.height))" as NSString
+        s.draw(at: CGPoint(x: r.minX + 6, y: r.maxY + 6), withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.white])
+    }
+}
+
+// MARK: Recorder HUD (non-activating, excluded from capture)
+
+@MainActor final class HUDController {
+    private var panel: NSPanel?
+    init(_ app: AppModel) {
+        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 48), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        p.contentView = NSHostingView(rootView: HUDView(app: app))
+        p.level = .statusBar; p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false
+        p.sharingType = .none; p.hidesOnDeactivate = false; p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        if let s = NSScreen.main { p.setFrameOrigin(CGPoint(x: s.frame.midX - 170, y: s.frame.maxY - 48 - 36)) }
+        panel = p
+    }
+    func show() { panel?.orderFrontRegardless() }
+    func close() { panel?.orderOut(nil); panel = nil }
+}
+
+struct HUDView: View {
+    let app: AppModel
+    var body: some View {
+        HStack(spacing: 12) {
+            switch app.phase {
+            case .countdown(let n):
+                Text("\(n)").font(AppType.metric).foregroundStyle(Tok.text).frame(width: 40)
+                Text("Recording starts…").font(AppType.body).foregroundStyle(Tok.text2); Spacer()
+            case .recording:
+                PixelStop(cell: 2)
+                Text(time(app.stats?.elapsed ?? 0)).font(AppType.label.monospacedDigit()).foregroundStyle(Tok.text)
+                PixelMeter(level: app.stats?.micLevel ?? 0)
+                if (app.stats?.dropped ?? 0) > 0 { PixelBadge(kind: .caution, text: "\(app.stats?.dropped ?? 0) dropped") }
+                Spacer(); LButton(title: "Stop", icon: "stop.fill", kind: .primary) { app.toggle() }
+            default:
+                PixelWait(); Text(app.phase == .finishing ? "Saving…" : "Preparing…").font(AppType.body).foregroundStyle(Tok.text2); Spacer()
+            }
+        }.padding(.horizontal, 12).frame(width: 340, height: 48).background(RoundedRectangle(cornerRadius: 16).fill(Tok.surface))
+    }
+    private func time(_ t: Double) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
+}
