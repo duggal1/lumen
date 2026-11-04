@@ -168,6 +168,8 @@ public final class AudioMixer: @unchecked Sendable {
             let g = Float(pow(10, clamp(a.targetLUFS - lufs, -30, 30) / 20))
             ch = ch.map { vDSP.multiply(g, $0) }
         }
+        let outputGain = Float(pow(10, clamp(a.outputGainDb, -60, 12) / 20))
+        ch = ch.map { vDSP.multiply(outputGain, $0) }
         Limiter.apply(&ch, ceiling: Float(pow(10, -1.5 / 20)))
         var tp = Loudness.truePeakDb(ch)
         if tp > -1.0 {
