@@ -24,7 +24,9 @@ struct Inspector: View {
                 case .export: export
                 }
             }.padding(20)
-        }.frame(width: Metrics.inspector).background(Tok.bg)
+        }.frame(width: Metrics.inspector).frame(maxHeight: .infinity).background(Tok.bg)
+        .onChange(of: model.exportPanelRequest) { _, _ in tab = .export }
+        .onChange(of: tab) { _, selected in model.exportPanelActive = selected == .export }
     }
 
     private func icon(_ t: Tab) -> String {
@@ -157,6 +159,7 @@ struct Inspector: View {
             VStack(spacing: 0) {
                 SliderRow(label: "Dead zone", v: m.bind(\.camera.deadZone), range: 0.1...0.45)
                 SliderRow(label: "Motion blur", v: m.bind(\.camera.shutter), range: 0...1)
+                ToggleRow(label: "Focus debug", on: Binding(get: { m.zoomDebug }, set: { m.zoomDebug = $0 }))
             }.card()
         }
     }
@@ -199,23 +202,5 @@ struct Inspector: View {
         }.card()
     }
 
-    private var export: some View {
-        let m = model
-        return VStack(alignment: .leading, spacing: 16) {
-            switch m.exportState {
-            case .idle, .done:
-                LButton(title: "Export video", icon: "square.and.arrow.up", kind: .primary, height: 32) {
-                    m.exportVideo()
-                }
-                if case .done(let u) = m.exportState { Text("Saved \(u.lastPathComponent)").font(AppType.caption).foregroundStyle(Tok.text2) }
-            case .running(let p):
-                Text("\(Int(p * 100))%").font(AppType.metric).foregroundStyle(Tok.text)
-                LButton(title: "Cancel", kind: .quiet) { m.cancelExport() }
-            case .failed(let why):
-                Text(why).font(AppType.caption).foregroundStyle(Tok.statusBad)
-                LButton(title: "Retry", kind: .secondary) { m.exportVideo() }
-            }
-            if let n = m.notice { Text(n).font(AppType.caption).foregroundStyle(Tok.text2) }
-        }.card()
-    }
+    private var export: some View { ExportInspector(model: model) }
 }
