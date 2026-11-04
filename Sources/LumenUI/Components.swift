@@ -12,6 +12,7 @@ struct LButtonStyle: ButtonStyle {
         let c: Configuration, kind: LKind, height: CGFloat
         @State private var hover = false
         @Environment(\.isEnabled) private var enabled
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         var body: some View {
             let off = !enabled
             let bg: Color = switch kind {
@@ -23,7 +24,8 @@ struct LButtonStyle: ButtonStyle {
             c.label.font(AppType.label).foregroundStyle(fg).padding(.horizontal, 12).frame(height: height)
                 .background(Capsule().fill(bg)).scaleEffect(c.isPressed ? 0.98 : 1).opacity(kind != .primary && off ? 0.4 : 1)
                 .onHover { hover = $0 }.pointerStyle(enabled ? .link : .default)
-                .animation(.easeOut(duration: hover ? 0.10 : 0.22), value: hover)
+                .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
+                .animation(reduceMotion ? nil : Motion.hoverIn, value: c.isPressed)
         }
     }
 }
@@ -43,11 +45,12 @@ struct LButton: View {
 struct LIconButton: View {
     let icon: String, label: String; let action: () -> Void
     @State private var hover = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Button(action: action) { Image(systemName: icon).font(.system(size: 12)).frame(width: 28, height: 28)
             .background(RoundedRectangle(cornerRadius: 8).fill(hover ? Tok.controlHover : .clear)) }
             .buttonStyle(.plain).foregroundStyle(Tok.text).onHover { hover = $0 }
-            .animation(hover ? Motion.hoverIn : Motion.hoverOut, value: hover)
+            .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
             .pointerStyle(.link).accessibilityLabel(label)
     }
 }
@@ -56,12 +59,13 @@ struct LIconButton: View {
 
 struct LToggle: View {
     @Binding var on: Bool; let label: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Button { on.toggle() } label: {
             ZStack(alignment: on ? .trailing : .leading) {
                 Capsule().fill(on ? Tok.accent : Tok.controlPressed)
                 Circle().fill(.white).frame(width: 20, height: 20).padding(2)
-            }.frame(width: 40, height: 24).animation(.snappy(duration: 0.22), value: on)
+            }.frame(width: 40, height: 24).animation(reduceMotion ? nil : Motion.toggle, value: on)
         }.buttonStyle(.plain).pointerStyle(.link).accessibilityLabel(label).accessibilityValue(on ? "On" : "Off")
     }
 }
@@ -100,6 +104,7 @@ struct LSegmented<T: Hashable>: View {
     var track: Color = Tok.well
     var thumb: Color = Tok.control
     @Namespace private var ns
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         HStack(spacing: 0) {
             ForEach(items, id: \.0) { v, title in
@@ -109,7 +114,7 @@ struct LSegmented<T: Hashable>: View {
                         .background { if sel == v { Capsule().fill(thumb).matchedGeometryEffect(id: "thumb", in: ns) } }
                 }.buttonStyle(.plain).pointerStyle(.link)
             }
-        }.padding(2).background(Capsule().fill(track)).animation(.smooth(duration: 0.25), value: sel)
+        }.padding(2).background(Capsule().fill(track)).animation(reduceMotion ? nil : Motion.slide, value: sel)
     }
 }
 
