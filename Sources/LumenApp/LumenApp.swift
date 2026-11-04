@@ -9,6 +9,7 @@ struct LumenApp: App {
             LibraryRoot(app).background(WindowChrome())
         }
         .defaultSize(width: Metrics.windowW, height: Metrics.windowH)
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         WindowGroup("Editor", id: "editor", for: URL.self) { $url in
             if let url { EditorRoot(url: url) }
