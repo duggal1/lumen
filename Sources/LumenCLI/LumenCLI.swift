@@ -7,6 +7,7 @@ import LumenDirector
 import LumenRender
 import LumenAudio
 import LumenExport
+import LumenAnalysis
 
 @main
 struct LumenCLI: AsyncParsableCommand {
@@ -27,9 +28,19 @@ func jsonOut(_ v: Any, to path: String?) throws {
 struct Analyze: AsyncParsableCommand {
     @Argument var project: String
     @Option var report: String?
+    @Flag(name: .long) var runAnalyzers = false
     func run() async throws {
-        let (s, tl) = try await openProject(project)
+        guard let dev = MTLCreateSystemDefaultDevice() else { throw ValidationError("no Metal device") }
+        let (s, sourceTimeline) = try await ProjectSession.open(ProjectBundle(url: URL(fileURLWithPath: project)), device: dev)
+        var analysisErrors: [String: String] = [:]
+        if runAnalyzers { analysisErrors = await s.analyze(sourceTimeline).errors }
+        let tl = s.derive(sourceTimeline, revision: 1)
         let ev = s.input.events
+        let masks = (sourceTimeline.overlays.masks + (tl.derived?.autoMasks ?? [])).map { mask in
+            ["category": mask.category ?? "", "origin": mask.origin.rawValue, "approved": mask.approved,
+             "start": mask.start, "end": mask.end,
+             "rects": mask.keys.map { ["t": $0.t, "x": $0.x, "y": $0.y, "w": $0.w, "h": $0.h] as [String: Double] }] as [String: Any]
+        }
         try jsonOut([
             "name": s.meta.name, "sourceSize": [s.meta.source.width, s.meta.source.height], "fps": s.meta.source.fps,
             "sourceDuration": s.meta.source.duration, "outputDuration": tl.timeMap.outputDuration, "droppedFrames": s.meta.droppedFrames,
@@ -41,6 +52,8 @@ struct Analyze: AsyncParsableCommand {
             "zoomSegments": tl.zoom.map { ["start": $0.start, "end": $0.end, "scale": $0.scale, "origin": $0.origin.rawValue] },
             "speedRamps": tl.timeMap.ramps.map { ["start": $0.start, "end": $0.end, "speed": $0.speed] },
             "voiceRegions": s.input.vad.count, "faceSamples": s.input.face.count,
+            "activityPoints": s.input.activity.count, "transcriptWords": s.input.transcript?.words.count ?? 0,
+            "masks": masks, "analysisErrors": analysisErrors,
         ] as [String: Any], to: report)
     }
 }
