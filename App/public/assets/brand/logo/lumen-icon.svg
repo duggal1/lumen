@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="176" height="176" viewBox="-36 -16 176 176" role="img" aria-label="Lumen icon">
+  <g fill="#3B1A0A" stroke="#3B1A0A" stroke-linejoin="round" transform="translate(0 5)">
+    <path opacity="0.035" stroke-width="26" d="M12,10 L12,122 L38,98 L56,134 L74,125 L57,90 L92,90 Z" />
+    <path opacity="0.05" stroke-width="20" d="M12,10 L12,122 L38,98 L56,134 L74,125 L57,90 L92,90 Z" />
+    <path opacity="0.12" stroke-width="14" d="M12,10 L12,122 L38,98 L56,134 L74,125 L57,90 L92,90 Z" />
+  </g>
+  <path fill="#F97316" stroke="#F97316" stroke-width="14" stroke-linejoin="round" d="M12,10 L12,122 L38,98 L56,134 L74,125 L57,90 L92,90 Z" />
+</svg>

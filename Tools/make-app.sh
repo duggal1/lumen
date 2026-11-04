@@ -18,7 +18,7 @@ if ! find "$app/Contents/Resources" -name default.metallib -print -quit | /usr/b
 fi
 icon_dir="$PWD/.build/Lumen.iconset"
 mkdir -p "$icon_dir"
-swift - App/public/assets/brand/logo/lumen.svg "$icon_dir" <<'SWIFT'
+swift - App/public/assets/brand/logo/lumen-icon.svg "$icon_dir" <<'SWIFT'
 import AppKit
 let args = CommandLine.arguments
 guard let source = NSImage(contentsOfFile: args[1]) else { fatalError("Cannot read Lumen logo") }
