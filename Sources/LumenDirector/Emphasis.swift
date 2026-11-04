@@ -44,6 +44,9 @@ public struct EmphasisFrame: Sendable, Equatable {
     public var highlights: [HighlightFrame]
     public var loupes: [LoupeFrame]
     public var texts: [TextFrame]
+    public init(masks: [MaskFrame] = [], highlights: [HighlightFrame] = [], loupes: [LoupeFrame] = [], texts: [TextFrame] = []) {
+        self.masks = masks; self.highlights = highlights; self.loupes = loupes; self.texts = texts
+    }
 }
 
 enum Emphasis {
