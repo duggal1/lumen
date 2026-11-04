@@ -30,6 +30,40 @@ The architecture follows that boundary:
 - Keep camera movement, cursor treatment, and pacing in service of the story.
 - Preserve a clear path from captured source to finished video.
 
-## Project status
+## Build and run
 
-The current source includes screen capture, session input tracking, project models, and the director pipeline. Rendering, audio finishing, export, and the app interface are planned as separate product stages; their implementation files are not present in this checkout yet.
+Requires Apple Silicon, macOS 15+, and Xcode with the Metal toolchain installed.
+If Metal is unavailable, run `xcodebuild -downloadComponent MetalToolchain`.
+
+```sh
+make build       # Debug app and CLI
+make test        # Synthetic media integration and algorithm checks
+make app         # Release bundle at .build/Lumen.app
+make verify      # Tests, release packaging, signature and launch checks
+open .build/Lumen.app
+make probe       # Encoder capabilities on this Mac
+```
+
+The app icon is generated from `App/public/assets/brand/logo/lumen.svg`.
+Local builds use ad hoc signing by default. Set `CODE_SIGN_IDENTITY` to a stable
+local signing identity to preserve permission identity across rebuilds.
+
+## Implementation and verification
+
+Capture, project storage, Director, Metal rendering, offline audio mixing,
+export, CLI, and SwiftUI app targets are connected. Preview and export use the
+same renderer and offline audio mix. Frame placement preserves source aspect
+inside the padded canvas. RNNoise is optional; the Swift gate is the fallback.
+
+Tests cover event encoding, time-map inversion and speech protection, manual
+zoom preservation, click positioning, camera bounds, repeatable audio and
+loudness, repeated frame rendering, and actual exported video frame count.
+
+`make verify` does not certify every acceptance criterion in the parent build
+plan. The flash-and-click sync harness, reference-image golden suite, long
+capture and memory tests, GPU performance measurements, and clean-machine
+permission checks still need implementation or hardware verification. The CLI
+sync command reports offsets only. Music uses loop/trim crossfades without beat
+detection; mesh backgrounds are static. Pause/resume, recovery of unfinished
+recordings, image/blurred-content backgrounds, and RNNoise vendoring are not
+implemented. The packaged build is not notarized.
