@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: swift-verify-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   macos:
     runs-on: macos-15
@@ -16,8 +20,10 @@ jobs:
         run: |
           swift --version
           xcodebuild -version
-      - name: Install Metal toolchain
-        run: xcodebuild -downloadComponent MetalToolchain
+      - name: Check installed Metal compiler
+        run: |
+          xcrun --find metal || echo "Metal compiler not present in the selected Xcode"
+          xcode-select -p
       - name: Build debug
         run: swift build
       - name: Run unit and integration tests
