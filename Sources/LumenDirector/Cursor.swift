@@ -3,10 +3,19 @@ import LumenCore
 import LumenProject
 
 enum CursorPipeline {
-    static func run(events: [InputEvent], st: CursorStyle, tm: TimeMap, src: SourceInfo) -> (CursorTrack, [ClickFX]) {
+    static func run(events: [InputEvent], taps: [TapIndicator], st: CursorStyle, tm: TimeMap, src: SourceInfo) -> (CursorTrack, [ClickFX]) {
         let rate = gridRate, lo = tm.trimStart, hi = tm.trimEnd
         let n = max(Int((hi - lo) * rate) + 1, 3)
         let cutoff = hi - 0.8                                   // Stop click / hotkey at the very end: no ring, no hand
+
+        // manual taps act like a press/release pair; they never move the cursor
+        var tapEv: [InputEvent] = []
+        for t in taps where t.t >= lo && t.t <= hi {
+            tapEv.append(InputEvent(t: t.t, kind: .down, x: Float(t.x), y: Float(t.y)))
+            tapEv.append(InputEvent(t: t.t + 0.12, kind: .up, x: Float(t.x), y: Float(t.y)))
+        }
+        let pressEv = (events.filter { $0.kind == .down || $0.kind == .up } + tapEv).sorted { $0.t < $1.t }
+        let downs = events.filter { $0.kind == .down && $0.t <= cutoff } + tapEv.filter { $0.kind == .down }
 
         // 1. ingest: monotonic, deduped
         var ts: [Double] = [], xs: [Double] = [], ys: [Double] = []
@@ -17,9 +26,10 @@ enum CursorPipeline {
             }
             ts.append(e.t); xs.append(Double(e.x)); ys.append(Double(e.y))
         }
+        let hasCursor = !ts.isEmpty                             // device recordings have no cursor: draw none
         // 3-5. PCHIP onto 1440 Hz, de-spike, zero-lag Gaussian
-        var X = ts.isEmpty ? [Double](repeating: Double(src.width) / 2, count: n) : pchipResample(t: ts, y: xs, t0: lo, count: n, rate: rate)
-        var Y = ts.isEmpty ? [Double](repeating: Double(src.height) / 2, count: n) : pchipResample(t: ts, y: ys, t0: lo, count: n, rate: rate)
+        var X = hasCursor ? pchipResample(t: ts, y: xs, t0: lo, count: n, rate: rate) : [Double](repeating: Double(src.width) / 2, count: n)
+        var Y = hasCursor ? pchipResample(t: ts, y: ys, t0: lo, count: n, rate: rate) : [Double](repeating: Double(src.height) / 2, count: n)
         X = gaussianSmooth(median5(X), sigma: st.smoothingSigma * rate)
         Y = gaussianSmooth(median5(Y), sigma: st.smoothingSigma * rate)
 
@@ -58,15 +68,25 @@ enum CursorPipeline {
             }
         }
 
+        // 11. loop mode: the tail glides (min-jerk) back to the first-frame position so a short clip repeats seamlessly
+        if hasCursor, let d = st.loop, d > 0 {
+            let tailN = max(min(Int(d * rate), n - 2), 1), x0 = X[0], y0 = Y[0]
+            for k in 0...tailN {
+                let idx = n - 1 - tailN + k, tau = Double(k) / Double(tailN)
+                let wgt = tau * tau * tau * (10 + tau * (-15 + 6 * tau))
+                X[idx] = lerp(X[idx], x0, wgt); Y[idx] = lerp(Y[idx], y0, wgt)
+            }
+        }
+
         // 8. idle hide
-        var op = [Float](repeating: 1, count: n)
-        if let idle = st.idleHide, idle > 0 {
-            let clicks = events.filter { $0.kind == .down || $0.kind == .up }.map(\.t)
+        var op = [Float](repeating: hasCursor ? 1 : 0, count: n)
+        if hasCursor, let idle = st.idleHide, idle > 0 {
+            let acts = pressEv.map(\.t)
             var cur = 1.0, lastAct = lo, ci = 0
             let dt = 1 / rate
             for i in 0..<n {
                 let t = lo + Double(i) * dt
-                while ci < clicks.count && clicks[ci] <= t { lastAct = clicks[ci]; ci += 1 }
+                while ci < acts.count && acts[ci] <= t { lastAct = acts[ci]; ci += 1 }
                 if moving[i] { lastAct = t }
                 let target = (t - lastAct) >= idle ? 0.0 : 1.0
                 cur += clamp(target - cur, -dt / 0.4, dt / 0.15)
@@ -76,21 +96,19 @@ enum CursorPipeline {
 
         // 9. press scale (critically damped)
         var press = [Float](repeating: 1, count: n)
-        let btn = events.filter { $0.kind == .down || $0.kind == .up }
         var px = 1.0, pv = 0.0, down = false, bi = 0
         for i in 0..<n {
             let t = lo + Double(i) / rate
-            while bi < btn.count && btn[bi].t <= t { down = btn[bi].kind == .down; bi += 1 }
+            while bi < pressEv.count && pressEv[bi].t <= t { down = pressEv[bi].kind == .down; bi += 1 }
             springStep(&px, &pv, target: down ? st.pressScale : 1, omega: 38, dt: 1 / rate)
             press[i] = Float(px)
         }
-        // shape: custom arrow normally; custom hand from 0.12 s before a press until 0.30 s after release.
-        // (System cursor classification is unreliable, so it is deliberately not used.)
+
+        // shape: custom arrow normally; custom hand from 0.12 s before a press until 0.30 s after release
         let arrowID = StockCursor.arrow.rawValue, handID = StockCursor.pointingHand.rawValue
-        let downs = events.filter { $0.kind == .down && $0.t <= cutoff }
-        let ups = events.filter { $0.kind == .up }
+        let ups = pressEv.filter { $0.kind == .up }
         var windows: [(Double, Double)] = []
-        for d in downs {
+        for d in downs.sorted(by: { $0.t < $1.t }) {
             let up = ups.first(where: { $0.t > d.t })?.t ?? (d.t + 0.2)
             windows.append((d.t - 0.12, min(up, d.t + 10) + 0.30))
         }
@@ -102,7 +120,7 @@ enum CursorPipeline {
             if wi < windows.count, windows[wi].0 <= t { shape[i] = handID }
         }
 
-        // source time -> output time resample (cursor smoothing ran in source time)
+        // source time -> output time resample (smoothing ran in source time)
         let m = max(Int(tm.outputDuration * rate) + 1, 2)
         var tr = CursorTrack(count: m)
         for j in 0..<m {
@@ -115,7 +133,7 @@ enum CursorPipeline {
             tr.press[j] = press[i0] * (1 - fr) + press[i0 + 1] * fr
             tr.shape[j] = shape[fr < 0.5 ? i0 : i0 + 1]
         }
-        let clicks = events.filter { $0.kind == .down && $0.t <= cutoff }.map { ClickFX(t: tm.output(atSource: $0.t), x: $0.x, y: $0.y) }
+        let clicks = downs.filter { !tm.isCut($0.t) }.map { ClickFX(t: tm.output(atSource: $0.t), x: $0.x, y: $0.y) }.sorted { $0.t < $1.t }
         return (tr, clicks)
     }
 
