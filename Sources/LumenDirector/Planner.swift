@@ -41,24 +41,28 @@ enum ZoomPlanner {
         // Ignore the tail: the Stop click / stop hotkey are recorded right before the end and must never trigger a zoom.
         let cutoff = tm.trimEnd - 0.8
         var pts: [Pt] = []
-        var lastClick = (x: W / 2, y: H / 2), lastDrag = -1.0
+        var lastClick = (x: W / 2, y: H / 2), lastDrag = -1.0, lastClickTime = -Double.infinity
         for e in events where e.t >= tm.trimStart && e.t <= cutoff {
             let x = Double(e.x), y = Double(e.y)
+            guard x >= 0, x <= W, y >= 0, y <= H else { continue }
             switch e.kind {
             case .down:
+                guard e.button == 0, e.flags & 0x14 == 0 else { continue }
+                lastClickTime = e.t
                 lastClick = (x, y); pts.append(Pt(t: e.t, x: x, y: y))
                 if e.axFrameIndex > 0, Int(e.axFrameIndex) <= ax.count {
                     let f = ax[Int(e.axFrameIndex) - 1]
                     // Big containers (windows, web areas) would blow the focus box up to the whole screen and cancel the zoom.
-                    if f.w > 8, f.h > 8, f.w <= 0.5 * W, f.h <= 0.5 * H {
+                    if f.w > 8, f.h > 8, x >= f.x, x <= f.x + f.w, y >= f.y, y <= f.y + f.h, f.w <= 0.5 * W, f.h <= 0.5 * H {
                         pts.append(Pt(t: e.t, x: f.x, y: f.y)); pts.append(Pt(t: e.t, x: f.x + f.w, y: f.y + f.h))
                     }
                 }
-            case .drag: if e.t - lastDrag > 0.1 { pts.append(Pt(t: e.t, x: x, y: y)); lastDrag = e.t }
+            case .drag: if e.t - lastClickTime < 2.5 && e.t - lastDrag > 0.1 { pts.append(Pt(t: e.t, x: x, y: y)); lastDrag = e.t }
             case .keyDown:
-                guard e.flags & 0x14 == 0 else { break }        // cmd / ctrl chords are shortcuts, not typing
+                guard e.t - lastClickTime < 1.5, e.flags & 0x14 == 0 else { break }        // cmd / ctrl chords are shortcuts, not typing
                 pts.append(Pt(t: e.t, x: lastClick.x, y: lastClick.y))
-            case .scroll: pts.append(Pt(t: e.t, x: x, y: y))
+            case .scroll:
+                if e.t - lastClickTime < 1.5 { pts.append(Pt(t: e.t, x: x, y: y)) }
             default: break
             }
         }
@@ -67,7 +71,7 @@ enum ZoomPlanner {
         for pt in pts {
             if let c = clusters.last, let l = c.last, pt.t - l.t <= p.mergeGap {
                 let cx = c.reduce(0) { $0 + $1.x } / Double(c.count), cy = c.reduce(0) { $0 + $1.y } / Double(c.count)
-                if hypot(pt.x - cx, pt.y - cy) <= 0.35 * diag { clusters[clusters.count - 1].append(pt); continue }
+                if hypot(pt.x - cx, pt.y - cy) <= 0.12 * diag { clusters[clusters.count - 1].append(pt); continue }
             }
             clusters.append([pt])
         }
@@ -82,7 +86,7 @@ enum ZoomPlanner {
             var scale = fit >= p.minTrigger ? min(fit, p.maxScale) : min(max(1.5, p.minTrigger), p.maxScale)
             scale = max((scale * 10).rounded() / 10, 1.1)
             let focus: Focus = spread > 0.25 ? .follow : .fixed(x: (minX + maxX) / 2 / W, y: (minY + maxY) / 2 / H)
-            let s = max(tm.trimStart, c.first!.t - p.leadIn)                            // lead-in before first event
+            let s = max(tm.trimStart, c.first!.t)                            // lead-in before first event
             let e = min(tm.trimEnd, max(c.last!.t + p.tail, s + p.minHold))
             guard e > s else { continue }
             segs.append(Seg(s: s, e: e, scale: scale, focus: focus))
