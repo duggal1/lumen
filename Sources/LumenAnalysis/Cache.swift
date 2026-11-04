@@ -31,7 +31,7 @@ private actor MediaDigestCache {
 }
 
 enum AnalysisCache {
-    static func key<P: Encodable>(media: URL, analyzer: String, version: Int, parameters: P) async throws -> String {
+    static func key<P: Encodable & Sendable>(media: URL, analyzer: String, version: Int, parameters: P) async throws -> String {
         var fingerprint = try await MediaDigestCache.shared.digest(for: media)
         fingerprint.append(Data("\(analyzer):\(version):".utf8))
         let encoder = JSONEncoder()
