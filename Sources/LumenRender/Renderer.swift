@@ -325,7 +325,7 @@ public final class Renderer: @unchecked Sendable {
         var q = QuadU(rect: rect, canvas: canvas)
         e.setVertexBytes(&q, length: MemoryLayout<QuadU>.stride, index: 0)
     }
-    private func frag<T>(_ e: MTLRenderCommandEncoder, _ v: T, _ i: Int = 0) {
+    private func frag<T: BitwiseCopyable>(_ e: MTLRenderCommandEncoder, _ v: T, _ i: Int = 0) {
         var x = v
         e.setFragmentBytes(&x, length: MemoryLayout<T>.stride, index: i)
     }
