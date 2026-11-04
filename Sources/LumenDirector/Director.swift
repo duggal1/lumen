@@ -88,6 +88,16 @@ public enum Director {
                                   clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm, camera: cam, layout: t.webcam),
                                   webcamAspect: input.webcamAspect, layout: layout, placement: placement,
                                   captions: captions, autoMasks: autoMasks, personMask: input.personMask)
+        if ProcessInfo.processInfo.environment["LUMEN_ZOOM_DEBUG"] == "1" {
+            for event in input.events where event.kind == .down && event.button == 0 {
+                let outTime = tm.output(atSource: event.t)
+                let frame = t.evaluate(at: outTime)
+                let message = String(format: "LUMEN_ZOOM event=%.5f source=%.5f output=%.5f click=(%.1f,%.1f) focus=(%.1f,%.1f) scale=%.3f\\n",
+                                     event.t, event.t, outTime, event.x, event.y,
+                                     frame.cameraCenter.x, frame.cameraCenter.y, frame.cameraScale)
+                FileHandle.standardError.write(Data(message.utf8))
+            }
+        }
         return t
     }
 }
