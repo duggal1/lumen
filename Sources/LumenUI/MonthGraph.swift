@@ -47,10 +47,10 @@ struct MonthGraph: View {
         } label: {
             ZStack {
                 if value > 0 && !future {
-                    PixelDot(color: Tok.accent, size: 10)
+                    ActivityDot(color: Tok.accent, size: 10)
                 } else {
-                    PixelDot(color: Tok.controlPressed, size: 10)
-                    PixelDot(color: .white, size: 6)
+                    ActivityDot(color: Tok.controlPressed, size: 10)
+                    ActivityDot(color: .white, size: 6)
                 }
             }
             .frame(maxWidth: .infinity).frame(height: rowHeight)
@@ -67,21 +67,12 @@ struct MonthGraph: View {
     }
 }
 
-/// A circular mark drawn on a whole-point lattice, without antialiased edges.
-private struct PixelDot: View {
+/// A clean, fully rounded activity marker.
+private struct ActivityDot: View {
     let color: Color
     let size: Int
     var body: some View {
-        Canvas { context, _ in
-            let center = Double(size - 1) / 2
-            for y in 0..<size {
-                for x in 0..<size where hypot(Double(x) - center, Double(y) - center) <= Double(size) / 2 {
-                    context.fill(Path(CGRect(x: CGFloat(x), y: CGFloat(y), width: 1, height: 1)), with: .color(color),
-                                 style: FillStyle(antialiased: false))
-                }
-            }
-        }
-        .frame(width: CGFloat(size), height: CGFloat(size))
+        Circle().fill(color).frame(width: CGFloat(size), height: CGFloat(size))
         .accessibilityHidden(true)
     }
 }
