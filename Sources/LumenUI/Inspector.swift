@@ -38,8 +38,7 @@ struct Inspector: View {
                 if m.session.webcam != nil {
                     ToggleRow(label: "Show face cam", on: Binding(get: { m.timeline.webcam != nil }, set: { m.setWebcam($0) }))
                 }
-                Row(label: "Canvas") { EmptyView() }
-                LSegmented(sel: m.bind(\.style.canvas), items: CanvasAspect.allCases.map { ($0, $0.title) })
+                Row(label: "Canvas") { LDropdown(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, "rectangle.dashed") }).frame(width: 130) }
                 SliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Padding", v: m.bind(\.style.padding), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
             }.card()
@@ -151,7 +150,7 @@ struct Inspector: View {
         return VStack(spacing: 24) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
-                Row(label: "Preset") { LDropdown(sel: m.bind(\.camera.preset), options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "plus.magnifyingglass") }).frame(width: 130) }
+                Row(label: "Preset") { LDropdown(sel: Binding(get: { m.timeline.camera.preset }, set: { v in m.edit { $0.camera.apply(preset: v) } }), options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "plus.magnifyingglass") }).frame(width: 130) }
                 SliderRow(label: "Max zoom", v: m.bind(\.camera.maxScale), range: 1.2...4, fmt: { String(format: "%.1f×", $0) })
                 SliderRow(label: "Smoothness", v: smooth, range: 0...1)
             }.card()
