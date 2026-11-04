@@ -6,6 +6,7 @@ enum CursorPipeline {
     static func run(events: [InputEvent], st: CursorStyle, tm: TimeMap, src: SourceInfo) -> (CursorTrack, [ClickFX]) {
         let rate = gridRate, lo = tm.trimStart, hi = tm.trimEnd
         let n = max(Int((hi - lo) * rate) + 1, 3)
+        let cutoff = hi - 0.8                                   // Stop click / hotkey at the very end: no ring, no hand
 
         // 1. ingest: monotonic, deduped
         var ts: [Double] = [], xs: [Double] = [], ys: [Double] = []
@@ -73,7 +74,7 @@ enum CursorPipeline {
             }
         }
 
-        // 9. press scale (critically damped), shape lookup
+        // 9. press scale (critically damped)
         var press = [Float](repeating: 1, count: n)
         let btn = events.filter { $0.kind == .down || $0.kind == .up }
         var px = 1.0, pv = 0.0, down = false, bi = 0
@@ -83,13 +84,22 @@ enum CursorPipeline {
             springStep(&px, &pv, target: down ? st.pressScale : 1, omega: 38, dt: 1 / rate)
             press[i] = Float(px)
         }
-        var shape = [UInt16](repeating: 0, count: n)
-        let pe = events.filter { $0.hasPosition }
-        var si = 0, cs: UInt16 = 0
+        // shape: custom arrow normally; custom hand from 0.12 s before a press until 0.30 s after release.
+        // (System cursor classification is unreliable, so it is deliberately not used.)
+        let arrowID = StockCursor.arrow.rawValue, handID = StockCursor.pointingHand.rawValue
+        let downs = events.filter { $0.kind == .down && $0.t <= cutoff }
+        let ups = events.filter { $0.kind == .up }
+        var windows: [(Double, Double)] = []
+        for d in downs {
+            let up = ups.first(where: { $0.t > d.t })?.t ?? (d.t + 0.2)
+            windows.append((d.t - 0.12, min(up, d.t + 10) + 0.30))
+        }
+        var shape = [UInt16](repeating: arrowID, count: n)
+        var wi = 0
         for i in 0..<n {
             let t = lo + Double(i) / rate
-            while si < pe.count && pe[si].t <= t { cs = pe[si].cursorShape; si += 1 }
-            shape[i] = cs
+            while wi < windows.count && windows[wi].1 < t { wi += 1 }
+            if wi < windows.count, windows[wi].0 <= t { shape[i] = handID }
         }
 
         // source time -> output time resample (cursor smoothing ran in source time)
@@ -105,7 +115,7 @@ enum CursorPipeline {
             tr.press[j] = press[i0] * (1 - fr) + press[i0 + 1] * fr
             tr.shape[j] = shape[fr < 0.5 ? i0 : i0 + 1]
         }
-        let clicks = events.filter { $0.kind == .down }.map { ClickFX(t: tm.output(atSource: $0.t), x: $0.x, y: $0.y) }
+        let clicks = events.filter { $0.kind == .down && $0.t <= cutoff }.map { ClickFX(t: tm.output(atSource: $0.t), x: $0.x, y: $0.y) }
         return (tr, clicks)
     }
 
