@@ -100,7 +100,7 @@ enum Radius {
 
 public enum Metrics {
     public static let pagePad: CGFloat = 32, sectionGap: CGFloat = 32, cardPad: CGFloat = 20
-    public static let pageBar: CGFloat = 52, sidebar: CGFloat = 220, inspector: CGFloat = 280
+    public static let pageBar: CGFloat = 52, sidebar: CGFloat = 220, inspector: CGFloat = 360
     public static let timeline: CGFloat = 184, wide: CGFloat = 880, settings: CGFloat = 640
     public static let listPane: CGFloat = 320, windowW: CGFloat = 1120, windowH: CGFloat = 720
     public static let minW: CGFloat = 960, minH: CGFloat = 600
