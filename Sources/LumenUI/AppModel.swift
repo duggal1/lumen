@@ -79,7 +79,7 @@ import LumenCapture
             let file = try? ProjectBundle(url: u).load()
             let meta = file?.meta
             return ProjectRow(url: u,
-                              name: meta?.name ?? u.deletingPathExtension().lastPathComponent,
+                              name: Self.displayName(meta?.name ?? u.deletingPathExtension().lastPathComponent),
                               date: meta?.created ?? d,
                               size: meta.map { "\($0.source.width)×\($0.source.height) · \(Int($0.source.duration)) s" } ?? "Couldn’t read this recording.",
                               duration: meta?.source.duration ?? 0,
@@ -94,6 +94,13 @@ import LumenCapture
                 .map { ($0.windowID, "\($0.owningApplication?.applicationName ?? "") — \($0.title ?? "")") }
             if windowID == 0 { windowID = windows.first?.id ?? 0 }
         }
+    }
+
+    /// Bundles created before human naming carry an ISO stamp; the meta line already holds the time.
+    static func displayName(_ raw: String) -> String {
+        let pattern = #"^Recording \d{4}-\d{2}-\d{2}T\d{6}(.*)$"#
+        guard raw.range(of: pattern, options: .regularExpression) != nil else { return raw }
+        return raw.replacingOccurrences(of: pattern, with: "Screen recording$1", options: .regularExpression)
     }
 
     public func showRecordingControls() { hud?.show() }
@@ -152,6 +159,17 @@ import LumenCapture
             try FileManager.default.moveItem(at: trashURL, to: row.url)
             refresh()
         } catch { self.error = "Couldn’t restore this recording. \(error.localizedDescription)" }
+    }
+
+    func duplicate(_ row: ProjectRow) {
+        let base = library.appendingPathComponent(row.name + " copy")
+        var dest = base.appendingPathExtension("lumen"), n = 2
+        while FileManager.default.fileExists(atPath: dest.path) {
+            dest = library.appendingPathComponent("\(row.name) copy \(n)").appendingPathExtension("lumen")
+            n += 1
+        }
+        do { try FileManager.default.copyItem(at: row.url, to: dest); refresh() }
+        catch { self.error = "Couldn’t duplicate this recording. \(error.localizedDescription)" }
     }
 
 
