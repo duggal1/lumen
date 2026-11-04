@@ -80,7 +80,7 @@ public enum Exporter {
         let (preset, notice) = ExportCapabilityMatrix.shared.resolve(p, aspect: aspect)
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
         let h = preset.height, w = preset.width(aspect: aspect), fps = preset.fps
-        let total = max(Int((d.outputDuration * Double(fps)).rounded(.down)), 1)
+        let total = max(Int(ceil(d.outputDuration * Double(fps) - 1e-8)), 1)
 
         let mixed = await Task.detached { session.mixer.mix(tl) }.value
         let caf = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".caf")
