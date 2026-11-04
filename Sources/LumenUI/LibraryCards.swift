@@ -49,10 +49,13 @@ struct ActivityCard: View {
 
     private var subtitle: String {
         if let d = hovered {
+            if Calendar.current.startOfDay(for: d) > Calendar.current.startOfDay(for: .now) {
+                return "\(d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())): Upcoming"
+            }
             let minutes = Int((app.minutesByDay[Calendar.current.startOfDay(for: d)] ?? 0).rounded())
             return "\(d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())): \(minutes) min"
         }
-        return "Recorded time, last 46 days"
+        return "Recorded time, this month and next"
     }
 
     var body: some View {
