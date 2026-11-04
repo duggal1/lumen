@@ -4,7 +4,9 @@ import LumenProject
 
 public struct EditorRoot: View {
     let url: URL
-    @State private var model: EditorModel?, failure: String?, attempt = 0
+    @State private var model: EditorModel?
+    @State private var failure: String?
+    @State private var attempt = 0
     public init(url: URL) { self.url = url }
     public var body: some View {
         MenuRoot {
