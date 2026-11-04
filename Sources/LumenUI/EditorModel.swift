@@ -37,6 +37,12 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     var playhead = 0.0
     var selection: UUID?
     var exportState = ExportState.idle
+    var exportSettings: ExportSettings
+    var exportPanelRequest = 0
+    var exportPanelActive = false
+    var zoomDebug = false
+    var exportElapsed = 0.0
+    var exportETA: Double?
     var notice: String?
     var focusEditing = false
     var canUndo: Bool { !undoStack.isEmpty }
@@ -56,6 +62,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
 
     init(session: ProjectSession, renderer: Renderer, timeline: Timeline) {
         self.session = session; self.renderer = renderer; self.timeline = timeline; box = TimelineBox(timeline)
+        self.exportSettings = ExportSettings.load(defaultName: AppModel.displayName(session.meta.name))
         renderer.setCustomCursors(session.cursors)
         remix()
     }
@@ -224,42 +231,93 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         if p.runModal() == .OK, let u = p.url { edit { $0.audio.musicPath = u.path } }
     }
 
-    func exportVideo() {
-        let panel = NSSavePanel()
-        let rawName = session.meta.name
-        let name = rawName.lowercased().hasSuffix(".lumen") ? String(rawName.dropLast(6)) : rawName
-        panel.nameFieldStringValue = AppModel.displayName(name) + ".mp4"
-        panel.allowedContentTypes = [.mpeg4Movie]
-        panel.allowsOtherFileTypes = false
-        panel.isExtensionHidden = false
+    func openExportPanel() { exportPanelRequest += 1; exportPanelActive = true }
 
-        let resolution = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 190, height: 26), pullsDown: false)
-        resolution.addItems(withTitles: ["1080p", "1440p (2K)", "2160p (4K)"])
-        resolution.selectItem(at: 0)
-        let label = NSTextField(labelWithString: "Resolution")
-        let accessory = NSStackView(views: [label, resolution])
-        accessory.orientation = .horizontal
-        accessory.alignment = .centerY
-        accessory.spacing = 12
-        panel.accessoryView = accessory
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let heights = [1080, 1440, 2160]
-        guard heights.indices.contains(resolution.indexOfSelectedItem), url.pathExtension.lowercased() == "mp4" else {
-            exportState = .failed("Choose an MP4 filename and resolution.")
-            return
-        }
-        let height = heights[resolution.indexOfSelectedItem]
-        let preset = ExportPreset(name: "\(height)p30-h264", codec: .h264, height: height, fps: 30)
-        let tl = timeline, s = session
-        notice = nil
-        exportState = .running(0); exportTask?.cancel()
-        exportTask = Task { [weak self] in
-            let report: @Sendable (ExportProgress) -> Void = { pr in Task { @MainActor in self?.exportState = .running(Double(pr.frame) / Double(pr.total)); if let n = pr.notice { self?.notice = n } } }
-            do {
-                try await Exporter.run(session: s, timeline: tl, preset: preset, to: url, progress: report)
-                self?.exportState = .done(url)
-            } catch is CancellationError { self?.exportState = .idle } catch { self?.exportState = .failed("\(error)") }
+    func updateExportSettings(_ update: (inout ExportSettings) -> Void) {
+        update(&exportSettings)
+        exportSettings.save()
+    }
+
+    func exportBinding<V>(_ key: WritableKeyPath<ExportSettings, V>) -> Binding<V> {
+        Binding(get: { self.exportSettings[keyPath: key] },
+                set: { value in self.updateExportSettings { $0[keyPath: key] = value } })
+    }
+
+    func chooseExportFolder() {
+        let picker = NSOpenPanel()
+        picker.canChooseDirectories = true
+        picker.canChooseFiles = false
+        picker.allowsMultipleSelection = false
+        picker.prompt = "Use folder"
+        picker.directoryURL = URL(fileURLWithPath: (exportSettings.folder as NSString).expandingTildeInPath)
+        // This is the ONLY picker allowed in the export workflow.
+        if picker.runModal() == .OK, let url = picker.url {
+            updateExportSettings { $0.folder = url.path }
         }
     }
+
+    var estimatedExportSeconds: Double? {
+        let throughput = UserDefaults.standard.double(forKey: "lumen.export.pixelsPerSecond")
+        guard throughput > 0 else { return nil }
+        let (w, h) = exportSettings.dimensions(source: session.meta.source, aspect: timeline.style.aspectRatio)
+        let pixels = Double(w) * Double(h) * Double(exportSettings.frameRate.fps(source: session.meta.source.fps)) * duration
+        return pixels / throughput
+    }
+
+    func exportVideo() {
+        let settings = exportSettings
+        guard let url = settings.destinationURL() else {
+            exportState = .failed("Enter a valid filename.")
+            return
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            exportState = .failed("Choose an existing output folder.")
+            return
+        }
+        let preset = settings.preset(source: session.meta.source, aspect: timeline.style.aspectRatio)
+        guard ExportCapabilityMatrix.shared.supports(preset, aspect: timeline.style.aspectRatio) else {
+            exportState = .failed("This Mac cannot encode the chosen resolution, codec and frame rate.")
+            return
+        }
+        let tl = timeline, session = session
+        notice = nil
+        exportElapsed = 0
+        exportETA = nil
+        exportTask?.cancel()
+        let start = HostClock.now()
+        exportState = .running(0)
+        exportTask = Task { [weak self] in
+            let report: @Sendable (ExportProgress) -> Void = { pr in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let fraction = Double(pr.frame) / Double(max(pr.total, 1))
+                    self.exportState = .running(fraction)
+                    self.exportElapsed = HostClock.now() - start
+                    self.exportETA = fraction > 0.01 ? max(0, self.exportElapsed * (1 - fraction) / fraction) : nil
+                    if let n = pr.notice { self.notice = n }
+                }
+            }
+            do {
+                try await Exporter.run(session: session, timeline: tl, preset: preset, to: url,
+                                       includeAudio: settings.includeAudio, audioBitrate: settings.audioBitrate,
+                                       progress: report)
+                let elapsed = max(HostClock.now() - start, 0.001)
+                let (w, h) = settings.dimensions(source: session.meta.source, aspect: tl.style.aspectRatio)
+                let pixels = Double(w) * Double(h) * Double(preset.fps) * tl.timeMap.outputDuration
+                UserDefaults.standard.set(pixels / elapsed, forKey: "lumen.export.pixelsPerSecond")
+                self?.exportElapsed = elapsed
+                self?.exportETA = nil
+                self?.exportState = .done(url)
+            } catch is CancellationError {
+                self?.exportState = .idle
+            } catch {
+                self?.exportState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
     func cancelExport() { exportTask?.cancel() }
+
 }
