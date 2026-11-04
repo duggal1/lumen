@@ -49,7 +49,9 @@ public final class CAFWriter: @unchecked Sendable {
         let pts = sb.presentationTimeStamp.seconds, box = AudioBox(buf: buf)
         q.async { [self] in
             if file == nil {
-                file = try? AVAudioFile(forWriting: url, settings: fmt.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+                var settings = fmt.settings
+                settings[AVLinearPCMIsNonInterleaved] = false
+                file = try? AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
                 first.withLock { $0 = pts }
             }
             try? file?.write(from: box.buf)
