@@ -71,6 +71,8 @@ import LumenCapture
         }
     }
 
+    public func showRecordingControls() { hud?.show() }
+
     public func toggle() {
         switch phase { case .idle: Task { await start() }; case .recording: Task { await stop() }; default: break }
     }
