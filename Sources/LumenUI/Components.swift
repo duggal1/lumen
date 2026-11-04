@@ -108,7 +108,11 @@ struct LSegmented<T: Hashable>: View {
         let id = UUID(); var title: String; var icon: String; var checked = false; var destructive = false; var gapBefore = false
         var disabled = false; var action: () -> Void
     }
-    var items: [Item] = [], anchor = CGRect.zero, minWidth: CGFloat = 0, hl = 0, isOpen = false
+    var items: [Item] = []
+    var anchor = CGRect.zero
+    var minWidth: CGFloat = 0
+    var hl = 0
+    var isOpen = false
     func show(_ items: [Item], anchor: CGRect, minWidth: CGFloat) {
         self.items = items; self.anchor = anchor; self.minWidth = minWidth
         hl = items.firstIndex(where: \.checked) ?? 0; isOpen = true
