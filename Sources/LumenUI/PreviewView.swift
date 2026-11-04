@@ -118,12 +118,13 @@ struct FocusOverlay: View {
                     defer { a = nil; b = nil; model.focusEditing = false }
                     let tl = model.timeline, st = tl.evaluate(at: model.playhead)
                     guard let d = tl.derived else { return }
-                    let size = SIMD2<Int>(Int(g.size.width), Int(g.size.height)), geo = Geometry(canvas: size, src: d.sourceSize, style: tl.style)
+                    let size = SIMD2<Int>(Int(g.size.width), Int(g.size.height))
+                    let transform = ZoomTransform(canvas: size, source: d.sourceSize, style: tl.style,
+                                                  cameraCenter: SIMD2<Double>(Double(st.cameraCenter.x), Double(st.cameraCenter.y)),
+                                                  scale: Double(st.cameraScale))
                     func toSrc(_ p: CGPoint) -> CGPoint {
-                        let view = d.sourceSize / Double(st.cameraScale), cam = SIMD2<Double>(Double(st.cameraCenter.x), Double(st.cameraCenter.y))
-                        let n = SIMD2((p.x - geo.content.x) / geo.content.z, (p.y - geo.content.y) / geo.content.w)
-                        let s = (cam - view / 2) + n * view
-                        return CGPoint(x: min(max(s.x / d.sourceSize.x, 0), 1), y: min(max(s.y / d.sourceSize.y, 0), 1))
+                        let s = transform.sourceNormalized(transform.canvasToSource(SIMD2(Double(p.x), Double(p.y))))
+                        return CGPoint(x: min(max(s.x, 0), 1), y: min(max(s.y, 0), 1))
                     }
                     let p0 = toSrc(v.startLocation), p1 = toSrc(v.location)
                     model.setFocus(box: CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y), width: abs(p0.x - p1.x), height: abs(p0.y - p1.y)))
