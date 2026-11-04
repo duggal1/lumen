@@ -59,7 +59,7 @@ enum ZoomPlanner {
                 }
             case .drag: if e.t - lastClickTime < 2.5 && e.t - lastDrag > 0.1 { pts.append(Pt(t: e.t, x: x, y: y)); lastDrag = e.t }
             case .keyDown:
-                guard e.t - lastClickTime < 1.5, e.flags & 0x14 == 0 else { break }        // cmd / ctrl chords are shortcuts, not typing
+                guard lastClickTime.isFinite, e.flags & 0x14 == 0, !(54...63).contains(e.keyCode) else { break }        // cmd / ctrl chords are shortcuts, not typing
                 pts.append(Pt(t: e.t, x: lastClick.x, y: lastClick.y))
             case .scroll:
                 if e.t - lastClickTime < 1.5 { pts.append(Pt(t: e.t, x: x, y: y)) }
