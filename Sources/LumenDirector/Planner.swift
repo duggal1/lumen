@@ -71,7 +71,7 @@ enum ZoomPlanner {
         for pt in pts {
             if let c = clusters.last, let l = c.last, pt.t - l.t <= p.mergeGap {
                 let cx = c.reduce(0) { $0 + $1.x } / Double(c.count), cy = c.reduce(0) { $0 + $1.y } / Double(c.count)
-                if hypot(pt.x - cx, pt.y - cy) <= 0.12 * diag { clusters[clusters.count - 1].append(pt); continue }
+                if pt.t == l.t || hypot(pt.x - cx, pt.y - cy) <= 0.12 * diag { clusters[clusters.count - 1].append(pt); continue }
             }
             clusters.append([pt])
         }
