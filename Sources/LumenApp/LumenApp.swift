@@ -9,6 +9,10 @@ struct LumenApp: App {
         WindowGroup("Editor", id: "editor", for: URL.self) { $url in
             if let url { EditorRoot(url: url) }
         }
-        MenuBarExtra("Lumen", systemImage: "record.circle") { MenuBarContent(app) }
+        MenuBarExtra {
+            MenuBarContent(app)
+        } label: {
+            Label(app.recordingStatus, systemImage: app.phase == .recording ? "record.circle.fill" : "record.circle")
+        }
     }
 }
