@@ -77,7 +77,6 @@ public enum ClockCalibration {
 /// Listen-only CGEventTap on its own high-QoS thread. Coordinates converted to source pixels once, here.
 public final class InputRecorder: @unchecked Sendable {
     private let ring = EventRing(capacity: 1 << 16)
-    private var debugEvents = 0
     private let liveEventHook = OSAllocatedUnfairLock<(@Sendable (InputEvent) -> Void)?>(initialState: nil)
     public func setLiveEventHook(_ hook: (@Sendable (InputEvent) -> Void)?) { liveEventHook.withLock { $0 = hook } }
     private let url: URL, origin: CGPoint, scale: Double, clock: RecordingClock, axURL: URL
@@ -163,10 +162,6 @@ public final class InputRecorder: @unchecked Sendable {
     }
 
     fileprivate func handle(_ type: CGEventType, _ e: CGEvent) {
-        if debugEvents < 3 {
-            debugEvents += 1
-            NSLog("Lumen event clock raw=%llu ticks=%.9f nanos=%.9f now=%.9f", e.timestamp, HostClock.seconds(machTicks: e.timestamp), Double(e.timestamp) / 1e9, HostClock.now())
-        }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }; return
         }
