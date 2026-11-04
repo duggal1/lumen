@@ -97,7 +97,11 @@ struct RecentRecordings: View {
 
     private var empty: some View {
         HStack(spacing: Space.s4) {
-            FrameLock(cell: 4)
+            Image(systemName: "video")
+                .font(.system(size: 20))
+                .foregroundStyle(Tok.text2)
+                .frame(width: 44, height: 44)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: Space.s1) {
                 Text("Nothing here yet.").font(AppType.label).foregroundStyle(Tok.text)
                 Text("Press ⌥⌘R to record.").font(AppType.body).foregroundStyle(Tok.text2)
