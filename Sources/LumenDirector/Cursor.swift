@@ -49,7 +49,7 @@ enum CursorPipeline {
         }
 
         // 6. click pinning (after glide so pins stay exact)
-        let w = 0.03 * rate, r = Int(3 * w)
+        let w = 0.065 * rate, r = Int(3 * w)
         for e in events where e.kind == .down || e.kind == .up {
             let c = Int(((e.t - lo) * rate).rounded()); guard c >= 0, c < n else { continue }
             let ex = Double(e.x) - X[c], ey = Double(e.y) - Y[c]
