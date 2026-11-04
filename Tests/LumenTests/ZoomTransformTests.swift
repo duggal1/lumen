@@ -7,7 +7,7 @@ import LumenDirector
 
 @Test(arguments: [1.0, 2.0])
 func zoomTransformRespectsDisplayBackingScale(_ backing: Double) {
-    let local = SIMD2<Double>(210, 140)
+    let local = SIMD2<Double>(640, 360)
     let global = SIMD2<Double>(-1440 + local.x, 240 + local.y)
     let origin = SIMD2<Double>(-1440, 240)
     let sourcePoint = (global - origin) * backing
