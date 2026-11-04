@@ -137,6 +137,17 @@ import LumenExport
     var frameCount = 0
     while let sample = outputTrack.copyNextSampleBuffer() { frameCount += CMSampleBufferGetNumSamples(sample) }
     #expect(frameCount == 30)
+    var short = loaded
+    short.timeMap.trimEnd = 1.0 / 30
+    let shortTimeline = session.derive(short, revision: 2)
+    let fourK = root.appendingPathComponent("export-4k.mp4")
+    try await Exporter.run(session: session, timeline: shortTimeline,
+                           preset: ExportPreset(name: "4k30-h264", codec: .h264, height: 2160, fps: 30), to: fourK) { _ in }
+    let fourKAsset = AVURLAsset(url: fourK)
+    let fourKTrack = try #require(try await fourKAsset.loadTracks(withMediaType: .video).first)
+    let dimensions = try await fourKTrack.load(.naturalSize)
+    #expect(dimensions.width == 3840 && dimensions.height == 2160)
+    #expect(try await fourKAsset.load(.isPlayable))
     let geometry = Geometry(canvas: SIMD2(180, 320), src: SIMD2(320, 180), style: timeline.style)
     #expect(abs(geometry.content.z / geometry.content.w - 16.0 / 9) < 0.03)
 }
