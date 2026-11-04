@@ -161,18 +161,15 @@ public final class InputRecorder: @unchecked Sendable {
         if !b.isEmpty { try? fh?.write(contentsOf: Data(b)) }
     }
 
-    private static func hostTime(_ ts: UInt64) -> Double {
-        let now = HostClock.now()
-        let ticks = HostClock.seconds(machTicks: ts), nanos = Double(ts) / 1e9
-        let best = abs(ticks - now) <= abs(nanos - now) ? ticks : nanos
-        return abs(best - now) < 1.0 ? best : now
-    }
-
     fileprivate func handle(_ type: CGEventType, _ e: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }; return
         }
-        var ev = InputEvent(t: Self.hostTime(e.timestamp))
+        // The event timestamp unit is calibrated once per recording, not
+        // guessed separately for each event. Never replace a bad PTS with now.
+        let eventHost = clock.hostSeconds(eventTimestamp: e.timestamp)
+        guard abs(eventHost - HostClock.now()) < 5 else { return }
+        var ev = InputEvent(t: eventHost)
         let loc = e.location                                   // Quartz global space: already top-left origin
         ev.x = Float((loc.x - origin.x) * scale); ev.y = Float((loc.y - origin.y) * scale)
         ev.cursorShape = shape.withLock { $0 }
