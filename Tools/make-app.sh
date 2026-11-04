@@ -5,6 +5,10 @@ config="${CONFIGURATION:-release}"
 swift build -c "$config"
 bin_dir="$(swift build -c "$config" --show-bin-path)"
 app="$PWD/.build/Lumen.app"
+if pgrep -x Lumen >/dev/null; then
+    echo 'Quit Lumen before packaging. Replacing a running app invalidates macOS permission requests.' >&2
+    exit 1
+fi
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_dir/Lumen" "$app/Contents/MacOS/Lumen"
 cp App/Info.plist "$app/Contents/Info.plist"
@@ -41,7 +45,17 @@ for size in [16, 32, 128, 256, 512] {
 }
 SWIFT
 iconutil -c icns "$icon_dir" -o "$app/Contents/Resources/Lumen.icns"
-codesign --force --sign "${CODE_SIGN_IDENTITY:--}" --identifier com.lumen.studio "$app"
+signing_identity="${CODE_SIGN_IDENTITY:-}"
+if [ -z "$signing_identity" ]; then
+    identities="$(security find-identity -v -p codesigning | sed -nE 's/^[[:space:]]*[0-9]+\) ([A-F0-9]{40}) .*/\1/p')"
+    if [ "$(printf '%s\n' "$identities" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 ]; then
+        signing_identity="$identities"
+    else
+        signing_identity=-
+        echo 'Using ad hoc signing. Set CODE_SIGN_IDENTITY for stable macOS permissions across builds.' >&2
+    fi
+fi
+codesign --force --sign "$signing_identity" --identifier com.lumen.studio "$app"
 codesign --verify --strict "$app"
 plutil -lint "$app/Contents/Info.plist"
 echo "Built $app"
