@@ -10,12 +10,13 @@ private func motionTimeline(_ events: [InputEvent]) -> Timeline {
     return Director.derive(timeline, input: DirectorInput(events: events, source: source), revision: 1)
 }
 
-@Test func automaticZoomWaitsForClick() {
+@Test func automaticZoomAnticipatesClickAndArrivesOnTime() {
     let timeline = motionTimeline([InputEvent(t: 2, kind: .down, x: 700, y: 400)])
     #expect(timeline.zoom.count == 1)
-    #expect(timeline.zoom.allSatisfy { $0.start >= 2 - 1e-9 })
-    #expect(abs(timeline.evaluate(at: 1.9).cameraScale - 1) < 0.001)
-    #expect(timeline.evaluate(at: 2.6).cameraScale > 1.4)
+    #expect(timeline.zoom[0].start < 2)
+    #expect(timeline.zoom[0].start >= 1.7)
+    #expect(abs(timeline.evaluate(at: 1.5).cameraScale - 1) < 0.001)
+    #expect(timeline.evaluate(at: 2.1).cameraScale > 1.6)
 }
 
 @Test func unanchoredActivityDoesNotZoom() {
