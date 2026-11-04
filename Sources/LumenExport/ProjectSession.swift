@@ -1,6 +1,6 @@
 import Foundation
 import Metal
-import AVFoundation
+@preconcurrency import AVFoundation
 import os
 import LumenCore
 import LumenProject
@@ -65,11 +65,12 @@ public final class ProjectSession: @unchecked Sendable {
         if let s = meta.system { sys = try? AudioIO.readMono(b.systemURL); sysOff = s.startHostSeconds - origin }
         let vad = (mic.map { VAD.regions($0) } ?? []).map { ($0.lowerBound + micOff) ... ($0.upperBound + micOff) }
         let wave = mic.map { envelope($0, offset: micOff) } ?? []
-        let screen = try await ReaderFrameSource(url: b.screenURL, device: device)
+        let sharedDevice = SendableMetalDevice(device)
+        let screen = try await ReaderFrameSource(url: b.screenURL, device: sharedDevice)
         var web: (any FrameSource)?, aspect: Float = 16.0 / 9
         if let w = meta.webcam {
             let off = w.startHostSeconds - origin
-            web = OffsetFrameSource(try await ReaderFrameSource(url: b.webcamURL, device: device), offset: off)
+            web = OffsetFrameSource(try await ReaderFrameSource(url: b.webcamURL, device: sharedDevice), offset: off)
             if let tr = try? await AVURLAsset(url: b.webcamURL).loadTracks(withMediaType: .video).first,
                let sz = try? await tr.load(.naturalSize), sz.height > 0 { aspect = Float(sz.width / sz.height) }
         }
