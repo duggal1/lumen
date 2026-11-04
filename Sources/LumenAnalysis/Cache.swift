@@ -1,20 +1,39 @@
 import Foundation
 import CryptoKit
 
-enum AnalysisCache {
-    static func key<P: Encodable>(media: URL, analyzer: String, version: Int, parameters: P) throws -> String {
-        let values = try media.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        let size = values.fileSize ?? 0
-        let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
-        var fingerprint = Data("\(size):\(modified):\(analyzer):\(version):".utf8)
+private actor MediaDigestCache {
+    private struct Fingerprint: Hashable {
+        var path: String
+        var size: Int
+        var modified: TimeInterval
+    }
+
+    static let shared = MediaDigestCache()
+    private var values: [Fingerprint: Data] = [:]
+    private var order: [Fingerprint] = []
+
+    func digest(for media: URL) throws -> Data {
+        let attributes = try media.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let fingerprint = Fingerprint(path: media.standardizedFileURL.path, size: attributes.fileSize ?? 0,
+                                      modified: attributes.contentModificationDate?.timeIntervalSince1970 ?? 0)
+        if let value = values[fingerprint] { return value }
+
         let handle = try FileHandle(forReadingFrom: media)
         defer { try? handle.close() }
-        let chunk = 64 * 1024
-        fingerprint.append(try handle.read(upToCount: chunk) ?? Data())
-        if size > chunk {
-            try handle.seek(toOffset: UInt64(max(size - chunk, 0)))
-            fingerprint.append(try handle.read(upToCount: chunk) ?? Data())
-        }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        let digest = Data(hasher.finalize())
+        values[fingerprint] = digest
+        order.append(fingerprint)
+        if order.count > 16 { values.removeValue(forKey: order.removeFirst()) }
+        return digest
+    }
+}
+
+enum AnalysisCache {
+    static func key<P: Encodable>(media: URL, analyzer: String, version: Int, parameters: P) async throws -> String {
+        var fingerprint = try await MediaDigestCache.shared.digest(for: media)
+        fingerprint.append(Data("\(analyzer):\(version):".utf8))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         fingerprint.append(try encoder.encode(parameters))
