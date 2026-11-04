@@ -55,6 +55,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     private var replanTask: Task<Void, Never>?
     private var analysisTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
+    private var activeExportID = UUID()
     private var mixTask: Task<Void, Never>?
     private var playbackTask: Task<Void, Never>?
     private var wantsPlayback = false
@@ -286,12 +287,16 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         exportElapsed = 0
         exportETA = nil
         exportTask?.cancel()
+        pause()
+        activeExportID = UUID()
+        let exportID = activeExportID
         let start = HostClock.now()
         exportState = .running(0)
         exportTask = Task { [weak self] in
             let report: @Sendable (ExportProgress) -> Void = { pr in
                 Task { @MainActor [weak self] in
-                    guard let self else { return }
+                    guard let self, self.activeExportID == exportID else { return }
+                    guard case .running = self.exportState else { return }
                     let fraction = Double(pr.frame) / Double(max(pr.total, 1))
                     self.exportState = .running(fraction)
                     self.exportElapsed = HostClock.now() - start
@@ -307,13 +312,14 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                 let (w, h) = settings.dimensions(source: session.meta.source, aspect: tl.style.aspectRatio)
                 let pixels = Double(w) * Double(h) * Double(preset.fps) * tl.timeMap.outputDuration
                 UserDefaults.standard.set(pixels / elapsed, forKey: "lumen.export.pixelsPerSecond")
-                self?.exportElapsed = elapsed
-                self?.exportETA = nil
-                self?.exportState = .done(url)
+                guard let self, self.activeExportID == exportID else { return }
+                self.exportElapsed = elapsed
+                self.exportETA = nil
+                self.exportState = .done(url)
             } catch is CancellationError {
-                self?.exportState = .idle
+                if self?.activeExportID == exportID { self?.exportState = .idle }
             } catch {
-                self?.exportState = .failed(error.localizedDescription)
+                if self?.activeExportID == exportID { self?.exportState = .failed(error.localizedDescription) }
             }
         }
     }
