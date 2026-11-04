@@ -22,7 +22,7 @@ if ! find "$app/Contents/Resources" -name default.metallib -print -quit | /usr/b
 fi
 icon_dir="$PWD/.build/Lumen.iconset"
 mkdir -p "$icon_dir"
-swift - App/public/assets/brand/logo/lumen-icon.svg "$icon_dir" <<'SWIFT'
+swift - App/public/assets/brand/logo/lumen-icon.png "$icon_dir" <<'SWIFT'
 import AppKit
 let args = CommandLine.arguments
 guard let source = NSImage(contentsOfFile: args[1]) else { fatalError("Cannot read Lumen logo") }
@@ -34,7 +34,7 @@ for size in [16, 32, 128, 256, 512] {
             bytesPerRow: 0, bitsPerPixel: 0), let context = NSGraphicsContext(bitmapImageRep: bitmap) else { fatalError("Icon allocation failed") }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
-        let side = CGFloat(pixels), width = side * 0.88, height = width * source.size.height / source.size.width
+        let side = CGFloat(pixels), width = side, height = width * source.size.height / source.size.width
         source.draw(in: NSRect(x: (side - width) / 2, y: (side - height) / 2, width: width, height: height))
         NSGraphicsContext.restoreGraphicsState()
         let suffix = scale == 2 ? "@2x" : ""

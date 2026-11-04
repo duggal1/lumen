@@ -1,8 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="176" height="176" viewBox="-36 -16 176 176" role="img" aria-label="Lumen icon">
-  <g fill="#3B1A0A" stroke="#3B1A0A" stroke-linejoin="round" transform="translate(0 5)">
-    <path opacity="0.035" stroke-width="26" d="M12,10 L12,122 L38,98 L56,134 L74,125 L57,90 L92,90 Z" />
-    <path opacity="0.05" stroke-width="20" d="M12,10 L12,122 L38,98 L56,134 L74,125 L57,90 L92,90 Z" />
-    <path opacity="0.12" stroke-width="14" d="M12,10 L12,122 L38,98 L56,134 L74,125 L57,90 L92,90 Z" />
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img">
+  <title>Lumen</title>
+  <defs>
+    <path id="arrow" d="M12,10 L12,122 L38,98 L56,134 L74,125 L57,90 L92,90 Z" stroke-width="14" stroke-linejoin="round"/>
+    <linearGradient id="fill" gradientUnits="userSpaceOnUse" x1="12" y1="6" x2="80" y2="138">
+      <stop offset="0" stop-color="#FFB267"/>
+      <stop offset="0.5" stop-color="#F97316"/>
+      <stop offset="1" stop-color="#E4570A"/>
+    </linearGradient>
+    <filter id="arrowShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="16"/>
+      <feOffset dy="26"/>
+      <feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.45 0"/>
+    </filter>
+  </defs>
+  <g filter="url(#arrowShadow)">
+    <g transform="translate(512 512) scale(3.6) translate(-52 -72)">
+      <use href="#arrow" fill="#000" stroke="#000"/>
+    </g>
   </g>
-  <path fill="#F97316" stroke="#F97316" stroke-width="14" stroke-linejoin="round" d="M12,10 L12,122 L38,98 L56,134 L74,125 L57,90 L92,90 Z" />
+  <g transform="translate(512 512) scale(3.6) translate(-52 -72)">
+    <use href="#arrow" fill="url(#fill)" stroke="url(#fill)"/>
+  </g>
 </svg>
