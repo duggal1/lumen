@@ -183,6 +183,7 @@ struct Inspector: View {
                     Row(label: "Remove music") { LButton(title: "Remove", icon: "trash", kind: .quiet) { m.edit { $0.audio.musicPath = nil } } }
                 }
                 SliderRow(label: "Loudness", v: m.bind(\.audio.targetLUFS), range: -23...(-10), fmt: { "\(Int($0)) LUFS" })
+                SliderRow(label: "Output level", v: m.bind(\.audio.outputGainDb), range: -24...6, fmt: { "\(Int($0)) dB" })
             }.card()
         }
     }
