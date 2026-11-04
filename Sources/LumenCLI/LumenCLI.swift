@@ -41,20 +41,41 @@ struct Analyze: AsyncParsableCommand {
              "start": mask.start, "end": mask.end,
              "rects": mask.keys.map { ["t": $0.t, "x": $0.x, "y": $0.y, "w": $0.w, "h": $0.h] as [String: Double] }] as [String: Any]
         }
-        try jsonOut([
-            "name": s.meta.name, "sourceSize": [s.meta.source.width, s.meta.source.height], "fps": s.meta.source.fps,
-            "sourceDuration": s.meta.source.duration, "outputDuration": tl.timeMap.outputDuration, "droppedFrames": s.meta.droppedFrames,
-            "eventTimeRange": [ev.first?.t ?? -1, ev.last?.t ?? -1],
-            "eventsInsideVideo": ev.filter { $0.t >= 0 && $0.t <= s.meta.source.duration }.count,
-            "clickTimes": ev.filter { $0.kind == .down }.map { $0.t },
-            "events": ["total": ev.count, "moves": ev.filter { $0.kind == .move }.count, "clicks": ev.filter { $0.kind == .down }.count,
-                       "keys": ev.filter { $0.kind == .keyDown }.count, "scrolls": ev.filter { $0.kind == .scroll }.count],
-            "zoomSegments": tl.zoom.map { ["start": $0.start, "end": $0.end, "scale": $0.scale, "origin": $0.origin.rawValue] },
-            "speedRamps": tl.timeMap.ramps.map { ["start": $0.start, "end": $0.end, "speed": $0.speed] },
-            "voiceRegions": s.input.vad.count, "faceSamples": s.input.face.count,
-            "activityPoints": s.input.activity.count, "transcriptWords": s.input.transcript?.words.count ?? 0,
-            "masks": masks, "analysisErrors": analysisErrors,
-        ] as [String: Any], to: report)
+        let eventCounts: [String: Int] = [
+            "total": ev.count,
+            "moves": ev.filter { $0.kind == .move }.count,
+            "clicks": ev.filter { $0.kind == .down }.count,
+            "keys": ev.filter { $0.kind == .keyDown }.count,
+            "scrolls": ev.filter { $0.kind == .scroll }.count
+        ]
+        let zoomItems: [[String: Any]] = tl.zoom.map { zoom in
+            ["start": zoom.start, "end": zoom.end, "scale": zoom.scale, "origin": zoom.origin.rawValue]
+        }
+        let ramps: [[String: Double]] = tl.timeMap.ramps.map { ramp in
+            ["start": ramp.start, "end": ramp.end, "speed": ramp.speed]
+        }
+        let eventTimes = ev.filter { $0.kind == .down }.map(\.t)
+        let withinVideo = ev.filter { $0.t >= 0 && $0.t <= s.meta.source.duration }.count
+        var summary: [String: Any] = [:]
+        summary["name"] = s.meta.name
+        summary["sourceSize"] = [s.meta.source.width, s.meta.source.height]
+        summary["fps"] = s.meta.source.fps
+        summary["sourceDuration"] = s.meta.source.duration
+        summary["outputDuration"] = tl.timeMap.outputDuration
+        summary["droppedFrames"] = s.meta.droppedFrames
+        summary["eventTimeRange"] = [ev.first?.t ?? -1, ev.last?.t ?? -1]
+        summary["eventsInsideVideo"] = withinVideo
+        summary["clickTimes"] = eventTimes
+        summary["events"] = eventCounts
+        summary["zoomSegments"] = zoomItems
+        summary["speedRamps"] = ramps
+        summary["voiceRegions"] = s.input.vad.count
+        summary["faceSamples"] = s.input.face.count
+        summary["activityPoints"] = s.input.activity.count
+        summary["transcriptWords"] = s.input.transcript?.words.count ?? 0
+        summary["masks"] = masks
+        summary["analysisErrors"] = analysisErrors
+        try jsonOut(summary, to: report)
     }
 }
 
