@@ -72,29 +72,9 @@ public enum Director {
             g += (tgt - g) * (1 - exp(-0.01 / tc)); duck[i] = Float(g)
         }
         t.derived = DerivedTracks(revision: revision, sourceSize: size, outputDuration: tm.outputDuration, cursor: cursor, camera: cam,
-                                  clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm),
+                                  clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm, camera: cam, layout: t.webcam),
                                   webcamAspect: input.webcamAspect)
         return t
-    }
-}
-
-enum WebcamFraming {
-    /// Face center/size pushed through the same spring cascade as the camera.
-    static func solve(_ s: [FaceSample], tm: TimeMap) -> [SIMD3<Float>] {
-        guard !s.isEmpty else { return [] }
-        let n = Int(tm.outputDuration * 30) + 2, dt = 1.0 / 30
-        var a = Spring3(x: SIMD3(Double(s[0].cx), Double(s[0].cy), Double(s[0].h))), b = a
-        let w = SIMD3<Double>(3, 3, 2.5)
-        var out: [SIMD3<Float>] = []; out.reserveCapacity(n)
-        var k = 0
-        for i in 0..<n {
-            let st = tm.source(atOutput: Double(i) * dt)
-            while k < s.count - 1 && s[k + 1].t <= st { k += 1 }
-            a.step(target: SIMD3(Double(s[k].cx), Double(s[k].cy), Double(s[k].h)), omega: w, dt: dt)
-            b.step(target: a.x, omega: w, dt: dt)
-            out.append(SIMD3(Float(b.x.x), Float(b.x.y), Float(b.x.z)))
-        }
-        return out
     }
 }
 
@@ -157,9 +137,10 @@ extension Timeline {
         // webcam crop: face-aware or centered square
         let ar = max(d.webcamAspect, 0.1)
         var ch: Float = 1, cx: Float = 0.5, cy: Float = 0.5
-        if webcam?.autoFrame == true, !d.face.isEmpty {
-            let fc = d.face[min(Int(t * 30), d.face.count - 1)]
-            ch = cf(fc.z * 3.2, 0.35, 1); cx = fc.x; cy = fc.y
+        if !d.face.isEmpty {
+            let fp = t * faceGridRate, i0 = min(Int(fp), d.face.count - 1), i1 = min(i0 + 1, d.face.count - 1)
+            let fc = d.face[i0] + (d.face[i1] - d.face[i0]) * Float(fp - Double(i0))
+            cx = fc.x; cy = fc.y; ch = cf(fc.z, 0.25, 1)
         }
         let cw = min(ch / ar, 1)
         let crop = SIMD4<Float>(cf(cx - cw / 2, 0, 1 - cw), cf(cy - ch / 2, 0, 1 - ch), cw, ch)
