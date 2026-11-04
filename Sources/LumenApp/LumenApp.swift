@@ -5,7 +5,11 @@ import LumenUI
 struct LumenApp: App {
     @State private var app = AppModel()
     var body: some Scene {
-        Window("Lumen", id: "library") { LibraryRoot(app) }
+        Window("Lumen", id: "library") {
+            LibraryRoot(app).background(WindowChrome())
+        }
+        .defaultSize(width: Metrics.windowW, height: Metrics.windowH)
+        .windowResizability(.contentMinSize)
         WindowGroup("Editor", id: "editor", for: URL.self) { $url in
             if let url { EditorRoot(url: url) }
         }
