@@ -424,11 +424,27 @@ public struct TrackMeta: Codable, Sendable {
 public struct ProjectMeta: Codable, Sendable {
     public var name: String
     public var created = Date()
+    public var analysisSalt: UInt64
     public var source: SourceInfo
     public var clock: RecordingClock
     public var mic: TrackMeta?, system: TrackMeta?, webcam: TrackMeta?
     public var droppedFrames = 0
-    public init(name: String, source: SourceInfo, clock: RecordingClock) { self.name = name; self.source = source; self.clock = clock }
+    enum CodingKeys: String, CodingKey { case name, created, analysisSalt, source, clock, mic, system, webcam, droppedFrames }
+    public init(name: String, source: SourceInfo, clock: RecordingClock) {
+        self.name = name; self.analysisSalt = UInt64.random(in: UInt64.min...UInt64.max); self.source = source; self.clock = clock
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        created = (try? c.decode(Date.self, forKey: .created)) ?? Date(timeIntervalSince1970: 0)
+        analysisSalt = (try? c.decode(UInt64.self, forKey: .analysisSalt)) ?? fnv1a64(name + String(created.timeIntervalSince1970))
+        source = try c.decode(SourceInfo.self, forKey: .source)
+        clock = try c.decode(RecordingClock.self, forKey: .clock)
+        mic = try? c.decodeIfPresent(TrackMeta.self, forKey: .mic)
+        system = try? c.decodeIfPresent(TrackMeta.self, forKey: .system)
+        webcam = try? c.decodeIfPresent(TrackMeta.self, forKey: .webcam)
+        droppedFrames = (try? c.decode(Int.self, forKey: .droppedFrames)) ?? 0
+    }
 }
 public struct ProjectFile: Codable, Sendable {
     public var meta: ProjectMeta
