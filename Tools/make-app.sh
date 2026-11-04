@@ -21,6 +21,14 @@ fi
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_dir/Lumen" "$app/Contents/MacOS/Lumen"
 cp App/Info.plist "$app/Contents/Info.plist"
+# The native app must ship the MP3 assets it actually plays. They are not
+# synthesized and are resolved from Contents/Resources/Audio at runtime.
+mkdir -p "$app/Contents/Resources/Audio"
+for sound in App/public/assets/*.mp3; do
+    [ -f "$sound" ] || continue
+    ditto "$sound" "$app/Contents/Resources/Audio/$(basename "$sound")"
+done
+ditto App/public/assets/music "$app/Contents/Resources/Audio/music"
 for bundle in "$bin_dir/"*.bundle; do
     [ -d "$bundle" ] || continue
     ditto "$bundle" "$app/Contents/Resources/$(basename "$bundle")"
