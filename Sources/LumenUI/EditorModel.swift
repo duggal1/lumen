@@ -47,6 +47,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     private var lastEdit = Date.distantPast
     private var revision = 1
     private var replanTask: Task<Void, Never>?
+    private var analysisTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
     private var mixTask: Task<Void, Never>?
     private var playbackTask: Task<Void, Never>?
@@ -70,7 +71,9 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             out.style.background = .dither
             out.style.colors = DitherPalettes.all[0].1
         }
-        return EditorModel(session: s, renderer: r, timeline: out)
+        let model = EditorModel(session: s, renderer: r, timeline: out)
+        model.analyzeInBackground(out)
+        return model
     }
 
     // MARK: Edits (value-type timeline: undo is a stack of snapshots)
@@ -82,9 +85,28 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         if !(coalesce && Date().timeIntervalSince(lastEdit) < 0.6) { undoStack.append(old); if undoStack.count > 100 { undoStack.removeFirst() } }
         lastEdit = Date(); redoStack.removeAll()
         timeline = new; box.set(new)                                    // renderer shows the new look immediately, old derived tracks
-        if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap || old.audio != new.audio || old.webcam != new.webcam || old.overlays.taps != new.overlays.taps {
+        let analysisChanged = old.overlays.privacy != new.overlays.privacy || old.captions.enabled != new.captions.enabled
+            || old.captions.locale != new.captions.locale || old.captions.vocabulary != new.captions.vocabulary
+            || old.layouts != new.layouts
+        if analysisChanged { analyzeInBackground(new) }
+        if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap
+            || old.audio != new.audio || old.webcam != new.webcam || old.overlays.taps != new.overlays.taps
+            || old.layouts != new.layouts || old.layoutSettings != new.layoutSettings
+            || old.captions != new.captions
+            || old.style.aspectRatio != new.style.aspectRatio || old.style.padding != new.style.padding
+            || old.style.paddingInsets != new.style.paddingInsets {
             replan()
         } else { session.save(new) }
+    }
+
+    private func analyzeInBackground(_ snapshot: Timeline) {
+        analysisTask?.cancel()
+        let session = session
+        analysisTask = Task { [weak self] in
+            await session.analyze(snapshot)
+            guard !Task.isCancelled, let self else { return }
+            self.replan()
+        }
     }
     func setWebcam(_ on: Bool) { edit { $0.webcam = on ? ($0.webcam ?? WebcamLayout()) : nil } }
     func undo() { if let p = undoStack.popLast() { redoStack.append(timeline); restore(p) } }
