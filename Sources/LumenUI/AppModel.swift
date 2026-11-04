@@ -202,6 +202,7 @@ struct HUDView: View {
                 Text("Recording starts…").font(AppType.body).foregroundStyle(Tok.text2); Spacer()
             case .recording:
                 PixelStop(cell: 2)
+                Text("Recording").font(AppType.label).foregroundStyle(Tok.text)
                 Text(time(app.stats?.elapsed ?? 0)).font(AppType.label.monospacedDigit()).foregroundStyle(Tok.text)
                 PixelMeter(level: app.stats?.micLevel ?? 0)
                 if (app.stats?.dropped ?? 0) > 0 { PixelBadge(kind: .caution, text: "\(app.stats?.dropped ?? 0) dropped") }
@@ -209,7 +210,7 @@ struct HUDView: View {
             default:
                 PixelWait(); Text(app.phase == .finishing ? "Saving…" : "Preparing…").font(AppType.body).foregroundStyle(Tok.text2); Spacer()
             }
-        }.padding(.horizontal, 12).frame(width: 340, height: 48).background(RoundedRectangle(cornerRadius: 16).fill(Tok.surface))
+        }.padding(.horizontal, 12).frame(width: 400, height: 64).background(RoundedRectangle(cornerRadius: 16).fill(Tok.surface))
     }
     private func time(_ t: Double) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
 }
