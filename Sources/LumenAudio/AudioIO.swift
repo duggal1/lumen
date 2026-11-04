@@ -107,7 +107,9 @@ public enum AudioIO {
     /// Float32 stereo CAF (the exporter reads this back and AAC-encodes it).
     public static func writeCAF(_ l: [Float], _ r: [Float], to url: URL) throws {
         let fmt = stereoFormat
-        let f = try AVAudioFile(forWriting: url, settings: fmt.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        var settings = fmt.settings
+        settings[AVLinearPCMIsNonInterleaved] = false
+        let f = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
         let chunk = 1 << 16
         guard let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(chunk)) else { throw AudioIOError.unreadable("buffer") }
         let total = min(l.count, r.count)
