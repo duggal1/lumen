@@ -170,12 +170,22 @@ private final class RegionView: NSView {
 
 @MainActor final class HUDController {
     private var panel: NSPanel?
-    init(_ app: AppModel) {
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 48), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    init(_ app: AppModel, screen: NSScreen?) {
+        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 64), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.contentView = NSHostingView(rootView: HUDView(app: app))
         p.level = .statusBar; p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false
-        p.sharingType = .none; p.hidesOnDeactivate = false; p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        if let s = NSScreen.main { p.setFrameOrigin(CGPoint(x: s.frame.midX - 170, y: s.frame.maxY - 48 - 36)) }
+        p.sharingType = .none
+        p.hidesOnDeactivate = false
+        p.canHide = false
+        p.isFloatingPanel = true
+        p.isMovableByWindowBackground = true
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        p.title = "Lumen recording controls"
+        p.setAccessibilityLabel("Lumen recording controls")
+        if let screen {
+            let frame = screen.visibleFrame
+            p.setFrameOrigin(CGPoint(x: frame.midX - 200, y: frame.maxY - 80))
+        }
         panel = p
     }
     func show() { panel?.orderFrontRegardless() }
