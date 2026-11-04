@@ -202,7 +202,8 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
             m.r.withUnsafeBufferPointer { b.floatChannelData![1].update(from: $0.baseAddress!, count: m.r.count) }
             prepared = Buffer(value: b)
         }
-        mixed.withLock { $0 = (m, prepared) }
+        let ready = prepared
+        mixed.withLock { $0 = (m, ready) }
     }
 
     /// Starts playback of output-time `t` at `atHostSeconds` (HostClock seconds).
