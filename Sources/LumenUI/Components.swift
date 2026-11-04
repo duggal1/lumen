@@ -32,7 +32,10 @@ struct LButton: View {
     let title: String; var icon: String?; var kind: LKind = .secondary; var height: CGFloat = 28; let action: () -> Void
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) { if let icon { Image(systemName: icon).font(.system(size: 12)) }; Text(title) }
+            HStack(spacing: 6) {
+                if let icon { Image(systemName: icon).font(.system(size: 12)) }
+                Text(title).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+            }
         }.buttonStyle(LButtonStyle(kind: kind, height: height)).accessibilityLabel(title)
     }
 }
@@ -64,6 +67,7 @@ struct LToggle: View {
 /// Track = 2x4 pt ticks on a 4 pt pitch; passed ticks rise to 8 pt in the accent ramp; thumb = 2 pt white scan line.
 struct LSlider: View {
     @Binding var value: Double; let range: ClosedRange<Double>; var step: Double = 0; var width: CGFloat = 150
+    @State private var dragging = false
     var body: some View {
         let frac = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
         Canvas { c, size in
@@ -75,12 +79,16 @@ struct LSlider: View {
             }
             c.fill(Path(CGRect(x: CGFloat(lit) * 4, y: (size.height - 16) / 2, width: 2, height: 16)), with: .color(Tok.text), style: FillStyle(antialiased: false))
         }
-        .frame(width: width, height: 24).contentShape(Rectangle()).pointerStyle(.link)
-        .gesture(DragGesture(minimumDistance: 0).onChanged { g in
-            var v = range.lowerBound + min(max(g.location.x / width, 0), 1) * (range.upperBound - range.lowerBound)
-            if step > 0 { v = (v / step).rounded() * step }
-            if v != value { value = v }
-        })
+        .frame(width: width, height: 24).contentShape(Rectangle())
+        .pointerStyle(dragging ? .grabActive : .grabIdle)
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { g in
+                dragging = true
+                var v = range.lowerBound + min(max(g.location.x / width, 0), 1) * (range.upperBound - range.lowerBound)
+                if step > 0 { v = (v / step).rounded() * step }
+                if v != value { value = v }
+            }
+            .onEnded { _ in dragging = false })
         .accessibilityRepresentation { Slider(value: $value, in: range) }
     }
 }
@@ -95,7 +103,7 @@ struct LSegmented<T: Hashable>: View {
             ForEach(items, id: \.0) { v, title in
                 Button { sel = v } label: {
                     Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(sel == v ? Tok.text : Tok.text2)
-                        .frame(maxWidth: .infinity).frame(height: 24)
+                        .lineLimit(1).frame(maxWidth: .infinity).frame(height: 24)
                         .background { if sel == v { Capsule().fill(thumb).matchedGeometryEffect(id: "thumb", in: ns) } }
                 }.buttonStyle(.plain).pointerStyle(.link)
             }
@@ -145,7 +153,7 @@ struct MenuLayer: View {
         }
     }
     private func panel(_ size: CGSize) -> some View {
-        let w = max(host.minWidth, 200)
+        let w = menuWidth()
         var ys: [CGFloat] = [], y0: CGFloat = 4
         for it in host.items { y0 += it.gapBefore ? 8 : 0; ys.append(y0); y0 += 32 }
         let h = y0 + 4
@@ -163,7 +171,7 @@ struct MenuLayer: View {
                 Button { host.close(); it.action() } label: {
                     HStack(spacing: 8) {
                         Image(systemName: it.icon).font(.system(size: 14)).frame(width: 20)
-                        Text(it.title).font(AppType.label)
+                        Text(it.title).font(AppType.label).lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         Spacer(minLength: 16)
                         Image(systemName: "checkmark").font(.system(size: 12)).foregroundStyle(Tok.accentText).frame(width: 20).opacity(it.checked ? 1 : 0)
                     }.padding(.horizontal, 12).frame(width: w - 8, height: 32).contentShape(Rectangle())
@@ -179,6 +187,13 @@ struct MenuLayer: View {
         .onKeyPress(.return) { host.fire(); return .handled }
         .onKeyPress(.escape) { host.close(); return .handled }
         .animation(.smooth(duration: 0.20), value: host.isOpen)
+    }
+
+    /// Width = max(trigger, longest title + 12 + 20 + 8 + 16 + 20 + 12 + 8). Titles never wrap.
+    private func menuWidth() -> CGFloat {
+        let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        let longest = host.items.map { ($0.title as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return max(host.minWidth, longest + 12 + 20 + 8 + 16 + 20 + 12 + 8)
     }
 }
 
@@ -217,7 +232,7 @@ struct Row<C: View>: View {
     var body: some View {
         HStack(spacing: 12) {
             if let icon { Image(systemName: icon).font(.system(size: 14)).foregroundStyle(Tok.text2).frame(width: 20) }
-            Text(label).font(AppType.label).foregroundStyle(Tok.text)
+            Text(label).font(AppType.label).foregroundStyle(Tok.text).lineLimit(1).fixedSize(horizontal: true, vertical: false)
             Spacer(minLength: 8)
             control
         }.frame(minHeight: 48)
@@ -227,7 +242,7 @@ struct SliderRow: View {
     let label: String; @Binding var v: Double; let range: ClosedRange<Double>; var fmt: (Double) -> String = { String(format: "%.2f", $0) }
     var body: some View {
         Row(label: label) {
-            HStack(spacing: 8) { LSlider(value: $v, range: range, width: 120)
+            HStack(spacing: 8) { LSlider(value: $v, range: range, width: 100)
                 Text(fmt(v)).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2).frame(width: 40, alignment: .trailing) }
         }
     }
@@ -334,6 +349,23 @@ struct UndoToast: View {
         .padding(.leading, 16).padding(.trailing, 8).frame(height: 40)
         .background(.ultraThinMaterial, in: Capsule())
         .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: Page bar (52 tall, one primary action, title baseline at y = 60)
+
+struct PageBar<Action: View>: View {
+    let title: String
+    @ViewBuilder var action: Action
+    var body: some View {
+        HStack(alignment: .bottom, spacing: Space.s4) {
+            PageTitle(text: title)
+            Spacer(minLength: Space.s4)
+            action
+        }
+        .padding(.horizontal, Metrics.pagePad)
+        .padding(.bottom, 8)
+        .frame(height: Metrics.pageBar + 8, alignment: .bottom)
     }
 }
 

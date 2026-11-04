@@ -134,7 +134,7 @@ private struct RecordingRow: View {
         return row.date.formatted(.dateTime.month(.abbreviated).day().year())
     }
 
-    private var time: String { row.date.formatted(date: .omitted, time: .shortened) }
+    private var time: String { ClockFormat.time(row.date) }
 
     private var duration: String {
         let total = Int(row.duration.rounded())

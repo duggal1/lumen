@@ -58,7 +58,12 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     static func open(url: URL) async throws -> EditorModel {
         let r = try Renderer()
         let (s, tl) = try await ProjectSession.open(ProjectBundle(url: url), device: r.device)
-        return EditorModel(session: s, renderer: r, timeline: s.derive(tl, revision: 0))
+        var out = s.derive(tl, revision: 0)
+        if out.style.background == .gradient || out.style.background == .mesh {
+            out.style.background = .dither
+            out.style.colors = DitherPalettes.all[0].1
+        }
+        return EditorModel(session: s, renderer: r, timeline: out)
     }
 
     // MARK: Edits (value-type timeline: undo is a stack of snapshots)

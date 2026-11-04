@@ -20,7 +20,8 @@ struct PreviewView: NSViewRepresentable {
     private let model: EditorModel, metal = CAMetalLayer()
     private var link: CADisplayLink?
     private let busy = OSAllocatedUnfairLock(initialState: false)
-    private var lastKey: (Int, Double, Int, Int) = (-1, -1, 0, 0)
+    private var lastKey: (Int, Double, Int, Int, Int) = (-1, -1, 0, 0, 0)
+    private let t0 = CACurrentMediaTime()
 
     init(model: EditorModel) {
         self.model = model; super.init(frame: .zero)
@@ -28,6 +29,8 @@ struct PreviewView: NSViewRepresentable {
         metal.device = model.renderer.device; metal.pixelFormat = .bgra8Unorm; metal.framebufferOnly = true
         metal.colorspace = CGColorSpace(name: CGColorSpace.displayP3); metal.displaySyncEnabled = true; metal.maximumDrawableCount = 3
         metal.isOpaque = true
+        metal.masksToBounds = true
+        metal.cornerRadius = Radius.card
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -48,7 +51,11 @@ struct PreviewView: NSViewRepresentable {
         let t = model.clock.time(at: l.targetTimestamp)
         if model.clock.playing { model.tick(t) }
         let (tl, ver) = model.box.get(), ds = metal.drawableSize
-        let key = (ver, t, Int(ds.width), Int(ds.height))
+        // The dither field is a living surface: redraw every display tick. Static backgrounds stay cache-stable.
+        let animated = tl.style.background == .dither && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let uiTime = animated ? l.targetTimestamp - t0 : 0
+        let phase = animated ? Int(uiTime * 240) : 0
+        let key = (ver, t, Int(ds.width), Int(ds.height), phase)
         guard key != lastKey, ds.width > 2, busy.withLock({ let b = $0; $0 = true; return !b }) else { return }
         lastKey = key
         let renderer = model.renderer, session = model.session, layer = Unsafe(v: metal), busy = busy
@@ -58,7 +65,7 @@ struct PreviewView: NSViewRepresentable {
             guard let sf = try? await session.screen.frame(atSource: s) else { return }
             let wf = tl.webcam != nil ? try? await session.webcam?.frame(atSource: s) : nil
             let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: SIMD2(Int(ds.width), Int(ds.height)), fps: 60,
-                                    backingScale: session.meta.source.backingScale, quality: .preview)
+                                    backingScale: session.meta.source.backingScale, quality: .preview, uiTime: uiTime)
             renderer.draw(req, to: layer.v)
         }
     }

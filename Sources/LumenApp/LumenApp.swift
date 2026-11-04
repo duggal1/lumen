@@ -14,6 +14,8 @@ struct LumenApp: App {
         WindowGroup("Editor", id: "editor", for: URL.self) { $url in
             if let url { EditorRoot(url: url) }
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentMinSize)
         MenuBarExtra {
             MenuBarContent(app)
         } label: {

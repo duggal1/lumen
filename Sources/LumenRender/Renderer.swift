@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import AppKit
 import CoreVideo
 import QuartzCore
 import simd
@@ -16,10 +17,12 @@ public struct RenderRequest: @unchecked Sendable {
     public var timeline: Timeline, t: Double
     public var screen: SourceFrame, webcam: SourceFrame?
     public var canvas: SIMD2<Int>, fps: Double, backingScale: Double, quality: RenderQuality
+    /// Preview-only animation phase for the pixel-dither backdrop. Always 0 for export, so output stays deterministic.
+    public var uiTime: Double
     public init(timeline: Timeline, t: Double, screen: SourceFrame, webcam: SourceFrame? = nil, canvas: SIMD2<Int>,
-                fps: Double = 60, backingScale: Double = 2, quality: RenderQuality = .export) {
+                fps: Double = 60, backingScale: Double = 2, quality: RenderQuality = .export, uiTime: Double = 0) {
         self.timeline = timeline; self.t = t; self.screen = screen; self.webcam = webcam
-        self.canvas = canvas; self.fps = fps; self.backingScale = backingScale; self.quality = quality
+        self.canvas = canvas; self.fps = fps; self.backingScale = backingScale; self.quality = quality; self.uiTime = uiTime
     }
 }
 
@@ -31,7 +34,8 @@ public struct Geometry: Sendable {
     public init(canvas c: SIMD2<Int>, src: SIMD2<Double>, style: Style) {
         let cv = SIMD2<Double>(Double(c.x), Double(c.y)), pad = style.padding * cv.x
         let aw = cv.x - 2 * pad, ah = cv.y - 2 * pad, sa = src.x / max(src.y, 1)
-        let w = min(aw, ah * sa), h = w / sa
+        let base = min(aw, ah * sa)
+        let w = base * min(max(style.contentScale, 0.3), 1.6), h = w / sa
         canvas = cv; self.src = src
         content = SIMD4(((cv.x - w) / 2).rounded(), ((cv.y - h) / 2).rounded(), w.rounded(), h.rounded())
         ui = cv.x / 1440; radius = style.cornerRadius * ui
@@ -45,7 +49,8 @@ public struct Geometry: Sendable {
 
 private struct QuadU { var rect: SIMD4<Float>; var canvas: SIMD2<Float> }
 private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; var angle: Float; var count: Int32; var kind: Int32
-                           var radius: Float; var shadow: Float; var scale: Float }
+                           var radius: Float; var shadow: Float; var scale: Float; var cell: Float; var density: Float; var hasWall: Int32
+                           var time: Float }
 private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float }
@@ -53,7 +58,7 @@ private struct WebU { var crop: SIMD4<Float>; var bubble: SIMD4<Float>; var radi
                       var shadow: Float; var bw: Float; var minif: Float; var margin: Float }
 private struct AccU { var weight: Float }
 private struct ResU { var levels: Float; var seed: UInt32 }
-private struct BackdropKey: Equatable { var style: Style; var size: SIMD2<Int> }
+private struct BackdropKey: Equatable { var style: Style; var size: SIMD2<Int>; var wall: String; var phase: Double }
 private struct Keep: @unchecked Sendable { let o: Any }
 
 /// BGRA source -> mip-mapped copy, regenerated only when a NEW source frame arrives (sample-and-hold reuses the chain).
@@ -92,6 +97,8 @@ public final class Renderer: @unchecked Sendable {
     private var backdrop: MTLTexture?
     private var backdropKey: BackdropKey?
     private var size = SIMD2<Int>(0, 0)
+    private var wallTex: MTLTexture?
+    private var wallID = ""
     private let screenMip = MipCache(), webMip = MipCache()
     private var atlas: CursorAtlas?
     private var atlasPack: CursorPack?
@@ -131,6 +138,34 @@ public final class Renderer: @unchecked Sendable {
     }
 
     public func setCustomCursors(_ c: [CustomCursor]) { customs = c; atlas = nil }
+
+    /// The Mac's own desktop picture, loaded once per wallpaper change. No download, no bundled asset.
+    private func loadWallpaperIfNeeded() {
+        guard let screen = NSScreen.main, let url = NSWorkspace.shared.desktopImageURL(for: screen) else {
+            wallTex = nil; wallID = ""; return
+        }
+        let stamp = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let id = "\(url.path)#\(stamp)"
+        guard id != wallID else { return }
+        wallID = id; wallTex = nil
+        guard let image = NSImage(contentsOf: url),
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        let w = cg.width, h = cg.height, bytes = w * 4
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        d.usage = [.shaderRead]; d.storageMode = .managed
+        guard let tex = device.makeTexture(descriptor: d) else { return }
+        var data = [UInt8](repeating: 0, count: bytes * h)
+        data.withUnsafeMutableBytes { raw in
+            guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: bytes,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return }
+            ctx.translateBy(x: 0, y: CGFloat(h))
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        tex.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0, withBytes: data, bytesPerRow: bytes)
+        wallTex = tex
+    }
 
     private func ensureTargets(_ s: SIMD2<Int>) {
         guard s != size else { return }
@@ -195,7 +230,9 @@ public final class Renderer: @unchecked Sendable {
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y))
 
         // 1. backdrop cache (style or size change only)
-        let key = BackdropKey(style: tl.style, size: cs)
+        if tl.style.background == .wallpaper { loadWallpaperIfNeeded() }
+        let key = BackdropKey(style: tl.style, size: cs, wall: tl.style.background == .wallpaper ? wallID : "",
+                              phase: tl.style.background == .dither ? r.uiTime : 0)
         if backdropKey != key {
             backdropKey = key
             let pd = MTLRenderPassDescriptor()
@@ -206,9 +243,21 @@ public final class Renderer: @unchecked Sendable {
                 let st = tl.style
                 var cols = st.colors.isEmpty ? [SIMD4<Float>(0, 0, 0, 1)] : st.colors.map(\.simd)
                 if cols.count < 6 { cols += [SIMD4<Float>](repeating: cols[0], count: 6 - cols.count) }
+                let kind: Int32 = switch st.background {
+                case .gradient: 0
+                case .mesh: 1
+                case .dither: 3
+                case .wallpaper: 4
+                case .canvas: 5
+                case .solid: 2
+                }
+                if st.background == .wallpaper, let wallTex { e.setFragmentTexture(wallTex, index: 0) }
                 frag(e, BackdropU(content: SIMD4<Float>(g.content), canvas: canvasF, angle: Float(st.gradientAngle * .pi / 180),
-                                  count: Int32(max(st.colors.count, 1)), kind: st.background == .gradient ? 0 : st.background == .mesh ? 1 : 2,
-                                  radius: Float(g.radius), shadow: Float(st.shadow), scale: Float(g.ui * 1.33)))
+                                  count: Int32(max(st.colors.count, 1)), kind: kind,
+                                  radius: Float(g.radius), shadow: Float(st.shadow), scale: Float(g.ui * 1.33),
+                                  cell: Float(max(2, st.ditherCell * g.ui)), density: Float(st.ditherDensity),
+                                  hasWall: st.background == .wallpaper && wallTex != nil ? 1 : 0,
+                                  time: Float(r.uiTime)))
                 cols.withUnsafeBytes { e.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()

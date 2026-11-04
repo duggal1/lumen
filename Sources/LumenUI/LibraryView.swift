@@ -10,14 +10,16 @@ public struct LibraryRoot: View {
 
     public var body: some View {
         MenuRoot {
-            LibrarySurface(app: app)
+            LumenShell(app)
         }
-        .frame(minWidth: Metrics.minW, minHeight: Metrics.minH)
-        .onAppear { app.onFinished = { openWindow(value: $0) } }
+        .onAppear {
+            Appearance.apply()
+            app.onFinished = { openWindow(value: $0) }
+        }
     }
 }
 
-private struct LibrarySurface: View {
+struct LibrarySurface: View {
     let app: AppModel
     @Environment(MenuHost.self) private var menu
     @Environment(\.openWindow) private var openWindow

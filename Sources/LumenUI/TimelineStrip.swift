@@ -7,7 +7,7 @@ struct TimelineStrip: View {
     let model: EditorModel
     @State private var drag: Drag?
     private struct Drag { enum Kind { case seek, move, left, right }; var kind: Kind; var id: UUID?; var orig: ZoomSegment?; var t0: Double }
-    private let zoomLane: ClosedRange<CGFloat> = 26...58, rampLane: ClosedRange<CGFloat> = 62...80
+    private let zoomLane: ClosedRange<CGFloat> = 34...74, rampLane: ClosedRange<CGFloat> = 78...92
 
     var body: some View {
         GeometryReader { g in
@@ -15,7 +15,8 @@ struct TimelineStrip: View {
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0).onChanged { change($0, g.size.width) }.onEnded { _ in drag = nil })
         }
-        .frame(height: 128).background(RoundedRectangle(cornerRadius: 12).fill(Tok.surface))
+        .frame(height: Metrics.timeline).background(RoundedRectangle(cornerRadius: Radius.nested).fill(Tok.surface))
+        .pointerStyle(drag == nil ? .grabIdle : .grabActive)
         .accessibilityLabel("Timeline").accessibilityHint("Drag to seek. Drag a zoom segment to move or resize it.")
     }
 
@@ -27,9 +28,9 @@ struct TimelineStrip: View {
         let stepS = dur > 120 ? 30.0 : dur > 40 ? 10.0 : dur > 12 ? 5.0 : 1.0
         var t = 0.0
         while t <= dur {
-            fill(CGRect(x: x(t).rounded(), y: 14, width: 1, height: 5), Tok.text2)
+            fill(CGRect(x: x(t).rounded(), y: 18, width: 1, height: 6), Tok.text2)
             c.draw(Text(String(format: "%d:%02d", Int(t) / 60, Int(t) % 60)).font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2),
-                   at: CGPoint(x: x(t) + 4, y: 8), anchor: .leading)
+                   at: CGPoint(x: x(t) + 4, y: 10), anchor: .leading)
             t += stepS
         }
         // zoom segments: auto = soft, manual = accent; selected = text-colored cap
@@ -46,20 +47,22 @@ struct TimelineStrip: View {
         for r in tl.timeMap.ramps {
             let a = x(tl.timeMap.output(atSource: r.start)), b = x(tl.timeMap.output(atSource: r.end))
             fill(CGRect(x: a, y: rampLane.lowerBound, width: max(b - a, 3), height: 14), Tok.controlPressed)
-            c.draw(Text(String(format: "%.0f×", r.speed)).font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2), at: CGPoint(x: a + 4, y: 69), anchor: .leading)
+            c.draw(Text(String(format: "%.0f×", r.speed)).font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2), at: CGPoint(x: a + 4, y: 85), anchor: .leading)
         }
-        // waveform tape: 4 pt cells, 2 pt gap, played = accent body
-        let wave = model.session.waveform, ph = x(model.playhead)
+        // waveform tape: 4 pt cells, 6 pt pitch, 7 rows (40 tall). Played core is the accent body.
+        let wave = model.session.waveform, ph = x(model.playhead), mid: CGFloat = 140
         if !wave.isEmpty {
             var cx: CGFloat = 0
             while cx < w {
                 let src = tl.timeMap.source(atOutput: Double(cx / w) * dur), i = min(max(Int(src * 100), 0), wave.count - 1)
                 let rows = Int(wave[i].squareRoot() * 3.99)
-                for k in -rows...rows { fill(CGRect(x: cx, y: 104 + CGFloat(k) * 4 - 2, width: 4, height: 3), cx < ph ? Ramp.o[3] : Tok.controlPressed) }
+                for k in -rows...rows {
+                    fill(CGRect(x: cx, y: mid + CGFloat(k) * 6 - 2, width: 4, height: 4), cx < ph ? Ramp.o[3] : Tok.controlPressed)
+                }
                 cx += 6
             }
         }
-        if let d = tl.derived { for k in d.clicks { fill(CGRect(x: x(k.t) - 1, y: 84, width: 2, height: 2), Tok.text2) } }
+        if let d = tl.derived { for k in d.clicks { fill(CGRect(x: x(k.t) - 1, y: 100, width: 2, height: 2), Tok.text2) } }
         fill(CGRect(x: ph.rounded() - 1, y: 4, width: 2, height: size.height - 8), Tok.text)     // playhead = white head
     }
 

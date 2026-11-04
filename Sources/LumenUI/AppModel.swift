@@ -41,10 +41,14 @@ import LumenCapture
     }
 
     public var phase = Phase.idle
-    var kind = SourceKind.display
+    var kind = SourceKind(rawValue: UserDefaults.standard.string(forKey: "LumenDefaultSource") ?? "") ?? .display {
+        didSet { UserDefaults.standard.set(kind.rawValue, forKey: "LumenDefaultSource") }
+    }
     var displayID = CGMainDisplayID()
     var windowID: CGWindowID = 0
-    var fps = 60
+    var fps = UserDefaults.standard.object(forKey: "LumenDefaultFPS") as? Int ?? 60 {
+        didSet { UserDefaults.standard.set(fps, forKey: "LumenDefaultFPS") }
+    }
     var mic = true
     var system = false
     var webcam = false
@@ -226,6 +230,17 @@ import LumenCapture
     }
 
     private func fail(_ e: Error) { poll?.cancel(); hud?.close(); hud = nil; live?.close(); live = nil; phase = .idle; error = "Recording failed. \(e)" }
+}
+
+/// 12-hour by default, 24-hour from Settings. One format for every meta line.
+enum ClockFormat {
+    static var uses24Hour: Bool { UserDefaults.standard.bool(forKey: "Lumen24Hour") }
+    static func time(_ date: Date) -> String {
+        if uses24Hour {
+            return date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+        }
+        return date.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)).minute(.twoDigits))
+    }
 }
 
 // MARK: Global hotkey (Carbon, no dependency)

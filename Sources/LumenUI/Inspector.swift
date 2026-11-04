@@ -25,7 +25,7 @@ struct Inspector: View {
                 case .export: export
                 }
             }.padding(20)
-        }.frame(width: 320).background(Tok.bg)
+        }.frame(width: Metrics.inspector).background(Tok.bg)
         .task { valid = await Task.detached { ExportCapabilityMatrix.shared.valid(ExportPresets.all) }.value }
     }
 
@@ -44,15 +44,30 @@ struct Inspector: View {
                 LSegmented(sel: m.bind(\.style.canvas), items: CanvasAspect.allCases.map { ($0, $0.title) })
             }.card()
             VStack(spacing: 0) {
-                Row(label: "Background") { LDropdown(sel: m.bind(\.style.background), options: BackgroundKind.allCases.map { ($0, $0.rawValue.capitalized, "square.fill.on.square") }).frame(width: 130) }
-                Row(label: "Colors") {
-                    LDropdown(sel: Binding(get: { GradientPresets.all.first { $0.1 == m.timeline.style.colors }?.0 ?? "Custom" },
-                                           set: { n in if let p = GradientPresets.all.first(where: { $0.0 == n }) { m.edit { $0.style.colors = p.1 } } }),
-                              options: GradientPresets.all.map { ($0.0, $0.0, "circle.lefthalf.filled") } + [("Custom", "Custom", "slider.horizontal.3")]).frame(width: 130)
+                Row(label: "Background") {
+                    LDropdown(sel: m.bind(\.style.background),
+                              options: BackgroundKind.offered.map { ($0, $0.rawValue.capitalized, backgroundIcon($0)) })
+                        .frame(width: 130)
                 }
-                SliderRow(label: "Angle", v: m.bind(\.style.gradientAngle), range: 0...360, fmt: { "\(Int($0))°" })
+                if m.timeline.style.background != .wallpaper {
+                    Row(label: "Palette") {
+                        LDropdown(sel: paletteName(m),
+                                  options: DitherPalettes.all.map { ($0.0, $0.0, "circle.lefthalf.filled") })
+                            .frame(width: 130)
+                    }
+                }
+                if m.timeline.style.background == .dither {
+                    SliderRow(label: "Cell", v: m.bind(\.style.ditherCell), range: 4...24, fmt: { "\(Int($0)) pt" })
+                    SliderRow(label: "Ink", v: m.bind(\.style.ditherDensity), range: 0.15...0.9, fmt: { "\(Int($0 * 100))%" })
+                }
+                if m.timeline.style.background == .wallpaper {
+                    Row(label: "Source") {
+                        Text("This Mac").font(AppType.body).foregroundStyle(Tok.text2)
+                    }
+                }
             }.card()
             VStack(spacing: 0) {
+                SliderRow(label: "Size", v: m.bind(\.style.contentScale), range: 0.5...1.5, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Padding", v: m.bind(\.style.padding), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Radius", v: m.bind(\.style.cornerRadius), range: 0...40, fmt: { "\(Int($0))" })
                 SliderRow(label: "Shadow", v: m.bind(\.style.shadow), range: 0...1)
@@ -67,6 +82,21 @@ struct Inspector: View {
                 }
             }.card()
         }
+    }
+
+    private func backgroundIcon(_ kind: BackgroundKind) -> String {
+        switch kind {
+        case .dither: "square.grid.3x3.fill"
+        case .canvas: "rectangle.fill"
+        case .wallpaper: "photo"
+        case .solid: "square.fill"
+        case .gradient, .mesh: "square.fill.on.square"
+        }
+    }
+
+    private func paletteName(_ m: EditorModel) -> Binding<String> {
+        Binding(get: { DitherPalettes.all.first { $0.1 == m.timeline.style.colors }?.0 ?? DitherPalettes.all[0].0 },
+                set: { name in m.edit { $0.style.colors = DitherPalettes.colors(named: name) } })
     }
 
     private var cursor: some View {

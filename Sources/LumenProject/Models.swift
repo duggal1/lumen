@@ -11,18 +11,30 @@ public struct RGBA: Codable, Equatable, Sendable {
     public var simd: SIMD4<Float> { [r, g, b, a] }
 }
 
-public enum GradientPresets {
+/// Two flat tones, ordered-dithered into a pixel field. Base first, ink second.
+public enum DitherPalettes {
     public static let all: [(String, [RGBA])] = [
-        ("Ember", [RGBA(0x1A0F08), RGBA(0x7C2D12), RGBA(0xF97316), RGBA(0xFDBA74)]),
-        ("Graphite", [RGBA(0x0A0A0A), RGBA(0x171717), RGBA(0x262626), RGBA(0x3A3A3A)]),
-        ("Paper", [RGBA(0xF4F4F4), RGBA(0xEDEDED), RGBA(0xE3E3E3), RGBA(0xFFFFFF)]),
-        ("Dusk", [RGBA(0x1E1B4B), RGBA(0x4C1D95), RGBA(0xBE185D), RGBA(0xF97316)]),
-        ("Ocean", [RGBA(0x082F49), RGBA(0x0369A1), RGBA(0x0EA5E9), RGBA(0x7DD3FC)]),
-        ("Moss", [RGBA(0x052E16), RGBA(0x166534), RGBA(0x4ADE80), RGBA(0xBBF7D0)]),
+        ("Ember", [RGBA(0x0A0A0A), RGBA(0xFF6A00)]),
+        ("Ember white", [RGBA(0xF4F4F4), RGBA(0xF05A00)]),
+        ("Ocean", [RGBA(0x06121F), RGBA(0x38BDF8)]),
+        ("Ocean white", [RGBA(0xEFF6FF), RGBA(0x2563EB)]),
+        ("Moss", [RGBA(0x07130C), RGBA(0x4ADE80)]),
+        ("Moss white", [RGBA(0xF0FDF4), RGBA(0x16A34A)]),
+        ("Rose", [RGBA(0x140A10), RGBA(0xF472B6)]),
+        ("Rose white", [RGBA(0xFDF2F8), RGBA(0xDB2777)]),
+        ("Graphite", [RGBA(0x0A0A0A), RGBA(0x525252)]),
+        ("Paper", [RGBA(0xF4F4F4), RGBA(0x171717)]),
     ]
+    public static func colors(named name: String) -> [RGBA] {
+        all.first { $0.0 == name }?.1 ?? all[0].1
+    }
 }
 
-public enum BackgroundKind: String, Codable, CaseIterable, Sendable { case gradient, mesh, solid }
+/// Legacy gradients are kept for decoding old projects; the picker offers dither, canvas, wallpaper and solid.
+public enum BackgroundKind: String, Codable, CaseIterable, Sendable {
+    case dither, canvas, wallpaper, solid, gradient, mesh
+    public static let offered: [BackgroundKind] = [.dither, .canvas, .wallpaper, .solid]
+}
 public enum CanvasAspect: String, Codable, CaseIterable, Sendable {
     case r16x9, r16x10, r1x1, r4x5, r9x16
     public var ratio: Double { switch self { case .r16x9: 16.0 / 9; case .r16x10: 1.6; case .r1x1: 1; case .r4x5: 0.8; case .r9x16: 9.0 / 16 } }
@@ -30,15 +42,34 @@ public enum CanvasAspect: String, Codable, CaseIterable, Sendable {
 }
 
 public struct Style: Codable, Equatable, Sendable {
-    public var background: BackgroundKind = .gradient
-    public var colors: [RGBA] = GradientPresets.all[0].1
+    public var background: BackgroundKind = .dither
+    public var colors: [RGBA] = DitherPalettes.all[0].1
     public var gradientAngle: Double = 35
+    public var ditherCell: Double = 12
+    public var ditherDensity: Double = 0.55
     public var padding: Double = 0.06
+    public var contentScale: Double = 1
     public var cornerRadius: Double = 14
     public var shadow: Double = 0.45
     public var innerBorder = true
     public var canvas: CanvasAspect = .r16x9
     public init() {}
+
+    /// Old project files predate the dither fields, so every key falls back to its default.
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        background = try c.decodeIfPresent(BackgroundKind.self, forKey: .background) ?? .dither
+        colors = try c.decodeIfPresent([RGBA].self, forKey: .colors) ?? DitherPalettes.all[0].1
+        gradientAngle = try c.decodeIfPresent(Double.self, forKey: .gradientAngle) ?? 35
+        ditherCell = try c.decodeIfPresent(Double.self, forKey: .ditherCell) ?? 12
+        ditherDensity = try c.decodeIfPresent(Double.self, forKey: .ditherDensity) ?? 0.55
+        padding = try c.decodeIfPresent(Double.self, forKey: .padding) ?? 0.06
+        contentScale = try c.decodeIfPresent(Double.self, forKey: .contentScale) ?? 1
+        cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? 14
+        shadow = try c.decodeIfPresent(Double.self, forKey: .shadow) ?? 0.45
+        innerBorder = try c.decodeIfPresent(Bool.self, forKey: .innerBorder) ?? true
+        canvas = try c.decodeIfPresent(CanvasAspect.self, forKey: .canvas) ?? .r16x9
+    }
 }
 
 public enum CursorPack: String, Codable, CaseIterable, Sendable { case system, minimal, dot, ring, pro }

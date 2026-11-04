@@ -18,9 +18,12 @@ public struct EditorRoot: View {
                         LButton(title: "Retry", kind: .primary) { self.failure = nil; attempt += 1 }
                     }.padding(32)
                 } else { PixelWait() }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Tok.bg)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Tok.bg)
+            .background(WindowChrome())
         }
-        .frame(minWidth: 1100, minHeight: 680)
+        .frame(minWidth: Metrics.minW, minHeight: Metrics.minH)
         .task(id: attempt) { do { model = try await EditorModel.open(url: url) } catch { failure = "Couldn't open this project. \(error)" } }
     }
 }
@@ -29,17 +32,17 @@ struct EditorView: View {
     let model: EditorModel
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                PageTitle(text: model.session.meta.name).lineLimit(1)
-                Spacer()
-                LIconButton(icon: "arrow.uturn.backward", label: "Undo") { model.undo() }.disabled(!model.canUndo)
-                LIconButton(icon: "arrow.uturn.forward", label: "Redo") { model.redo() }.disabled(!model.canRedo)
-            }.padding(.horizontal, 32).frame(height: 52)
+            PageBar(title: AppModel.displayName(model.session.meta.name)) {
+                HStack(spacing: 8) {
+                    LIconButton(icon: "arrow.uturn.backward", label: "Undo") { model.undo() }.disabled(!model.canUndo)
+                    LIconButton(icon: "arrow.uturn.forward", label: "Redo") { model.redo() }.disabled(!model.canRedo)
+                }
+            }
             HStack(spacing: 0) {
                 VStack(spacing: 16) {
                     PreviewView(model: model)
                         .aspectRatio(model.timeline.style.canvas.ratio, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                         .overlay { if model.focusEditing { FocusOverlay(model: model) } }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     transport

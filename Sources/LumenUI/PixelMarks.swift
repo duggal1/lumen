@@ -60,6 +60,29 @@ struct FrameLock: View {
     }
 }
 
+enum SidebarMarkKind { case ready, warming, blocked }
+
+/// 5 x 5 pixel status mark: 3 pt cells on a 4 pt pitch, 19 pt inside a 20 pt box.
+struct SidebarStatusMark: View {
+    let kind: SidebarMarkKind
+    private static let disc = [".###.", "#####", "#####", "#####", ".###."]
+    private static let ring = [".###.", "#...#", "#...#", "#...#", ".###."]
+    private static let radial = ["..#..", ".###.", "##.##", ".###.", "..#.."]
+    var body: some View {
+        Canvas { c, _ in
+            let rows = kind == .ready ? Self.disc : kind == .warming ? Self.radial : Self.ring
+            let color = kind == .ready ? Tok.statusOK : kind == .warming ? Tok.accent : Tok.statusBad
+            for (y, row) in rows.enumerated() {
+                for (x, ch) in row.enumerated() where ch == "#" {
+                    cellFill(&c, CGRect(x: CGFloat(x) * 4, y: CGFloat(y) * 4, width: 3, height: 3), color)
+                }
+            }
+        }
+        .frame(width: 20, height: 20)
+        .accessibilityHidden(true)
+    }
+}
+
 /// Selection is four corner brackets built from 2 pt cells, never an outline.
 struct CornerBrackets: View {
     var cell: CGFloat = 2

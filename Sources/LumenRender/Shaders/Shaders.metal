@@ -33,13 +33,40 @@ static float rectMask(float2 px, float4 rect, float r) {
     return clamp(0.5 - d / max(fwidth(d), 1e-3), 0.0, 1.0);
 }
 
-// ---- Backdrop (cached): gradient / mesh / solid + two-layer shadow
-struct BackdropU { float4 content; float2 canvas; float angle; int count; int kind; float radius; float shadow; float scale; };
+// ---- Backdrop (cached): dither / wallpaper / gradient / mesh / solid + two-layer shadow
+struct BackdropU { float4 content; float2 canvas; float angle; int count; int kind;
+                   float radius; float shadow; float scale; float cell; float density; int hasWall; float time; };
 
-fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)]], constant float4 *cols [[buffer(1)]]) {
+constant float kBayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
+
+fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)]], constant float4 *cols [[buffer(1)]],
+                           texture2d<float> wall [[texture(0)]]) {
     float2 uv = in.px / u.canvas;
     float3 c = cols[0].rgb;
-    if (u.kind == 0 && u.count > 1) {
+    if (u.kind == 3) {
+        // Two flat tones ordered-dithered under a slow diagonal wave. Display-rate phase; export always sends 0.
+        float cell = max(2.0, u.cell);
+        float2 g = floor(in.px / cell);
+        int ix = int(g.x) & 3, iy = int(g.y) & 3;
+        float t = (kBayer[iy * 4 + ix] + 0.5) / 16.0;
+        float2 d = float2(cos(u.angle), sin(u.angle));
+        float s = dot(uv - 0.5, d) / max(abs(d.x) + abs(d.y), 1e-3) + 0.5;
+        float wave = 0.5 + 0.5 * sin((s * 2.0 - u.time * 0.09) * 6.2831853);
+        float field = smoothstep(0.08, 0.92, wave);
+        float ink = field * clamp(u.density * 1.8, 0.0, 1.0);
+        c = ink > t ? cols[1].rgb : cols[0].rgb;
+    } else if (u.kind == 5) {
+        // Canvas: a flat two-tone pixel weave. Static, so it reads as paper rather than motion.
+        float cell = max(4.0, u.cell);
+        float2 g = floor(in.px / cell);
+        float alt = fmod(g.x + g.y, 2.0);
+        c = mix(cols[0].rgb, cols[1].rgb, alt * 0.14);
+    } else if (u.kind == 4 && u.hasWall == 1) {
+        float2 ts = float2(wall.get_width(), wall.get_height());
+        float s = max(u.canvas.x / ts.x, u.canvas.y / ts.y);
+        float2 off = (u.canvas - ts * s) * 0.5;
+        c = wall.sample(linClamp, (in.px - off) / (ts * s)).rgb;
+    } else if (u.kind == 0 && u.count > 1) {
         float2 d = float2(cos(u.angle), sin(u.angle));
         float t = dot(uv - 0.5, d) / (abs(d.x) + abs(d.y)) + 0.5;
         float f = clamp(t, 0.0, 1.0) * float(u.count - 1);
