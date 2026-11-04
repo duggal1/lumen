@@ -59,15 +59,17 @@ struct ActivityCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s3) {
-            VStack(alignment: .leading, spacing: Space.s1) {
+        VStack(alignment: .leading, spacing: Space.s2) {
+            HStack(spacing: Space.s2) {
                 Text("Activity").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
-                Text(subtitle).font(AppType.caption).foregroundStyle(Tok.text2)
-                    .contentTransition(.numericText())
+                if hovered != nil {
+                    Text(subtitle).font(AppType.caption).foregroundStyle(Tok.text2)
+                        .lineLimit(1)
+                }
             }
             MonthGraph(minutes: app.minutesByDay, hovered: $hovered)
         }
-        .card()
+        .card(padding: Space.s4)
         .accessibilityElement(children: .contain)
     }
 }

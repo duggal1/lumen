@@ -9,7 +9,7 @@ struct MonthGraph: View {
     @State private var weekOffset = 0
 
     private static let calendar = Calendar.current
-    private let rowHeight: CGFloat = 48
+    private let rowHeight: CGFloat = 28
 
     private var days: [Date] {
         let cal = Self.calendar
@@ -18,25 +18,13 @@ struct MonthGraph: View {
         return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: week) }
     }
 
-    private var weekLabel: String {
-        guard let first = days.first, let last = days.last else { return "" }
-        return "\(first.formatted(.dateTime.month(.abbreviated).day())) – \(last.formatted(.dateTime.month(.abbreviated).day()))"
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s2) {
-            HStack(spacing: Space.s1) {
-                Text(weekLabel).font(AppType.caption).foregroundStyle(Tok.text2)
-                Spacer()
-                LIconButton(icon: "chevron.left", label: "Previous week") { changeWeek(-1) }
-                LIconButton(icon: "chevron.right", label: "Next week") { changeWeek(1) }
+        HStack(spacing: 0) {
+            LIconButton(icon: "chevron.left", label: "Previous week") { changeWeek(-1) }
+            ForEach(days, id: \.self) { day in
+                dayButton(day)
             }
-            HStack(spacing: 0) {
-                ForEach(days, id: \.self) { day in
-                    dayButton(day)
-                }
-            }
-            .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.control))
+            LIconButton(icon: "chevron.right", label: "Next week") { changeWeek(1) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
@@ -57,14 +45,16 @@ struct MonthGraph: View {
             selected = selected == day ? nil : day
             hovered = selected
         } label: {
-            VStack(spacing: Space.s1) {
-                PixelDot(color: value > 0 && !future ? Tok.accent : .white, size: 10)
-                Text(day.formatted(.dateTime.weekday(.abbreviated)))
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-                    .lineLimit(1)
+            ZStack {
+                if value > 0 && !future {
+                    PixelDot(color: Tok.accent, size: 10)
+                } else {
+                    PixelDot(color: Tok.controlPressed, size: 10)
+                    PixelDot(color: .white, size: 6)
+                }
             }
             .frame(maxWidth: .infinity).frame(height: rowHeight)
-            .background(RoundedRectangle(cornerRadius: Radius.field).fill(active ? Tok.controlHover : .clear))
+            .background(RoundedRectangle(cornerRadius: Radius.field).fill(active ? Tok.control : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(ActivityPressStyle())
