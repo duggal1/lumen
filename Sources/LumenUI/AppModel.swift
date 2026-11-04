@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 import AVFoundation
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 import Carbon.HIToolbox
 import LumenCore
 import LumenProject
