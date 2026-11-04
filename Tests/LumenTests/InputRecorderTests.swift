@@ -12,6 +12,6 @@ import LumenCore
                                  origin: .zero, scale: 1, clock: RecordingClock())
     recorder.startFlushTimer()
     try await Task.sleep(for: .milliseconds(800))
-    recorder.stop()
+    await recorder.stop()
     #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("ax.json").path))
 }
