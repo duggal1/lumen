@@ -117,17 +117,27 @@ enum ZoomPlanner {
         var segs: [Seg] = []
         for c in clusters {
             guard c.reduce(0, { $0 + $1.w }) >= 2 else { continue }              // a click, a typing burst, or two purposeful hovers
-            let xs = c.map(\.x), ys = c.map(\.y)
+            // Accessibility element bounds may be the entire popup, not the
+            // clicked row. Include them for context only when they still allow
+            // a useful zoom; otherwise frame the actual interaction points.
+            let anchors = c.filter { $0.w > 0 }
+            func framing(_ points: [Pt]) -> (fit: Double, valid: Bool) {
+                let xs = points.map(\.x), ys = points.map(\.y)
+                let dx = (xs.max() ?? 0) - (xs.min() ?? 0)
+                let dy = (ys.max() ?? 0) - (ys.min() ?? 0)
+                let fit = 0.8 * min(W / (dx + 0.24 * W), H / (dy + 0.24 * H))
+                let scale = clamp(fit, p.minScale, p.maxScale)
+                return (fit, dx * scale <= 0.8 * W && dy * scale <= 0.8 * H)
+            }
+            let context = framing(c)
+            let region = context.valid && context.fit >= p.minTrigger ? c : anchors
+            let xs = region.map(\.x), ys = region.map(\.y)
             let minX = xs.min()!, maxX = xs.max()!, minY = ys.min()!, maxY = ys.max()!
-            let bw = (maxX - minX) + 0.24 * W, bh = (maxY - minY) + 0.24 * H    // 12% padding each side
-            let fit = 0.8 * min(W / bw, H / bh)
+            let selection = framing(region)
+            let fit = selection.fit
             var scale = clamp(fit, p.minScale, p.maxScale)
             scale = max((scale * 10).rounded() / 10, 1.1)
-            let fits = (maxX - minX) * scale <= 0.8 * W && (maxY - minY) * scale <= 0.8 * H
-            // AX element bounds inform how far to zoom, never where to point.
-            // Popup and menu element frames can be much larger than the click
-            // target; focusing their bounding-box center shifts the viewport.
-            let anchors = c.filter { $0.w > 0 }
+            let fits = selection.valid
             let mass = max(anchors.reduce(0) { $0 + $1.w }, 1)
             let fx = anchors.reduce(0) { $0 + $1.x * $1.w } / mass
             let fy = anchors.reduce(0) { $0 + $1.y * $1.w } / mass
