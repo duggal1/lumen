@@ -20,6 +20,22 @@ import LumenRender
     }
 }
 
+@Test func oversizedPopupDoesNotForceCursorFollow() {
+    let src = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 6, backingScale: 1, originX: 0, originY: 0)
+    var tl = Timeline(duration: 6)
+    tl.audio.speedRampsAuto = false
+    let click = InputEvent(t: 2, kind: .down, x: 850, y: 300, axFrameIndex: 1)
+    let popup = AXFrame(x: 0, y: 0, w: 960, h: 540)
+    tl = Director.derive(tl, input: DirectorInput(events: [click], source: src, ax: [popup]), revision: 1)
+    #expect(tl.zoom.count == 1)
+    if case .fixed(let x, let y) = tl.zoom[0].focus {
+        #expect(abs(x - 850.0 / 1920) < 0.001)
+        #expect(abs(y - 300.0 / 1080) < 0.001)
+    } else {
+        Issue.record("Oversized popup should not switch fixed click focus to follow")
+    }
+}
+
 @Test func twentyFourClicksStayInsideZoomViewport() {
     let source = SIMD2<Double>(1920, 1080)
     let positions: [SIMD2<Double>] = [
