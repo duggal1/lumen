@@ -19,10 +19,12 @@ public struct RenderRequest: @unchecked Sendable {
     public var canvas: SIMD2<Int>, fps: Double, backingScale: Double, quality: RenderQuality
     /// Preview-only animation phase for the pixel-dither backdrop. Always 0 for export, so output stays deterministic.
     public var uiTime: Double
+    public var pointer: SIMD4<Float>
     public init(timeline: Timeline, t: Double, screen: SourceFrame, webcam: SourceFrame? = nil, canvas: SIMD2<Int>,
-                fps: Double = 60, backingScale: Double = 2, quality: RenderQuality = .export, uiTime: Double = 0) {
+                fps: Double = 60, backingScale: Double = 2, quality: RenderQuality = .export, uiTime: Double = 0,
+                pointer: SIMD4<Float> = .zero) {
         self.timeline = timeline; self.t = t; self.screen = screen; self.webcam = webcam
-        self.canvas = canvas; self.fps = fps; self.backingScale = backingScale; self.quality = quality; self.uiTime = uiTime
+        self.canvas = canvas; self.fps = fps; self.backingScale = backingScale; self.quality = quality; self.uiTime = uiTime; self.pointer = pointer
     }
 }
 
@@ -50,7 +52,7 @@ public struct Geometry: Sendable {
 private struct QuadU { var rect: SIMD4<Float>; var canvas: SIMD2<Float> }
 private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; var angle: Float; var count: Int32; var kind: Int32
                            var radius: Float; var shadow: Float; var scale: Float; var cell: Float; var density: Float; var hasWall: Int32
-                           var time: Float }
+                           var time: Float; var pointer: SIMD4<Float> }
 private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float }
@@ -58,7 +60,7 @@ private struct WebU { var crop: SIMD4<Float>; var bubble: SIMD4<Float>; var radi
                       var shadow: Float; var bw: Float; var minif: Float; var margin: Float }
 private struct AccU { var weight: Float }
 private struct ResU { var levels: Float; var seed: UInt32 }
-private struct BackdropKey: Equatable { var style: Style; var size: SIMD2<Int>; var wall: String; var phase: Double }
+private struct BackdropKey: Equatable { var style: Style; var size: SIMD2<Int>; var wall: String; var phase: Double; var pointer: SIMD4<Float> }
 private struct Keep: @unchecked Sendable { let o: Any }
 
 /// BGRA source -> mip-mapped copy, regenerated only when a NEW source frame arrives (sample-and-hold reuses the chain).
@@ -234,8 +236,9 @@ public final class Renderer: @unchecked Sendable {
         let patterned = tl.style.background == .wave || tl.style.background == .field
         let backgroundTime = patterned ? (r.quality == .export ? r.t : r.uiTime)
             : (tl.style.background == .dither && r.quality == .preview ? r.uiTime : 0)
+        let pointer = tl.style.background == .wave && r.quality == .preview ? r.pointer : .zero
         let key = BackdropKey(style: tl.style, size: cs, wall: tl.style.background == .wallpaper ? wallID : "",
-                              phase: backgroundTime)
+                              phase: backgroundTime, pointer: pointer)
         if backdropKey != key {
             backdropKey = key
             let pd = MTLRenderPassDescriptor()
@@ -262,7 +265,7 @@ public final class Renderer: @unchecked Sendable {
                                   radius: Float(g.radius), shadow: Float(st.shadow), scale: Float(g.ui * 1.33),
                                   cell: Float(max(2, st.ditherCell * g.ui)), density: Float(st.ditherDensity),
                                   hasWall: st.background == .wallpaper && wallTex != nil ? 1 : 0,
-                                  time: Float(backgroundTime)))
+                                  time: Float(backgroundTime), pointer: pointer))
                 cols.withUnsafeBytes { e.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()
