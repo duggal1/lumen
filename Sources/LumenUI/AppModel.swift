@@ -10,7 +10,24 @@ import LumenCapture
 @MainActor @Observable public final class AppModel {
     public enum Phase: Equatable { case idle, preparing, countdown(Int), recording, finishing }
     enum SourceKind: String, CaseIterable { case display, window, region }
-    struct ProjectRow: Identifiable { var id: URL { url }; let url: URL; let name: String; let date: Date; let size: String }
+    struct ProjectRow: Identifiable {
+        var id: URL { url }
+        let url: URL
+        let name: String
+        let date: Date
+        let size: String
+        let duration: Double
+        let width: Int, height: Int
+        let fps: Double
+        let dropped: Int
+        let unreadable: Bool
+        /// Capture pixels, named the way a person would name the output.
+        var output: String {
+            guard width > 0 else { return "—" }
+            let tier = width >= 3840 ? "4K" : width >= 2560 ? "1440p" : width >= 1920 ? "1080p" : "\(width)×\(height)"
+            return "\(tier) \(Int(fps.rounded()))"
+        }
+    }
 
     public var recordingStatus: String {
         switch phase {
@@ -49,7 +66,7 @@ import LumenCapture
         library = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
         try? FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
         refresh()
-        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(cmdKey | shiftKey)) { [weak self] in Task { @MainActor in self?.toggle() } }
+        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.toggle() } }
     }
 
     func refresh() {
@@ -57,11 +74,19 @@ import LumenCapture
             (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID).map { ($0, s.localizedName) }
         }
         let urls = (try? FileManager.default.contentsOfDirectory(at: library, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        projects = urls.filter { $0.pathExtension == "lumen" }.map { u in
+        projects = urls.filter { $0.pathExtension == "lumen" }.compactMap { u in
             let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            var meta = "—"
-            if let f = try? ProjectBundle(url: u).load() { meta = "\(f.meta.source.width)×\(f.meta.source.height) · \(Int(f.meta.source.duration)) s" }
-            return ProjectRow(url: u, name: u.deletingPathExtension().lastPathComponent, date: d, size: meta)
+            let file = try? ProjectBundle(url: u).load()
+            let meta = file?.meta
+            return ProjectRow(url: u,
+                              name: meta?.name ?? u.deletingPathExtension().lastPathComponent,
+                              date: meta?.created ?? d,
+                              size: meta.map { "\($0.source.width)×\($0.source.height) · \(Int($0.source.duration)) s" } ?? "Couldn’t read this recording.",
+                              duration: meta?.source.duration ?? 0,
+                              width: meta?.source.width ?? 0, height: meta?.source.height ?? 0,
+                              fps: meta?.source.fps ?? 0,
+                              dropped: meta?.droppedFrames ?? 0,
+                              unreadable: meta == nil || !FileManager.default.fileExists(atPath: u.appendingPathComponent("screen.mov").path))
         }.sorted { $0.date > $1.date }
         Task {
             let c = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
@@ -72,6 +97,63 @@ import LumenCapture
     }
 
     public func showRecordingControls() { hud?.show() }
+
+    // MARK: Library metrics (real data only: zero is a gap, never a fake number)
+
+    var recent: [ProjectRow] { Array(projects.prefix(5)) }
+    var totalRecorded: Double { projects.reduce(0) { $0 + $1.duration } }
+    var recordedToday: Double {
+        let cal = Calendar.current
+        return projects.filter { cal.isDateInToday($0.date) }.reduce(0) { $0 + $1.duration }
+    }
+    var exportedCount: Int {
+        get { UserDefaults.standard.integer(forKey: "LumenExportedCount") }
+        set { UserDefaults.standard.set(newValue, forKey: "LumenExportedCount") }
+    }
+    /// Consecutive days ending today (or yesterday, before the first recording of the day) with work recorded.
+    var streak: Int {
+        let days = Set(projects.map { Calendar.current.startOfDay(for: $0.date) })
+        guard !days.isEmpty else { return 0 }
+        let cal = Calendar.current
+        var day = cal.startOfDay(for: Date())
+        if !days.contains(day) {
+            guard let yesterday = cal.date(byAdding: .day, value: -1, to: day), days.contains(yesterday) else { return 0 }
+            day = yesterday
+        }
+        var n = 0
+        while days.contains(day) {
+            n += 1
+            guard let prev = cal.date(byAdding: .day, value: -1, to: day) else { break }
+            day = prev
+        }
+        return n
+    }
+    /// Minutes recorded per start-of-day, for the month graph.
+    var minutesByDay: [Date: Double] {
+        var out: [Date: Double] = [:]
+        let cal = Calendar.current
+        for p in projects { out[cal.startOfDay(for: p.date), default: 0] += p.duration / 60 }
+        return out
+    }
+
+    // MARK: Destructive actions act first, then offer a 6 s undo.
+
+    func trash(_ row: ProjectRow) -> URL? {
+        var moved: NSURL?
+        do {
+            try FileManager.default.trashItem(at: row.url, resultingItemURL: &moved)
+            refresh()
+            return moved as URL?
+        } catch { self.error = "Couldn’t delete this recording. \(error.localizedDescription)"; return nil }
+    }
+
+    func restore(_ row: ProjectRow, from trashURL: URL) {
+        do {
+            try FileManager.default.moveItem(at: trashURL, to: row.url)
+            refresh()
+        } catch { self.error = "Couldn’t restore this recording. \(error.localizedDescription)" }
+    }
+
 
     public func toggle() {
         switch phase { case .idle: Task { await start() }; case .recording: Task { await stop() }; default: break }
