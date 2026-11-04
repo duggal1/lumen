@@ -9,7 +9,7 @@ import LumenRender
     var tl = Timeline(duration: 6)
     tl.audio.speedRampsAuto = false
     let click = InputEvent(t: 2, kind: .down, x: 800, y: 300, axFrameIndex: 1)
-    let popup = AXFrame(x: 0, y: 0, w: 600, h: 400)
+    let popup = AXFrame(x: 200, y: 100, w: 400, h: 200)
     tl = Director.derive(tl, input: DirectorInput(events: [click], source: src, ax: [popup]), revision: 1)
     #expect(tl.zoom.count == 1)
     if case .fixed(let x, let y) = tl.zoom[0].focus {
