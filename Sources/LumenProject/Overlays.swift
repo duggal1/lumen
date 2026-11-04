@@ -1,6 +1,6 @@
 import Foundation
 
-public enum CutOrigin: String, Codable, Sendable { case manual, autoTidy }
+public enum CutOrigin: String, Codable, Sendable { case manual, autoTidy, transcript }
 /// Removed span, SOURCE seconds.
 public struct CutRange: Codable, Equatable, Sendable, Identifiable {
     public var id: UUID
@@ -76,12 +76,13 @@ public struct TextBlock: Codable, Equatable, Sendable, Identifiable {
 
 public struct Overlays: Codable, Equatable, Sendable {
     public var masks: [Mask] = [], highlights: [Highlight] = [], loupes: [Loupe] = [], taps: [TapIndicator] = [], texts: [TextBlock] = []
-    enum CodingKeys: String, CodingKey { case masks, highlights, loupes, taps, texts }
+    public var privacy = PrivacyPlan()
+    enum CodingKeys: String, CodingKey { case masks, highlights, loupes, taps, texts, privacy }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         masks = c.opt(.masks, masks); highlights = c.opt(.highlights, highlights); loupes = c.opt(.loupes, loupes)
-        taps = c.opt(.taps, taps); texts = c.opt(.texts, texts)
+        taps = c.opt(.taps, taps); texts = c.opt(.texts, texts); privacy = c.opt(.privacy, privacy)
     }
 }
 
@@ -92,12 +93,29 @@ public struct LayoutSegment: Codable, Equatable, Sendable, Identifiable {
     public var kind: LayoutKind
     public init(id: UUID = UUID(), start: Double, end: Double, kind: LayoutKind) { self.id = id; self.start = start; self.end = end; self.kind = kind }
 }
+public enum BehindFace: String, Codable, CaseIterable, Sendable { case move, hide, fade }
 public struct LayoutSettings: Codable, Equatable, Sendable {
     public var size = 0.22
     public var corner: WebcamLayout.Corner = .bottomRight
     public var shape: WebcamLayout.Shape = .circle
     public var mirror = true, border = true, shadow = true, autoFrame = true
+    public var avoidCursor = true
+    public var avoidMargin = 48.0
+    public var snapDwell = 1.5
+    public var behindFace: BehindFace = .move
+    public var hideOnSilence = false
+    public var silenceHold = 0.6
+    enum CodingKeys: String, CodingKey {
+        case size, corner, shape, mirror, border, shadow, autoFrame, avoidCursor, avoidMargin, snapDwell, behindFace, hideOnSilence, silenceHold
+    }
     public init() {}
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        size = c.opt(.size, size); corner = c.opt(.corner, corner); shape = c.opt(.shape, shape); mirror = c.opt(.mirror, mirror)
+        border = c.opt(.border, border); shadow = c.opt(.shadow, shadow); autoFrame = c.opt(.autoFrame, autoFrame)
+        avoidCursor = c.opt(.avoidCursor, avoidCursor); avoidMargin = c.opt(.avoidMargin, avoidMargin); snapDwell = c.opt(.snapDwell, snapDwell)
+        behindFace = c.opt(.behindFace, behindFace); hideOnSilence = c.opt(.hideOnSilence, hideOnSilence); silenceHold = c.opt(.silenceHold, silenceHold)
+    }
 }
 /// Independent camera settings per layout.
 public struct LayoutSet: Codable, Equatable, Sendable {
@@ -144,4 +162,24 @@ public struct CaptionPlan: Codable, Equatable, Sendable {
     public var deletedWords: [Int] = []                             // transcript word indices removed by transcript editing
     public var textEdits: [String: String] = [:]                    // word index -> corrected text (captions only)
     public init() {}
+}
+
+/// Privacy analyzer settings and user decisions keyed by stable automatic-mask ids.
+public struct PrivacyPlan: Codable, Equatable, Sendable {
+    public var enabled = true
+    public var autoDetect = true
+    public var autoApply: [String] = ["apiKey", "jwt", "privateKey", "envSecret", "card", "email", "custom"]
+    public var customPatterns: [String] = []
+    public var padding = 6.0
+    public var mode: MaskMode = .blend
+    public var entropyThreshold = 3.5
+    public var decisions: [String: Bool] = [:]
+    enum CodingKeys: String, CodingKey { case enabled, autoDetect, autoApply, customPatterns, padding, mode, entropyThreshold, decisions }
+    public init() {}
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        enabled = c.opt(.enabled, enabled); autoDetect = c.opt(.autoDetect, autoDetect); autoApply = c.opt(.autoApply, autoApply)
+        customPatterns = c.opt(.customPatterns, customPatterns); padding = c.opt(.padding, padding); mode = c.opt(.mode, mode)
+        entropyThreshold = c.opt(.entropyThreshold, entropyThreshold); decisions = c.opt(.decisions, decisions)
+    }
 }
