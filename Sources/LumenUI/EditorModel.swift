@@ -33,13 +33,20 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     enum ExportState: Equatable { case idle, running(Double), done(URL), failed(String) }
     let session: ProjectSession, renderer: Renderer, box: TimelineBox, clock = PlaybackClock()
     private(set) var timeline: Timeline
-    var playhead = 0.0, selection: UUID?, exportState = ExportState.idle, notice: String?
+    var playhead = 0.0
+    var selection: UUID?
+    var exportState = ExportState.idle
+    var notice: String?
     var focusEditing = false
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
     var duration: Double { timeline.timeMap.outputDuration }
-    private var undoStack: [Timeline] = [], redoStack: [Timeline] = [], lastEdit = Date.distantPast
-    private var revision = 1, replanTask: Task<Void, Never>?, exportTask: Task<Void, Never>?
+    private var undoStack: [Timeline] = []
+    private var redoStack: [Timeline] = []
+    private var lastEdit = Date.distantPast
+    private var revision = 1
+    private var replanTask: Task<Void, Never>?
+    private var exportTask: Task<Void, Never>?
     private let player = PreviewAudioPlayer()
 
     init(session: ProjectSession, renderer: Renderer, timeline: Timeline) {
