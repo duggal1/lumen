@@ -23,6 +23,14 @@ public struct LibraryRoot: View {
 
     private var record: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if app.phase != .idle {
+                Text(app.recordingStatus).font(AppType.title).foregroundStyle(Tok.text).padding(.bottom, 16)
+                if app.phase == .recording {
+                    LButton(title: "Show recording controls", icon: "rectangle.on.rectangle", kind: .secondary) {
+                        app.showRecordingControls()
+                    }.padding(.bottom, 16)
+                }
+            }
             LSegmented(sel: Bindable(app).kind, items: AppModel.SourceKind.allCases.map { ($0, $0.rawValue.capitalized) }).padding(.bottom, 8)
             switch app.kind {
             case .display:
