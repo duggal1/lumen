@@ -84,10 +84,11 @@ public enum Exporter {
         defer { ProcessInfo.processInfo.endActivity(activity) }
         var decodeSeconds = 0.0, compositeSeconds = 0.0, encodeWaitSeconds = 0.0
         var lastProgress = 0.0
-        let aspect = tl.style.canvas.ratio
+        let aspect = tl.style.aspectRatio
         let (preset, notice) = ExportCapabilityMatrix.shared.resolve(p, aspect: aspect)
-        guard preset.height == p.height, ExportCapabilityMatrix.shared.supports(preset, aspect: aspect) else {
-            throw ExportError.writer("This Mac cannot encode the selected resolution. Choose another resolution.")
+        // An export must never silently alter the selected codec, fps, or dimensions.
+        guard preset == p, ExportCapabilityMatrix.shared.supports(p, aspect: aspect) else {
+            throw ExportError.writer("This Mac cannot encode the selected resolution, frame rate and codec.")
         }
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
         let h = preset.height, w = preset.width(aspect: aspect), fps = preset.fps
@@ -209,7 +210,7 @@ public enum Exporter {
     public static func gif(session: ProjectSession, timeline tl: Timeline, to url: URL,
                            progress: @escaping @Sendable (ExportProgress) -> Void) async throws {
         guard let d = tl.derived else { throw ExportError.noTimeline }
-        let w = 800, h = (Int((Double(w) / tl.style.canvas.ratio).rounded()) + 1) & ~1, fps = 15
+        let w = 800, h = (Int((Double(w) / tl.style.aspectRatio).rounded()) + 1) & ~1, fps = 15
         let total = max(Int(ceil(d.outputDuration * Double(fps) - 1e-8)), 1)
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, total, nil) else { throw ExportError.writer("gif") }
