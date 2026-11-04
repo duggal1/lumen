@@ -34,17 +34,15 @@ public struct Geometry: Sendable {
     public var content: SIMD4<Double>        // x y w h in canvas px
     public var radius: Double, ui: Double
     public init(canvas c: SIMD2<Int>, src: SIMD2<Double>, style: Style) {
-        let cv = SIMD2<Double>(Double(c.x), Double(c.y)), pad = style.padding * cv.x
-        let aw = cv.x - 2 * pad, ah = cv.y - 2 * pad, sa = src.x / max(src.y, 1)
-        let base = min(aw, ah * sa)
-        let w = base * min(max(style.contentScale, 0.3), 2.0), h = w / sa
-        canvas = cv; self.src = src
-        content = SIMD4(((cv.x - w) / 2).rounded(), ((cv.y - h) / 2).rounded(), w.rounded(), h.rounded())
+        let transform = ZoomTransform(canvas: c, source: src, style: style)
+        canvas = transform.canvas; self.src = src
+        content = transform.videoRect
         ui = cv.x / 1440; radius = style.cornerRadius * ui
     }
     /// Source px -> canvas px for a given camera.
     public func toCanvas(_ p: SIMD2<Double>, cam: SIMD2<Double>, scale: Double) -> SIMD2<Double> {
-        let view = src / scale, n = (p - (cam - view / 2)) / view
+        let center = ZoomTransform.clamp(cam, source: src, scale: scale)
+        let view = src / max(scale, 1), n = (p - (center - view / 2)) / view
         return SIMD2(content.x + n.x * content.z, content.y + n.y * content.w)
     }
 }
@@ -329,13 +327,14 @@ public final class Renderer: @unchecked Sendable {
         pd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return }
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y)), content = SIMD4<Float>(g.content)
-        let cam = SIMD2<Double>(Double(st.cameraCenter.x), Double(st.cameraCenter.y)), sc = Double(st.cameraScale)
+        let sc = max(Double(st.cameraScale), 1)
+        let cam = ZoomTransform.clamp(SIMD2<Double>(Double(st.cameraCenter.x), Double(st.cameraCenter.y)), source: g.src, scale: sc)
         let pxPerSrc = g.content.z / g.src.x
         func draw() { e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
 
         // content
         e.setRenderPipelineState(pContent); quad(e, content, canvasF)
-        frag(e, ContentU(content: content, src: SIMD2<Float>(g.src), cam: st.cameraCenter, scale: st.cameraScale,
+        frag(e, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam), scale: Float(sc),
                          radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0))
         e.setFragmentTexture(src, index: 0); draw()
 
