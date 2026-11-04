@@ -231,8 +231,9 @@ public final class Renderer: @unchecked Sendable {
 
         // 1. backdrop cache (style or size change only)
         if tl.style.background == .wallpaper { loadWallpaperIfNeeded() }
-        let animated = tl.style.background == .dither || tl.style.background == .wave || tl.style.background == .field
-        let backgroundTime = animated ? (r.quality == .export ? r.t : r.uiTime) : 0
+        let patterned = tl.style.background == .wave || tl.style.background == .field
+        let backgroundTime = patterned ? (r.quality == .export ? r.t : r.uiTime)
+            : (tl.style.background == .dither && r.quality == .preview ? r.uiTime : 0)
         let key = BackdropKey(style: tl.style, size: cs, wall: tl.style.background == .wallpaper ? wallID : "",
                               phase: backgroundTime)
         if backdropKey != key {
