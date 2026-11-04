@@ -1,0 +1,219 @@
+import SwiftUI
+import AppKit
+
+// MARK: Ledger
+
+struct LedgerCard: View {
+    let app: AppModel
+
+    private struct Metric {
+        let icon: String, label: String, value: String, note: String
+    }
+
+    private var metrics: [Metric] {
+        let minutes = Int(app.totalRecorded / 60)
+        let recorded = minutes >= 600 ? String(format: "%.1f h", Double(minutes) / 60) : "\(minutes) min"
+        return [
+            Metric(icon: "timer", label: "Recorded", value: recorded, note: "all time"),
+            Metric(icon: "film.stack", label: "Projects", value: "\(app.projects.count)", note: "in this library"),
+            Metric(icon: "square.and.arrow.up", label: "Exported", value: "\(app.exportedCount)", note: "this Mac"),
+            Metric(icon: "calendar", label: "Streak", value: "\(app.streak)", note: app.streak == 1 ? "day" : "days"),
+        ]
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Space.s4) {
+            ForEach(metrics, id: \.label) { m in
+                VStack(alignment: .leading, spacing: Space.s1) {
+                    HStack(spacing: Space.s2) {
+                        Image(systemName: m.icon).font(.system(size: 14)).frame(width: 16)
+                        Text(m.label).font(AppType.caption).tracking(0)
+                    }.foregroundStyle(Tok.text2)
+                    Text(m.value).font(AppType.metric).tracking(-0.6).foregroundStyle(Tok.text)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                    Text(m.note).font(AppType.caption).foregroundStyle(Tok.text2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .card()
+        .accessibilityElement(children: .contain)
+    }
+}
+
+// MARK: Activity
+
+struct ActivityCard: View {
+    let app: AppModel
+    @State private var hovered: Date?
+
+    private var subtitle: String {
+        if let d = hovered {
+            let minutes = Int((app.minutesByDay[Calendar.current.startOfDay(for: d)] ?? 0).rounded())
+            return "\(d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())): \(minutes) min"
+        }
+        return "Recorded time, last 46 days"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s3) {
+            VStack(alignment: .leading, spacing: Space.s1) {
+                Text("Activity").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
+                Text(subtitle).font(AppType.caption).foregroundStyle(Tok.text2)
+                    .contentTransition(.numericText())
+            }
+            MonthGraph(minutes: app.minutesByDay, hovered: $hovered)
+        }
+        .card()
+        .accessibilityElement(children: .contain)
+    }
+}
+
+// MARK: Recent recordings
+
+struct RecentRecordings: View {
+    let app: AppModel
+    let open: (URL) -> Void
+    let reveal: (URL) -> Void
+    let delete: (AppModel.ProjectRow) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s2) {
+            Text("Recent recordings").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
+            if app.recent.isEmpty {
+                empty
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(app.recent) { p in
+                        RecordingRow(row: p, open: { open(p.url) }, reveal: { reveal(p.url) },
+                                     duplicate: { app.duplicate(p) }, delete: { delete(p) })
+                    }
+                }
+                .padding(Space.s2)
+                .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
+            }
+        }
+    }
+
+    private var empty: some View {
+        HStack(spacing: Space.s4) {
+            FrameLock(cell: 4)
+            VStack(alignment: .leading, spacing: Space.s1) {
+                Text("Nothing here yet.").font(AppType.label).foregroundStyle(Tok.text)
+                Text("Press ⌥⌘R to record.").font(AppType.body).foregroundStyle(Tok.text2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Space.s5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct RecordingRow: View {
+    let row: AppModel.ProjectRow
+    let open: () -> Void
+    let reveal: () -> Void
+    let duplicate: () -> Void
+    let delete: () -> Void
+
+    @State private var hover = false
+    @FocusState private var focused: Bool
+
+    private var day: String {
+        let cal = Calendar.current
+        if cal.isDateInToday(row.date) { return "Today" }
+        if cal.isDateInYesterday(row.date) { return "Yesterday" }
+        if let week = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: .now)), row.date >= week {
+            return row.date.formatted(.dateTime.weekday(.abbreviated))
+        }
+        if cal.component(.year, from: row.date) == cal.component(.year, from: .now) {
+            return row.date.formatted(.dateTime.month(.abbreviated).day())
+        }
+        return row.date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+
+    private var time: String { row.date.formatted(date: .omitted, time: .shortened) }
+
+    private var duration: String {
+        let total = Int(row.duration.rounded())
+        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+
+    private var menuItems: [MenuHost.Item] {
+        [
+            .init(title: "Open in Studio", icon: "slider.horizontal.below.rectangle", action: open),
+            .init(title: "Reveal in Finder", icon: "folder", action: reveal),
+            .init(title: "Duplicate project", icon: "plus.square.on.square", action: duplicate),
+            .init(title: "Delete recording", icon: "trash", destructive: true, gapBefore: true, action: delete),
+        ]
+    }
+
+    var body: some View {
+        HStack(spacing: Space.s3) {
+            Button(action: open) {
+                HStack(spacing: Space.s3) {
+                    ProjectThumb(url: row.url)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.name).font(AppType.label).tracking(-0.1).foregroundStyle(Tok.text).lineLimit(1)
+                        HStack(spacing: Space.s1) {
+                            Text(time).font(AppType.caption).monospacedDigit().foregroundStyle(Tok.text2)
+                            Text(day).font(AppType.caption).foregroundStyle(Tok.text2.opacity(0.72))
+                        }
+                    }
+                    Spacer(minLength: Space.s3)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerStyle(.link)
+
+            if row.unreadable {
+                PixelBadge(kind: .failed, text: "Failed")
+            } else if row.dropped > 0 {
+                PixelBadge(kind: .caution, text: "\(row.dropped) dropped")
+            }
+            Text(duration).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                .frame(width: 44, alignment: .trailing)
+            Text(row.output).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                .frame(width: 64, alignment: .trailing)
+
+            HStack(spacing: 0) {
+                LIconButton(icon: "slider.horizontal.below.rectangle", label: "Open in Studio", action: open)
+                LIconButton(icon: "folder", label: "Reveal in Finder", action: reveal)
+                LActionMenuButton(label: "Recording actions", items: menuItems)
+            }
+            .opacity(hover || focused ? 1 : 0)
+        }
+        .padding(.horizontal, Space.s3)
+        .frame(height: 48)
+        .background(RoundedRectangle(cornerRadius: Radius.field).fill(hover ? Tok.control : .clear))
+        .overlay {
+            if focused { CornerBrackets(cell: 2, arm: 4).padding(-8) }
+        }
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .focusable()
+        .focused($focused)
+        .focusEffectDisabled()
+        .onKeyPress(.return) { open(); return .handled }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+// MARK: Where you record
+
+struct WhereYouRecord: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s3) {
+            Text("Where you record").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
+            Text("No app usage yet.").font(AppType.caption).foregroundStyle(Tok.text2)
+            DustLine()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+        .accessibilityElement(children: .combine)
+    }
+}
