@@ -36,8 +36,8 @@ struct EditorView: View {
                 HStack(spacing: 8) {
                     LIconButton(icon: "arrow.uturn.backward", label: "Undo") { model.undo() }.disabled(!model.canUndo)
                     LIconButton(icon: "arrow.uturn.forward", label: "Redo") { model.redo() }.disabled(!model.canRedo)
-                    LButton(title: "Export", icon: "square.and.arrow.up", kind: .primary) { model.exportVideo() }
-                        .disabled({ if case .running = model.exportState { return true }; return false }())
+                    LButton(title: "Export", icon: "square.and.arrow.up",
+                            kind: model.exportPanelActive ? .secondary : .primary) { model.openExportPanel() }
                 }
             }
             HStack(spacing: 0) {
@@ -46,6 +46,7 @@ struct EditorView: View {
                         .aspectRatio(model.timeline.style.canvas.ratio, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                         .overlay { if model.focusEditing { FocusOverlay(model: model) } }
+                        .overlay { if model.zoomDebug { ZoomDebugOverlay(model: model) } }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     transport
                     TimelineStrip(model: model)
