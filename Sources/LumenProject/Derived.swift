@@ -116,12 +116,13 @@ public struct DerivedTracks: Sendable, Equatable {
     public var layout: LayoutTrack
     public var placement: PlacementTrack
     public var captions: [CaptionChunk]
+    public var autoMasks: [Mask]
     public init(revision: Int, sourceSize: SIMD2<Double>, outputDuration: Double, cursor: CursorTrack, camera: CameraTrack,
                 clicks: [ClickFX], cues: [SFXCue], duck: [Float], face: [SIMD3<Float>], webcamAspect: Float,
-                layout: LayoutTrack = LayoutTrack(), placement: PlacementTrack = PlacementTrack(), captions: [CaptionChunk] = []) {
+                layout: LayoutTrack = LayoutTrack(), placement: PlacementTrack = PlacementTrack(), captions: [CaptionChunk] = [], autoMasks: [Mask] = []) {
         self.revision = revision; self.sourceSize = sourceSize; self.outputDuration = outputDuration; self.cursor = cursor
         self.camera = camera; self.clicks = clicks; self.cues = cues; self.duck = duck; self.face = face; self.webcamAspect = webcamAspect
-        self.layout = layout; self.placement = placement; self.captions = captions
+        self.layout = layout; self.placement = placement; self.captions = captions; self.autoMasks = autoMasks
     }
     public static func == (a: Self, b: Self) -> Bool { a.revision == b.revision }
 }
