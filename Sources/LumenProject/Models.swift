@@ -46,9 +46,9 @@ public enum CanvasAspect: String, Codable, CaseIterable, Sendable {
 
 public struct Style: Codable, Equatable, Sendable {
     public var background: BackgroundKind = .solid
-    public var colors: [RGBA] = [RGBA(0xF4F4F4), RGBA(0xF97316)]
+    public var colors: [RGBA] = [RGBA(0xF4F4F4), RGBA(0xDADADA)]
     public var gradientAngle: Double = 35
-    public var ditherCell: Double = 12
+    public var ditherCell: Double = 4
     public var ditherDensity: Double = 0.55
     public var padding: Double = 0.06
     public var contentScale: Double = 1
