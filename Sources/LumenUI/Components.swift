@@ -87,6 +87,8 @@ struct LSlider: View {
 
 struct LSegmented<T: Hashable>: View {
     @Binding var sel: T; let items: [(T, String)]
+    var track: Color = Tok.well
+    var thumb: Color = Tok.control
     @Namespace private var ns
     var body: some View {
         HStack(spacing: 0) {
@@ -94,10 +96,10 @@ struct LSegmented<T: Hashable>: View {
                 Button { sel = v } label: {
                     Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(sel == v ? Tok.text : Tok.text2)
                         .frame(maxWidth: .infinity).frame(height: 24)
-                        .background { if sel == v { Capsule().fill(Tok.control).matchedGeometryEffect(id: "thumb", in: ns) } }
+                        .background { if sel == v { Capsule().fill(thumb).matchedGeometryEffect(id: "thumb", in: ns) } }
                 }.buttonStyle(.plain).pointerStyle(.link)
             }
-        }.padding(2).background(Capsule().fill(Tok.well)).animation(.smooth(duration: 0.25), value: sel)
+        }.padding(2).background(Capsule().fill(track)).animation(.smooth(duration: 0.25), value: sel)
     }
 }
 
