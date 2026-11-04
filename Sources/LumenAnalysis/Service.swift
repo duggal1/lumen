@@ -145,7 +145,7 @@ public actor AnalysisService {
         let directory = analysisDirectory(r)
         let params = PersonMaskParameters(offset: r.webcamOffset, fps: 30, maxDimension: 720)
         do {
-            let key = try AnalysisCache.key(media: webcam, analyzer: "person-mask", version: 1, parameters: params)
+            let key = try await AnalysisCache.key(media: webcam, analyzer: "person-mask", version: 1, parameters: params)
             if let cached = AnalysisCache.load(PersonMaskInfo.self, key: key, directory: directory),
                FileManager.default.fileExists(atPath: directory.appendingPathComponent(cached.file).path) { return (cached, nil) }
             let output = directory.appendingPathComponent("\(key).lmask")
@@ -159,7 +159,7 @@ public actor AnalysisService {
                                                                            parameters: Parameters,
                                                                            produce: () async throws -> Value) async -> (Value?, String?) {
         do {
-            let key = try AnalysisCache.key(media: url, analyzer: analyzer, version: version, parameters: parameters)
+            let key = try await AnalysisCache.key(media: url, analyzer: analyzer, version: version, parameters: parameters)
             if let cached = AnalysisCache.load(Value.self, key: key, directory: directory) { return (cached, nil) }
             let value = try await produce()
             try AnalysisCache.save(value, key: key, directory: directory)
