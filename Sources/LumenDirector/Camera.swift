@@ -3,7 +3,7 @@ import LumenCore
 import LumenProject
 
 @inline(__always) func smootherstep(_ x: Double) -> Double {
-    let t = clamp(x, 0, 1); return t * t * t * (t * (t * 6 - 15) + 10)
+    let t = clamp(x, 0, 1); return t * t * t * t * (35 + t * (-84 + t * (70 - 20 * t)))
 }
 
 @inline(__always) func scaledSpring(_ x: inout Double, _ v: inout Double, target: Double, omega w: Double, dt: Double, scale s: Double) {
