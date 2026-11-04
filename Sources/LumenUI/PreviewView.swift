@@ -52,8 +52,9 @@ struct PreviewView: NSViewRepresentable {
         if model.clock.playing { model.tick(t) }
         let (tl, ver) = model.box.get(), ds = metal.drawableSize
         // The dither field is a living surface: redraw every display tick. Static backgrounds stay cache-stable.
-        let animated = tl.style.background == .dither && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let uiTime = animated ? l.targetTimestamp - t0 : 0
+        let animated = (tl.style.background == .dither || tl.style.background == .wave || tl.style.background == .field)
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let uiTime = animated ? (model.clock.playing ? t : l.targetTimestamp - t0) : 0
         let phase = animated ? Int(uiTime * 240) : 0
         let key = (ver, t, Int(ds.width), Int(ds.height), phase)
         guard key != lastKey, ds.width > 2, busy.withLock({ let b = $0; $0 = true; return !b }) else { return }
