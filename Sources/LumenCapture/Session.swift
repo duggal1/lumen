@@ -123,7 +123,7 @@ public actor RecordingSession {
     public func stop() async throws -> ProjectBundle {
         guard let engine, let input, let b = bundle, var info = engine.info else { throw CaptureError.noSource }
         defer { if let a = activity { ProcessInfo.processInfo.endActivity(a) } }
-        await MainActor.run { input.stop() }
+        await input.stop()
         await webcam?.stop()
         try await engine.stop()
         let origin = engine.firstPTS ?? 0
