@@ -15,7 +15,7 @@ let package = Package(
     ],
     dependencies: [.package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0")],
     targets: [
-        .testTarget(name: "LumenTests", dependencies: ["LumenCore", "LumenProject", "LumenDirector", "LumenRender", "LumenAudio", "LumenExport"]),
+        .testTarget(name: "LumenTests", dependencies: ["LumenCapture", "LumenCore", "LumenProject", "LumenDirector", "LumenRender", "LumenAudio", "LumenExport"]),
         lib("LumenCore"),
         lib("LumenProject", ["LumenCore"]),
         lib("LumenDirector", ["LumenCore", "LumenProject"]),
