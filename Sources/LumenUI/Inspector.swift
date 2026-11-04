@@ -43,6 +43,8 @@ struct Inspector: View {
                 }
                 Row(label: "Canvas") { EmptyView() }
                 LSegmented(sel: m.bind(\.style.canvas), items: CanvasAspect.allCases.map { ($0, $0.title) })
+                SliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Padding", v: m.bind(\.style.padding), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
             }.card()
             VStack(spacing: 0) {
                 Row(label: "Background") {
@@ -80,8 +82,6 @@ struct Inspector: View {
                 }
             }.card()
             VStack(spacing: 0) {
-                SliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
-                SliderRow(label: "Padding", v: m.bind(\.style.padding), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Radius", v: m.bind(\.style.cornerRadius), range: 0...40, fmt: { "\(Int($0))" })
                 SliderRow(label: "Shadow", v: m.bind(\.style.shadow), range: 0...1)
                 ToggleRow(label: "Inner border", on: m.bind(\.style.innerBorder))
