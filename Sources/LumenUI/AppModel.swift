@@ -13,14 +13,24 @@ import LumenCapture
     struct ProjectRow: Identifiable { var id: URL { url }; let url: URL; let name: String; let date: Date; let size: String }
 
     public var phase = Phase.idle
-    var kind = SourceKind.display, displayID = CGMainDisplayID(), windowID: CGWindowID = 0
-    var fps = 60, mic = true, system = false, webcam = false
-    var displays: [(id: CGDirectDisplayID, name: String)] = [], windows: [(id: CGWindowID, name: String)] = []
-    var error: String?, stats: CaptureStats?, projects: [ProjectRow] = []
+    var kind = SourceKind.display
+    var displayID = CGMainDisplayID()
+    var windowID: CGWindowID = 0
+    var fps = 60
+    var mic = true
+    var system = false
+    var webcam = false
+    var displays: [(id: CGDirectDisplayID, name: String)] = []
+    var windows: [(id: CGWindowID, name: String)] = []
+    var error: String?
+    var stats: CaptureStats?
+    var projects: [ProjectRow] = []
     public var onFinished: ((URL) -> Void)?
     public let library: URL
     private let session = RecordingSession()
-    private var hud: HUDController?, hotKey: HotKey?, poll: Task<Void, Never>?
+    private var hud: HUDController?
+    private var hotKey: HotKey?
+    private var poll: Task<Void, Never>?
 
     public init() {
         library = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
