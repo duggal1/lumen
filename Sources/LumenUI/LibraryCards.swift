@@ -124,6 +124,7 @@ private struct RecordingRow: View {
 
     @State private var hover = false
     @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var day: String {
         let cal = Calendar.current
@@ -199,6 +200,8 @@ private struct RecordingRow: View {
         }
         .contentShape(Rectangle())
         .onHover { hover = $0 }
+        .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
+        .animation(reduceMotion ? nil : Motion.hoverIn, value: focused)
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
