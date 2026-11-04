@@ -110,7 +110,14 @@ import LumenExport
     let asset = AVURLAsset(url: output)
     let duration = try await asset.load(.duration).seconds
     #expect(abs(duration - 1) < 0.02)
-    #expect(try await asset.loadTracks(withMediaType: .video).count == 1)
+    let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
+    let reader = try AVAssetReader(asset: asset)
+    let outputTrack = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+    reader.add(outputTrack)
+    #expect(reader.startReading())
+    var frameCount = 0
+    while outputTrack.copyNextSampleBuffer() != nil { frameCount += 1 }
+    #expect(frameCount == 30)
     let geometry = Geometry(canvas: SIMD2(180, 320), src: SIMD2(320, 180), style: timeline.style)
     #expect(abs(geometry.content.z / geometry.content.w - 16.0 / 9) < 0.03)
 }
