@@ -32,7 +32,7 @@ enum CameraSolver {
             switch s.focus {
             case .fixed(let x, let y): return SIMD2(x, y)
             case .element(let x, let y, let w, let h): return SIMD2(x + w / 2, y + h / 2)
-            case .follow: return cursorN(t + p.lookahead)
+            case .follow: return cursorN(t)
             }
         }
         func trans(_ from: Int, _ to: Int, _ t: Double) -> Double {
@@ -84,7 +84,7 @@ enum CameraSolver {
             var lzc = lz
             for sh in shots { if sh.start - 1.0 > t { break }; if t <= sh.end { lzc = max(lzc, sh.lz) } }
             let sc = exp(lzc), half = p.deadZone / sc, hw = 0.5 / sc
-            let cur = cursorN(t + p.lookahead)
+            let cur = cursorN(t)
             for k in 0..<2 {
                 let d = cur[k] - tgt[k]
                 if d > half { tgt[k] = cur[k] - half } else if d < -half { tgt[k] = cur[k] + half }
