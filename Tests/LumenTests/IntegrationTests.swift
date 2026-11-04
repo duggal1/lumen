@@ -105,6 +105,25 @@ import LumenExport
         return Data(bytes: CVPixelBufferGetBaseAddress(buffer)!, count: CVPixelBufferGetDataSize(buffer))
     }
     #expect(pixels(a) == pixels(b))
+    var patterned = derived
+    patterned.style.padding = 0.2
+    patterned.style.contentScale = 0.5
+    patterned.style.colors = [RGBA(0xFFFFFF), RGBA(0x000000)]
+    patterned.style.background = .wave
+    let wave = try await FrameImage.render(renderer: renderer, session: session, timeline: patterned, t: 0.25, canvas: SIMD2(320, 180))
+    patterned.style.background = .field
+    let field = try await FrameImage.render(renderer: renderer, session: session, timeline: patterned, t: 0.25, canvas: SIMD2(320, 180))
+    #expect(pixels(wave) != pixels(field))
+    patterned.style.colors = [RGBA(0xFFFFFF), RGBA(0xFF6A00)]
+    let recolored = try await FrameImage.render(renderer: renderer, session: session, timeline: patterned, t: 0.25, canvas: SIMD2(320, 180))
+    #expect(pixels(field) != pixels(recolored))
+    let restoredStyle = try JSONDecoder().decode(Style.self, from: JSONEncoder().encode(patterned.style))
+    #expect(restoredStyle == patterned.style)
+    var larger = patterned.style
+    larger.contentScale = 2
+    let smallGeometry = Geometry(canvas: SIMD2(320, 180), src: SIMD2(320, 180), style: patterned.style)
+    let largeGeometry = Geometry(canvas: SIMD2(320, 180), src: SIMD2(320, 180), style: larger)
+    #expect(largeGeometry.content.z > smallGeometry.content.z)
     let output = root.appendingPathComponent("export.mp4")
     try await Exporter.run(session: session, timeline: derived, preset: ExportPreset(name: "test", codec: .h264, height: 180, fps: 30), to: output) { _ in }
     let asset = AVURLAsset(url: output)
