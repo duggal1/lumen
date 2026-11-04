@@ -24,12 +24,13 @@ struct PixelBitmap: View {
 
 /// The title aperture: eight orange cells surrounding the head.
 struct PixelStop: View {
+    var cell: CGFloat = 2
     var body: some View {
         Canvas { c, _ in
             for j in 0..<3 { for i in 0..<3 {
-                cellFill(&c, CGRect(x: CGFloat(i * 2), y: CGFloat(j * 2), width: 2, height: 2), i == 1 && j == 1 ? Tok.text : Tok.accent)
+                cellFill(&c, CGRect(x: CGFloat(i) * cell, y: CGFloat(j) * cell, width: cell, height: cell), i == 1 && j == 1 ? Tok.text : Tok.accent)
             } }
-        }.frame(width: 6, height: 6)
+        }.frame(width: cell * 3, height: cell * 3)
     }
 }
 
