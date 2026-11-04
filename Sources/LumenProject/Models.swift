@@ -63,7 +63,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
     public var autoZoom = true
     public var maxScale = 2.2
     public var minTrigger = 1.25
-    public var leadIn = 0.45, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
+    public var leadIn = 0.65, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
     public var omegaPan = 7.0, omegaZoom = 6.0, lookahead = 0.20, deadZone = 0.28
     public var shutter = 0.5
     public var maxSamples = 8
@@ -91,7 +91,22 @@ public struct WebcamLayout: Codable, Equatable, Sendable {
     public var size = 0.22
     public var shape: Shape = .circle
     public var mirror = true, border = true, shadow = true, autoFrame = true
+    public var faceFill = 0.31
+    public var faceZoom = 0.6
     public init() {}
+    enum CodingKeys: String, CodingKey { case corner, size, shape, mirror, border, shadow, autoFrame, faceFill, faceZoom }
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        corner = try c.decodeIfPresent(Corner.self, forKey: .corner) ?? corner
+        size = try c.decodeIfPresent(Double.self, forKey: .size) ?? size
+        shape = try c.decodeIfPresent(Shape.self, forKey: .shape) ?? shape
+        mirror = try c.decodeIfPresent(Bool.self, forKey: .mirror) ?? mirror
+        border = try c.decodeIfPresent(Bool.self, forKey: .border) ?? border
+        shadow = try c.decodeIfPresent(Bool.self, forKey: .shadow) ?? shadow
+        autoFrame = try c.decodeIfPresent(Bool.self, forKey: .autoFrame) ?? autoFrame
+        faceFill = try c.decodeIfPresent(Double.self, forKey: .faceFill) ?? faceFill
+        faceZoom = try c.decodeIfPresent(Double.self, forKey: .faceZoom) ?? faceZoom
+    }
 }
 
 public enum Focus: Codable, Equatable, Sendable {
