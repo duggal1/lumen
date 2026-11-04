@@ -69,6 +69,9 @@ struct PreviewView: NSViewRepresentable {
     }
 
     @objc private func tick(_ l: CADisplayLink) {
+        // The export owns the GPU until encoding finishes. The paused editor
+        // does not compete for frames or media engine bandwidth.
+        if case .running = model.exportState { return }
         let t = model.clock.time(at: l.targetTimestamp)
         if model.clock.playing { model.tick(t) }
         let (tl, ver) = model.box.get(), ds = metal.drawableSize
