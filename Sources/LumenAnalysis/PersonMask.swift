@@ -112,7 +112,7 @@ private final class PersonMaskJob: @unchecked Sendable {
         let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
         let scale = min(1, Double(maxDimension) / Double(max(width, height)))
         let targetWidth = max(Int((Double(width) * scale).rounded()), 1), targetHeight = max(Int((Double(height) * scale).rounded()), 1)
-        let sourceBuffer = vImage_Buffer(data: source, height: vImagePixelCount(height), width: vImagePixelCount(width),
+        var sourceBuffer = vImage_Buffer(data: source, height: vImagePixelCount(height), width: vImagePixelCount(width),
                                          rowBytes: CVPixelBufferGetBytesPerRow(buffer))
         var data = Data(count: targetWidth * targetHeight)
         let status = data.withUnsafeMutableBytes { bytes -> vImage_Error in
