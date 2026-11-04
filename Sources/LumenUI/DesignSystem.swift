@@ -46,6 +46,7 @@ enum Tok {
     static let accentText = Color(light: 0xBF3F00, dark: 0xFF8A3D)
     static let accentSoft = Color(light: 0xFFEDD5, dark: 0xFF6A00, darkAlpha: 0.17)
     static let accentFill = Color(light: 0xFFEDD5, dark: 0xFF6A00, darkAlpha: 0.50)
+    static let activity = Color(hex: 0xEA580C)
     static let onAccent = Color(hex: 0x0A0A0A)     // near-black: white on orange fails contrast
     // status, diff
     static let statusOK = Color(light: 0x16A34A, dark: 0x4ADE80)
