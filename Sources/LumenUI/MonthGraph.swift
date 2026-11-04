@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The month graph: 1st of this month through the 15th of next month, one cell per day.
-/// Heat levels come from max(90th-percentile day, 10 min). Zero is a gap, never a colour.
+/// Recorded days use the activity colour. Zero is a gap, never a recorded day.
 struct MonthGraph: View {
     let minutes: [Date: Double]
     @Binding var hovered: Date?
@@ -23,12 +23,12 @@ struct MonthGraph: View {
                         let future = day > Self.calendar.startOfDay(for: .now)
                         let r = CGRect(x: lay.xs[i], y: 20, width: lay.cell, height: lay.cell)
                         if future {
-                            cell(&ctx, CGRect(x: r.minX + 2, y: r.minY + (lay.cell - 2) / 2, width: 2, height: 2), Tok.controlPressed)
+                            cell(&ctx, CGRect(x: r.minX + 2, y: r.minY + (lay.cell - 2) / 2, width: 2, height: 2), Tok.activity)
                         } else if Self.calendar.isDateInToday(day) {
-                            cell(&ctx, r, Tok.control)
+                            cell(&ctx, r, value > 0 ? Tok.activity : Tok.control)
                             cell(&ctx, CGRect(x: r.midX - 1, y: r.midY - 1, width: 2, height: 2), Tok.text)
                         } else if value > 0 {
-                            cell(&ctx, r, Ramp.heat[level(value, days: days) - 1])
+                            cell(&ctx, r, Tok.activity)
                         }
                         // zero minutes on a past day stays a gap
                     }
@@ -46,7 +46,9 @@ struct MonthGraph: View {
             .contentShape(Rectangle())
             .onContinuousHover { phase in
                 switch phase {
-                case .active(let p): hovered = day(at: p, days: days, layout: lay)
+                case .active(let p):
+                    let next = day(at: p, days: days, layout: lay)
+                    if hovered != next { hovered = next }
                 case .ended: hovered = nil
                 }
             }
@@ -99,15 +101,6 @@ struct MonthGraph: View {
         guard p.y >= 18, p.y <= 20 + layout.cell else { return nil }
         for (i, x) in layout.xs.enumerated() where p.x >= x && p.x <= x + layout.cell { return days[i] }
         return nil
-    }
-
-    private func level(_ minutes: Double, days: [Date]) -> Int {
-        let values = days.filter { $0 <= Self.calendar.startOfDay(for: .now) }
-            .map { self.minutes[Self.calendar.startOfDay(for: $0)] ?? 0 }.sorted()
-        let p90 = values.isEmpty ? 0 : values[min(values.count - 1, Int((Double(values.count) * 0.9).rounded(.up)) - 1)]
-        let limit = max(p90, 10)
-        let f = minutes / limit
-        return f <= 0.25 ? 1 : f <= 0.5 ? 2 : f <= 0.8 ? 3 : 4
     }
 
     private func cell(_ c: inout GraphicsContext, _ r: CGRect, _ color: Color) {
