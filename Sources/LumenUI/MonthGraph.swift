@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Recording activity arranged in calendar weeks, from this month through the 15th of next month.
+/// Recording activity across the current and following calendar months.
 struct MonthGraph: View {
     let minutes: [Date: Double]
     @Binding var hovered: Date?
@@ -8,14 +8,14 @@ struct MonthGraph: View {
     @State private var selected: Date?
 
     private static let calendar = Calendar.current
-    private let pitch: CGFloat = 24
+    private let rowHeight: CGFloat = 28
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
 
-    private var days: [Date] { Self.window() }
-    private var offset: Int {
-        guard let first = days.first else { return 0 }
-        return (Self.calendar.component(.weekday, from: first) - Self.calendar.firstWeekday + 7) % 7
+    private var months: [Date] {
+        let cal = Self.calendar
+        let first = cal.date(from: cal.dateComponents([.year, .month], from: .now)) ?? cal.startOfDay(for: .now)
+        return [first, cal.date(byAdding: .month, value: 1, to: first) ?? first]
     }
-    private var weekCount: Int { (offset + days.count + 6) / 7 }
     private var ceiling: Double {
         let values = minutes.values.filter { $0 > 0 }.sorted()
         guard !values.isEmpty else { return 10 }
@@ -23,46 +23,50 @@ struct MonthGraph: View {
     }
 
     var body: some View {
-        let dates = days
-        HStack(alignment: .top, spacing: Space.s2) {
-            VStack(alignment: .trailing, spacing: 0) {
-                Color.clear.frame(height: Space.s5)
-                ForEach(0..<7, id: \.self) { row in
-                    Text(weekdayLabel(row))
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .frame(width: 24, height: pitch, alignment: .trailing)
-                }
-            }.accessibilityHidden(true)
-
-            HStack(alignment: .top, spacing: 0) {
-                ForEach(0..<weekCount, id: \.self) { week in
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(monthLabel(week, days: dates))
-                            .font(AppType.caption).foregroundStyle(Tok.text2)
-                            .fixedSize().frame(width: pitch, height: Space.s5, alignment: .leading)
-                            .accessibilityHidden(true)
-                        ForEach(0..<7, id: \.self) { row in
-                            let index = week * 7 + row - offset
-                            if dates.indices.contains(index) {
-                                dayButton(dates[index])
-                            } else {
-                                Color.clear.frame(width: pitch, height: pitch).accessibilityHidden(true)
-                            }
-                        }
-                    }
-                }
+        HStack(alignment: .top, spacing: Space.s6) {
+            ForEach(months, id: \.self) { month in
+                monthGrid(month)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Recording activity, this month and next")
     }
 
+    private func monthGrid(_ month: Date) -> some View {
+        let cal = Self.calendar
+        let offset = (cal.component(.weekday, from: month) - cal.firstWeekday + 7) % 7
+        let count = cal.range(of: .day, in: .month, for: month)?.count ?? 0
+        let slots = ((offset + count + 6) / 7) * 7
+        return VStack(alignment: .leading, spacing: Space.s2) {
+            Text(month.formatted(.dateTime.month(.wide)))
+                .font(AppType.label).foregroundStyle(Tok.text)
+            LazyVGrid(columns: columns, spacing: 0) {
+                ForEach(0..<7, id: \.self) { weekday in
+                    let index = (cal.firstWeekday - 1 + weekday) % 7
+                    Text(cal.veryShortWeekdaySymbols[index])
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .frame(maxWidth: .infinity).frame(height: rowHeight)
+                        .accessibilityHidden(true)
+                }
+                ForEach(0..<slots, id: \.self) { slot in
+                    let day = slot - offset
+                    if day >= 0, day < count, let date = cal.date(byAdding: .day, value: day, to: month) {
+                        dayButton(date)
+                    } else {
+                        Color.clear.frame(height: rowHeight).accessibilityHidden(true)
+                    }
+                }
+            }
+        }
+    }
+
     private func dayButton(_ day: Date) -> some View {
-        let today = Self.calendar.startOfDay(for: .now)
-        let future = day > today
+        let future = day > Self.calendar.startOfDay(for: .now)
         let value = minutes[day] ?? 0
         let active = selected == day || hovered == day
-        let color: Color = future ? Tok.controlPressed : value > 0 ? Ramp.heat[level(value)] : Tok.controlPressed
+        let dotSize = future ? 4 : value > 0 ? (value / ceiling > 0.5 ? 16 : 12) : 6
         return Button {
             selected = selected == day ? nil : day
             hovered = selected
@@ -70,14 +74,14 @@ struct MonthGraph: View {
             ZStack {
                 if active {
                     RoundedRectangle(cornerRadius: Radius.field).fill(Tok.control)
-                        .frame(width: pitch, height: pitch)
+                        .frame(width: rowHeight, height: rowHeight)
                 }
-                PixelDot(color: color, size: value > 0 && !future ? 8 : future ? 2 : 4)
+                PixelDot(color: value > 0 && !future ? Tok.accent : Tok.controlPressed, size: dotSize)
                 if Self.calendar.isDateInToday(day) {
-                    Rectangle().fill(Tok.text).frame(width: 2, height: 2).offset(x: 0, y: 0)
+                    Rectangle().fill(Tok.text).frame(width: 2, height: 2)
                 }
             }
-            .frame(width: pitch, height: pitch).contentShape(Rectangle())
+            .frame(maxWidth: .infinity).frame(height: rowHeight).contentShape(Rectangle())
         }
         .buttonStyle(ActivityPressStyle())
         .pointerStyle(.link)
@@ -86,38 +90,6 @@ struct MonthGraph: View {
         .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).month(.wide).day().year()))
         .accessibilityValue(future ? "Upcoming" : "\(Int(value.rounded())) minutes recorded")
         .accessibilityAddTraits(selected == day ? .isSelected : [])
-    }
-
-    private func level(_ value: Double) -> Int {
-        let fraction = value / ceiling
-        if fraction <= 0.25 { return 0 }
-        if fraction <= 0.5 { return 1 }
-        if fraction <= 0.8 { return 2 }
-        return 3
-    }
-
-    private func weekdayLabel(_ row: Int) -> String {
-        guard row == 1 || row == 3 || row == 5 else { return "" }
-        let weekday = (Self.calendar.firstWeekday - 1 + row) % 7
-        return Self.calendar.shortWeekdaySymbols[weekday]
-    }
-
-    private func monthLabel(_ week: Int, days: [Date]) -> String {
-        let start = max(0, week * 7 - offset), end = min(days.count, (week + 1) * 7 - offset)
-        guard start < end else { return "" }
-        if week == 0 { return days[start].formatted(.dateTime.month(.abbreviated)) }
-        guard let first = days[start..<end].first(where: { Self.calendar.component(.day, from: $0) == 1 }) else { return "" }
-        return first.formatted(.dateTime.month(.abbreviated))
-    }
-
-    static func window() -> [Date] {
-        let cal = calendar
-        let first = cal.date(from: cal.dateComponents([.year, .month], from: .now)) ?? cal.startOfDay(for: .now)
-        let next = cal.date(byAdding: .month, value: 1, to: first) ?? first
-        let last = cal.date(byAdding: .day, value: 14, to: next) ?? next
-        var out: [Date] = [], d = first
-        while d <= last { out.append(d); d = cal.date(byAdding: .day, value: 1, to: d) ?? last.addingTimeInterval(86_400) }
-        return out
     }
 }
 
