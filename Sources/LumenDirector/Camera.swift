@@ -17,7 +17,9 @@ enum CameraSolver {
     private struct Shot { var start: Double, end: Double, lz: Double, focus: Focus }
     private struct Key { var t: Double; var shot: Int }
 
-    static func solve(zoom: [ZoomSegment], cursor: CursorTrack, p: CameraParams, src: SIMD2<Double>, outDur: Double) -> CameraTrack {
+    static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams, src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
+        let zoom = zoom.map { z in ZoomSegment(id: z.id, start: tm.output(atSource: z.start), end: tm.output(atSource: z.end), scale: z.scale, focus: z.focus, easing: z.easing, origin: z.origin) }
+        _ = loop
         let n = max(Int(outDur * gridRate) + 1, 2), dt = 1 / gridRate
         var tr = CameraTrack(count: n)
         let soft = 8 / src.x, base = 4.5 / max(p.omegaZoom, 1)
@@ -108,6 +110,22 @@ enum CameraSolver {
         }
         tr.nx = cx.map { Float($0) }; tr.ny = cy.map { Float($0) }; tr.lz = cz.map { Float($0) }
         tr.vx = deriv(cx); tr.vy = deriv(cy); tr.vz = deriv(cz)
+        var yaw = p.tilt == .reveal ? 12.0 : 0.0, yawV = 0.0, pitch = 0.0, pitchV = 0.0
+        func phase(_ k: Int) -> Double { Double((p.tiltSeed >> UInt64(k * 8)) & 255) / 255 * 2 * .pi }
+        for i in 0..<n {
+            let t = Double(i) * dt, z = exp(cz[i])
+            var yT = 0.0, pT = 0.0
+            switch p.tilt {
+            case .lean: yT = clamp(Double(tr.vx[i]) * z * 12, -p.maxYaw, p.maxYaw); pT = clamp(-Double(tr.vy[i]) * z * 9, -p.maxPitch, p.maxPitch)
+            case .float:
+                yT = p.floatDeg * (0.6 * sin(2 * .pi * 0.11 * t + phase(0)) + 0.4 * sin(2 * .pi * 0.07 * t + phase(1)))
+                pT = p.floatDeg * (0.6 * sin(2 * .pi * 0.09 * t + phase(2)) + 0.4 * sin(2 * .pi * 0.05 * t + phase(3)))
+            case .reveal, .off: break
+            }
+            springStep(&yaw, &yawV, target: yT, omega: p.omegaTilt, dt: dt)
+            springStep(&pitch, &pitchV, target: pT, omega: p.omegaTilt, dt: dt)
+            tr.yaw[i] = Float(yaw); tr.pitch[i] = Float(pitch)
+        }
         return tr
     }
 
