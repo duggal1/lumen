@@ -13,7 +13,7 @@ public enum Permissions {
     public static func requestInput() { _ = CGRequestListenEventAccess() }
     public static var accessibility: Bool { AXIsProcessTrusted() }
     @MainActor public static func requestAccessibility() {
-        _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+        _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
     public static var mic: Bool { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
     public static var camera: Bool { AVCaptureDevice.authorizationStatus(for: .video) == .authorized }
