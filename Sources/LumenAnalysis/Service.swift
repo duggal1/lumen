@@ -1,5 +1,11 @@
 import Foundation
+import AVFoundation
 import LumenProject
+
+final class ReaderHandle: @unchecked Sendable {
+    let reader: AVAssetReader
+    init(_ reader: AVAssetReader) { self.reader = reader }
+}
 
 enum AnalysisError: Error, LocalizedError, Sendable {
     case noVideoTrack
