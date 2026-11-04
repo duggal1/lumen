@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import VideoToolbox
 import CoreVideo
 import CoreGraphics
 import ImageIO
@@ -97,7 +98,6 @@ public enum Exporter {
         case .hevc10: codec = .hevc; comp[AVVideoAverageBitRateKey] = bitrate; comp[AVVideoProfileLevelKey] = kVTProfileLevel_HEVC_Main10_AutoLevel as String
         case .prores: codec = .proRes422HQ
         }
-        if preset.codec != .prores { comp[AVVideoDataRateLimitsKey] = [bitrate * 3 / 16, 1] }
         let vi = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: codec, AVVideoWidthKey: w, AVVideoHeightKey: h,
             AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: AVVideoColorPrimaries_P3_D65,
