@@ -159,7 +159,6 @@ struct Inspector: View {
                 SliderRow(label: "Smoothness", v: smooth, range: 0...1)
             }.card()
             VStack(spacing: 0) {
-                SliderRow(label: "Lookahead", v: m.bind(\.camera.lookahead), range: 0...0.6, fmt: { "\(Int($0 * 1000)) ms" })
                 SliderRow(label: "Dead zone", v: m.bind(\.camera.deadZone), range: 0.1...0.45)
                 SliderRow(label: "Motion blur", v: m.bind(\.camera.shutter), range: 0...1)
             }.card()
