@@ -16,10 +16,10 @@ public struct PersonMaskInfo: Codable, Sendable, Equatable {
 }
 
 public enum PersonMaskAnalyzer {
-    public static func analyze(url: URL, output: URL, fps: Double = 30, maxDimension: Int = 720) async throws -> PersonMaskInfo {
+    public static func analyze(url: URL, output: URL, offset: Double = 0, fps: Double = 30, maxDimension: Int = 720) async throws -> PersonMaskInfo {
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw AnalysisError.noVideoTrack }
-        let job = PersonMaskJob(asset: asset, track: track, output: output, fps: fps, maxDimension: maxDimension)
+        let job = PersonMaskJob(asset: asset, track: track, output: output, offset: offset, fps: fps, maxDimension: maxDimension)
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) { try job.run() }.value
         } onCancel: { job.cancel() }
@@ -30,13 +30,14 @@ private final class PersonMaskJob: @unchecked Sendable {
     private let asset: AVAsset
     private let track: AVAssetTrack
     private let outputURL: URL
+    private let offset: Double
     private let fps: Double
     private let maxDimension: Int
     private let readerLock = OSAllocatedUnfairLock<AVAssetReader?>(uncheckedState: nil)
     private let cancelled = OSAllocatedUnfairLock(initialState: false)
 
-    init(asset: AVAsset, track: AVAssetTrack, output: URL, fps: Double, maxDimension: Int) {
-        self.asset = asset; self.track = track; self.outputURL = output
+    init(asset: AVAsset, track: AVAssetTrack, output: URL, offset: Double, fps: Double, maxDimension: Int) {
+        self.asset = asset; self.track = track; self.outputURL = output; self.offset = offset
         self.fps = max(fps, 1); self.maxDimension = max(maxDimension, 64)
     }
 
@@ -76,7 +77,7 @@ private final class PersonMaskJob: @unchecked Sendable {
             guard let mask = request.results?.first?.pixelBuffer else { continue }
             let scaled = try grayscale(mask, maxDimension: maxDimension)
             if frameCount == 0 { width = scaled.width; height = scaled.height; try writer.write(contentsOf: dimensions(width, height)) }
-            var timeBits = CMSampleBufferGetPresentationTimeStamp(sample).seconds.bitPattern.littleEndian
+            var timeBits = (CMSampleBufferGetPresentationTimeStamp(sample).seconds + offset).bitPattern.littleEndian
             var timeData = Data(bytes: &timeBits, count: MemoryLayout<UInt64>.size)
             timeData.append(scaled.data)
             try writer.write(contentsOf: timeData)
