@@ -33,7 +33,7 @@ private final class PersonMaskJob: @unchecked Sendable {
     private let offset: Double
     private let fps: Double
     private let maxDimension: Int
-    private let readerLock = OSAllocatedUnfairLock<AVAssetReader?>(uncheckedState: nil)
+    private let readerLock = OSAllocatedUnfairLock<ReaderHandle?>(uncheckedState: nil)
     private let cancelled = OSAllocatedUnfairLock(initialState: false)
 
     init(asset: AVAsset, track: AVAssetTrack, output: URL, offset: Double, fps: Double, maxDimension: Int) {
@@ -43,12 +43,13 @@ private final class PersonMaskJob: @unchecked Sendable {
 
     func cancel() {
         cancelled.withLock { $0 = true }
-        readerLock.withLock { $0?.cancelReading() }
+        readerLock.withLock { $0?.reader.cancelReading() }
     }
 
     func run() throws -> PersonMaskInfo {
         let reader = try AVAssetReader(asset: asset)
-        readerLock.withLock { $0 = reader }
+        let handle = ReaderHandle(reader)
+        readerLock.withLock { $0 = handle }
         if cancelled.withLock({ $0 }) { reader.cancelReading(); throw CancellationError() }
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -118,7 +119,7 @@ private final class PersonMaskJob: @unchecked Sendable {
             guard let destination = bytes.baseAddress else { return kvImageMemoryAllocationError }
             var destinationBuffer = vImage_Buffer(data: destination, height: vImagePixelCount(targetHeight),
                                                   width: vImagePixelCount(targetWidth), rowBytes: targetWidth)
-            return vImageScale_Planar8(sourceBuffer, &destinationBuffer, nil, vImage_Flags(kvImageNoFlags))
+            return vImageScale_Planar8(&sourceBuffer, &destinationBuffer, nil, vImage_Flags(kvImageNoFlags))
         }
         guard status == kvImageNoError else { throw AnalysisError.maskScale(status) }
         return (targetWidth, targetHeight, data)
