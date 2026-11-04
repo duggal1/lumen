@@ -203,10 +203,15 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     func deleteSelected() { if let id = selection { edit { $0.zoom.removeAll { $0.id == id } }; selection = nil } }
     func setFocus(box b: CGRect) {       // normalized source coords
         guard let id = selection, b.width > 0.02, b.height > 0.02 else { return }
+        let width = Double(b.width), height = Double(b.height)
+        let bounds = Focus.element(x: Double(b.minX), y: Double(b.minY), w: width, h: height)
+        let widthFit = 1.0 / (width + 0.24)
+        let heightFit = 1.0 / (height + 0.24)
+        let targetScale = min(max((0.8 * min(widthFit, heightFit) * 10).rounded() / 10, 1.1), 4.0)
         edit { tl in
             guard let i = tl.zoom.firstIndex(where: { $0.id == id }) else { return }
-            tl.zoom[i].focus = .element(x: b.minX, y: b.minY, w: b.width, h: b.height)
-            tl.zoom[i].scale = min(max((0.8 * min(1 / (b.width + 0.24), 1 / (b.height + 0.24)) * 10).rounded() / 10, 1.1), 4)
+            tl.zoom[i].focus = bounds
+            tl.zoom[i].scale = targetScale
             tl.zoom[i].origin = .manual
         }
     }
@@ -293,15 +298,16 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         let start = HostClock.now()
         exportState = .running(0)
         exportTask = Task { [weak self] in
-            let report: @Sendable (ExportProgress) -> Void = { pr in
-                Task { @MainActor [weak self] in
-                    guard let self, self.activeExportID == exportID else { return }
-                    guard case .running = self.exportState else { return }
+            let report: @Sendable (ExportProgress) -> Void = { [weak self] pr in
+                guard let model = self else { return }
+                Task { @MainActor in
+                    guard model.activeExportID == exportID else { return }
+                    guard case .running = model.exportState else { return }
                     let fraction = Double(pr.frame) / Double(max(pr.total, 1))
-                    self.exportState = .running(fraction)
-                    self.exportElapsed = HostClock.now() - start
-                    self.exportETA = fraction > 0.01 ? max(0, self.exportElapsed * (1 - fraction) / fraction) : nil
-                    if let n = pr.notice { self.notice = n }
+                    model.exportState = .running(fraction)
+                    model.exportElapsed = HostClock.now() - start
+                    model.exportETA = fraction > 0.01 ? max(0, model.exportElapsed * (1 - fraction) / fraction) : nil
+                    if let n = pr.notice { model.notice = n }
                 }
             }
             do {
