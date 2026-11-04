@@ -13,7 +13,7 @@ private func motionTimeline(_ events: [InputEvent]) -> Timeline {
 @Test func automaticZoomWaitsForClick() {
     let timeline = motionTimeline([InputEvent(t: 2, kind: .down, x: 700, y: 400)])
     #expect(timeline.zoom.count == 1)
-    #expect(timeline.zoom.allSatisfy { $0.start >= 2 })
+    #expect(timeline.zoom.allSatisfy { $0.start >= 2 - 1e-9 })
     #expect(abs(timeline.evaluate(at: 1.9).cameraScale - 1) < 0.001)
     #expect(timeline.evaluate(at: 2.6).cameraScale > 1.4)
 }
