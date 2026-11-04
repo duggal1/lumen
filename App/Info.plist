@@ -41,6 +41,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Lumen records your microphone for screen recordings.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Lumen transcribes your microphone recording on this Mac when captions are enabled.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
