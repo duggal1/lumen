@@ -74,8 +74,16 @@ private final class AudioFeeder: @unchecked Sendable {
 public enum Exporter {
     /// Offline export: GPU renders frame i+1 while the encoder consumes frame i (depth-2 pipeline).
     public static func run(session: ProjectSession, timeline tl: Timeline, preset p: ExportPreset, to url: URL,
+                           includeAudio: Bool = true, audioBitrate: Int = 256_000,
                            progress: @escaping @Sendable (ExportProgress) -> Void) async throws {
         guard let d = tl.derived else { throw ExportError.noTimeline }
+        let benchmark = ProcessInfo.processInfo.environment["LUMEN_BENCHMARK"] == "1"
+        let startedAt = HostClock.now()
+        let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
+                                                              reason: "Lumen hardware video export")
+        defer { ProcessInfo.processInfo.endActivity(activity) }
+        var decodeSeconds = 0.0, compositeSeconds = 0.0, encodeWaitSeconds = 0.0
+        var lastProgress = 0.0
         let aspect = tl.style.canvas.ratio
         let (preset, notice) = ExportCapabilityMatrix.shared.resolve(p, aspect: aspect)
         guard preset.height == p.height, ExportCapabilityMatrix.shared.supports(preset, aspect: aspect) else {
@@ -85,13 +93,17 @@ public enum Exporter {
         let h = preset.height, w = preset.width(aspect: aspect), fps = preset.fps
         let total = max(Int(ceil(d.outputDuration * Double(fps) - 1e-8)), 1)
 
-        let mixed = await Task.detached { session.mixer.mix(tl) }.value
+        let mixed = includeAudio ? await Task.detached(priority: .userInitiated) { session.mixer.mix(tl) }.value : nil
         let caf = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".caf")
         if let m = mixed { try AudioIO.writeCAF(m.l, m.r, to: caf) }
         defer { try? FileManager.default.removeItem(at: caf) }
 
-        try? FileManager.default.removeItem(at: url)
-        let writer = try AVAssetWriter(outputURL: url, fileType: preset.codec == .prores || url.pathExtension == "mov" ? .mov : .mp4)
+        // Render into the destination directory and publish only after success.
+        // Cancellation or an encoder error must not erase the previous export.
+        let stagedURL = url.deletingLastPathComponent().appendingPathComponent(".lumen-export-\(UUID().uuidString).\(url.pathExtension)")
+        defer { try? FileManager.default.removeItem(at: stagedURL) }
+        let writer = try AVAssetWriter(outputURL: stagedURL, fileType: preset.codec == .prores || url.pathExtension == "mov" ? .mov : .mp4)
+        defer { if writer.status != .completed { writer.cancelWriting() } }
         let bitrate = Int(Double(w * h * fps) * (preset.bpp > 0 ? preset.bpp : 0.06))
         var comp: [String: Any] = [AVVideoExpectedSourceFrameRateKey: fps, AVVideoMaxKeyFrameIntervalDurationKey: 2]
         let codec: AVVideoCodecType
@@ -122,7 +134,7 @@ public enum Exporter {
                     AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false])
                 r.add(o)
                 let ai = AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48000,
-                                                                                  AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: 256_000])
+                                                                                  AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: max(64_000, min(audioBitrate, 320_000))])
                 ai.expectsMediaDataInRealTime = false
                 if writer.canAdd(ai) { writer.add(ai); feeder = AudioFeeder(r, o, ai); r.startReading() }
             }
@@ -134,33 +146,63 @@ public enum Exporter {
 
         var pending: [(Latch, CVPixelBuffer, Int)] = []
         func flush(_ item: (Latch, CVPixelBuffer, Int)) async throws {
+            let waitStart = HostClock.now()
             await item.0.wait()
-            while !vi.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(2)) }
+            while !vi.isReadyForMoreMediaData {
+                try Task.checkCancellation()
+                guard writer.status == .writing else { throw ExportError.writer(writer.error?.localizedDescription ?? "encoder stopped") }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            encodeWaitSeconds += HostClock.now() - waitStart
             if !adaptor.append(item.1, withPresentationTime: CMTime(value: Int64(item.2), timescale: Int32(fps))) {
                 throw ExportError.writer(writer.error?.localizedDescription ?? "append failed")
             }
-            progress(ExportProgress(frame: item.2 + 1, total: total, notice: notice))
+            let now = HostClock.now()
+            if now - lastProgress >= 0.10 || item.2 + 1 == total {
+                progress(ExportProgress(frame: item.2 + 1, total: total, notice: notice))
+                lastProgress = now
+            }
         }
         for i in 0..<total {
             try Task.checkCancellation()
             let t = Double(i) / Double(fps), s = tl.timeMap.source(atOutput: t)
+            let readStart = HostClock.now()
             let sf = try await session.screen.frame(atSource: s)
             let wf = tl.webcam != nil ? try? await session.webcam?.frame(atSource: s) : nil
+            decodeSeconds += HostClock.now() - readStart
             var pbo: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pbo)
             guard let pb = pbo else { throw ExportError.render }
             let latch = Latch()
             let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: SIMD2(w, h), fps: Double(fps),
                                     backingScale: session.meta.source.backingScale)
+            let compositeStart = HostClock.now()
             guard renderer.render(req, into: pb, completion: { latch.fire() }) else { throw ExportError.render }
+            compositeSeconds += HostClock.now() - compositeStart
             pending.append((latch, pb, i))
-            if pending.count > 2 { try await flush(pending.removeFirst()) }
+            // Metal has three in-flight uniform slots. Keep the encode queue full
+            // without retaining an unbounded number of decoded pixel buffers.
+            if pending.count >= 3 { try await flush(pending.removeFirst()) }
         }
         for item in pending { try await flush(item) }
         vi.markAsFinished()
         await feeder?.done.wait()
         await writer.finishWriting()
         if writer.status != .completed { throw ExportError.writer(writer.error?.localizedDescription ?? "export failed") }
+        try Task.checkCancellation()
+        if FileManager.default.fileExists(atPath: url.path) {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: stagedURL)
+        } else {
+            try FileManager.default.moveItem(at: stagedURL, to: url)
+        }
+        if benchmark {
+            let elapsed = HostClock.now() - startedAt
+            let message = String(format: "Lumen export benchmark: %d frames in %.3fs (%.1f fps, %.2fx realtime) decode %.3fs GPU submit %.3fs GPU/encoder wait %.3fs other %.3fs\\n",
+                                 total, elapsed, Double(total) / max(elapsed, 0.001), d.outputDuration / max(elapsed, 0.001),
+                                 decodeSeconds, compositeSeconds, encodeWaitSeconds,
+                                 max(0, elapsed - decodeSeconds - compositeSeconds - encodeWaitSeconds))
+            FileHandle.standardError.write(Data(message.utf8))
+        }
     }
 
     /// GIF via ImageIO (its own palette quantization). Capped at 800 px wide and 15 fps.
