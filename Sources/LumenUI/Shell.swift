@@ -57,6 +57,7 @@ enum Route: String, CaseIterable, Identifiable {
 public struct LumenShell: View {
     let app: AppModel
     @State private var shell = ShellModel()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public init(_ app: AppModel) { self.app = app }
 
     public var body: some View {
@@ -74,8 +75,8 @@ public struct LumenShell: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Tok.bg)
         }
-        .animation(Motion.slide, value: shell.sidebarShown)
-        .animation(Motion.route, value: shell.route)
+        .animation(reduceMotion ? nil : Motion.slide, value: shell.sidebarShown)
+        .animation(reduceMotion ? nil : Motion.route, value: shell.route)
         .frame(minWidth: Metrics.minW, minHeight: Metrics.minH)
         .onAppear { shell.sidebarShown = false }
         .overlay(alignment: .topLeading) {
@@ -106,6 +107,7 @@ private struct ShellSidebar: View {
     let go: (Route) -> Void
     @Namespace private var pill
     @State private var hovered: Route?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -143,8 +145,8 @@ private struct ShellSidebar: View {
                 }
             }
             .contentShape(Capsule())
-            .animation(Motion.menuHighlight, value: route)
-            .animation(hovered == r ? Motion.hoverIn : Motion.hoverOut, value: hovered)
+            .animation(reduceMotion ? nil : Motion.menuHighlight, value: route)
+            .animation(reduceMotion ? nil : (hovered == r ? Motion.hoverIn : Motion.hoverOut), value: hovered)
         }
         .buttonStyle(.plain)
         .pointerStyle(.link)
@@ -160,6 +162,7 @@ private struct SidebarToggle: View {
     let shows: Bool
     let action: () -> Void
     @State private var hover = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
@@ -173,7 +176,7 @@ private struct SidebarToggle: View {
         .buttonStyle(.plain)
         .pointerStyle(.link)
         .onHover { hover = $0 }
-        .animation(hover ? Motion.hoverIn : Motion.hoverOut, value: hover)
+        .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
         .keyboardShortcut("s", modifiers: [.command, .option])
         .accessibilityLabel(shows ? "Hide sidebar" : "Show sidebar")
     }
