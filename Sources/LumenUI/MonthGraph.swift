@@ -55,7 +55,7 @@ struct MonthGraph: View {
         }
         .frame(height: 40)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Recorded time, last 46 days")
+        .accessibilityLabel("Recorded time, this month and next")
         .task {
             shown = reduceMotion ? Self.window().count : 0
             guard !reduceMotion, shown == 0 else { return }
