@@ -65,6 +65,9 @@ import LumenCapture
     }
 
     func start() async {
+        guard phase == .idle else { return }
+        phase = .preparing
+        defer { if phase == .preparing { phase = .idle } }
         error = nil
         guard Permissions.screen else { Permissions.requestScreen(); error = "Screen Recording is off. Grant it, then relaunch Lumen."; return }
         guard Permissions.input else { Permissions.requestInput(); error = "Input Monitoring is off. Grant it, then relaunch Lumen."; return }
@@ -80,13 +83,23 @@ import LumenCapture
         cfg.fps = fps; cfg.mic = mic && Permissions.mic; cfg.systemAudio = system
         cfg.webcamDeviceID = webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
         phase = .preparing
-        hud = HUDController(self); hud?.show()                  // before prepare(): the filter excludes our own windows
+        let sourceDisplay: CGDirectDisplayID?
+        switch cfg.source {
+        case .display(let id), .region(let id, _): sourceDisplay = id
+        case .window: sourceDisplay = nil
+        }
+        let recordingScreen = NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == sourceDisplay
+        } ?? NSScreen.main
+        hud = HUDController(self, screen: recordingScreen)
+        hud?.show()
         if livePreview { live = LivePreviewController(); live?.show() }
         do {
             try await session.prepare(cfg, library: library)
             if let hub = live?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }) }
             for n in [3, 2, 1] { phase = .countdown(n); try await Task.sleep(for: .seconds(1)) }
             try await session.start(); phase = .recording
+            hud?.show()
             poll = Task { while !Task.isCancelled { stats = await session.stats(); try? await Task.sleep(for: .milliseconds(250)) } }
         } catch { fail(error) }
     }
