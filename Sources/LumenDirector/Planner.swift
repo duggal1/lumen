@@ -131,8 +131,6 @@ enum ZoomPlanner {
             }
             let context = framing(c)
             let region = context.valid && context.fit >= p.minTrigger ? c : anchors
-            let xs = region.map(\.x), ys = region.map(\.y)
-            let minX = xs.min()!, maxX = xs.max()!, minY = ys.min()!, maxY = ys.max()!
             let selection = framing(region)
             let fit = selection.fit
             var scale = clamp(fit, p.minScale, p.maxScale)
