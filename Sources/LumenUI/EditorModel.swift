@@ -82,7 +82,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         if !(coalesce && Date().timeIntervalSince(lastEdit) < 0.6) { undoStack.append(old); if undoStack.count > 100 { undoStack.removeFirst() } }
         lastEdit = Date(); redoStack.removeAll()
         timeline = new; box.set(new)                                    // renderer shows the new look immediately, old derived tracks
-        if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap || old.audio != new.audio || old.webcam != new.webcam {
+        if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap || old.audio != new.audio || old.webcam != new.webcam || old.overlays.taps != new.overlays.taps {
             replan()
         } else { session.save(new) }
     }
@@ -162,8 +162,13 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     func addZoom() {
         let s = playhead, e = min(s + 2.5, duration)
         guard e - s > 0.3 else { return }
-        let z = ZoomSegment(start: s, end: e, scale: 2, focus: .follow, origin: .manual)
+        let tm = timeline.timeMap
+        let z = ZoomSegment(start: tm.source(atOutput: s), end: tm.source(atOutput: e), scale: 2, focus: .follow, origin: .manual)
         edit { $0.zoom.append(z) }; selection = z.id
+    }
+    func dispatch(_ c: Command) {
+        let ctx = ReduceContext(playhead: playhead, selection: selection, duration: duration)
+        edit { tl in _ = try? reduce(&tl, c, ctx: ctx) }
     }
     func deleteSelected() { if let id = selection { edit { $0.zoom.removeAll { $0.id == id } }; selection = nil } }
     func setFocus(box b: CGRect) {       // normalized source coords
