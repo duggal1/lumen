@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import LumenCore
 import LumenProject
 import LumenExport
@@ -46,18 +47,30 @@ struct Inspector: View {
             VStack(spacing: 0) {
                 Row(label: "Background") {
                     LDropdown(sel: m.bind(\.style.background),
-                              options: BackgroundKind.offered.map { ($0, $0.rawValue.capitalized, backgroundIcon($0)) })
+                              options: (BackgroundKind.offered + (m.timeline.style.background == .dither ? [.dither] : []))
+                                .map { ($0, $0 == .dither ? "Legacy" : $0.rawValue.capitalized, backgroundIcon($0)) })
                         .frame(width: 130)
                 }
                 if m.timeline.style.background != .wallpaper {
                     Row(label: "Palette") {
                         LDropdown(sel: paletteName(m),
-                                  options: DitherPalettes.all.map { ($0.0, $0.0, "circle.lefthalf.filled") })
+                                  options: (DitherPalettes.all.map { ($0.0, $0.0, "circle.lefthalf.filled") }
+                                    + (DitherPalettes.all.contains { $0.1 == m.timeline.style.colors } ? [] : [("Custom", "Custom", "paintpalette")])) )
                             .frame(width: 130)
                     }
+                    Row(label: "Canvas color") {
+                        ColorPicker("Canvas color", selection: canvasColor(m, index: 0), supportsOpacity: false).labelsHidden()
+                    }
+                    if m.timeline.style.background != .solid {
+                        Row(label: "Pattern color") {
+                            ColorPicker("Pattern color", selection: canvasColor(m, index: 1), supportsOpacity: false).labelsHidden()
+                        }
+                    }
                 }
-                if m.timeline.style.background == .dither {
-                    SliderRow(label: "Cell", v: m.bind(\.style.ditherCell), range: 4...24, fmt: { "\(Int($0)) pt" })
+                if m.timeline.style.background == .dither || m.timeline.style.background == .wave || m.timeline.style.background == .field {
+                    SliderRow(label: "Cell", v: m.bind(\.style.ditherCell), range: 2...24, fmt: { "\(Int($0)) pt" })
+                }
+                if m.timeline.style.background == .dither || m.timeline.style.background == .wave {
                     SliderRow(label: "Ink", v: m.bind(\.style.ditherDensity), range: 0.15...0.9, fmt: { "\(Int($0 * 100))%" })
                 }
                 if m.timeline.style.background == .wallpaper {
@@ -67,7 +80,7 @@ struct Inspector: View {
                 }
             }.card()
             VStack(spacing: 0) {
-                SliderRow(label: "Size", v: m.bind(\.style.contentScale), range: 0.5...1.5, fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Padding", v: m.bind(\.style.padding), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Radius", v: m.bind(\.style.cornerRadius), range: 0...40, fmt: { "\(Int($0))" })
                 SliderRow(label: "Shadow", v: m.bind(\.style.shadow), range: 0...1)
@@ -87,6 +100,8 @@ struct Inspector: View {
     private func backgroundIcon(_ kind: BackgroundKind) -> String {
         switch kind {
         case .dither: "square.grid.3x3.fill"
+        case .wave: "waveform.path"
+        case .field: "square.grid.3x3"
         case .canvas: "rectangle.fill"
         case .wallpaper: "photo"
         case .solid: "square.fill"
@@ -95,8 +110,22 @@ struct Inspector: View {
     }
 
     private func paletteName(_ m: EditorModel) -> Binding<String> {
-        Binding(get: { DitherPalettes.all.first { $0.1 == m.timeline.style.colors }?.0 ?? DitherPalettes.all[0].0 },
-                set: { name in m.edit { $0.style.colors = DitherPalettes.colors(named: name) } })
+        Binding(get: { DitherPalettes.all.first { $0.1 == m.timeline.style.colors }?.0 ?? "Custom" },
+                set: { name in if name != "Custom" { m.edit { $0.style.colors = DitherPalettes.colors(named: name) } } })
+    }
+
+    private func canvasColor(_ m: EditorModel, index: Int) -> Binding<Color> {
+        Binding(get: {
+            let colors = m.timeline.style.colors
+            let c = colors.indices.contains(index) ? colors[index] : RGBA(0xF4F4F4)
+            return Color(.sRGB, red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
+        }, set: { color in
+            guard let c = NSColor(color).usingColorSpace(.sRGB) else { return }
+            m.edit(coalesce: true) { timeline in
+                while timeline.style.colors.count <= index { timeline.style.colors.append(RGBA(0xF4F4F4)) }
+                timeline.style.colors[index] = RGBA(r: Float(c.redComponent), g: Float(c.greenComponent), b: Float(c.blueComponent))
+            }
+        })
     }
 
     private var cursor: some View {
