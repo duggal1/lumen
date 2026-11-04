@@ -81,6 +81,8 @@ private struct PTSRange { var first: Double?; var last = 0.0 }
 /// Records raw screen video (native pixels, HEVC) + audio tracks. Frames go straight from the SCK queue into the writer; no actor hops.
 public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     public let bundle: ProjectBundle
+    private let liveFrameHook = OSAllocatedUnfairLock<(@Sendable (CVPixelBuffer) -> Void)?>(initialState: nil)
+    public func setLiveFrameHook(_ hook: (@Sendable (CVPixelBuffer) -> Void)?) { liveFrameHook.withLock { $0 = hook } }
     private let videoQ = DispatchQueue(label: "lumen.capture.video", qos: .userInteractive)
     private let audioQ = DispatchQueue(label: "lumen.capture.audio", qos: .userInitiated)
     private var stream: SCStream?
@@ -203,7 +205,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
             ptsRange.withLock { $0.first = pts.seconds }
         }
         guard vin.isReadyForMoreMediaData else { dropped.withLock { $0 += 1 }; return }   // never block
-        if adaptor.append(pb, withPresentationTime: pts) { ptsRange.withLock { $0.last = pts.seconds } }
+        if adaptor.append(pb, withPresentationTime: pts) { ptsRange.withLock { $0.last = pts.seconds }; liveFrameHook.withLock { $0 }?(pb) }
         var rect = CGRect.zero
         if let d = info[.contentRect] as? [String: Any], let r = CGRect(dictionaryRepresentation: d as CFDictionary) { rect = r }
         meta?.write(pts: pts.seconds, status: raw, rect: rect)

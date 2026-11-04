@@ -36,6 +36,7 @@ public struct LibraryRoot: View {
             Row(label: "Microphone", icon: "mic") { LToggle(on: Bindable(app).mic, label: "Microphone") }
             Row(label: "System audio", icon: "speaker.wave.2") { LToggle(on: Bindable(app).system, label: "System audio") }
             Row(label: "Webcam", icon: "camera") { LToggle(on: Bindable(app).webcam, label: "Webcam") }
+            Row(label: "Live preview", icon: "bolt") { LToggle(on: Bindable(app).livePreview, label: "Live preview") }
             LButton(title: app.phase == .idle ? "Record" : "Stop", icon: app.phase == .idle ? "record.circle" : "stop.fill", kind: .primary, height: 32) { app.toggle() }
                 .padding(.top, 8).disabled(app.phase != .idle && app.phase != .recording)
             if let e = app.error {

@@ -12,6 +12,7 @@ public enum RenderError: Error { case noDevice, pipeline(String) }
 public enum RenderQuality: Sendable { case preview, export }
 
 public struct RenderRequest: @unchecked Sendable {
+    public var live: FrameState?
     public var timeline: Timeline, t: Double
     public var screen: SourceFrame, webcam: SourceFrame?
     public var canvas: SIMD2<Int>, fps: Double, backingScale: Double, quality: RenderQuality
@@ -219,8 +220,8 @@ public final class Renderer: @unchecked Sendable {
         let dt = 1 / max(r.fps, 1)
         for i in 0..<K {
             let off = ((Double(i) + 0.5) / Double(K) - 0.5) * tl.camera.shutter * dt
-            var st = tl.evaluate(at: r.t + off)
-            if tl.derived == nil { st.cameraCenter = SIMD2<Float>(Float(g.src.x / 2), Float(g.src.y / 2)) }
+            var st = r.live ?? tl.evaluate(at: r.t + off)
+            if r.live == nil, tl.derived == nil { st.cameraCenter = SIMD2<Float>(Float(g.src.x / 2), Float(g.src.y / 2)) }
             scene(cb, into: work[s], st: st, r: r, g: g, src: srcTex, web: webTex)
             if K > 1 {
                 let pd = MTLRenderPassDescriptor()

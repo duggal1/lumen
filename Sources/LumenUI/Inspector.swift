@@ -37,6 +37,9 @@ struct Inspector: View {
         let m = model
         return VStack(spacing: 24) {
             VStack(spacing: 0) {
+                if m.session.webcam != nil {
+                    ToggleRow(label: "Show face cam", on: Binding(get: { m.timeline.webcam != nil }, set: { m.setWebcam($0) }))
+                }
                 Row(label: "Canvas") { EmptyView() }
                 LSegmented(sel: m.bind(\.style.canvas), items: CanvasAspect.allCases.map { ($0, $0.title) })
             }.card()
@@ -136,6 +139,8 @@ struct Inspector: View {
             ToggleRow(label: "Mirror", on: Binding(get: { m.timeline.webcam?.mirror ?? true }, set: { v in m.edit { $0.webcam?.mirror = v } }))
             ToggleRow(label: "Border", on: Binding(get: { m.timeline.webcam?.border ?? true }, set: { v in m.edit { $0.webcam?.border = v } }))
             ToggleRow(label: "Auto framing", on: Binding(get: { m.timeline.webcam?.autoFrame ?? true }, set: { v in m.edit { $0.webcam?.autoFrame = v } }))
+            SliderRow(label: "Face zoom", v: Binding(get: { m.timeline.webcam?.faceZoom ?? 0.6 }, set: { v in m.edit(coalesce: true) { $0.webcam?.faceZoom = v } }), range: 0...1)
+            SliderRow(label: "Face size", v: Binding(get: { m.timeline.webcam?.faceFill ?? 0.31 }, set: { v in m.edit(coalesce: true) { $0.webcam?.faceFill = v } }), range: 0.2...0.5)
         }.card()
     }
 

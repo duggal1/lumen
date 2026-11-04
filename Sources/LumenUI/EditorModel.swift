@@ -70,10 +70,11 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         if !(coalesce && Date().timeIntervalSince(lastEdit) < 0.6) { undoStack.append(old); if undoStack.count > 100 { undoStack.removeFirst() } }
         lastEdit = Date(); redoStack.removeAll()
         timeline = new; box.set(new)                                    // renderer shows the new look immediately, old derived tracks
-        if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap || old.audio != new.audio {
+        if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap || old.audio != new.audio || old.webcam != new.webcam {
             replan()
         } else { session.save(new) }
     }
+    func setWebcam(_ on: Bool) { edit { $0.webcam = on ? ($0.webcam ?? WebcamLayout()) : nil } }
     func undo() { if let p = undoStack.popLast() { redoStack.append(timeline); restore(p) } }
     func redo() { if let n = redoStack.popLast() { undoStack.append(timeline); restore(n) } }
     private func restore(_ t: Timeline) { replanTask?.cancel(); timeline = t; box.set(t); session.save(t); remix(); if clock.playing { play() } }

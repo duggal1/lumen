@@ -76,6 +76,8 @@ public enum ClockCalibration {
 /// Listen-only CGEventTap on its own high-QoS thread. Coordinates converted to source pixels once, here.
 public final class InputRecorder: @unchecked Sendable {
     private let ring = EventRing(capacity: 1 << 16)
+    private let liveEventHook = OSAllocatedUnfairLock<(@Sendable (InputEvent) -> Void)?>(initialState: nil)
+    public func setLiveEventHook(_ hook: (@Sendable (InputEvent) -> Void)?) { liveEventHook.withLock { $0 = hook } }
     private let url: URL, origin: CGPoint, scale: Double, clock: RecordingClock, axURL: URL
     private let shape = OSAllocatedUnfairLock<UInt16>(initialState: 0)
     private let loop = OSAllocatedUnfairLock<CFRunLoop?>(uncheckedState: nil)
@@ -168,6 +170,7 @@ public final class InputRecorder: @unchecked Sendable {
         case .flagsChanged: ev.kind = .flagsChanged
         default: return
         }
+        liveEventHook.withLock { $0 }?(ev)
         ring.push(ev)
     }
 

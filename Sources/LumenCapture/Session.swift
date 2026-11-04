@@ -1,4 +1,5 @@
 import Foundation
+import CoreVideo
 import AVFoundation
 import CoreGraphics
 import AppKit
@@ -81,6 +82,10 @@ public actor RecordingSession {
     private var unit = EventTimeUnit.machTicks
     private var activity: NSObjectProtocol?
     public init() {}
+
+    public func setLiveHooks(frame: (@Sendable (CVPixelBuffer) -> Void)?, event: (@Sendable (InputEvent) -> Void)?) {
+        engine?.setLiveFrameHook(frame); input?.setLiveEventHook(event)
+    }
 
     public func prepare(_ config: RecordingConfig, library: URL) async throws {
         cfg = config

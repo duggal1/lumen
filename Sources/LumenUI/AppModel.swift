@@ -20,6 +20,8 @@ import LumenCapture
     var mic = true
     var system = false
     var webcam = false
+    var livePreview = false
+    private var live: LivePreviewController?
     var displays: [(id: CGDirectDisplayID, name: String)] = []
     var windows: [(id: CGWindowID, name: String)] = []
     var error: String?
@@ -79,8 +81,10 @@ import LumenCapture
         cfg.webcamDeviceID = webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
         phase = .preparing
         hud = HUDController(self); hud?.show()                  // before prepare(): the filter excludes our own windows
+        if livePreview { live = LivePreviewController(); live?.show() }
         do {
             try await session.prepare(cfg, library: library)
+            if let hub = live?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }) }
             for n in [3, 2, 1] { phase = .countdown(n); try await Task.sleep(for: .seconds(1)) }
             try await session.start(); phase = .recording
             poll = Task { while !Task.isCancelled { stats = await session.stats(); try? await Task.sleep(for: .milliseconds(250)) } }
@@ -91,11 +95,11 @@ import LumenCapture
         phase = .finishing; poll?.cancel()
         do {
             let b = try await session.stop()
-            hud?.close(); hud = nil; phase = .idle; refresh(); onFinished?(b.url)
+            hud?.close(); hud = nil; live?.close(); live = nil; phase = .idle; refresh(); onFinished?(b.url)
         } catch { fail(error) }
     }
 
-    private func fail(_ e: Error) { poll?.cancel(); hud?.close(); hud = nil; phase = .idle; error = "Recording failed. \(e)" }
+    private func fail(_ e: Error) { poll?.cancel(); hud?.close(); hud = nil; live?.close(); live = nil; phase = .idle; error = "Recording failed. \(e)" }
 }
 
 // MARK: Global hotkey (Carbon, no dependency)
