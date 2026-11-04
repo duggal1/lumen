@@ -12,6 +12,17 @@ import LumenCapture
     enum SourceKind: String, CaseIterable { case display, window, region }
     struct ProjectRow: Identifiable { var id: URL { url }; let url: URL; let name: String; let date: Date; let size: String }
 
+    public var recordingStatus: String {
+        switch phase {
+        case .idle: "Lumen"
+        case .preparing: "Preparing recording"
+        case .countdown(let seconds): "Recording in \(seconds)"
+        case .recording:
+            "Recording " + String(format: "%d:%02d", Int(stats?.elapsed ?? 0) / 60, Int(stats?.elapsed ?? 0) % 60)
+        case .finishing: "Saving recording"
+        }
+    }
+
     public var phase = Phase.idle
     var kind = SourceKind.display
     var displayID = CGMainDisplayID()
