@@ -3,6 +3,7 @@ import AVFoundation
 import Accelerate
 import Vision
 import os
+import LumenProject
 
 public enum PersonMaskAnalyzer {
     public static func analyze(url: URL, output: URL, offset: Double = 0, fps: Double = 30, maxDimension: Int = 720) async throws -> PersonMaskInfo {
