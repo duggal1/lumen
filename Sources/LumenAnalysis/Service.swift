@@ -100,29 +100,32 @@ public actor AnalysisService {
 
     private func face(_ r: AnalysisRequest) async -> ([FaceSample], String?) {
         guard r.includeFace, let webcam = r.webcam else { return ([], nil) }
-        return await cached(url: webcam, directory: analysisDirectory(r), analyzer: "face", version: 1,
-                            parameters: FaceParameters(offset: r.webcamOffset, fps: 12)) {
+        let (samples, error) = await cached(url: webcam, directory: analysisDirectory(r), analyzer: "face", version: 1,
+                                            parameters: FaceParameters(offset: r.webcamOffset, fps: 12)) {
             try await FaceAnalyzer.analyze(url: webcam, startOffset: r.webcamOffset)
         }
+        return (samples ?? [], error)
     }
 
     private func activity(_ r: AnalysisRequest) async -> ([ActivityPoint], String?) {
         guard r.includeActivity else { return ([], nil) }
-        return await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "activity", version: 1,
-                            parameters: ActivityParameters(offset: 0, fps: 10)) {
+        let (points, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "activity", version: 1,
+                                           parameters: ActivityParameters(offset: 0, fps: 10)) {
             try await ActivityAnalyzer.analyze(url: r.screen, fps: 10)
         }
+        return (points ?? [], error)
     }
 
     private func ocr(_ r: AnalysisRequest) async -> ([OCRDetection], String?) {
         guard r.privacy.enabled, r.privacy.autoDetect, ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else { return ([], nil) }
         let params = OCRParameters(salt: r.projectSalt, patterns: r.privacy.customPatterns,
                                    entropyThreshold: r.privacy.entropyThreshold, fps: 2)
-        return await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "sensitive-text", version: 1,
-                            parameters: params) {
+        let (detections, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "sensitive-text", version: 1,
+                                               parameters: params) {
             try await OCRAnalyzer.analyze(url: r.screen, projectSalt: r.projectSalt, customPatterns: r.privacy.customPatterns,
                                           entropyThreshold: r.privacy.entropyThreshold)
         }
+        return (detections ?? [], error)
     }
 
     private func transcript(_ r: AnalysisRequest) async -> (Transcript?, String?) {
