@@ -74,7 +74,9 @@ struct ExportSettings: Codable, Equatable {
     func destinationURL() -> URL? {
         let base = filename.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !base.isEmpty, base != ".", base != "..", !base.contains("/"), !base.contains(":") else { return nil }
-        let name = base.lowercased().hasSuffix("." + container.ext) ? base : base + "." + container.ext
+        let lower = base.lowercased()
+        let stem = lower.hasSuffix(".mp4") || lower.hasSuffix(".mov") ? String(base.dropLast(4)) : base
+        let name = stem + "." + container.ext
         return URL(fileURLWithPath: (folder as NSString).expandingTildeInPath, isDirectory: true).appendingPathComponent(name)
     }
 
