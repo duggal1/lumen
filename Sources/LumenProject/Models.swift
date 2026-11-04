@@ -8,6 +8,9 @@ public struct RGBA: Codable, Equatable, Sendable {
     public init(_ hex: UInt32, a: Float = 1) {
         r = Float((hex >> 16) & 255) / 255; g = Float((hex >> 8) & 255) / 255; b = Float(hex & 255) / 255; self.a = a
     }
+    public init(r: Float, g: Float, b: Float, a: Float = 1) {
+        self.r = r; self.g = g; self.b = b; self.a = a
+    }
     public var simd: SIMD4<Float> { [r, g, b, a] }
 }
 
@@ -32,8 +35,8 @@ public enum DitherPalettes {
 
 /// Legacy gradients are kept for decoding old projects; the picker offers dither, canvas, wallpaper and solid.
 public enum BackgroundKind: String, Codable, CaseIterable, Sendable {
-    case dither, canvas, wallpaper, solid, gradient, mesh
-    public static let offered: [BackgroundKind] = [.dither, .canvas, .wallpaper, .solid]
+    case dither, canvas, wallpaper, solid, gradient, mesh, wave, field
+    public static let offered: [BackgroundKind] = [.solid, .wave, .field, .canvas, .wallpaper]
 }
 public enum CanvasAspect: String, Codable, CaseIterable, Sendable {
     case r16x9, r16x10, r1x1, r4x5, r9x16
@@ -42,8 +45,8 @@ public enum CanvasAspect: String, Codable, CaseIterable, Sendable {
 }
 
 public struct Style: Codable, Equatable, Sendable {
-    public var background: BackgroundKind = .dither
-    public var colors: [RGBA] = DitherPalettes.all[0].1
+    public var background: BackgroundKind = .solid
+    public var colors: [RGBA] = [RGBA(0xF4F4F4), RGBA(0xF97316)]
     public var gradientAngle: Double = 35
     public var ditherCell: Double = 12
     public var ditherDensity: Double = 0.55
