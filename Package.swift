@@ -4,7 +4,7 @@ import PackageDescription
 func lib(_ n: String, _ deps: [String] = [], resources: [Resource]? = nil) -> Target {
     .target(name: n, dependencies: deps.map { .byName(name: $0) }, resources: resources)
 }
-let all = ["LumenCore", "LumenProject", "LumenDirector", "LumenCapture", "LumenRender", "LumenAudio", "LumenExport"]
+let all = ["LumenCore", "LumenProject", "LumenDirector", "LumenCapture", "LumenRender", "LumenAudio", "LumenAnalysis", "LumenExport"]
 
 let package = Package(
     name: "Lumen",
@@ -15,14 +15,15 @@ let package = Package(
     ],
     dependencies: [.package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0")],
     targets: [
-        .testTarget(name: "LumenTests", dependencies: ["LumenCapture", "LumenCore", "LumenProject", "LumenDirector", "LumenRender", "LumenAudio", "LumenExport"]),
+        .testTarget(name: "LumenTests", dependencies: ["LumenCapture", "LumenCore", "LumenProject", "LumenDirector", "LumenRender", "LumenAudio", "LumenAnalysis", "LumenExport"]),
         lib("LumenCore"),
         lib("LumenProject", ["LumenCore"]),
         lib("LumenDirector", ["LumenCore", "LumenProject"]),
+        lib("LumenAnalysis", ["LumenCore", "LumenProject"]),
         lib("LumenCapture", ["LumenCore", "LumenProject"]),
         lib("LumenRender", ["LumenCore", "LumenProject", "LumenDirector"], resources: [.process("Shaders")]),
         lib("LumenAudio", ["LumenCore", "LumenProject", "LumenDirector"]),
-        lib("LumenExport", ["LumenCore", "LumenProject", "LumenDirector", "LumenRender", "LumenAudio"]),
+        lib("LumenExport", ["LumenCore", "LumenProject", "LumenDirector", "LumenAnalysis", "LumenRender", "LumenAudio"]),
         lib("LumenUI", all),
         .executableTarget(name: "LumenApp", dependencies: ["LumenUI"]),
         .executableTarget(name: "LumenCLI", dependencies: [
