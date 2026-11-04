@@ -137,13 +137,20 @@ public final class InputRecorder: @unchecked Sendable {
         tm.resume(); timer = tm
     }
 
-    @MainActor public func stop() {
+    @MainActor public func stop() async {
         running.withLock { $0 = false }
         if let t = tap { CGEvent.tapEnable(tap: t, enable: false) }
         loop.withLock { if let l = $0 { CFRunLoopStop(l) } }
         timer?.cancel()
-        writeQ.sync { flush(); try? fh?.close() }
-        axQ.sync { }
+        await withCheckedContinuation { continuation in
+            writeQ.async { [self] in
+                flush(); try? fh?.close()
+                continuation.resume()
+            }
+        }
+        await withCheckedContinuation { continuation in
+            axQ.async { continuation.resume() }
+        }
         catalog.writeJSON(to: url.deletingLastPathComponent().appendingPathComponent("cursors.json"))
         if let d = try? JSONEncoder().encode(axFrames.withLock { $0 }) { try? d.write(to: axURL) }
     }
