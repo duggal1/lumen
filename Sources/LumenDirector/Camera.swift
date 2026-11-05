@@ -6,13 +6,6 @@ import LumenProject
     let t = clamp(x, 0, 1); return t * t * t * t * (35 + t * (-84 + t * (70 - 20 * t)))
 }
 
-@inline(__always) func scaledSpring(_ x: inout Double, _ v: inout Double, target: Double, omega w: Double, dt: Double, scale s: Double) {
-    let d = (x - target) * s, vs = v * s, e = exp(-w * dt)
-    let nd = (d + (vs + w * d) * dt) * e
-    let nv = (vs - w * (vs + w * d) * dt) * e
-    x = target + nd / s; v = nv / s
-}
-
 enum CameraSolver {
     private struct Shot { var start: Double, end: Double, lz: Double, focus: Focus, ease: Double, automatic: Bool }
     private struct Key { var t: Double; var shot: Int }
@@ -111,8 +104,15 @@ enum CameraSolver {
             let view = exp(-sh.lz)
             let bx = clamp(p.centerOffsetX, -0.25, 0.25) * view
             let by = clamp(p.centerOffsetY, -0.25, 0.25) * view
-            return SIMD2(softClamp(c.x - bx, hw, 1 - hw, soft),
-                         softClamp(c.y - by, hw, 1 - hw, soft))
+            // Fixed and AX-element targets must land EXACTLY on the feasible
+            // center, including a button only a few pixels from a screen edge.
+            // Soft clamping nudges a legal edge target by ~3 source pixels.
+            if case .follow = sh.focus {
+                return SIMD2(softClamp(c.x - bx, hw, 1 - hw, soft),
+                             softClamp(c.y - by, hw, 1 - hw, soft))
+            }
+            return SIMD2(clamp(c.x - bx, hw, 1 - hw),
+                         clamp(c.y - by, hw, 1 - hw))
         }
         var cx = [Double](repeating: 0.5, count: n), cy = cx, cz = [Double](repeating: 0, count: n)
         var ki = 0
@@ -125,7 +125,6 @@ enum CameraSolver {
             let lzA = a >= 0 ? shots[a].lz : 0, lzB = b >= 0 ? shots[b].lz : 0
             let lz = lerp(lzA, lzB, pr)
             // Scale and clamp must use the SAME zoom value at every frame.
-            let hw = 0.5 / exp(lz)
             let follow = cursorN(t)
             let cA = center(a, follow), cB = center(b, follow)
             let wA = exp(-lzA), wB = exp(-lzB), w = exp(-lz)
