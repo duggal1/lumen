@@ -38,6 +38,8 @@ struct ExportSettings: Codable, Equatable {
     var frameRate: ExportRate = .source
     var includeAudio = true
     var audioBitrate = 256_000
+    /// One click renders 16:9, 1:1 and 9:16. Each aspect is re-aimed by the Director.
+    var batchAspects = false
     var folder: String = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)
         .first?.path ?? NSHomeDirectory() + "/Movies"
     var filename = "Lumen export"
