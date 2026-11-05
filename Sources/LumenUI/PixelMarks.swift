@@ -122,6 +122,29 @@ struct DustLine: View {
     }
 }
 
+/// Determinate export fill: 3 x 8 pt cells on a 4 pt pitch, four-column
+/// dithered front. Never a bar, never a shimmer.
+struct PixelProgress: View {
+    let value: Double
+    var body: some View {
+        Canvas { c, size in
+            let pitch: CGFloat = 4, width: CGFloat = 3, height: CGFloat = 8
+            let columns = max(1, Int(size.width / pitch))
+            let filled = Int((min(max(value, 0), 1) * Double(columns)).rounded(.down))
+            for col in 0..<columns {
+                let color: Color
+                if col < filled - 4 { color = Tok.accentFill }
+                else if col < filled { color = col.isMultiple(of: 2) ? Tok.accent : Tok.accentFill }
+                else { color = Tok.controlPressed }
+                cellFill(&c, CGRect(x: CGFloat(col) * pitch, y: (size.height - height) / 2,
+                                    width: width, height: height), color)
+            }
+        }
+        .frame(height: 8)
+        .accessibilityHidden(true)
+    }
+}
+
 /// Three 2 pt cells stepping every 160 ms. Indeterminate waits only.
 
 /// The title aperture: eight orange cells surrounding the head.
