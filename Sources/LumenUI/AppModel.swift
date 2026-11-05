@@ -56,7 +56,9 @@ import LumenCapture
         didSet { UserDefaults.standard.set(micInputIDs, forKey: "LumenMicrophoneInputIDs") }
     }
     var availableAudioInputs: [(id: String, name: String)] {
-        AVCaptureDevice.devices(for: .audio).map { (id: $0.uniqueID, name: $0.localizedName) }
+        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio,
+                                         position: .unspecified).devices
+            .map { (id: $0.uniqueID, name: $0.localizedName) }
     }
     func selectAudioInput(_ id: String, enabled: Bool) {
         var selected = micInputIDs.filter { $0 != id }
