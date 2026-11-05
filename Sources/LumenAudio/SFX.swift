@@ -11,7 +11,7 @@ public struct SFXBank: Sendable {
                   let pcm = try? AudioIO.readMono(url), !pcm.isEmpty else { return [] }
             // Peak leveling is applied once, never synthesized on each cue.
             let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
-            return peak > 0.0001 ? pcm.map { $0 * (0.9 / peak) } : []
+            return peak > 0.0001 ? pcm.map { $0 * (1.0 / peak) } : []
         }
         mouse = load("mouse-click.mp3")
         subtle = load("Subtle-ui-tap-interactions.mp3")

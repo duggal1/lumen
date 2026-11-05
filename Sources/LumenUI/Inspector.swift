@@ -408,10 +408,12 @@ struct Inspector: View {
                         .frame(width: 138)
                 }
                 ToggleRow(label: "Clean mic", on: m.bind(\.audio.micClean))
-                SliderRow(label: "Mic level", v: m.bind(\.audio.micGainDb), range: -18...12,
-                          fmt: { "\(Int($0)) dB" })
+                SliderRow(label: "Voice level", v: m.bind(\.audio.micGainDb), range: -18...12,
+                          fmt: { String(format: "%+.0f dB", $0) })
+                SliderRow(label: "Room echo", v: m.bind(\.audio.dereverb), range: 0...1,
+                          fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "System level", v: m.bind(\.audio.systemGainDb), range: -24...6,
-                          fmt: { "\(Int($0)) dB" })
+                          fmt: { String(format: "%+.0f dB", $0) })
                 Row(label: "Voice profile") {
                     LSegmented(sel: m.bind(\.audio.voiceProfile),
                                items: [(.natural, "Natural"), (.studio, "Studio")]).frame(width: 156)
@@ -426,6 +428,11 @@ struct Inspector: View {
                         LDropdown(sel: m.bind(\.audio.clickTone),
                                   options: [(ClickSound.mouse, "Mouse", "cursorarrow.click"),
                                             (.subtle, "Subtle", "cursorarrow.click")]).frame(width: 130)
+                    }
+                    SliderRow(label: "Click level", v: m.bind(\.audio.sfxGainDb), range: -24...6,
+                              fmt: { String(format: "%+.0f dB", $0) })
+                    Row(label: "Preview") {
+                        LButton(title: "Play click", icon: "speaker.wave.2", kind: .quiet) { m.previewClick() }
                     }
                 }
                 ToggleRow(label: "Zoom whooshes", on: m.bind(\.audio.whooshes))
@@ -457,8 +464,23 @@ struct Inspector: View {
                     SliderRow(label: "Music level", v: m.bind(\.audio.musicGainDb), range: -30...(-6), fmt: { "\(Int($0)) dB" })
                     Row(label: "Remove music") { LButton(title: "Remove", icon: "trash", kind: .quiet) { m.edit { $0.audio.musicPath = nil } } }
                 }
-                SliderRow(label: "Loudness", v: m.bind(\.audio.targetLUFS), range: -23...(-10), fmt: { "\(Int($0)) LUFS" })
-                SliderRow(label: "Output level", v: m.bind(\.audio.outputGainDb), range: -24...6, fmt: { "\(Int($0)) dB" })
+                ToggleRow(label: "Auto loudness", on: m.bind(\.audio.normalize))
+                if m.timeline.audio.normalize {
+                    SliderRow(label: "Loudness", v: m.bind(\.audio.targetLUFS), range: -23...(-10),
+                              fmt: { String(format: "%.0f LUFS", $0) })
+                    SliderRow(label: "Trim", v: m.bind(\.audio.outputGainDb), range: -12...6,
+                              fmt: { String(format: "%+.0f dB", $0) })
+                } else {
+                    SliderRow(label: "Output level", v: m.bind(\.audio.outputGainDb), range: -24...6,
+                              fmt: { String(format: "%+.0f dB", $0) })
+                }
+                if let stats = m.mixStats {
+                    Row(label: "Master") {
+                        Text(String(format: "%.1f LUFS · peak %.1f dBTP", stats.lufs, stats.peak))
+                            .font(AppType.caption.monospacedDigit())
+                            .foregroundStyle(stats.peak > -1 ? Tok.statusBad : Tok.text2)
+                    }
+                }
             }.card()
         }
     }
