@@ -454,6 +454,17 @@ public struct TrackMeta: Codable, Sendable {
     public var file: String, startHostSeconds: Double
     public init(file: String, startHostSeconds: Double) { self.file = file; self.startHostSeconds = startHostSeconds }
 }
+/// Separately recorded additional microphone or loopback source.
+public struct MicrophoneSourceMeta: Codable, Sendable {
+    public var deviceID: String, deviceName: String
+    public var track: TrackMeta
+    public init(deviceID: String, deviceName: String, track: TrackMeta) {
+        self.deviceID = deviceID
+        self.deviceName = deviceName
+        self.track = track
+    }
+}
+
 public struct ProjectMeta: Codable, Sendable {
     public var name: String
     public var created = Date()
@@ -461,8 +472,10 @@ public struct ProjectMeta: Codable, Sendable {
     public var source: SourceInfo
     public var clock: RecordingClock
     public var mic: TrackMeta?, system: TrackMeta?, webcam: TrackMeta?
+    /// Older projects have no additional inputs; decoding defaults to empty.
+    public var additionalMicrophones: [MicrophoneSourceMeta] = []
     public var droppedFrames = 0
-    enum CodingKeys: String, CodingKey { case name, created, analysisSalt, source, clock, mic, system, webcam, droppedFrames }
+    enum CodingKeys: String, CodingKey { case name, created, analysisSalt, source, clock, mic, system, webcam, additionalMicrophones, droppedFrames }
     public init(name: String, source: SourceInfo, clock: RecordingClock) {
         self.name = name; self.analysisSalt = UInt64.random(in: UInt64.min...UInt64.max); self.source = source; self.clock = clock
     }
@@ -476,6 +489,7 @@ public struct ProjectMeta: Codable, Sendable {
         mic = try? c.decodeIfPresent(TrackMeta.self, forKey: .mic)
         system = try? c.decodeIfPresent(TrackMeta.self, forKey: .system)
         webcam = try? c.decodeIfPresent(TrackMeta.self, forKey: .webcam)
+        additionalMicrophones = (try? c.decode([MicrophoneSourceMeta].self, forKey: .additionalMicrophones)) ?? []
         droppedFrames = (try? c.decode(Int.self, forKey: .droppedFrames)) ?? 0
     }
 }
