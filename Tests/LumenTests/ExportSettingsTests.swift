@@ -67,3 +67,13 @@ import LumenExport
     options.frameRate = .f120
     #expect(options.preset(source: source, aspect: 16.0 / 9).fps == 120)
 }
+
+@Test func gifExportUsesGifExtensionAndIgnoresVideoContainer() {
+    var options = ExportSettings()
+    options.kind = .gif
+    options.container = .mov
+    options.filename = "loop"
+    options.folder = "/tmp"
+    #expect(options.fileExtension == "gif")
+    #expect(options.destinationURL()?.lastPathComponent == "loop.gif")
+}
