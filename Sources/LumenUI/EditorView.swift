@@ -46,6 +46,7 @@ struct EditorView: View {
                         .aspectRatio(model.timeline.style.canvas.ratio, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                         .overlay { if model.focusEditing { FocusOverlay(model: model) } }
+                        .overlay { if model.maskEditing { ManualMaskOverlay(model: model) } }
                         .overlay { if model.zoomDebug { ZoomDebugOverlay(model: model) } }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     transport
