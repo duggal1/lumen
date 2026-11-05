@@ -343,14 +343,14 @@ struct Inspector: View {
     private var webcam: some View {
         let m = model
         return VStack(spacing: 0) {
-            Row(label: "Corner") { LDropdown(sel: Binding(get: { m.timeline.webcam?.corner ?? .bottomRight }, set: { v in m.edit { $0.webcam?.corner = v } }),
+            Row(label: "Corner") { LDropdown(sel: layoutBinding(.cameraOverlay, \.corner),
                 options: WebcamLayout.Corner.allCases.map { ($0, $0.rawValue, "rectangle.inset.filled") }).frame(width: 130) }
-            SliderRow(label: "Size", v: Binding(get: { m.timeline.webcam?.size ?? 0.22 }, set: { v in m.edit(coalesce: true) { $0.webcam?.size = v } }), range: 0.1...0.4)
-            Row(label: "Shape") { LSegmented(sel: Binding(get: { m.timeline.webcam?.shape ?? .circle }, set: { v in m.edit { $0.webcam?.shape = v } }),
+            SliderRow(label: "Size", v: layoutBinding(.cameraOverlay, \.size), range: 0.1...0.4)
+            Row(label: "Shape") { LSegmented(sel: layoutBinding(.cameraOverlay, \.shape),
                                              items: [(.circle, "Circle"), (.roundRect, "Square")]).frame(width: 130) }
-            ToggleRow(label: "Mirror", on: Binding(get: { m.timeline.webcam?.mirror ?? true }, set: { v in m.edit { $0.webcam?.mirror = v } }))
-            ToggleRow(label: "Border", on: Binding(get: { m.timeline.webcam?.border ?? true }, set: { v in m.edit { $0.webcam?.border = v } }))
-            ToggleRow(label: "Auto framing", on: Binding(get: { m.timeline.webcam?.autoFrame ?? true }, set: { v in m.edit { $0.webcam?.autoFrame = v } }))
+            ToggleRow(label: "Mirror", on: layoutBinding(.cameraOverlay, \.mirror))
+            ToggleRow(label: "Border", on: layoutBinding(.cameraOverlay, \.border))
+            ToggleRow(label: "Auto framing", on: layoutBinding(.cameraOverlay, \.autoFrame))
             SliderRow(label: "Face zoom", v: Binding(get: { m.timeline.webcam?.faceZoom ?? 0.6 }, set: { v in m.edit(coalesce: true) { $0.webcam?.faceZoom = v } }), range: 0...1)
             SliderRow(label: "Face size", v: Binding(get: { m.timeline.webcam?.faceFill ?? 0.31 }, set: { v in m.edit(coalesce: true) { $0.webcam?.faceFill = v } }), range: 0.2...0.5)
         }.card()
