@@ -45,7 +45,8 @@ public enum Director {
         let (cursor, clicks) = CursorPipeline.run(events: input.events, taps: t.overlays.taps, st: t.cursor, tm: tm, src: src)
         let size = SIMD2(Double(src.width), Double(src.height))
         let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size, outDur: tm.outputDuration, loop: t.cursor.loop)
-        let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad, outDur: tm.outputDuration)
+        let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad,
+                                             outDur: tm.outputDuration, clicks: clicks)
         let layoutSpans = LayoutSolver.spans(t, tm, hasWebcam: t.webcam != nil)
         let layout = LayoutSolver.solve(t, spans: layoutSpans.spans, fallback: layoutSpans.fallback, src: size,
                                         webcamAspect: Double(input.webcamAspect), placement: placement, outDur: tm.outputDuration)

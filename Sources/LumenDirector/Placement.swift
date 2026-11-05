@@ -14,7 +14,7 @@ enum WebcamPlacement {
     }
 
     static func solve(_ tl: Timeline, tm: TimeMap, cam: CameraTrack, cursor: CursorTrack, src: SIMD2<Double>,
-                      vad: [ClosedRange<Double>], outDur: Double) -> PlacementTrack {
+                      vad: [ClosedRange<Double>], outDur: Double, clicks: [ClickFX] = []) -> PlacementTrack {
         guard tl.webcam != nil else { return PlacementTrack() }
         let s = tl.layoutSettings.cameraOverlay
         let a = tl.style.aspectRatio, sa = src.x / max(src.y, 1)
@@ -29,14 +29,24 @@ enum WebcamPlacement {
         let rects = cand.map { LayoutResolver.bubbleRect(corner: $0, size: s.size, aspect: a) }
         let mx = s.avoidMargin / gridRate, my = mx * a
 
-        /// Cursor in canvas-normalized space through the live camera; z = cursor opacity.
-        func cursorCanvas(_ t: Double) -> SIMD3<Double>? {
-            guard !cursor.x.isEmpty, !cam.nx.isEmpty else { return nil }
-            let i = min(max(Int(t * gridRate), 0), cursor.x.count - 1), ci = min(i, cam.nx.count - 1)
+        /// Transform recorded screen pixels through the zoom at a chosen
+        /// output timestamp. Use this for both live cursor and future clicks,
+        /// rather than comparing source pixels with a canvas-space bubble.
+        func canvasPoint(_ x: Double, _ y: Double, at t: Double, opacity: Double = 1) -> SIMD3<Double>? {
+            guard !cam.nx.isEmpty, !cam.lz.isEmpty else { return nil }
+            let ci = min(max(Int(t * gridRate), 0), min(cam.nx.count, cam.lz.count) - 1)
             let z = exp(Double(cam.lz[ci])), vw = src.x / z, vh = src.y / z
             let cx = Double(cam.nx[ci]) * src.x, cy = Double(cam.ny[ci]) * src.y
-            let nx = (Double(cursor.x[i]) - (cx - vw / 2)) / vw, ny = (Double(cursor.y[i]) - (cy - vh / 2)) / vh
-            return SIMD3(content.x + nx * content.z, content.y + ny * content.w, Double(cursor.opacity[i]))
+            let nx = (x - (cx - vw / 2)) / vw, ny = (y - (cy - vh / 2)) / vh
+            return SIMD3(content.x + nx * content.z, content.y + ny * content.w, opacity)
+        }
+
+        /// Cursor in canvas-normalized space through the live camera; z = cursor opacity.
+        func cursorCanvas(_ t: Double) -> SIMD3<Double>? {
+            guard !cursor.x.isEmpty else { return nil }
+            let i = min(max(Int(t * gridRate), 0), min(cursor.x.count, cursor.y.count, cursor.opacity.count) - 1)
+            return canvasPoint(Double(cursor.x[i]), Double(cursor.y[i]), at: t,
+                               opacity: Double(cursor.opacity[i]))
         }
         func inside(_ r: SIMD4<Double>, _ p: SIMD3<Double>, _ ex: Double, _ ey: Double) -> Bool {
             p.x >= r.x - ex && p.x <= r.x + r.z + ex && p.y >= r.y - ey && p.y <= r.y + r.w + ey
@@ -51,17 +61,47 @@ enum WebcamPlacement {
             return false
         }
 
+        // Offline analysis knows future click positions. Anticipate them
+        // before the click is hidden by a camera overlay. Each position is
+        // resolved at its original event timestamp under that frame's zoom.
+        let futureClicks = clicks.sorted { $0.t < $1.t }.compactMap { click -> (Double, SIMD3<Double>)? in
+            guard click.t >= 0, click.t <= outDur,
+                  let p = canvasPoint(Double(click.x), Double(click.y), at: click.t) else { return nil }
+            return (click.t, p)
+        }
+        let clickLead = 0.8      // enough time for the critically damped layout to settle
+        let clickTrail = 0.12    // prevent a new bubble from obscuring a recent click
+        var clickStart = 0
         var cur = 0, badSince: Double? = nil, lastSwitch = -10.0, vis = 1.0, lastVoice = -10.0
         var corner = [UInt8](repeating: 0, count: n), visible = [Float](repeating: 1, count: n)
         for i in 0..<n {
             let t = Double(i) * dt
             if voice[i] { lastVoice = t }
+            while clickStart < futureClicks.count && futureClicks[clickStart].0 < t - clickTrail {
+                clickStart += 1
+            }
+            func hidesClick(_ k: Int) -> Bool {
+                guard s.avoidCursor else { return false }
+                var j = clickStart
+                while j < futureClicks.count && futureClicks[j].0 <= t + clickLead {
+                    if inside(rects[k], futureClicks[j].1, mx, my) { return true }
+                    j += 1
+                }
+                return false
+            }
             let isNear = near(cur, t), isBehind = behind(cur, t)
             if isNear { if badSince == nil { badSince = t } } else { badSince = nil }
-            let dwell = (isBehind && s.behindFace == .move) ? 0.25 : s.snapDwell        // hysteresis: only move after a real dwell
-            if let b = badSince, t - b >= dwell, t - lastSwitch >= 0.8 {
+            let dwell = (isBehind && s.behindFace == .move) ? 0.25 : s.snapDwell
+            let predictedOcclusion = hidesClick(cur)
+            // Clicks are not ordinary cursor wiggles. Move proactively so the
+            // 120Hz layout spring can settle before a quick click or tap.
+            let shouldMove = predictedOcclusion || (badSince.map { t - $0 >= dwell } ?? false)
+            if shouldMove && t - lastSwitch >= 0.8 {
                 var best = cur
-                for k in 0..<4 where k != cur && !near(k, t) { best = k; break }
+                for k in 0..<4 where k != cur && !hidesClick(k) && !near(k, t) {
+                    best = k
+                    break
+                }
                 if best != cur { cur = best; lastSwitch = t; badSince = nil }
             }
             var target = 1.0
