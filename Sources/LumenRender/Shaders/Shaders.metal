@@ -325,3 +325,11 @@ fragment float4 resolveFS(VO in [[stage_in]], constant ResU &u [[buffer(0)]],
     float n = rnd(g, u.seed) + rnd(g, u.seed + 1u) - 1.0;
     return float4(clamp(c + n / u.levels, 0.0, 1.0), 1.0);
 }
+
+// Premultiplied text sprite rasterized by CoreText on the CPU once per content/style.
+// The Metal pass is shared by the editor preview and offline export.
+struct TextSpriteU { float opacity; };
+fragment float4 textSpriteFS(VO in [[stage_in]], constant TextSpriteU &u [[buffer(0)]],
+                            texture2d<float> image [[texture(0)]]) {
+    return image.sample(linClamp, in.q) * clamp(u.opacity, 0.0, 1.0);
+}
