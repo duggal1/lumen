@@ -21,5 +21,5 @@ import LumenRender
 @Test func backdropBlurStrengthIsMonotonicAsZoomIncreases() {
     let scales: [Float] = [1, 1.05, 1.15, 1.5, 2, 3, 6]
     let levels = scales.map { BackdropBlur.mipLevel(enabled: true, cameraScale: $0) }
-    #expect(zip(levels, levels.dropFirst()).allSatisfy { $0 <= $1 })
+    #expect(zip(levels, levels.dropFirst()).allSatisfy { pair in pair.0 <= pair.1 })
 }
