@@ -50,3 +50,20 @@ import LumenExport
         #expect(options.destinationURL() == nil)
     }
 }
+
+@Test func proResForcesMovContainerAndHighRatesReachThePreset() {
+    let source = SourceInfo(width: 3840, height: 2160, fps: 60, duration: 5,
+                            backingScale: 2, originX: 0, originY: 0)
+    var options = ExportSettings()
+    options.container = .mp4
+    options.codec = .prores
+    options.resolution = .ultraHD
+    options.frameRate = .f240
+    options.filename = "pro demo"
+    options.folder = "/tmp"
+    #expect(options.resolvedContainer == .mov)
+    #expect(options.destinationURL()?.lastPathComponent == "pro demo.mov")
+    #expect(options.preset(source: source, aspect: 16.0 / 9).fps == 240)
+    options.frameRate = .f120
+    #expect(options.preset(source: source, aspect: 16.0 / 9).fps == 120)
+}
