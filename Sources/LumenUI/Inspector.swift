@@ -146,6 +146,8 @@ struct Inspector: View {
             VStack(spacing: 0) {
                 ToggleRow(label: "Hide when idle", on: Binding(get: { m.timeline.cursor.idleHide != nil }, set: { v in m.edit { $0.cursor.idleHide = v ? 2.0 : nil } }))
                 ToggleRow(label: "Click ring", on: Binding(get: { m.timeline.cursor.clickRing != nil }, set: { v in m.edit { $0.cursor.clickRing = v ? 0.45 : nil } }))
+                ToggleRow(label: "Constant size", on: m.bind(\.cursor.constantSize))
+                ToggleRow(label: "Loop position", on: Binding(get: { m.timeline.cursor.loop != nil }, set: { v in m.edit { $0.cursor.loop = v ? 1.2 : nil } }))
                 SliderRow(label: "Press scale", v: m.bind(\.cursor.pressScale), range: 0.7...1)
                 SliderRow(label: "Zoom comp.", v: m.bind(\.cursor.zoomCompensation), range: 0...1)
             }.card()
