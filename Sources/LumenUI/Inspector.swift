@@ -307,7 +307,16 @@ struct Inspector: View {
         let m = model
         return VStack(spacing: 24) {
             VStack(spacing: 0) {
+                Row(label: "Microphone") {
+                    LDropdown(sel: m.bind(\.audio.micMode),
+                              options: MicMode.allCases.map { ($0, $0.rawValue.capitalized, "mic") })
+                        .frame(width: 138)
+                }
                 ToggleRow(label: "Clean mic", on: m.bind(\.audio.micClean))
+                SliderRow(label: "Mic level", v: m.bind(\.audio.micGainDb), range: -18...12,
+                          fmt: { "\(Int($0)) dB" })
+                SliderRow(label: "System level", v: m.bind(\.audio.systemGainDb), range: -24...6,
+                          fmt: { "\(Int($0)) dB" })
                 Row(label: "Voice profile") {
                     LSegmented(sel: m.bind(\.audio.voiceProfile),
                                items: [(.natural, "Natural"), (.studio, "Studio")]).frame(width: 156)
@@ -330,6 +339,25 @@ struct Inspector: View {
             }.card()
             VStack(spacing: 0) {
                 MusicPicker(model: m)
+                Row(label: "Voice-over") {
+                    LButton(title: "Import…", icon: "waveform") { m.importVoiceover() }
+                }
+                ForEach(m.timeline.audio.lanes.filter { $0.role == .voiceover }) { lane in
+                    Row(label: (lane.variant ?? "Voice") + " · " + (lane.path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Recorded")) {
+                        HStack(spacing: Space.s1) {
+                            LButton(title: lane.mute ? "Unmute" : "Mute", kind: .quiet) {
+                                m.edit { tl in
+                                    if let i = tl.audio.lanes.firstIndex(where: { $0.id == lane.id }) {
+                                        tl.audio.lanes[i].mute.toggle()
+                                    }
+                                }
+                            }
+                            LButton(title: "Remove", icon: "trash", kind: .quiet) {
+                                m.edit { tl in tl.audio.lanes.removeAll { $0.id == lane.id } }
+                            }
+                        }
+                    }
+                }
                 if m.timeline.audio.musicPath != nil {
                     SliderRow(label: "Music level", v: m.bind(\.audio.musicGainDb), range: -30...(-6), fmt: { "\(Int($0)) dB" })
                     Row(label: "Remove music") { LButton(title: "Remove", icon: "trash", kind: .quiet) { m.edit { $0.audio.musicPath = nil } } }
@@ -342,7 +370,8 @@ struct Inspector: View {
 
     private var webcam: some View {
         let m = model
-        return VStack(spacing: 0) {
+        return VStack(spacing: 24) {
+            VStack(spacing: 0) {
             Row(label: "Corner") { LDropdown(sel: layoutBinding(.cameraOverlay, \.corner),
                 options: WebcamLayout.Corner.allCases.map { ($0, $0.rawValue, "rectangle.inset.filled") }).frame(width: 130) }
             SliderRow(label: "Size", v: layoutBinding(.cameraOverlay, \.size), range: 0.1...0.4)
@@ -382,7 +411,8 @@ struct Inspector: View {
             }
             Text("4K output increases pixel dimensions; it cannot restore detail the camera never captured.")
                 .font(AppType.caption).foregroundStyle(Tok.text2).frame(maxWidth: .infinity, alignment: .leading)
-        }.card()
+            }.card()
+        }
     }
 
     private var export: some View { ExportInspector(model: model) }
