@@ -118,11 +118,8 @@ struct ExportInspector: View {
                 }
             case .running(let fraction):
                 progress(fraction)
-                HStack {
-                    Text(String(format: "%.1f s elapsed", model.exportElapsed))
-                    Spacer(minLength: 0)
-                    Text(model.exportETA.map { "\(Int($0.rounded())) s left" } ?? "Estimating")
-                }.font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                Text(String(format: "%.1f s elapsed", model.exportElapsed))
+                    .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
                 LButton(title: "Cancel", kind: .quiet) { model.cancelExport() }
             case .done(let url):
                 Text("Saved \(url.lastPathComponent)").font(AppType.caption).foregroundStyle(Tok.text2)
@@ -147,15 +144,18 @@ struct ExportInspector: View {
     }
 
     private func progress(_ value: Double) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well)
-                RoundedRectangle(cornerRadius: Radius.field).fill(Tok.accentFill)
-                    .frame(width: max(0, geo.size.width * min(max(value, 0), 1)))
-                Text("\(Int(value * 100))%").font(AppType.label.monospacedDigit())
-                    .foregroundStyle(Tok.text).padding(.horizontal, Space.s3)
+        VStack(alignment: .leading, spacing: Space.s2) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(Int(value * 100))%")
+                    .font(AppType.metric).foregroundStyle(Tok.text)
+                Spacer(minLength: Space.s2)
+                Text(model.exportETA.map { "\(Int($0.rounded())) s left" } ?? "Estimating")
+                    .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
             }
-        }.frame(height: 40).accessibilityLabel("Export progress").accessibilityValue("\(Int(value * 100)) percent")
+            PixelProgress(value: value)
+                .accessibilityLabel("Export progress")
+                .accessibilityValue("\(Int(value * 100)) percent")
+        }
     }
 }
 
