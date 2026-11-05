@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import LumenProject
+import LumenCore
 import LumenDirector
 import LumenAudio
 
