@@ -96,6 +96,7 @@ public actor RecordingSession {
     private var engine: CaptureEngine?
     private var input: InputRecorder?
     private var webcam: WebcamRecorder?
+    private var extraMicrophones: [ExtraMicrophoneRecorder] = []
     private var bundle: ProjectBundle?
     private var cfg: RecordingConfig?
     private var unit = EventTimeUnit.machTicks
@@ -123,6 +124,12 @@ public actor RecordingSession {
             input = i
         }
         if config.webcamDeviceID != nil { webcam = try WebcamRecorder(url: b.webcamURL, deviceID: config.webcamDeviceID) }
+        // Device IDs are unique and checked before recording starts; never
+        // quietly substitute the system default if a requested device vanished.
+        extraMicrophones = try Array(Set(config.additionalMicDeviceIDs))
+            .sorted().enumerated().map { index, id in
+                try ExtraMicrophoneRecorder(deviceID: id, file: "mic-extra-\(index + 1).caf", in: b)
+            }
     }
 
     public func start() async throws {
@@ -130,8 +137,16 @@ public actor RecordingSession {
         activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled, .idleSystemSleepDisabled],
                                                          reason: "Lumen recording")
         try await MainActor.run { try input.start() }
+        for recorder in extraMicrophones { recorder.start() }
         webcam?.start()
-        try await engine.start()
+        do {
+            try await engine.start()
+        } catch {
+            for recorder in extraMicrophones { await recorder.stop() }
+            await webcam?.stop()
+            await input.stop()
+            throw error
+        }
     }
 
     public func stats() -> CaptureStats {
@@ -144,6 +159,8 @@ public actor RecordingSession {
         defer { if let a = activity { ProcessInfo.processInfo.endActivity(a) } }
         await input.stop()
         await webcam?.stop()
+        // Always close device files, even if screen encoding fails.
+        for recorder in extraMicrophones { await recorder.stop() }
         try await engine.stop()
         let origin = engine.firstPTS ?? 0
         info.duration = max(engine.lastPTS - origin, 0)
@@ -153,6 +170,7 @@ public actor RecordingSession {
         if let t = engine.mic?.first.withLock({ $0 }) { meta.mic = TrackMeta(file: "mic.caf", startHostSeconds: t) }
         if let t = engine.system?.first.withLock({ $0 }) { meta.system = TrackMeta(file: "system.caf", startHostSeconds: t) }
         if let t = webcam?.first.withLock({ $0 }) { meta.webcam = TrackMeta(file: "webcam.mov", startHostSeconds: t) }
+        meta.additionalMicrophones = extraMicrophones.compactMap(\.track)
         var tl = Timeline(duration: info.duration)
         if meta.webcam != nil { tl.webcam = WebcamLayout() }
         try b.save(ProjectFile(meta: meta, timeline: tl))
