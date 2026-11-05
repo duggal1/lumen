@@ -167,8 +167,8 @@ public final class Renderer: @unchecked Sendable {
     private func loadCameraBackgroundIfNeeded(_ path: String?) {
         guard let path, !path.isEmpty else { cameraBackgroundID = ""; cameraBackground = nil; return }
         let url = URL(fileURLWithPath: path)
-        let version = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))
-            ?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+        let version = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
         let id = "\(url.path)#\(version)"
         guard id != cameraBackgroundID else { return }
         cameraBackgroundID = id
