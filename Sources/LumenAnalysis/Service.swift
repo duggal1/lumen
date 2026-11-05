@@ -117,7 +117,10 @@ public actor AnalysisService {
     }
 
     private func ocr(_ r: AnalysisRequest) async -> ([OCRDetection], String?) {
-        guard r.privacy.enabled, r.privacy.autoDetect, ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else { return ([], nil) }
+        guard r.privacy.enabled, r.privacy.autoDetect else { return ([], nil) }
+        guard ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else {
+            return ([], "Automatic text scanning is disabled by LUMEN_NO_OCR.")
+        }
         let params = OCRParameters(salt: r.projectSalt, patterns: r.privacy.customPatterns,
                                    entropyThreshold: r.privacy.entropyThreshold, fps: 2)
         let (detections, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "sensitive-text", version: 1,
