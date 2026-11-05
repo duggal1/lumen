@@ -12,6 +12,18 @@ staging="$(mktemp -d "$PWD/.build/lumen-package.XXXXXX")"
 trap 'rm -rf "$staging"; rmdir "$lock"' EXIT
 swift build -c "$config"
 bin_dir="$(swift build -c "$config" --show-bin-path)"
+# Older Xcode toolchains copy Shaders.metal without compiling it. Build the
+# metallib here so the packaged app never depends on runtime compilation.
+for bundle in "$bin_dir/"*.bundle; do
+    [ -d "$bundle" ] || continue
+    resources="$bundle/Contents/Resources"
+    if [ -f "$resources/Shaders.metal" ] && [ ! -f "$resources/default.metallib" ]; then
+        scratch="$(mktemp -d)"
+        xcrun -sdk macosx metal -c "$resources/Shaders.metal" -o "$scratch/Shaders.air"
+        xcrun -sdk macosx metallib "$scratch/Shaders.air" -o "$resources/default.metallib"
+        rm -rf "$scratch"
+    fi
+done
 destination="$PWD/.build/Lumen.app"
 app="$staging/Lumen.app"
 if pgrep -x Lumen >/dev/null; then
