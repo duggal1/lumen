@@ -119,7 +119,9 @@ public final class AudioMixer: @unchecked Sendable {
                            mode: plan.micMode)
         if let v = voice[key] { return v }
         let regions = VAD.regions(samples)
-        let useWPE = plan.dereverb > 0.01
+        // WPE models speech reverberation. On unvoiced material (e.g. loopback
+        // tones), it can mistake the sustained signal for a room tail and erase it.
+        let useWPE = plan.dereverb > 0.01 && !regions.isEmpty
         let st = stageA(samples, index: micIndex, needWPE: useWPE)
         let base = useWPE ? (st.wpe ?? st.hp) : st.hp
         var x: [Float]
