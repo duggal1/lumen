@@ -111,6 +111,50 @@ import LumenExport
         return Data(bytes: CVPixelBufferGetBaseAddress(buffer)!, count: CVPixelBufferGetDataSize(buffer))
     }
     #expect(pixels(a) == pixels(b))
+
+    // Security regression: changes must affect actual rendered pixels. Each
+    // independent mask must cover its own source region before export.
+    var privacy = derived
+    privacy.overlays.masks = [
+        Mask(start: 0, end: 1, mode: .solid,
+             keys: [MaskKey(t: 0, x: 110, y: 58, w: 58, h: 28)], padding: 0),
+        Mask(start: 0, end: 1, mode: .solid,
+             keys: [MaskKey(t: 0, x: 220, y: 100, w: 50, h: 38)], padding: 0)
+    ]
+    func blue(_ buffer: CVPixelBuffer, sourcePoint: SIMD2<Double>,
+              state: FrameState, style: Style) -> UInt8 {
+        let geometry = Geometry(canvas: SIMD2(320, 180), src: SIMD2(320, 180), style: style)
+        let canvas = geometry.toCanvas(sourcePoint,
+                                       cam: SIMD2(Double(state.cameraCenter.x), Double(state.cameraCenter.y)),
+                                       scale: Double(state.cameraScale))
+        let x = min(max(Int(canvas.x), 0), 319)
+        let y = min(max(Int(canvas.y), 0), 179)
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let address = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+        return address[y * CVPixelBufferGetBytesPerRow(buffer) + x * 4]
+    }
+    let protected = try await FrameImage.render(renderer: renderer, session: session, timeline: privacy,
+                                                 t: 0.25, canvas: SIMD2(320, 180))
+    #expect(blue(protected, sourcePoint: SIMD2(139, 72), state: privacy.evaluate(at: 0.25),
+                 style: privacy.style) < 70)
+    #expect(blue(protected, sourcePoint: SIMD2(244, 118), state: privacy.evaluate(at: 0.25),
+                 style: privacy.style) < 70)
+    #expect(blue(a, sourcePoint: SIMD2(139, 72), state: derived.evaluate(at: 0.25),
+                 style: derived.style) > 110)
+
+    // The masks are SOURCE-anchored, so even a changing camera zoom cannot
+    // expose their original pixels.
+    var zoomProtected = privacy
+    zoomProtected.camera.autoZoom = false
+    zoomProtected.zoom = [ZoomSegment(start: 0, end: 1, scale: 2,
+                                      focus: .fixed(x: 0.5, y: 0.5), origin: .manual)]
+    zoomProtected = session.derive(zoomProtected, revision: 11)
+    let zoomFrame = try await FrameImage.render(renderer: renderer, session: session, timeline: zoomProtected,
+                                                t: 0.65, canvas: SIMD2(320, 180))
+    #expect(blue(zoomFrame, sourcePoint: SIMD2(139, 72), state: zoomProtected.evaluate(at: 0.65),
+                 style: zoomProtected.style) < 70)
+
     var patterned = derived
     patterned.style.padding = 0.2
     patterned.style.contentScale = 0.5
