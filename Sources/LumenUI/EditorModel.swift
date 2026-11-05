@@ -51,6 +51,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     var privacyScanError: String?
     private var privacyAnalysisComplete = true
     var focusEditing = false
+    var maskEditing = false
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
     var duration: Double { timeline.timeMap.outputDuration }
@@ -204,6 +205,28 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     func tick(_ t: Double) { playhead = t; if clock.playing, t >= duration - 0.001 { pause() } }
 
     // MARK: Zoom segments
+
+    /// A manual region is stored in SOURCE pixels and SOURCE time.
+    /// Its default lifetime runs from the current playhead to the recording
+    /// end, not a static canvas position; auto zoom never exposes it.
+    func addManualMask(sourceRect rect: CGRect) {
+        guard let derived = timeline.derived, rect.width >= 4, rect.height >= 4 else { return }
+        let sourceTime = timeline.timeMap.source(atOutput: playhead)
+        let endTime = timeline.timeMap.trimEnd
+        guard sourceTime + 0.01 < endTime else { return }
+        let width = derived.sourceSize.x, height = derived.sourceSize.y
+        let left = min(max(Double(rect.minX), 0), width)
+        let top = min(max(Double(rect.minY), 0), height)
+        let right = min(max(Double(rect.maxX), 0), width)
+        let bottom = min(max(Double(rect.maxY), 0), height)
+        guard right - left >= 4, bottom - top >= 4 else { return }
+        let mask = Mask(start: sourceTime, end: endTime,
+                        mode: timeline.overlays.privacy.mode,
+                        keys: [MaskKey(t: sourceTime, x: left, y: top,
+                                       w: right - left, h: bottom - top)],
+                        origin: .manual, approved: true, padding: 0)
+        edit { $0.overlays.masks.append(mask) }
+    }
 
     func addZoom() {
         let s = playhead, e = min(s + 2.5, duration)
