@@ -67,6 +67,15 @@ struct Analyze: AsyncParsableCommand {
         summary["eventsInsideVideo"] = withinVideo
         summary["clickTimes"] = eventTimes
         summary["events"] = eventCounts
+        let accuracy = AccuracyReport.measure(tl, events: ev)
+        summary["zoomAccuracy"] = [
+            "clicks": accuracy.clicks,
+            "zoomedClicks": accuracy.zoomedClicks,
+            "insideMargin": accuracy.insideMargin,
+            "medianExcessError": accuracy.medianExcessError,
+            "maxExcessError": accuracy.maxExcessError,
+            "medianArrival": accuracy.medianArrival
+        ] as [String: Any]
         summary["zoomSegments"] = zoomItems
         summary["speedRamps"] = ramps
         summary["voiceRegions"] = s.input.vad.count
