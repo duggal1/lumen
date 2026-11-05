@@ -271,8 +271,24 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         return pixels / throughput
     }
 
-    func exportVideo() {
-        let settings = exportSettings
+    func exportVideo() { startExport(settings: exportSettings, clipboard: false) }
+
+    /// The Clipboard preset: a short 1080p H.264 file placed on the pasteboard as a file URL.
+    func exportToClipboard() {
+        var quick = exportSettings
+        quick.kind = .video
+        quick.resolution = .p1080
+        quick.codec = .h264
+        quick.container = .mp4
+        quick.quality = .high
+        quick.filename = "Lumen clip"
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("LumenClipboard", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        quick.folder = directory.path
+        startExport(settings: quick, clipboard: true)
+    }
+
+    private func startExport(settings: ExportSettings, clipboard: Bool) {
         guard let url = settings.destinationURL() else {
             exportState = .failed("Enter a valid filename.")
             return
@@ -284,7 +300,8 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             return
         }
         let preset = settings.preset(source: session.meta.source, aspect: timeline.style.aspectRatio)
-        guard ExportCapabilityMatrix.shared.supports(preset, aspect: timeline.style.aspectRatio) else {
+        if settings.kind == .video,
+           !ExportCapabilityMatrix.shared.supports(preset, aspect: timeline.style.aspectRatio) {
             exportState = .failed("This Mac cannot encode the chosen resolution, codec and frame rate.")
             return
         }
@@ -312,9 +329,13 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                 }
             }
             do {
-                try await Exporter.run(session: session, timeline: tl, preset: preset, to: url,
-                                       includeAudio: settings.includeAudio, audioBitrate: settings.audioBitrate,
-                                       progress: report)
+                if settings.kind == .gif {
+                    try await Exporter.gif(session: session, timeline: tl, to: url, progress: report)
+                } else {
+                    try await Exporter.run(session: session, timeline: tl, preset: preset, to: url,
+                                           includeAudio: settings.includeAudio, audioBitrate: settings.audioBitrate,
+                                           progress: report)
+                }
                 let elapsed = max(HostClock.now() - start, 0.001)
                 let (w, h) = settings.dimensions(source: session.meta.source, aspect: tl.style.aspectRatio)
                 let pixels = Double(w) * Double(h) * Double(preset.fps) * tl.timeMap.outputDuration
@@ -322,6 +343,11 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                 guard let self, self.activeExportID == exportID else { return }
                 self.exportElapsed = elapsed
                 self.exportETA = nil
+                if clipboard {
+                    NSPasteboard.general.clearContents()
+                    _ = NSPasteboard.general.writeObjects([url as NSURL])
+                    self.notice = "Copied to clipboard."
+                }
                 self.exportState = .done(url)
             } catch is CancellationError {
                 if self?.activeExportID == exportID { self?.exportState = .idle }
