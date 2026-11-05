@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import Metal
 import LumenProject
+import LumenCore
 @testable import LumenRender
 @testable import LumenDirector
 
@@ -26,7 +27,7 @@ import LumenProject
     #expect(a == 0)
     #expect(b == 1)
     #expect(abs(fraction - 0.5) < 0.001)
-    #expect(reader.indices(at: 9.0) == nil)
+    #expect(reader.indices(at: 9.0)?.0 == nil)
     if let device = MTLCreateSystemDefaultDevice() {
         let sample = try #require(reader.sample(at: 1.05, slot: 0, device: device))
         #expect(sample.previous.width == 2)
