@@ -107,7 +107,7 @@ public final class Renderer: @unchecked Sendable {
 
     public init() throws {
         guard let d = MTLCreateSystemDefaultDevice(), let q = d.makeCommandQueue() else { throw RenderError.noDevice }
-        let l = try d.makeDefaultLibrary(bundle: .module), f = MTLPixelFormat.rgba16Float
+        let l = try Self.library(d), f = MTLPixelFormat.rgba16Float
         device = d; queue = q; lib = l
         pBackdrop = try Self.pipe(d, l, "backdropFS", f, 0)
         pContent = try Self.pipe(d, l, "contentFS", f, 1)
@@ -119,6 +119,18 @@ public final class Renderer: @unchecked Sendable {
         CVMetalTextureCacheCreate(nil, nil, d, nil, &c)
         guard let c else { throw RenderError.noDevice }
         outCache = c
+    }
+
+    /// Prefer the metallib SwiftPM builds. Older Xcode toolchains only copy
+    /// `Shaders.metal` into the bundle, so compile it once as a fallback
+    /// instead of failing to launch.
+    private static func library(_ d: MTLDevice) throws -> MTLLibrary {
+        if let lib = try? d.makeDefaultLibrary(bundle: .module) { return lib }
+        guard let url = Bundle.module.url(forResource: "Shaders", withExtension: "metal"),
+              let source = try? String(contentsOf: url, encoding: .utf8) else {
+            throw RenderError.pipeline("Missing default.metallib and Shaders.metal")
+        }
+        return try d.makeLibrary(source: source, options: nil)
     }
 
     /// blend: 0 none, 1 premultiplied over, 2 additive
