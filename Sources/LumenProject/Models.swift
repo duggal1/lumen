@@ -231,11 +231,16 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var studioAmount = 0.65
     public var micGainDb = 0.0, systemGainDb = -3.0
     public var declick = true, declickDepthDb = -12.0
+    /// Room-tail suppression, 0...1. Applied before EQ and compression so the
+    /// compressor cannot lift the reverb back up after every phrase.
+    public var dereverb = 0.5
+    /// Auto loudness. Off makes `outputGainDb` the only master gain.
+    public var normalize = true
     public var outputGainDb = 0.0
-    public var targetLUFS = -14.0
+    public var targetLUFS = -16.0
     public var clickSounds = true, whooshes = true, keySounds = false
     public var clickTone: ClickSound = .mouse
-    public var sfxGainDb = -20.0
+    public var sfxGainDb = -9.0
     public var musicPath: String?
     public var musicGainDb = -18.0
     public var duckDepthDb = -14.0, duckAttack = 0.05, duckRelease = 0.4
@@ -245,6 +250,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var lanes: [AudioLane] = []
     enum CodingKeys: String, CodingKey {
         case outputGainDb, micClean, micMode, voiceProfile, studioAmount, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFS, clickSounds, whooshes, keySounds, clickTone, sfxGainDb, musicPath
+        case dereverb, normalize
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
     public init() {}
@@ -254,6 +260,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         micClean = c.opt(.micClean, micClean); micMode = c.opt(.micMode, micMode)
         voiceProfile = c.opt(.voiceProfile, voiceProfile); studioAmount = c.opt(.studioAmount, studioAmount)
         micGainDb = c.opt(.micGainDb, micGainDb)
+        dereverb = c.opt(.dereverb, dereverb); normalize = c.opt(.normalize, normalize)
         systemGainDb = c.opt(.systemGainDb, systemGainDb); declick = c.opt(.declick, declick); declickDepthDb = c.opt(.declickDepthDb, declickDepthDb)
         targetLUFS = c.opt(.targetLUFS, targetLUFS); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = c.opt(.whooshes, whooshes)
         keySounds = c.opt(.keySounds, keySounds); clickTone = c.opt(.clickTone, clickTone); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)

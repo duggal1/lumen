@@ -53,7 +53,7 @@ public final class AudioMixer: @unchecked Sendable {
     private let extraMicrophones: [RecordedMicrophone]
     private let bank = SFXBank()
     private let lock = NSLock()
-    private struct VoiceKey: Equatable { var clean: Bool; var profile: VoiceProfile; var amount: Double }
+    private struct VoiceKey: Equatable { var clean: Bool; var profile: VoiceProfile; var amount: Double; var room: Int }
     private var voice: (key: VoiceKey, x: [Float])?
     private var extraVoices: [Int: (key: VoiceKey, x: [Float])] = [:]
     private var music: MusicCache?
@@ -70,7 +70,8 @@ public final class AudioMixer: @unchecked Sendable {
 
     private func voiceKey(_ plan: AudioPlan) -> VoiceKey {
         VoiceKey(clean: plan.micClean, profile: plan.voiceProfile,
-                 amount: max(0, min(plan.studioAmount, 1)))
+                 amount: max(0, min(plan.studioAmount, 1)),
+                 room: Int(max(0, min(plan.dereverb, 1)) * 20))
     }
 
     /// Every microphone is enhanced independently, never mixed before
@@ -78,15 +79,29 @@ public final class AudioMixer: @unchecked Sendable {
     /// quieter presenter's voice when a louder loopback source is active.
     private func processVoice(_ samples: [Float], plan: AudioPlan, key: VoiceKey) -> [Float] {
         let fs = AudioIO.fs
-        var hp = Biquad.highpass(80, fs: fs), eq = Biquad.peaking(3000, q: 1, db: 2, fs: fs)
-        var x = samples.map { Float(hp.run(Double($0))) }
+        let regions = VAD.regions(samples)
+        // The room tail is removed BEFORE EQ and compression. Compressing a
+        // reverberant signal lifts the tail after every phrase, which is why
+        // the old chain made a small room sound louder, not quieter.
+        var x = Cascade.apply(samples, Cascade.hp4(80, fs: fs))
         if key.clean { x = denoiser.process(x) }
+        let room = Double(key.room) / 20
+        if room > 0.01 {
+            x = LateReverbSuppressor(amount: room, vad: regions).process(x)
+        }
+        var eq = Biquad.peaking(3000, q: 1, db: 2, fs: fs)
         x = x.map { Float(eq.run(Double($0))) }
         if key.profile == .studio {
             x = StudioVoice.process(x, amount: key.amount, fs: fs)
-        } else {
-            x = Compressor().process(x, fs: fs)
+            x = StudioPolish.deEss(x, fs: fs, amount: key.amount)
+            x = StudioPolish.level(x, vad: regions, fs: fs, range: 3 + 6 * key.amount)
         }
+        x = Expander().process(x, fs: fs)
+        var comp = Compressor()
+        comp.thresholdDb = key.profile == .studio ? -19 : -20
+        comp.ratio = key.profile == .studio ? 2.2 : 3.0
+        comp.release = key.profile == .studio ? 0.24 : 0.12
+        x = comp.process(x, fs: fs)
         let lu = Loudness.integrated([x])
         if lu > -69 {
             let target = key.profile == .studio ? -14.5 : Self.voiceRefLUFS
@@ -320,13 +335,18 @@ public final class AudioMixer: @unchecked Sendable {
 
         var ch = [L, R]
         var lufs = Loudness.integrated(ch)
-        // Only normalize when there is real program material; sparse clicks alone must not be pumped to -14 LUFS.
-        if hasProgram, lufs > -69 {
-            let g = Float(pow(10, clamp(a.targetLUFS - lufs, -30, 30) / 20))
-            ch = ch.map { vDSP.multiply(g, $0) }
+        // Auto loudness sets the overall level; `outputGainDb` offsets it.
+        // When normalization is off, `outputGainDb` is the ONLY master gain,
+        // so a +6 dB voice-level move is exactly +6 LU at the output. Sparse
+        // clicks alone are never pumped up to the programme target.
+        let offsetDb: Double
+        if a.normalize, hasProgram, lufs > -69 {
+            offsetDb = a.targetLUFS - lufs + a.outputGainDb
+        } else {
+            offsetDb = a.outputGainDb
         }
-        let outputGain = Float(pow(10, clamp(a.outputGainDb, -60, 12) / 20))
-        ch = ch.map { vDSP.multiply(outputGain, $0) }
+        let master = Float(pow(10, clamp(offsetDb, -36, 30) / 20))
+        ch = ch.map { vDSP.multiply(master, $0) }
         Limiter.apply(&ch, ceiling: Float(pow(10, -1.5 / 20)))
         var tp = Loudness.truePeakDb(ch)
         if tp > -1.0 {
@@ -341,14 +361,37 @@ public final class AudioMixer: @unchecked Sendable {
 
 /// Preview playback of a pre-mixed buffer, started in lock-step with the host clock. `load` is safe from any thread.
 public final class PreviewAudioPlayer: @unchecked Sendable {
-    private let engine = AVAudioEngine(), node = AVAudioPlayerNode()
+    private let engine = AVAudioEngine(), node = AVAudioPlayerNode(), previewNode = AVAudioPlayerNode()
     private struct Buffer: @unchecked Sendable { let value: AVAudioPCMBuffer }
     private let mixed = OSAllocatedUnfairLock<(audio: MixedAudio?, buffer: Buffer?)>(initialState: (nil, nil))
     private let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 2, interleaved: false)!
 
     public init() {
-        engine.attach(node)
+        engine.attach(node); engine.attach(previewNode)
         engine.connect(node, to: engine.mainMixerNode, format: fmt)
+        engine.connect(previewNode, to: engine.mainMixerNode, format: fmt)
+    }
+
+    /// Hardware output latency (Bluetooth sinks are large). Used to schedule
+    /// audio so it is HEARD on the same host instant as the video frame.
+    public var outputLatency: Double { engine.isRunning ? engine.outputNode.presentationLatency : 0 }
+
+    /// Plays the selected click at the current click level without touching
+    /// the timeline playback node, so the preview never desyncs transport.
+    public func previewClick(_ plan: AudioPlan) {
+        let (samples, bankGain) = SFXBank().render(.click, clickTone: plan.clickTone)
+        guard !samples.isEmpty,
+              let buffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
+        let amp = Float(pow(10, (plan.sfxGainDb + bankGain) / 20))
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        for i in samples.indices {
+            buffer.floatChannelData![0][i] = samples[i] * amp
+            buffer.floatChannelData![1][i] = samples[i] * amp
+        }
+        if !engine.isRunning { try? engine.start() }
+        previewNode.stop()
+        previewNode.scheduleBuffer(buffer, at: nil, options: .interrupts)
+        previewNode.play()
     }
 
     public func load(_ m: MixedAudio?) {
@@ -382,9 +425,13 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
         }
         if !engine.isRunning { do { try engine.start() } catch { return max(h, HostClock.now() + 0.03) } }
         node.scheduleBuffer(b, at: nil, options: .interrupts, completionHandler: nil)
-        let start = max(h, HostClock.now() + 0.03)
+        // `h` is the instant the sample must be HEARD. The device holds the
+        // buffer for `outputLatency` before it reaches the speakers, so the
+        // render clock starts that much earlier.
+        let latency = outputLatency
+        let start = max(h - latency, HostClock.now() + 0.005)
         node.play(at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: start)))
-        return start
+        return max(h, start + latency)
     }
 
     public func stop() { node.stop() }

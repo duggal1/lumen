@@ -47,13 +47,32 @@ enum CursorPipeline {
             i = j
         }
 
-        // 7. glide: min-jerk retiming along each movement's own path
+        // 7. glide: min-jerk retiming along each movement's own path.
+        // Never glide while a button is held: a dragged window must stay
+        // exactly under the cursor, not trail it for cinematic smoothing.
+        var held = [Bool](repeating: false, count: n)
+        var downTime: Double? = nil
+        for e in pressEv {
+            if e.kind == .down { downTime = e.t }
+            else if e.kind == .up, let d = downTime {
+                let a = max(Int(((d - lo) * rate).rounded()) - Int(0.05 * rate), 0)
+                let b = min(Int(((e.t - lo) * rate).rounded()) + Int(0.05 * rate), n - 1)
+                if b >= a { for k in a...b { held[k] = true } }
+                downTime = nil
+            }
+        }
+        if let d = downTime {
+            let a = max(Int(((d - lo) * rate).rounded()), 0)
+            if a < n { for k in a..<n { held[k] = true } }
+        }
         if st.glide > 0 {
             var s = 0
             while s < n {
                 if !moving[s] { s += 1; continue }
                 var e = s; while e < n && moving[e] { e += 1 }
-                if e - s > Int(0.1 * rate) { glide(&X, &Y, s, e, st.glide) }
+                if e - s > Int(0.1 * rate), !(s..<e).contains(where: { held[$0] }) {
+                    glide(&X, &Y, s, e, st.glide)
+                }
                 s = e
             }
         }

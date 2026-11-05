@@ -62,7 +62,7 @@ struct LibrarySurface: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.18), value: undo?.id)
+        .animation(Motion.settle, value: undo?.id)
     }
 
     // MARK: Page bar

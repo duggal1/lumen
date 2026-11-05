@@ -28,6 +28,16 @@ final class TimelineBox: @unchecked Sendable {
     func get() -> (Timeline, Int) { s.withLock { $0 } }
 }
 
+/// Serializes replans and keeps the expensive cursor stage between edits.
+/// A newer edit cancels the awaiting task, so stale results never overwrite
+/// the user's latest change.
+actor DerivePipeline {
+    private var cache = DeriveCache()
+    func derive(_ tl: Timeline, input: DirectorInput, revision: Int) -> Timeline {
+        Director.derive(tl, input: input, revision: revision, cache: &cache)
+    }
+}
+
 struct LookPreset: Codable, Identifiable { var id: String { name }; var name: String; var style: Style; var cursor: CursorStyle; var camera: CameraParams; var audio: AudioPlan }
 
 @MainActor @Observable final class EditorModel {
@@ -35,6 +45,11 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     let session: ProjectSession, renderer: Renderer, box: TimelineBox, clock = PlaybackClock()
     private(set) var timeline: Timeline
     var playhead = 0.0
+    /// True while the clock is running. The strip reads it to choose between
+    /// display-rate playhead animation and the exact paused position.
+    var isPlaying = false
+    /// Latest measured master loudness/peak, for the audio meter.
+    var mixStats: (lufs: Double, peak: Double)?
     var selection: UUID?
     var exportState = ExportState.idle
     var exportSettings: ExportSettings
@@ -59,6 +74,8 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     private var redoStack: [Timeline] = []
     private var lastEdit = Date.distantPast
     private var revision = 1
+    private let pipeline = DerivePipeline()
+    private var published = -1.0
     private var replanTask: Task<Void, Never>?
     private var analysisTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
@@ -141,17 +158,21 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         Binding(get: { self.timeline[keyPath: kp] }, set: { v in self.edit(coalesce: true) { $0[keyPath: kp] = v } })
     }
 
-    /// Debounced 100 ms. Director runs off-main on a snapshot; a newer edit cancels this one.
+    /// No artificial debounce: a yield coalesces a burst of slider events and
+    /// the actor pipeline keeps the cursor stage warm. A newer edit cancels the
+    /// awaiting task before it can publish a stale timeline.
     private func replan() {
         replanTask?.cancel()
-        let snap = timeline, s = session; revision += 1; let rev = revision
+        let snap = timeline, s = session, pl = pipeline; revision += 1; let rev = revision
         replanTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(100))
+            await Task.yield()
             guard !Task.isCancelled else { return }
-            let out = await Task.detached(priority: .userInitiated) { s.derive(snap, revision: rev) }.value
+            let out = await pl.derive(snap, input: s.input, revision: rev)
             guard !Task.isCancelled, let self else { return }
             self.timeline = out; self.box.set(out); s.save(out); self.remix()
-            self.playhead = min(self.playhead, out.timeMap.outputDuration); self.clock.seek(self.playhead)
+            self.playhead = min(self.playhead, out.timeMap.outputDuration)
+            self.published = self.playhead
+            self.clock.seek(self.playhead)
             if self.privacyAnalysisComplete { self.privacyScanning = false }
         }
     }
@@ -171,7 +192,10 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             guard !Task.isCancelled else { return }
             await Task.detached(priority: .userInitiated) { player.load(audio) }.value
             guard !Task.isCancelled else { return }
-            if let self, self.wantsPlayback { self.play() }
+            if let self {
+                self.mixStats = audio.map { ($0.lufs, $0.truePeakDb) }
+                if self.wantsPlayback { self.play() }
+            }
         }
     }
 
@@ -180,7 +204,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     func seek(_ t: Double) {
         let wasPlaying = wantsPlayback
         playbackTask?.cancel()
-        let c = min(max(t, 0), duration); playhead = c; clock.seek(c)
+        let c = min(max(t, 0), duration); playhead = c; published = c; clock.seek(c)
         if wasPlaying { play() }
     }
     func play() {
@@ -191,18 +215,33 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             await ready?.value
             guard !Task.isCancelled, let self, self.wantsPlayback else { return }
             let t = self.playhead >= self.duration - 0.02 ? 0 : self.playhead
-            let h = self.player.play(from: t, atHostSeconds: HostClock.now() + 0.03)
-            self.clock.start(from: t, at: h, dur: self.duration)
+            // Start audio and video on the same host instant. The player
+            // subtracts the output device latency, so a Bluetooth sink does
+            // not make clicks land late.
+            let audible = HostClock.now() + max(0.05, self.player.outputLatency + 0.03)
+            // The player returns the host instant the first sample reaches the
+            // speakers (it clamps when the requested start is already past).
+            let start = self.player.play(from: t, atHostSeconds: audible)
+            self.clock.start(from: t, at: start, dur: self.duration)
+            self.isPlaying = true
         }
     }
     func pause() {
         wantsPlayback = false
         playbackTask?.cancel()
-        clock.pause(at: HostClock.now()); player.stop(); playhead = clock.time(at: HostClock.now())
+        clock.pause(at: HostClock.now()); player.stop()
+        playhead = clock.time(at: HostClock.now()); published = playhead
+        isPlaying = false
     }
     func togglePlay() { wantsPlayback ? pause() : play() }
 
-    func tick(_ t: Double) { playhead = t; if clock.playing, t >= duration - 0.001 { pause() } }
+    /// Publishing the playhead at display rate invalidates the whole editor
+    /// (including the waveform canvas) 60-120 times a second. The preview reads
+    /// the clock directly, so the inspector only needs ~12 Hz.
+    func tick(_ t: Double) {
+        if abs(t - published) >= 1.0 / 12 { playhead = t; published = t }
+        if clock.playing, t >= duration - 0.001 { pause() }
+    }
 
     // MARK: Zoom segments
 
@@ -270,6 +309,10 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         try? JSONEncoder().encode(p).write(to: Self.presetsDir.appendingPathComponent("\(name).json"))
     }
     func apply(_ p: LookPreset) { edit { $0.style = p.style; $0.cursor = p.cursor; $0.camera = p.camera; $0.audio = p.audio } }
+
+    /// Auditions the selected click at the current click level without
+    /// touching timeline playback.
+    func previewClick() { player.previewClick(timeline.audio) }
 
     func importMusic() {
         let p = NSOpenPanel(); p.allowedContentTypes = [.audio]; p.allowsMultipleSelection = false

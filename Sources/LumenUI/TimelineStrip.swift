@@ -15,7 +15,9 @@ struct TimelineStrip: View {
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0).onChanged { change($0, g.size.width) }.onEnded { _ in drag = nil })
         }
-        .frame(height: 128).background(RoundedRectangle(cornerRadius: 12).fill(Tok.surface))
+        .frame(height: 128)
+        .overlay { PlayheadLine(model: model) }
+        .background(RoundedRectangle(cornerRadius: 12).fill(Tok.surface))
         .accessibilityLabel("Timeline").accessibilityHint("Drag to seek. Drag a zoom segment to move or resize it.")
     }
 
@@ -64,7 +66,23 @@ struct TimelineStrip: View {
             }
         }
         if let d = tl.derived { for k in d.clicks { fill(CGRect(x: x(k.t) - 1, y: 84, width: 2, height: 2), Tok.text2) } }
-        fill(CGRect(x: ph.rounded() - 1, y: 4, width: 2, height: size.height - 8), Tok.text)     // playhead = white head
+    }
+
+    /// Smooth playhead line: it reads the clock at display rate, while the
+    /// heavy strip canvas (waveform + segments) redraws only at ~12 Hz.
+    private struct PlayheadLine: View {
+        let model: EditorModel
+        var body: some View {
+            let paused = model.playhead
+            TimelineView(.animation(paused: !model.isPlaying)) { _ in
+                Canvas { context, size in
+                    let t = model.isPlaying ? model.clock.time(at: HostClock.now()) : paused
+                    let x = (CGFloat(t / max(model.duration, 0.001)) * size.width).rounded()
+                    context.fill(Path(CGRect(x: x - 1, y: 4, width: 2, height: size.height - 8)),
+                                 with: .color(Tok.text), style: FillStyle(antialiased: false))
+                }
+            }.allowsHitTesting(false)
+        }
     }
 
     private func hit(_ p: CGPoint, _ w: CGFloat) -> Drag {
