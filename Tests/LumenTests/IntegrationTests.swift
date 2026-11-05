@@ -177,6 +177,20 @@ import LumenExport
                                                  t: 0.25, canvas: SIMD2(320, 180))
     #expect(pixels(titleFrame) != pixels(a))
 
+    var highlighted = derived
+    highlighted.overlays.highlights = [Highlight(start: 0, end: 1,
+        x: 110, y: 58, w: 58, h: 28, style: .dim, dim: 0.7)]
+    let highlightFrame = try await FrameImage.render(renderer: renderer, session: session,
+                                                     timeline: highlighted, t: 0.25, canvas: SIMD2(320, 180))
+    #expect(pixels(highlightFrame) != pixels(a))
+    // Highlighting must not bypass existing independent privacy masks.
+    var coveredHighlight = privacy
+    coveredHighlight.overlays.highlights = highlighted.overlays.highlights
+    let covered = try await FrameImage.render(renderer: renderer, session: session,
+                                              timeline: coveredHighlight, t: 0.25, canvas: SIMD2(320, 180))
+    #expect(blue(covered, sourcePoint: SIMD2(139, 72),
+                 state: coveredHighlight.evaluate(at: 0.25), style: coveredHighlight.style) < 70)
+
     var patterned = derived
     patterned.style.padding = 0.2
     patterned.style.contentScale = 0.5
