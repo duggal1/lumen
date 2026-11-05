@@ -45,6 +45,11 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     var exportElapsed = 0.0
     var exportETA: Double?
     var notice: String?
+    /// Protect against exporting a video whose automatic redaction analysis
+    /// has not yet been applied to the final derived timeline.
+    var privacyScanning = false
+    var privacyScanError: String?
+    private var privacyAnalysisComplete = true
     var focusEditing = false
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
@@ -111,10 +116,18 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
 
     private func analyzeInBackground(_ snapshot: Timeline) {
         analysisTask?.cancel()
+        let scansPrivacy = snapshot.overlays.privacy.enabled && snapshot.overlays.privacy.autoDetect
+        privacyScanning = scansPrivacy
+        privacyAnalysisComplete = !scansPrivacy
+        privacyScanError = nil
         let session = session
         analysisTask = Task { [weak self] in
-            await session.analyze(snapshot)
+            let result = await session.analyze(snapshot)
             guard !Task.isCancelled, let self else { return }
+            if scansPrivacy { self.privacyScanError = result.errors["ocr"] }
+            self.privacyAnalysisComplete = true
+            // The result must be applied by the Director before export
+            // is re-enabled. A completion of OCR alone is not sufficient.
             self.replan()
         }
     }
@@ -138,6 +151,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             guard !Task.isCancelled, let self else { return }
             self.timeline = out; self.box.set(out); s.save(out); self.remix()
             self.playhead = min(self.playhead, out.timeMap.outputDuration); self.clock.seek(self.playhead)
+            if self.privacyAnalysisComplete { self.privacyScanning = false }
         }
     }
 
@@ -325,6 +339,16 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     }
 
     private func startExport(settings: ExportSettings, clipboard: Bool) {
+        if timeline.overlays.privacy.enabled && timeline.overlays.privacy.autoDetect {
+            if privacyScanning {
+                exportState = .failed("Sensitive-data scanning is still running. Wait for it to finish or turn off automatic detection.")
+                return
+            }
+            if let error = privacyScanError {
+                exportState = .failed("Sensitive-data analysis failed: \(error). Review masks or turn off automatic detection before exporting.")
+                return
+            }
+        }
         guard let url = settings.destinationURL() else {
             exportState = .failed("Enter a valid filename.")
             return
