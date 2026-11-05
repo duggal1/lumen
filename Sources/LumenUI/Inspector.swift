@@ -7,7 +7,7 @@ import LumenAudio
 
 struct Inspector: View {
     let model: EditorModel
-    enum Tab: String, CaseIterable { case look = "Look", cursor = "Cursor", camera = "Camera", audio = "Audio", webcam = "Webcam", export = "Export" }
+    enum Tab: String, CaseIterable { case look = "Look", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", privacy = "Privacy", audio = "Audio", export = "Export" }
     @State private var tab = Tab.look
     @State private var presets = EditorModel.loadPresets()
     @State private var newName = ""
@@ -20,8 +20,11 @@ struct Inspector: View {
                 case .look: look
                 case .cursor: cursor
                 case .camera: camera
+                case .layout: layout
                 case .audio: audio
                 case .webcam: webcam
+                case .captions: captions
+                case .privacy: privacy
                 case .export: export
                 }
             }.padding(20)
@@ -31,7 +34,11 @@ struct Inspector: View {
     }
 
     private func icon(_ t: Tab) -> String {
-        switch t { case .look: "paintpalette"; case .cursor: "cursorarrow"; case .camera: "video"; case .audio: "waveform"; case .webcam: "person.crop.circle"; case .export: "square.and.arrow.up" }
+        switch t {
+        case .look: "paintpalette"; case .cursor: "cursorarrow"; case .camera: "video"
+        case .layout: "rectangle.3.group"; case .audio: "waveform"; case .webcam: "person.crop.circle"
+        case .captions: "captions.bubble"; case .privacy: "lock"; case .export: "square.and.arrow.up"
+        }
     }
 
     private var look: some View {
@@ -163,6 +170,134 @@ struct Inspector: View {
                 ToggleRow(label: "Focus debug", on: Binding(get: { m.zoomDebug }, set: { m.zoomDebug = $0 }))
             }.card()
         }
+    }
+
+    private var layout: some View {
+        let kind = currentLayout
+        return VStack(spacing: 24) {
+            VStack(spacing: 0) {
+                Row(label: "Layout") {
+                    LDropdown(sel: layoutKind, options: LayoutKind.allCases.map {
+                        ($0, $0 == .screenOnly ? "Screen only" : $0 == .cameraOverlay ? "Camera overlay"
+                            : $0 == .cameraFullscreen ? "Camera fullscreen" : $0 == .cameraCutout ? "Cutout" : "Split", "rectangle.3.group")
+                    }).frame(width: 150)
+                }
+                Row(label: "Camera size") {
+                    HStack(spacing: 8) {
+                        LSlider(value: layoutBinding(kind, \.size), range: 0.1...0.4, width: 100)
+                        Text("\(Int(layoutBinding(kind, \.size).wrappedValue * 100))%")
+                            .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2).frame(width: 40, alignment: .trailing)
+                    }
+                }
+                Row(label: "Corner") {
+                    LDropdown(sel: layoutBinding(kind, \.corner), options: WebcamLayout.Corner.allCases.map {
+                        ($0, $0.rawValue, "rectangle.inset.filled")
+                    }).frame(width: 130)
+                }
+                Row(label: "Shape") {
+                    LSegmented(sel: layoutBinding(kind, \.shape), items: [(.circle, "Circle"), (.roundRect, "Square")]).frame(width: 130)
+                }
+            }.card()
+            VStack(spacing: 0) {
+                ToggleRow(label: "Mirror", on: layoutBinding(kind, \.mirror))
+                ToggleRow(label: "Border", on: layoutBinding(kind, \.border))
+                ToggleRow(label: "Auto framing", on: layoutBinding(kind, \.autoFrame))
+            }.card()
+            VStack(spacing: 0) {
+                ToggleRow(label: "Avoid cursor", on: layoutBinding(kind, \.avoidCursor))
+                Row(label: "Behind face") {
+                    LSegmented(sel: layoutBinding(kind, \.behindFace), items: [(.move, "Move"), (.hide, "Hide"), (.fade, "Fade")]).frame(width: 170)
+                }
+                ToggleRow(label: "Hide on silence", on: layoutBinding(kind, \.hideOnSilence))
+            }.card()
+        }
+    }
+
+    private var captions: some View {
+        let m = model
+        return VStack(spacing: 24) {
+            VStack(spacing: 0) {
+                ToggleRow(label: "Captions", on: m.bind(\.captions.enabled))
+                Row(label: "Position") {
+                    LDropdown(sel: m.bind(\.captions.style.position), options: CaptionPosition.allCases.map {
+                        ($0, $0.rawValue.capitalized, "text.alignleft")
+                    }).frame(width: 130)
+                }
+                Row(label: "Animation") {
+                    LDropdown(sel: m.bind(\.captions.style.animation), options: CaptionAnimation.allCases.map {
+                        ($0, $0.rawValue.capitalized, "sparkles")
+                    }).frame(width: 130)
+                }
+            }.card()
+            VStack(spacing: 0) {
+                SliderRow(label: "Size", v: m.bind(\.captions.style.size), range: 0.02...0.08, fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Lines", v: maxLines, range: 1...3, fmt: { "\(Int($0))" })
+                ToggleRow(label: "Word highlight", on: m.bind(\.captions.style.wordHighlight))
+            }.card()
+            VStack(spacing: 0) {
+                Row(label: "Language") {
+                    TextField("en-US", text: locale).textFieldStyle(.plain).font(AppType.body)
+                        .padding(.horizontal, 12).frame(width: 130, height: 32)
+                        .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well))
+                        .accessibilityLabel("Caption language")
+                }
+            }.card()
+        }
+    }
+
+    private var privacy: some View {
+        let m = model
+        let detected = m.timeline.derived?.autoMasks.count ?? 0
+        return VStack(spacing: 24) {
+            VStack(spacing: 0) {
+                ToggleRow(label: "Detect sensitive data", on: m.bind(\.overlays.privacy.autoDetect))
+                Row(label: "Mask style") {
+                    LDropdown(sel: m.bind(\.overlays.privacy.mode), options: MaskMode.allCases.map {
+                        ($0, $0.rawValue.capitalized, "eye.slash")
+                    }).frame(width: 130)
+                }
+                SliderRow(label: "Padding", v: m.bind(\.overlays.privacy.padding), range: 0...24, fmt: { "\(Int($0)) px" })
+                SliderRow(label: "Sensitivity", v: m.bind(\.overlays.privacy.entropyThreshold), range: 3...4.5, fmt: { String(format: "%.1f", $0) })
+            }.card()
+            VStack(alignment: .leading, spacing: Space.s2) {
+                Text("Masks").font(AppType.title).foregroundStyle(Tok.text)
+                Text(detected == 0 ? "No sensitive text found." : "\(detected) mask\(detected == 1 ? "" : "s") follow the content through zooms.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+                Text("Manual masks and highlights are added from the timeline.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+            }.card()
+        }
+    }
+
+    // MARK: Nested bindings
+
+    private var currentLayout: LayoutKind {
+        let source = model.timeline.timeMap.source(atOutput: model.playhead)
+        return model.timeline.layouts.first { source >= $0.start && source < $0.end }?.kind
+            ?? (model.timeline.webcam != nil ? .cameraOverlay : .screenOnly)
+    }
+
+    private var layoutKind: Binding<LayoutKind> {
+        Binding(get: { currentLayout }, set: { kind in
+            model.edit { timeline in
+                timeline.layouts = [LayoutSegment(start: 0, end: timeline.timeMap.sourceDuration, kind: kind)]
+            }
+        })
+    }
+
+    private func layoutBinding<V>(_ kind: LayoutKind, _ keyPath: WritableKeyPath<LayoutSettings, V>) -> Binding<V> {
+        Binding(get: { model.timeline.layoutSettings[kind][keyPath: keyPath] },
+                set: { value in model.edit(coalesce: true) { $0.layoutSettings[kind][keyPath: keyPath] = value } })
+    }
+
+    private var maxLines: Binding<Double> {
+        Binding(get: { Double(model.timeline.captions.maxLines) },
+                set: { value in model.edit(coalesce: true) { $0.captions.maxLines = min(max(Int(value.rounded()), 1), 3) } })
+    }
+
+    private var locale: Binding<String> {
+        Binding(get: { model.timeline.captions.locale },
+                set: { value in model.edit(coalesce: true) { $0.captions.locale = value } })
     }
 
     private var audio: some View {
