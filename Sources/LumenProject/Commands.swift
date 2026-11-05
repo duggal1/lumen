@@ -40,9 +40,9 @@ public enum Command: Codable, Sendable {
     case setLayout(LayoutSegment), deleteLayout(UUID), setLayoutSettings(LayoutKind, LayoutSettings)
     case addMask(Mask), addMaskAtPlayhead(x: Double, y: Double, w: Double, h: Double, mode: MaskMode)
     case approveMasks([UUID]), rejectMasks([UUID]), deleteMask(UUID)
-    case addHighlight(Highlight), deleteHighlight(UUID), addLoupe(Loupe), deleteLoupe(UUID)
+    case addHighlight(Highlight), setHighlightStyle(UUID, HighlightStyle), deleteHighlight(UUID), addLoupe(Loupe), deleteLoupe(UUID)
     case addTapAtPlayhead(x: Double, y: Double), deleteTap(UUID)
-    case addText(TextBlock), deleteText(UUID)
+    case addText(TextBlock), editText(UUID, String), deleteText(UUID)
     case applyAutoTidy([CutRange]), clearAutoTidy
 }
 
@@ -130,12 +130,18 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         return .masks
     case .deleteMask(let id): t.overlays.masks.removeAll { $0.id == id }; return .masks
     case .addHighlight(let h): t.overlays.highlights.append(h); return .masks
+    case .setHighlightStyle(let id, let style):
+        guard let i = t.overlays.highlights.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        t.overlays.highlights[i].style = style; return .masks
     case .deleteHighlight(let id): t.overlays.highlights.removeAll { $0.id == id }; return .masks
     case .addLoupe(let l): t.overlays.loupes.append(l); return .masks
     case .deleteLoupe(let id): t.overlays.loupes.removeAll { $0.id == id }; return .masks
     case .addTapAtPlayhead(let x, let y): t.overlays.taps.append(TapIndicator(t: playSrc, x: x, y: y)); return [.cursor, .audio]
     case .deleteTap(let id): t.overlays.taps.removeAll { $0.id == id }; return [.cursor, .audio]
     case .addText(let b): t.overlays.texts.append(b); return .captions
+    case .editText(let id, let value):
+        guard let i = t.overlays.texts.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        t.overlays.texts[i].text = String(value.prefix(500)); return .captions
     case .deleteText(let id): t.overlays.texts.removeAll { $0.id == id }; return .captions
 
     case .applyAutoTidy(let cuts):

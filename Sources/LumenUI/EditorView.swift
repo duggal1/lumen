@@ -74,6 +74,8 @@ struct EditorView: View {
             Spacer()
             LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
             LButton(title: "Frame it", icon: "viewfinder", kind: .quiet) { if model.selection != nil { model.focusEditing.toggle() } }
+            LButton(title: "Title", icon: "textformat", kind: .quiet) { model.addManualTitle() }
+            LButton(title: "Highlight", icon: "highlighter", kind: .quiet) { model.addManualHighlight() }
             LButton(title: "Delete", icon: "trash", kind: .quiet) { model.deleteSelected() }.disabled(model.selection == nil)
         }
     }

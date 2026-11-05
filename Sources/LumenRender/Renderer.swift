@@ -77,6 +77,14 @@ private struct WebU {
 }
 private struct AccU { var weight: Float }
 private struct ResU { var levels: Float; var seed: UInt32; var blur: Float }
+private struct TextSpriteU { var opacity: Float }
+private struct HighlightU {
+    var rect: SIMD4<Float>
+    var content: SIMD4<Float>
+    var opacity: Float
+    var strength: Float
+    var mode: Int32
+}
 private struct BackdropKey: Equatable { var style: Style; var size: SIMD2<Int>; var wall: String; var phase: Double; var pointer: SIMD4<Float> }
 private struct Keep: @unchecked Sendable { let o: Any }
 
@@ -133,6 +141,9 @@ public final class Renderer: @unchecked Sendable {
     private let queue: MTLCommandQueue
     private let lib: MTLLibrary
     private let pBackdrop, pContent, pCursor, pRing, pWeb, pPrivacy, pAccum: MTLRenderPipelineState
+    private let pTextSprite: MTLRenderPipelineState
+    private let pHighlight: MTLRenderPipelineState
+    private let textCache = TextOverlayCache()
     private var pResolve: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     private var personMatte: PersonMatteSequence?
     private let sem = DispatchSemaphore(value: 3)
@@ -165,6 +176,8 @@ public final class Renderer: @unchecked Sendable {
         pPrivacy = try Self.pipe(d, l, "privacyFS", f, 1)
         pWeb = try Self.pipe(d, l, "webFS", f, 1)
         pAccum = try Self.pipe(d, l, "accumFS", f, 2)
+        pTextSprite = try Self.pipe(d, l, "textSpriteFS", f, 1)
+        pHighlight = try Self.pipe(d, l, "highlightFS", f, 1)
         var c: CVMetalTextureCache?
         CVMetalTextureCacheCreate(nil, nil, d, nil, &c)
         guard let c else { throw RenderError.noDevice }
@@ -492,6 +505,28 @@ public final class Renderer: @unchecked Sendable {
             }
         }
 
+        // Highlight geometry follows the exact source-pixel camera transform.
+        // Dimmer is drawn AFTER privacy redaction and never resamples raw pixels.
+        if !st.emphasis.highlights.isEmpty {
+            e.setRenderPipelineState(pHighlight)
+            for mark in st.emphasis.highlights where mark.opacity > 0.001 {
+                let start = g.toCanvas(SIMD2(Double(mark.rect.x), Double(mark.rect.y)), cam: cam, scale: sc)
+                let end = g.toCanvas(SIMD2(Double(mark.rect.x + mark.rect.z),
+                                            Double(mark.rect.y + mark.rect.w)), cam: cam, scale: sc)
+                let bounds = SIMD4<Float>(Float(min(start.x, end.x)), Float(min(start.y, end.y)),
+                                           Float(abs(end.x - start.x)), Float(abs(end.y - start.y)))
+                let mode: Int32 = switch mark.style {
+                case .dim: 0
+                case .outline: 1
+                case .glow: 2
+                }
+                quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
+                frag(e, HighlightU(rect: bounds, content: content, opacity: mark.opacity,
+                                    strength: mark.dim, mode: mode))
+                draw()
+            }
+        }
+
         // click rings
         if tl.cursor.clickRing != nil {
             e.setRenderPipelineState(pRing)
@@ -563,6 +598,31 @@ public final class Renderer: @unchecked Sendable {
                     let background = wl.backdrop == .image ? cameraBackground : wallTex
                     if let background { e.setFragmentTexture(background, index: 3) }
                 }
+                draw()
+            }
+        }
+
+        // Caption and manual text share this pass in both live preview and offline exports.
+        // Both are source-time anchored; rasterization is cached by actual text/style,
+        // with a different cache entry only when the highlighted word changes.
+        var sprites: [TextOverlaySprite] = []
+        if let caption = st.caption, tl.captions.enabled,
+           let sprite = textCache.caption(caption, style: tl.captions.style,
+                                          time: r.t, canvas: r.canvas, device: device) {
+            sprites.append(sprite)
+        }
+        for manual in st.emphasis.texts {
+            if let sprite = textCache.manual(manual, canvas: r.canvas, device: device) {
+                sprites.append(sprite)
+            }
+        }
+        if !sprites.isEmpty {
+            e.setRenderPipelineState(pTextSprite)
+            for sprite in sprites where sprite.opacity > 0.001 {
+                let w = Float(sprite.texture.width), h = Float(sprite.texture.height)
+                quad(e, SIMD4<Float>(sprite.center.x - w / 2, sprite.center.y - h / 2, w, h), canvasF)
+                frag(e, TextSpriteU(opacity: sprite.opacity))
+                e.setFragmentTexture(sprite.texture, index: 0)
                 draw()
             }
         }
