@@ -267,6 +267,33 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         edit { $0.overlays.masks.append(mask) }
     }
 
+    /// Add a manual text/title overlay without modifying the original recording.
+    /// The same source-time object is used in Metal preview and offline export.
+    func addManualTitle() {
+        let start = timeline.timeMap.source(atOutput: playhead)
+        let end = min(start + 3, timeline.timeMap.trimEnd)
+        guard end > start else { return }
+        let title = TextBlock(start: start, end: end, text: "Title")
+        dispatch(.addText(title))
+        selection = title.id
+    }
+
+    /// Place a source-space spotlight around the current pointer.
+    func addManualHighlight() {
+        guard let size = timeline.derived?.sourceSize else { return }
+        let start = timeline.timeMap.source(atOutput: playhead)
+        let end = min(start + 3, timeline.timeMap.trimEnd)
+        guard end > start else { return }
+        let cursor = timeline.evaluate(at: playhead).cursor.position
+        let w = size.x * 0.3, h = size.y * 0.16
+        let x = max(0, min(Double(cursor.x) - w / 2, size.x - w))
+        let y = max(0, min(Double(cursor.y) - h / 2, size.y - h))
+        let highlight = Highlight(start: start, end: end,
+                                  x: x, y: y, w: w, h: h, style: .dim)
+        dispatch(.addHighlight(highlight))
+        selection = highlight.id
+    }
+
     func addZoom() {
         let s = playhead, e = min(s + 2.5, duration)
         guard e - s > 0.3 else { return }
@@ -278,7 +305,14 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         let ctx = ReduceContext(playhead: playhead, selection: selection, duration: duration)
         edit { tl in _ = try? reduce(&tl, c, ctx: ctx) }
     }
-    func deleteSelected() { if let id = selection { edit { $0.zoom.removeAll { $0.id == id } }; selection = nil } }
+    func deleteSelected() {
+        guard let id = selection else { return }
+        if timeline.zoom.contains(where: { $0.id == id }) { dispatch(.deleteZoom(id)) }
+        else if timeline.overlays.texts.contains(where: { $0.id == id }) { dispatch(.deleteText(id)) }
+        else if timeline.overlays.highlights.contains(where: { $0.id == id }) { dispatch(.deleteHighlight(id)) }
+        else { return }
+        selection = nil
+    }
     func setFocus(box b: CGRect) {       // normalized source coords
         guard let id = selection, b.width > 0.02, b.height > 0.02 else { return }
         let width = Double(b.width), height = Double(b.height)
