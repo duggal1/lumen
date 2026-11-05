@@ -38,9 +38,18 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         super.init()
         guard let dev = deviceID.flatMap({ AVCaptureDevice(uniqueID: $0) }) ?? AVCaptureDevice.default(for: .video) else { throw CaptureError.noSource }
         session.beginConfiguration()
-        session.sessionPreset = .hd1280x720
-        session.addInput(try AVCaptureDeviceInput(device: dev))
+        // macOS does not expose AVCaptureSession.Preset.inputPriority. Use the
+        // highest *supported* session preset, then encode the actual buffer
+        // dimensions reported by the camera, never a fictional 4K resolution.
+        let input = try AVCaptureDeviceInput(device: dev)
+        guard session.canAddInput(input) else { throw CaptureError.noSource }
+        session.addInput(input)
+        let presets: [AVCaptureSession.Preset] = [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
+        if let best = presets.first(where: { session.canSetSessionPreset($0) }) {
+            session.sessionPreset = best
+        }
         let out = AVCaptureVideoDataOutput()
+        out.alwaysDiscardsLateVideoFrames = true
         out.setSampleBufferDelegate(self, queue: q)
         session.addOutput(out)
         session.commitConfiguration()
@@ -54,8 +63,18 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     }
     func captureOutput(_ o: AVCaptureOutput, didOutput sb: CMSampleBuffer, from c: AVCaptureConnection) {
         if input == nil {
-            let i = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.hevc, AVVideoWidthKey: 1280, AVVideoHeightKey: 720])
-            i.expectsMediaDataInRealTime = true; writer.add(i); input = i
+            guard let pixels = CMSampleBufferGetImageBuffer(sb) else { return }
+            let width = CVPixelBufferGetWidth(pixels), height = CVPixelBufferGetHeight(pixels)
+            let fps = 30
+            let bitrate = Int(Double(width * height * fps) * 0.11)
+            let i = AVAssetWriterInput(mediaType: .video, outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.hevc,
+                AVVideoWidthKey: width, AVVideoHeightKey: height,
+                AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: bitrate]
+            ])
+            i.expectsMediaDataInRealTime = true
+            guard writer.canAdd(i) else { return }
+            writer.add(i); input = i
         }
         if !started {
             guard writer.startWriting() else { return }

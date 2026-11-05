@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import MetalKit
 import AppKit
 import CoreVideo
 import QuartzCore
@@ -108,6 +109,8 @@ public final class Renderer: @unchecked Sendable {
     private var size = SIMD2<Int>(0, 0)
     private var wallTex: MTLTexture?
     private var wallID = ""
+    private var cameraBackground: MTLTexture?
+    private var cameraBackgroundID = ""
     private let screenMip = MipCache(), webMip = MipCache()
     private var atlas: CursorAtlas?
     private var atlasPack: CursorPack?
@@ -159,6 +162,19 @@ public final class Renderer: @unchecked Sendable {
     }
 
     public func setCustomCursors(_ c: [CustomCursor]) { customs = c; atlas = nil }
+
+    /// User-selected image is decoded only on path/version change, never per frame.
+    private func loadCameraBackgroundIfNeeded(_ path: String?) {
+        guard let path, !path.isEmpty else { cameraBackgroundID = ""; cameraBackground = nil; return }
+        let url = URL(fileURLWithPath: path)
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+        let version = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let id = "\(url.path)#\(version)"
+        guard id != cameraBackgroundID else { return }
+        cameraBackgroundID = id
+        cameraBackground = try? MTKTextureLoader(device: device)
+            .newTexture(URL: url, options: [.SRGB: false])
+    }
 
     /// The Mac's own desktop picture, loaded once per wallpaper change. No download, no bundled asset.
     private func loadWallpaperIfNeeded() {
@@ -265,6 +281,7 @@ public final class Renderer: @unchecked Sendable {
 
         // 1. backdrop cache (style or size change only)
         if tl.style.background == .wallpaper || tl.webcam?.backdrop == .wallpaper { loadWallpaperIfNeeded() }
+        if tl.webcam?.backdrop == .image { loadCameraBackgroundIfNeeded(tl.webcam?.backdropImagePath) }
         let patterned = tl.style.background == .wave || tl.style.background == .field
         let backgroundTime = patterned ? (r.quality == .export ? r.t : r.uiTime)
             : (tl.style.background == .dither && r.quality == .preview ? r.uiTime : 0)
@@ -420,6 +437,7 @@ public final class Renderer: @unchecked Sendable {
                 case .transparent: 1
                 case .wallpaper: wallTex == nil ? 3 : 2
                 case .canvas: 3
+                case .image: cameraBackground == nil ? 3 : 2
                 }
                 if matte == nil { maskMode = 0 } // Never simulate a missing AI mask.
                 let color = tl.style.colors.first?.simd ?? SIMD4<Float>(0.1, 0.1, 0.1, 1)
@@ -439,7 +457,10 @@ public final class Renderer: @unchecked Sendable {
                     e.setFragmentTexture(matte.previous, index: 1)
                     e.setFragmentTexture(matte.next, index: 2)
                 }
-                if maskMode == 2, let wallTex { e.setFragmentTexture(wallTex, index: 3) }
+                if maskMode == 2 {
+                    let background = wl.backdrop == .image ? cameraBackground : wallTex
+                    if let background { e.setFragmentTexture(background, index: 3) }
+                }
                 draw()
             }
         }
