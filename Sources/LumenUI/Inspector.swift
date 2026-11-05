@@ -291,6 +291,43 @@ struct Inspector: View {
                         .accessibilityLabel("Caption language")
                 }
             }.card()
+            VStack(spacing: 0) {
+                Row(label: "Manual titles") {
+                    LButton(title: "Add title", icon: "textformat", kind: .quiet) { m.addManualTitle() }
+                }
+                ForEach(m.timeline.overlays.texts) { title in
+                    Row(label: "Text") {
+                        TextField("Title", text: Binding(
+                            get: { m.timeline.overlays.texts.first(where: { $0.id == title.id })?.text ?? title.text },
+                            set: { m.dispatch(.editText(title.id, $0)) }
+                        ))
+                        .textFieldStyle(.plain)
+                        .font(AppType.body)
+                        .accessibilityLabel("Manual overlay text")
+                        LButton(title: "Remove", icon: "trash", kind: .quiet) {
+                            m.dispatch(.deleteText(title.id))
+                        }
+                    }
+                }
+            }.card()
+            VStack(spacing: 0) {
+                Row(label: "Spotlights") {
+                    LButton(title: "Add highlight", icon: "highlighter", kind: .quiet) { m.addManualHighlight() }
+                }
+                ForEach(m.timeline.overlays.highlights) { highlight in
+                    Row(label: "Style") {
+                        LDropdown(sel: Binding(
+                            get: { m.timeline.overlays.highlights.first(where: { $0.id == highlight.id })?.style ?? highlight.style },
+                            set: { m.dispatch(.setHighlightStyle(highlight.id, $0)) }
+                        ), options: HighlightStyle.allCases.map {
+                            ($0, $0.rawValue.capitalized, "highlighter")
+                        }).frame(width: 120)
+                        LButton(title: "Remove", icon: "trash", kind: .quiet) {
+                            m.dispatch(.deleteHighlight(highlight.id))
+                        }
+                    }
+                }
+            }.card()
         }
     }
 
