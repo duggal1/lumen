@@ -12,15 +12,19 @@ staging="$(mktemp -d "$PWD/.build/lumen-package.XXXXXX")"
 trap 'rm -rf "$staging"; rmdir "$lock"' EXIT
 swift build -c "$config"
 bin_dir="$(swift build -c "$config" --show-bin-path)"
-# Older Xcode toolchains copy Shaders.metal without compiling it. Build the
-# metallib here so the packaged app never depends on runtime compilation.
+metal_src="$PWD/Sources/LumenRender/Shaders/Shaders.metal"
+# Xcode 16's SwiftPM copies Shaders.metal instead of compiling it, while newer
+# Xcodes compile it into default.metallib. Compile from source whenever a bundle
+# is missing its metallib so packaging never depends on SwiftPM's behaviour.
 for bundle in "$bin_dir/"*.bundle; do
     [ -d "$bundle" ] || continue
     resources="$bundle/Contents/Resources"
-    if [ -f "$resources/Shaders.metal" ] && [ ! -f "$resources/default.metallib" ]; then
+    mkdir -p "$resources"
+    if [ ! -f "$resources/default.metallib" ] && [ -f "$metal_src" ]; then
         scratch="$(mktemp -d)"
-        xcrun -sdk macosx metal -c "$resources/Shaders.metal" -o "$scratch/Shaders.air"
-        xcrun -sdk macosx metallib "$scratch/Shaders.air" -o "$resources/default.metallib"
+        if xcrun -sdk macosx metal -c "$metal_src" -o "$scratch/Shaders.air" 2>/dev/null; then
+            xcrun -sdk macosx metallib "$scratch/Shaders.air" -o "$resources/default.metallib"
+        fi
         rm -rf "$scratch"
     fi
 done
@@ -46,7 +50,7 @@ for bundle in "$bin_dir/"*.bundle; do
     ditto "$bundle" "$app/Contents/Resources/$(basename "$bundle")"
 done
 if ! find "$app/Contents/Resources" -name default.metallib -print -quit | /usr/bin/grep -q .; then
-    echo 'Missing default.metallib. Install the Metal toolchain with xcodebuild -downloadComponent MetalToolchain.' >&2
+    echo 'Missing default.metallib after packaging.' >&2
     exit 1
 fi
 icon_dir="$staging/Lumen.iconset"
