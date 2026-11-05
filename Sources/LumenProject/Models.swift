@@ -219,9 +219,16 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
 
 public enum ClickSound: String, Codable, CaseIterable, Sendable { case mouse, subtle }
 
+/// Optional mastering of microphone speech only. Existing projects decode as natural.
+public enum VoiceProfile: String, Codable, CaseIterable, Sendable {
+    case natural = "Natural", studio = "Studio"
+}
+
 public struct AudioPlan: Codable, Equatable, Sendable {
     public var micClean = true
     public var micMode: MicMode = .standard
+    public var voiceProfile: VoiceProfile = .natural
+    public var studioAmount = 0.65
     public var micGainDb = 0.0, systemGainDb = -3.0
     public var declick = true, declickDepthDb = -12.0
     public var outputGainDb = 0.0
@@ -237,14 +244,16 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var speedRampMinIdle = 4.0, speedRampMaxSpeed = 8.0
     public var lanes: [AudioLane] = []
     enum CodingKeys: String, CodingKey {
-        case outputGainDb, micClean, micMode, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFS, clickSounds, whooshes, keySounds, clickTone, sfxGainDb, musicPath
+        case outputGainDb, micClean, micMode, voiceProfile, studioAmount, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFS, clickSounds, whooshes, keySounds, clickTone, sfxGainDb, musicPath
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         outputGainDb = c.opt(.outputGainDb, outputGainDb)
-        micClean = c.opt(.micClean, micClean); micMode = c.opt(.micMode, micMode); micGainDb = c.opt(.micGainDb, micGainDb)
+        micClean = c.opt(.micClean, micClean); micMode = c.opt(.micMode, micMode)
+        voiceProfile = c.opt(.voiceProfile, voiceProfile); studioAmount = c.opt(.studioAmount, studioAmount)
+        micGainDb = c.opt(.micGainDb, micGainDb)
         systemGainDb = c.opt(.systemGainDb, systemGainDb); declick = c.opt(.declick, declick); declickDepthDb = c.opt(.declickDepthDb, declickDepthDb)
         targetLUFS = c.opt(.targetLUFS, targetLUFS); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = c.opt(.whooshes, whooshes)
         keySounds = c.opt(.keySounds, keySounds); clickTone = c.opt(.clickTone, clickTone); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)
