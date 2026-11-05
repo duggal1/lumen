@@ -1,7 +1,6 @@
 import Foundation
 import Accelerate
 import AVFoundation
-import os
 import LumenCore
 import LumenProject
 import LumenDirector
@@ -22,9 +21,7 @@ public struct AudioStem: Sendable {
     public let left: [Float]
     public let right: [Float]
     public init(name: String, left: [Float], right: [Float]) {
-        self.name = name
-        self.left = left
-        self.right = right
+        self.name = name; self.left = left; self.right = right
     }
 }
 
@@ -34,16 +31,17 @@ public struct RecordedMicrophone: Sendable {
     public let deviceName: String, samples: [Float]
     public let offset: Double
     public init(deviceName: String, samples: [Float], offset: Double) {
-        self.deviceName = deviceName
-        self.samples = samples
-        self.offset = offset
+        self.deviceName = deviceName; self.samples = samples; self.offset = offset
     }
 }
 
 /// Offline mix of the whole timeline. Preview plays this buffer; export encodes it. One code path = they always match.
-/// Voice chain (HP, denoise, EQ, compressor, -16 LUFS reference) is cached by `micClean`. Thread-safe.
+/// Voice stage A (HP + WPE) is cached on disk for the primary mic; the residual
+/// suppressor and studio chain are cached per setting in memory.
 public final class AudioMixer: @unchecked Sendable {
     private struct MusicCache { var path: String; var track: MusicTrack?; var lufs: Double }
+    private struct StageA { var hp: [Float]; var wpe: [Float]? }
+    private struct VoiceKey: Hashable { var mic: Int; var clean: Bool; var room: Int; var studio: Int; var mode: MicMode }
 
     /// Voice sits at -16 LUFS before the master stage. Music reference is 6 dB hotter so the default
     /// `musicGainDb` (-18) lands the bed ~12 dB under the voice at rest (plan 10.3).
@@ -51,84 +49,109 @@ public final class AudioMixer: @unchecked Sendable {
 
     private let mic: [Float]?, micOffset: Double, sys: [Float]?, sysOffset: Double
     private let extraMicrophones: [RecordedMicrophone]
+    private let cacheDir: URL?
     private let bank = SFXBank()
     private let lock = NSLock()
-    private struct VoiceKey: Equatable { var clean: Bool; var profile: VoiceProfile; var amount: Double; var room: Int }
-    private var voice: (key: VoiceKey, x: [Float])?
-    private var extraVoices: [Int: (key: VoiceKey, x: [Float])] = [:]
+    private var stages: [Int: StageA] = [:]
+    private var rt60s: [Int: Double] = [:]
+    private var voice: [VoiceKey: [Float]] = [:]
     private var music: MusicCache?
     private var imported: [String: MusicTrack] = [:]
     public var denoiser: any Denoiser = defaultDenoiser
 
     public init(mic: [Float]?, micOffset: Double, system: [Float]?, systemOffset: Double,
-                additionalMicrophones: [RecordedMicrophone] = []) {
+                additionalMicrophones: [RecordedMicrophone] = [], cacheDir: URL? = nil) {
         self.mic = mic; self.micOffset = micOffset; sys = system; sysOffset = systemOffset
-        extraMicrophones = additionalMicrophones
+        extraMicrophones = additionalMicrophones; self.cacheDir = cacheDir
+        if let cacheDir { try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true) }
     }
 
-    // MARK: Cached stages
-
-    private func voiceKey(_ plan: AudioPlan) -> VoiceKey {
-        VoiceKey(clean: plan.micClean, profile: plan.voiceProfile,
-                 amount: max(0, min(plan.studioAmount, 1)),
-                 room: Int(max(0, min(plan.dereverb, 1)) * 20))
+    static func fingerprint(_ x: [Float]) -> UInt64 {
+        var h: UInt64 = 0xcbf29ce484222325 ^ UInt64(x.count), i = 0
+        while i < x.count { h = (h ^ UInt64(x[i].bitPattern)) &* 0x100000001b3; i += 997 }
+        return h
     }
 
-    /// Every microphone is enhanced independently, never mixed before
-    /// denoising/compression. A shared model can otherwise attenuate the
-    /// quieter presenter's voice when a louder loopback source is active.
-    private func processVoice(_ samples: [Float], plan: AudioPlan, key: VoiceKey) -> [Float] {
-        let fs = AudioIO.fs
+    /// WPE is the expensive stage, so it is written next to the project and reused on reopen.
+    /// Only the primary mic is persisted on disk; extra mics run WPE in memory.
+    private func stageA(_ m: [Float], index: Int, needWPE: Bool) -> StageA {
+        lock.lock(); defer { lock.unlock() }
+        if let s = stages[index], !needWPE || s.wpe != nil { return s }
+        let hp = Cascade.apply(m, Cascade.hp4(80, fs: AudioIO.fs))
+        guard needWPE else {
+            let s = StageA(hp: hp, wpe: nil)
+            stages[index] = s
+            return s
+        }
+        let url = index == 0 ? cacheDir?.appendingPathComponent("voice-wpe-v1.f32") : nil
+        let sig = Self.fingerprint(m)
+        if let url, let d = try? Data(contentsOf: url), d.count == 8 + m.count * 4,
+           d.withUnsafeBytes({ $0.loadUnaligned(fromByteOffset: 0, as: UInt64.self) }) == sig {
+            var out = [Float](repeating: 0, count: m.count)
+            out.withUnsafeMutableBytes { dst in
+                d.withUnsafeBytes { src in dst.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[8...])) }
+            }
+            let s = StageA(hp: hp, wpe: out)
+            stages[index] = s
+            return s
+        }
+        let w = WPE().process(hp)
+        if let url {
+            var data = Data()
+            withUnsafeBytes(of: sig) { data.append(contentsOf: $0) }
+            w.withUnsafeBufferPointer { data.append(Data(buffer: $0)) }
+            try? data.write(to: url, options: .atomic)
+        }
+        let s = StageA(hp: hp, wpe: w)
+        stages[index] = s
+        return s
+    }
+
+    /// Every microphone is enhanced independently, never mixed before denoising/compression.
+    /// The room tail is removed before EQ and compression, which would otherwise lift it after every phrase.
+    private func voiceChain(_ plan: AudioPlan, micIndex: Int, samples: [Float]) -> [Float]? {
+        lock.lock(); defer { lock.unlock() }
+        guard plan.micMode != .off else { return nil }
+        let key = VoiceKey(mic: micIndex, clean: plan.micClean,
+                           room: Int(max(0, min(plan.dereverb, 1)) * 20),
+                           studio: Int(max(0, min(plan.studio, 1)) * 20),
+                           mode: plan.micMode)
+        if let v = voice[key] { return v }
         let regions = VAD.regions(samples)
-        // The room tail is removed BEFORE EQ and compression. Compressing a
-        // reverberant signal lifts the tail after every phrase, which is why
-        // the old chain made a small room sound louder, not quieter.
-        var x = Cascade.apply(samples, Cascade.hp4(80, fs: fs))
-        if key.clean { x = denoiser.process(x) }
-        let room = Double(key.room) / 20
-        if room > 0.01 {
-            x = LateReverbSuppressor(amount: room, vad: regions).process(x)
+        let useWPE = plan.dereverb > 0.01
+        let st = stageA(samples, index: micIndex, needWPE: useWPE)
+        let base = useWPE ? (st.wpe ?? st.hp) : st.hp
+        var x: [Float]
+        if useWPE || plan.micClean {
+            var late = [Float](repeating: 0, count: base.count)
+            if useWPE { for i in 0..<base.count { late[i] = st.hp[i] - base[i] } }
+            if rt60s[micIndex] == nil { rt60s[micIndex] = RoomEstimate.rt60(samples, vad: regions) }
+            x = ResidualSuppressor(noise: plan.micClean ? 0.9 : 0, reverb: useWPE ? plan.dereverb : 0,
+                                   rt60: rt60s[micIndex] ?? 0.5).process(x: base, late: late)
+        } else {
+            x = base
         }
-        var eq = Biquad.peaking(3000, q: 1, db: 2, fs: fs)
-        x = x.map { Float(eq.run(Double($0))) }
-        if key.profile == .studio {
-            x = StudioVoice.process(x, amount: key.amount, fs: fs)
-            x = StudioPolish.deEss(x, fs: fs, amount: key.amount)
-            x = StudioPolish.level(x, vad: regions, fs: fs, range: 3 + 6 * key.amount)
-        }
-        x = Expander().process(x, fs: fs)
-        var comp = Compressor()
-        comp.thresholdDb = key.profile == .studio ? -19 : -20
-        comp.ratio = key.profile == .studio ? 2.2 : 3.0
-        comp.release = key.profile == .studio ? 0.24 : 0.12
-        x = comp.process(x, fs: fs)
+        x = VoiceStudio.finish(x, vad: regions, plan: plan, denoiser: denoiser)
         let lu = Loudness.integrated([x])
         if lu > -69 {
-            let target = key.profile == .studio ? -14.5 : Self.voiceRefLUFS
-            let g = Float(pow(10, clamp(target - lu, -24, 24) / 20))
+            let g = Float(pow(10, clamp(Self.voiceRefLUFS - lu, -24, 24) / 20))
             x = vDSP.multiply(g, x)
         }
+        // Cap the cache: keep the most recent few settings, drop the rest.
+        let cap = max(3, extraMicrophones.count + 1)
+        if voice.count >= cap { voice.removeAll() }
+        voice[key] = x
         return x
     }
 
     private func voiceChain(_ plan: AudioPlan) -> [Float]? {
-        lock.lock(); defer { lock.unlock() }
-        let key = voiceKey(plan)
-        if let cached = voice, cached.key == key { return cached.x }
         guard let mic else { return nil }
-        let x = processVoice(mic, plan: plan, key: key)
-        voice = (key, x)
-        return x
+        return voiceChain(plan, micIndex: 0, samples: mic)
     }
 
     private func extraVoiceChain(_ index: Int, plan: AudioPlan) -> [Float]? {
         guard extraMicrophones.indices.contains(index) else { return nil }
-        lock.lock(); defer { lock.unlock() }
-        let key = voiceKey(plan)
-        if let cached = extraVoices[index], cached.key == key { return cached.x }
-        let x = processVoice(extraMicrophones[index].samples, plan: plan, key: key)
-        extraVoices[index] = (key, x)
-        return x
+        return voiceChain(plan, micIndex: index + 1, samples: extraMicrophones[index].samples)
     }
 
     private func loadMusic(_ path: String?) -> MusicCache? {
@@ -186,8 +209,7 @@ public final class AudioMixer: @unchecked Sendable {
     /// Loop with 0.5 s crossfade to length n, 0.3 s fade-in, 1.5 s fade-out.
     static func fit(_ m: MusicTrack, n: Int) -> ([Float], [Float]) {
         let fs = AudioIO.fs, xf = Int(0.5 * fs), len = m.l.count
-        var L = [Float](repeating: 0, count: n), R = L
-        var i = 0
+        var L = [Float](repeating: 0, count: n), R = L, i = 0
         while i < n {
             let c = min(len, n - i)
             for k in 0..<c {
@@ -298,7 +320,6 @@ public final class AudioMixer: @unchecked Sendable {
             guard offset < n else { continue }
             let count = min(n - offset, track.l.count)
             let gain = Float(pow(10, clamp(lane.gainDb, -60, 24) / 20))
-            // Short, click-free ramps when placing a voice-over on the timeline.
             let fadeLength = min(Int(0.01 * fs), count / 2)
             for i in 0..<count {
                 let fadeIn = fadeLength > 0 ? min(1, Float(i) / Float(fadeLength)) : 1
@@ -335,10 +356,6 @@ public final class AudioMixer: @unchecked Sendable {
 
         var ch = [L, R]
         var lufs = Loudness.integrated(ch)
-        // Auto loudness sets the overall level; `outputGainDb` offsets it.
-        // When normalization is off, `outputGainDb` is the ONLY master gain,
-        // so a +6 dB voice-level move is exactly +6 LU at the output. Sparse
-        // clicks alone are never pumped up to the programme target.
         let offsetDb: Double
         if a.normalize, hasProgram, lufs > -69 {
             offsetDb = a.targetLUFS - lufs + a.outputGainDb
@@ -425,9 +442,6 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
         }
         if !engine.isRunning { do { try engine.start() } catch { return max(h, HostClock.now() + 0.03) } }
         node.scheduleBuffer(b, at: nil, options: .interrupts, completionHandler: nil)
-        // `h` is the instant the sample must be HEARD. The device holds the
-        // buffer for `outputLatency` before it reaches the speakers, so the
-        // render clock starts that much earlier.
         let latency = outputLatency
         let start = max(h - latency, HostClock.now() + 0.005)
         node.play(at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: start)))

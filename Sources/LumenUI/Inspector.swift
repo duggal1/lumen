@@ -414,14 +414,8 @@ struct Inspector: View {
                           fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "System level", v: m.bind(\.audio.systemGainDb), range: -24...6,
                           fmt: { String(format: "%+.0f dB", $0) })
-                Row(label: "Voice profile") {
-                    LSegmented(sel: m.bind(\.audio.voiceProfile),
-                               items: [(.natural, "Natural"), (.studio, "Studio")]).frame(width: 156)
-                }
-                if m.timeline.audio.voiceProfile == .studio {
-                    SliderRow(label: "Polish", v: m.bind(\.audio.studioAmount), range: 0...1,
-                              fmt: { "\(Int($0 * 100))%" })
-                }
+                SliderRow(label: "Studio voice", v: m.bind(\.audio.studio), range: 0...1,
+                          fmt: { "\(Int($0 * 100))%" })
                 ToggleRow(label: "Click sounds", on: m.bind(\.audio.clickSounds))
                 if m.timeline.audio.clickSounds {
                     Row(label: "Click tone") {

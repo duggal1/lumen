@@ -94,7 +94,7 @@ public final class ProjectSession: @unchecked Sendable {
         let input = DirectorInput(events: events, source: meta.source, vad: vad, ax: ax, face: [], webcamAspect: aspect)
         let s = ProjectSession(bundle: b, meta: meta, screen: screen, webcam: web, input: input,
                                mixer: AudioMixer(mic: mic, micOffset: micOff, system: sys, systemOffset: sysOff,
-                                                 additionalMicrophones: extras),
+                                                 additionalMicrophones: extras, cacheDir: b.cacheURL),
                                waveform: wave, cursors: CursorLibrary.load(from: b.cursorsURL))
         return (s, file.timeline)
     }

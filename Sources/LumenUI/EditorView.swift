@@ -67,6 +67,10 @@ struct EditorView: View {
         HStack(spacing: 12) {
             LButton(title: model.clock.playing ? "Pause" : "Play", icon: model.clock.playing ? "pause.fill" : "play.fill", kind: .secondary) { model.togglePlay() }
             Text("\(fmt(model.playhead)) / \(fmt(model.duration))").font(AppType.body.monospacedDigit()).foregroundStyle(Tok.text2)
+#if DEBUG
+            Text({ let s = model.renderer.presentStats.snapshot; return "late \(s.late)/\(s.frames) · worst \(Int(s.worstMs)) ms" }())
+                .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+#endif
             Spacer()
             LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
             LButton(title: "Frame it", icon: "viewfinder", kind: .quiet) { if model.selection != nil { model.focusEditing.toggle() } }

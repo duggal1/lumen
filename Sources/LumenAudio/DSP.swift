@@ -94,33 +94,6 @@ public enum Limiter {
     }
 }
 
-/// A restrained, deterministic voice-mastering stage; never generates speech.
-/// Calibrated for 48 kHz mono mic. Strength controls spectral shaping and
-/// compression; the final mix limiter still enforces the output ceiling.
-public enum StudioVoice {
-    public static func process(_ signal: [Float], amount: Double, fs: Double = 48_000) -> [Float] {
-        guard !signal.isEmpty else { return signal }
-        let strength = max(0, min(amount, 1))
-        guard strength > 0 else { return signal }
-        // Reduce proximity boom rather than cutting the fundamental.
-        var lowMid = Biquad.peaking(260, q: 0.9, db: -1.8 * strength, fs: fs)
-        // Gentle presence and air improve intelligibility without brittle top end.
-        var presence = Biquad.peaking(3_100, q: 0.85, db: 2.3 * strength, fs: fs)
-        var air = Biquad.peaking(7_800, q: 0.8, db: 0.8 * strength, fs: fs)
-        var shaped = [Float](repeating: 0, count: signal.count)
-        for i in signal.indices {
-            let x = Double(signal[i])
-            shaped[i] = Float(air.run(presence.run(lowMid.run(x))))
-        }
-        var compressor = Compressor()
-        compressor.thresholdDb = -21
-        compressor.ratio = 1 + 1.7 * strength
-        compressor.attack = 0.012
-        compressor.release = 0.16
-        return compressor.process(shaped, fs: fs)
-    }
-}
-
 public struct Compressor: Sendable {
     public var thresholdDb = -20.0, ratio = 3.0, attack = 0.010, release = 0.12
     public init() {}

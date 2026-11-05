@@ -219,21 +219,18 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
 
 public enum ClickSound: String, Codable, CaseIterable, Sendable { case mouse, subtle }
 
-/// Optional mastering of microphone speech only. Existing projects decode as natural.
-public enum VoiceProfile: String, Codable, CaseIterable, Sendable {
-    case natural = "Natural", studio = "Studio"
-}
-
 public struct AudioPlan: Codable, Equatable, Sendable {
     public var micClean = true
     public var micMode: MicMode = .standard
-    public var voiceProfile: VoiceProfile = .natural
-    public var studioAmount = 0.65
+    /// Studio-voice strength, 0...1 (tone, de-ess, leveler). Replaces the old
+    /// `voiceProfile` + `studioAmount` pair. Legacy `studioAmount` values decode
+    /// into this field; legacy `voiceProfile == .studio` projects keep the default.
+    public var studio = 0.8
     public var micGainDb = 0.0, systemGainDb = -3.0
     public var declick = true, declickDepthDb = -12.0
     /// Room-tail suppression, 0...1. Applied before EQ and compression so the
     /// compressor cannot lift the reverb back up after every phrase.
-    public var dereverb = 0.5
+    public var dereverb = 0.85
     /// Auto loudness. Off makes `outputGainDb` the only master gain.
     public var normalize = true
     public var outputGainDb = 0.0
@@ -248,8 +245,9 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var speedRampsAuto = true
     public var speedRampMinIdle = 4.0, speedRampMaxSpeed = 8.0
     public var lanes: [AudioLane] = []
+    private enum LegacyKeys: String, CodingKey { case studioAmount }
     enum CodingKeys: String, CodingKey {
-        case outputGainDb, micClean, micMode, voiceProfile, studioAmount, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFS, clickSounds, whooshes, keySounds, clickTone, sfxGainDb, musicPath
+        case outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFS, clickSounds, whooshes, keySounds, clickTone, sfxGainDb, musicPath
         case dereverb, normalize
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
@@ -258,7 +256,12 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         let c = try d.container(keyedBy: CodingKeys.self)
         outputGainDb = c.opt(.outputGainDb, outputGainDb)
         micClean = c.opt(.micClean, micClean); micMode = c.opt(.micMode, micMode)
-        voiceProfile = c.opt(.voiceProfile, voiceProfile); studioAmount = c.opt(.studioAmount, studioAmount)
+        // Legacy `studioAmount` decodes into `studio` when the new key is absent.
+        if let lc = try? d.container(keyedBy: LegacyKeys.self),
+           let v = try lc.decodeIfPresent(Double.self, forKey: .studioAmount) {
+            studio = v
+        }
+        studio = c.opt(.studio, studio)
         micGainDb = c.opt(.micGainDb, micGainDb)
         dereverb = c.opt(.dereverb, dereverb); normalize = c.opt(.normalize, normalize)
         systemGainDb = c.opt(.systemGainDb, systemGainDb); declick = c.opt(.declick, declick); declickDepthDb = c.opt(.declickDepthDb, declickDepthDb)
