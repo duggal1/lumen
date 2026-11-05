@@ -155,6 +155,28 @@ import LumenExport
     #expect(blue(zoomFrame, sourcePoint: SIMD2(139, 72), state: zoomProtected.evaluate(at: 0.65),
                  style: zoomProtected.style) < 70)
 
+    // Caption text and manual subtitles must affect rendered PIXELS, not just
+    // live in Codable models. Preview and export call this exact renderer.
+    var captioned = derived
+    captioned.captions.enabled = true
+    captioned.captions.style.size = 0.13
+    captioned.captions.style.animation = .none
+    captioned.derived?.captions = [CaptionChunk(start: 0, end: 1,
+        lines: [[CaptionWord(text: "VISIBLE CAPTION", start: 0, end: 0.8)]], y: 0.5)]
+    let captionFrame = try await FrameImage.render(renderer: renderer, session: session, timeline: captioned,
+                                                   t: 0.25, canvas: SIMD2(320, 180))
+    #expect(pixels(captionFrame) != pixels(a))
+    var noWordHighlight = captioned
+    noWordHighlight.captions.style.wordHighlight = false
+    let plainCaption = try await FrameImage.render(renderer: renderer, session: session, timeline: noWordHighlight,
+                                                   t: 0.25, canvas: SIMD2(320, 180))
+    #expect(pixels(plainCaption) != pixels(captionFrame))
+    var titled = derived
+    titled.overlays.texts = [TextBlock(start: 0, end: 1, text: "TITLE", x: 0.5, y: 0.5, size: 0.14)]
+    let titleFrame = try await FrameImage.render(renderer: renderer, session: session, timeline: titled,
+                                                 t: 0.25, canvas: SIMD2(320, 180))
+    #expect(pixels(titleFrame) != pixels(a))
+
     var patterned = derived
     patterned.style.padding = 0.2
     patterned.style.contentScale = 0.5
