@@ -21,7 +21,7 @@ let package = Package(
         lib("LumenDirector", ["LumenCore", "LumenProject"]),
         lib("LumenAnalysis", ["LumenCore", "LumenProject"]),
         lib("LumenCapture", ["LumenCore", "LumenProject"]),
-        lib("LumenRender", ["LumenCore", "LumenProject", "LumenDirector"], resources: [.process("Shaders")]),
+        lib("LumenRender", ["LumenCore", "LumenProject", "LumenDirector"]),
         lib("LumenAudio", ["LumenCore", "LumenProject", "LumenDirector"]),
         lib("LumenExport", ["LumenCore", "LumenProject", "LumenDirector", "LumenAnalysis", "LumenRender", "LumenAudio"]),
         lib("LumenUI", all),
