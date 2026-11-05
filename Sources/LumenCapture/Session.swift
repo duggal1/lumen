@@ -38,9 +38,31 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         super.init()
         guard let dev = deviceID.flatMap({ AVCaptureDevice(uniqueID: $0) }) ?? AVCaptureDevice.default(for: .video) else { throw CaptureError.noSource }
         session.beginConfiguration()
-        session.sessionPreset = .hd1280x720
+        // Camera hardware resolution is chosen before starting the session.
+        // The former fixed 720p preset threw away pixels from 1080p/4K devices.
+        let native = dev.formats.compactMap { format -> (format: AVCaptureDevice.Format, area: Int, fps: Double)? in
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            guard dimensions.width >= 640, dimensions.height >= 480,
+                  dimensions.width <= 4096, dimensions.height <= 2160,
+                  format.videoSupportedFrameRateRanges.contains(where: { $0.maxFrameRate >= 29.97 }) else { return nil }
+            return (format, Int(dimensions.width) * Int(dimensions.height),
+                    format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0)
+        }.max { lhs, rhs in lhs.area == rhs.area ? lhs.fps < rhs.fps : lhs.area < rhs.area }
+        if let native {
+            try dev.lockForConfiguration()
+            dev.activeFormat = native.format
+            let fps = native.fps >= 59.9 && native.area <= 1920 * 1080 ? 60 : 30
+            let interval = CMTime(value: 1, timescale: CMTimeScale(fps))
+            dev.activeVideoMinFrameDuration = interval
+            dev.activeVideoMaxFrameDuration = interval
+            dev.unlockForConfiguration()
+            session.sessionPreset = .inputPriority
+        } else {
+            session.sessionPreset = .high
+        }
         session.addInput(try AVCaptureDeviceInput(device: dev))
         let out = AVCaptureVideoDataOutput()
+        out.alwaysDiscardsLateVideoFrames = true
         out.setSampleBufferDelegate(self, queue: q)
         session.addOutput(out)
         session.commitConfiguration()
@@ -54,8 +76,18 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     }
     func captureOutput(_ o: AVCaptureOutput, didOutput sb: CMSampleBuffer, from c: AVCaptureConnection) {
         if input == nil {
-            let i = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.hevc, AVVideoWidthKey: 1280, AVVideoHeightKey: 720])
-            i.expectsMediaDataInRealTime = true; writer.add(i); input = i
+            guard let pixels = CMSampleBufferGetImageBuffer(sb) else { return }
+            let width = CVPixelBufferGetWidth(pixels), height = CVPixelBufferGetHeight(pixels)
+            let fps = 30
+            let bitrate = Int(Double(width * height * fps) * 0.11)
+            let i = AVAssetWriterInput(mediaType: .video, outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.hevc,
+                AVVideoWidthKey: width, AVVideoHeightKey: height,
+                AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: bitrate]
+            ])
+            i.expectsMediaDataInRealTime = true
+            guard writer.canAdd(i) else { return }
+            writer.add(i); input = i
         }
         if !started {
             guard writer.startWriting() else { return }
