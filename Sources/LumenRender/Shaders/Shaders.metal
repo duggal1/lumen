@@ -333,3 +333,32 @@ fragment float4 textSpriteFS(VO in [[stage_in]], constant TextSpriteU &u [[buffe
                             texture2d<float> image [[texture(0)]]) {
     return image.sample(linClamp, in.q) * clamp(u.opacity, 0.0, 1.0);
 }
+
+struct HighlightU {
+    float4 rect;
+    float4 content;
+    float opacity;
+    float strength;
+    int mode;
+};
+fragment float4 highlightFS(VO in [[stage_in]], constant HighlightU &u [[buffer(0)]]) {
+    float2 p = in.px;
+    if (p.x < u.content.x || p.y < u.content.y ||
+        p.x > u.content.x + u.content.z || p.y > u.content.y + u.content.w)
+        return float4(0.0);
+    float2 lo = p - u.rect.xy;
+    float2 hi = u.rect.xy + u.rect.zw - p;
+    bool inside = all(lo >= 0.0) && all(hi >= 0.0);
+    float alpha = 0.0;
+    if (u.mode == 0) {
+        alpha = inside ? 0.0 : u.strength * u.opacity;
+        return float4(0.0, 0.0, 0.0, alpha);
+    }
+    float2 d = max(max(-lo, -hi), float2(0.0));
+    float outsideDistance = length(d);
+    float insideDistance = min(min(lo.x, lo.y), min(hi.x, hi.y));
+    float distance = inside ? insideDistance : -outsideDistance;
+    if (u.mode == 1) alpha = (1.0 - smoothstep(1.0, 3.0, abs(distance))) * u.opacity * 0.85;
+    else alpha = exp(-pow(distance / 9.0, 2.0)) * u.opacity * 0.45;
+    return float4(float3(1.0, 0.78, 0.30) * alpha, alpha);
+}
