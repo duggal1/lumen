@@ -307,6 +307,20 @@ struct Inspector: View {
                 }
                 SliderRow(label: "Padding", v: m.bind(\.overlays.privacy.padding), range: 0...24, fmt: { "\(Int($0)) px" })
                 SliderRow(label: "Sensitivity", v: m.bind(\.overlays.privacy.entropyThreshold), range: 3...4.5, fmt: { String(format: "%.1f", $0) })
+                if m.timeline.overlays.privacy.mode == .blur || m.timeline.overlays.privacy.mode == .pixelate {
+                    Text("Blur and pixelation are visual effects, not secure redaction. Use Blend or Solid to hide secrets.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if m.privacyScanning {
+                    Text("Scanning for sensitive text. Export is disabled until the scan is applied.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if let error = m.privacyScanError {
+                    Text("Sensitive text scan failed: \(error)")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }.card()
             VStack(alignment: .leading, spacing: Space.s2) {
                 Text("Masks").font(AppType.title).foregroundStyle(Tok.text)

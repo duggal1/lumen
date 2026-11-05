@@ -183,6 +183,51 @@ fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]]
     return float4(rgb * a, a);
 }
 
+// ---- Privacy masks: source-space rectangles composited after screen content.
+// Mode 3 (Blend) never samples pixels inside the protected region; mode 2
+// (Solid) never samples the source. Blur/pixelation are visual effects only.
+struct PrivacyU {
+    float4 content;
+    float4 sourceRect;
+    float2 sourceSize;
+    float2 safeSample;
+    float radius;
+    int mode;
+    float block;
+    float pad;
+};
+fragment float4 privacyFS(VO in [[stage_in]], constant PrivacyU &u [[buffer(0)]],
+                          texture2d<float> src [[texture(0)]]) {
+    float alpha = rectMask(in.px, u.content, u.radius);
+    if (alpha <= 0.0) return float4(0.0);
+    float2 p = u.sourceRect.xy + in.q * u.sourceRect.zw;
+    float2 sourceUV = p / u.sourceSize;
+    float3 rgb;
+    if (u.mode == 2) {
+        // Deliberately opaque. Never let the original characters show through.
+        rgb = float3(0.09);
+    } else if (u.mode == 3) {
+        // Sample only outside the masked source rectangle. The CPU falls back
+        // to solid when every neighboring pixel could contain masked data.
+        rgb = src.sample(linClamp, u.safeSample / u.sourceSize, level(0.0)).rgb;
+    } else if (u.mode == 1) {
+        float pitch = max(u.block, 24.0);
+        float2 tile = floor(p / pitch) * pitch + 0.5 * pitch;
+        rgb = src.sample(linClamp, clamp(tile / u.sourceSize, 0.0, 1.0), level(0.0)).rgb;
+    } else {
+        // Visual obfuscation only. Blur is not presented as secure redaction.
+        float2 r = float2(max(u.block, 16.0)) / u.sourceSize;
+        rgb = float3(0);
+        for (int y = -2; y <= 2; ++y) {
+            for (int x = -2; x <= 2; ++x) {
+                rgb += src.sample(linClamp, clamp(sourceUV + float2(x, y) * r, 0.0, 1.0), level(0.0)).rgb;
+            }
+        }
+        rgb *= 1.0 / 25.0;
+    }
+    return float4(rgb * alpha, alpha);
+}
+
 // ---- Cursor sprite (premultiplied atlas, mip-mapped)
 struct CursorU { float4 content; float radius; float opacity; uint layer; float p; };
 fragment float4 cursorFS(VO in [[stage_in]], constant CursorU &u [[buffer(0)]], texture2d_array<float> atlas [[texture(0)]]) {

@@ -58,6 +58,16 @@ private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; 
 private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float }
+private struct PrivacyU {
+    var content: SIMD4<Float>
+    var sourceRect: SIMD4<Float>
+    var sourceSize: SIMD2<Float>
+    var safeSample: SIMD2<Float>
+    var radius: Float
+    var mode: Int32
+    var block: Float
+    var pad: Float
+}
 private struct WebU {
     var crop: SIMD4<Float>; var bubble: SIMD4<Float>
     var radius: Float; var shape: Float; var mirror: Float; var border: Float
@@ -98,7 +108,7 @@ public final class Renderer: @unchecked Sendable {
     public let device: MTLDevice
     private let queue: MTLCommandQueue
     private let lib: MTLLibrary
-    private let pBackdrop, pContent, pCursor, pRing, pWeb, pAccum: MTLRenderPipelineState
+    private let pBackdrop, pContent, pCursor, pRing, pWeb, pPrivacy, pAccum: MTLRenderPipelineState
     private var pResolve: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     private var personMatte: PersonMatteSequence?
     private let sem = DispatchSemaphore(value: 3)
@@ -126,6 +136,7 @@ public final class Renderer: @unchecked Sendable {
         pContent = try Self.pipe(d, l, "contentFS", f, 1)
         pCursor = try Self.pipe(d, l, "cursorFS", f, 1)
         pRing = try Self.pipe(d, l, "ringFS", f, 1)
+        pPrivacy = try Self.pipe(d, l, "privacyFS", f, 1)
         pWeb = try Self.pipe(d, l, "webFS", f, 1)
         pAccum = try Self.pipe(d, l, "accumFS", f, 2)
         var c: CVMetalTextureCache?
@@ -406,6 +417,35 @@ public final class Renderer: @unchecked Sendable {
         frag(e, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam), scale: Float(sc),
                          radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0))
         e.setFragmentTexture(src, index: 0); draw()
+
+        // Every privacy mask is anchored to SOURCE pixels and transformed by
+        // the exact same zoom camera as content. Mask before drawing cursor
+        // and webcam, never by stamping a static canvas rectangle afterward.
+        if !st.emphasis.masks.isEmpty {
+            e.setRenderPipelineState(pPrivacy)
+            let sourceSize = SIMD2<Float>(Float(g.src.x), Float(g.src.y))
+            for mask in st.emphasis.masks {
+                guard let projected = PrivacyMaskGeometry.canvasRect(mask.rect, geometry: g,
+                                                                      camera: cam, scale: sc),
+                      projected.z > 0.2, projected.w > 0.2 else { continue }
+                let safe = PrivacyMaskGeometry.outsideSample(mask.rect, sourceSize: sourceSize)
+                let requested: Int32 = switch mask.mode {
+                case .blur: 0
+                case .pixelate: 1
+                case .solid: 2
+                case .blend: 3
+                }
+                // If no region outside the mask exists, Blend falls back to
+                // an opaque solid instead of sampling protected pixels.
+                let mode: Int32 = requested == 3 && safe == nil ? 2 : requested
+                quad(e, projected, canvasF)
+                frag(e, PrivacyU(content: content, sourceRect: mask.rect,
+                                 sourceSize: sourceSize, safeSample: safe ?? .zero,
+                                 radius: Float(g.radius), mode: mode, block: 20, pad: 0))
+                e.setFragmentTexture(src, index: 0)
+                draw()
+            }
+        }
 
         // click rings
         if tl.cursor.clickRing != nil {
