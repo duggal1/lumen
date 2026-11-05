@@ -20,3 +20,15 @@ public func zeroPhaseSmooth(_ input: [Double], omega: Double, dt: Double) -> [Do
     }
     return output
 }
+
+/// Scale-corrected exact critically damped spring used by the LIVE camera.
+/// The offline camera no longer requires it, but live zoom/pan still does.
+@inline(__always) func scaledSpring(_ x: inout Double, _ v: inout Double,
+                                     target: Double, omega w: Double,
+                                     dt: Double, scale s: Double) {
+    let d = (x - target) * s, vs = v * s, e = exp(-w * dt)
+    let nd = (d + (vs + w * d) * dt) * e
+    let nv = (vs - w * (vs + w * d) * dt) * e
+    x = target + nd / s
+    v = nv / s
+}
