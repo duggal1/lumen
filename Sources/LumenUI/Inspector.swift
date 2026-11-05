@@ -400,6 +400,15 @@ struct Inspector: View {
                           options: WebcamBackdrop.allCases.map { ($0, $0.rawValue, "person.crop.rectangle") })
                     .frame(width: 168)
             }
+            if m.timeline.webcam?.backdrop == .image {
+                Row(label: "Image") {
+                    LButton(title: m.timeline.webcam?.backdropImagePath.map {
+                        URL(fileURLWithPath: $0).lastPathComponent
+                    } ?? "Choose image…", icon: "photo", kind: .secondary) {
+                        m.importWebcamBackground()
+                    }
+                }
+            }
             if m.timeline.webcam?.backdrop != .original {
                 Text("Person mask generated locally using Vision. It may take time to analyze a recording.")
                     .font(AppType.caption).foregroundStyle(Tok.text2).frame(maxWidth: .infinity, alignment: .leading)
