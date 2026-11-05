@@ -44,6 +44,9 @@ import LumenAudio
     timeline.audio.clickSounds = false
     timeline.audio.whooshes = false
     timeline.audio.micClean = false
+    // Default behavior mutes microphone audio during speed ramps.
+    // Disable it here to test the actual waveform's output-time alignment.
+    timeline.audio.muteMicInRamps = false
     timeline.timeMap.ramps = [SpeedRamp(start: 1, end: 3, speed: 2.2)]
     timeline = Director.derive(timeline, input: DirectorInput(events: [], source: source), revision: 1)
     let mic = (0..<Int(fs * 4)).map { i -> Float in
