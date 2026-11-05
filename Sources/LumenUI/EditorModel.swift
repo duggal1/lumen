@@ -241,6 +241,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
 
     func updateExportSettings(_ update: (inout ExportSettings) -> Void) {
         update(&exportSettings)
+        if exportSettings.codec == .prores { exportSettings.container = .mov }
         exportSettings.save()
     }
 
