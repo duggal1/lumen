@@ -266,12 +266,17 @@ fragment float4 accumFS(VO in [[stage_in]], constant AccU &u [[buffer(0)]], text
 // ---- Resolve: scene over cached backdrop, triangular dither, convert to output format
 static uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
 static float rnd(uint2 p, uint seed) { return float(pcg(p.x + pcg(p.y + pcg(seed)))) * (1.0 / 4294967295.0); }
-struct ResU { float levels; uint seed; };
+struct ResU { float levels; uint seed; float blur; };
 fragment float4 resolveFS(VO in [[stage_in]], constant ResU &u [[buffer(0)]],
-                          texture2d<float, access::read> scene [[texture(0)]], texture2d<float, access::read> back [[texture(1)]]) {
+                          texture2d<float, access::read> scene [[texture(0)]],
+                          texture2d<float> back [[texture(1)]]) {
     uint2 g = uint2(in.pos.xy);
     float4 s = scene.read(g);
-    float3 c = s.rgb + back.read(g).rgb * (1.0 - s.a);
+    float2 uv = (float2(g) + 0.5) / float2(back.get_width(), back.get_height());
+    // Only the backdrop has mipmaps. Text, cursor, and webcam are drawn into
+    // the sharp scene layer, sampled without any blur.
+    float3 background = back.sample(linMip, uv, level(u.blur)).rgb;
+    float3 c = s.rgb + background * (1.0 - s.a);
     float n = rnd(g, u.seed) + rnd(g, u.seed + 1u) - 1.0;
     return float4(clamp(c + n / u.levels, 0.0, 1.0), 1.0);
 }

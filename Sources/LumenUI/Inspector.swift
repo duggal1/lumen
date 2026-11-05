@@ -114,6 +114,12 @@ struct Inspector: View {
                         Text("This Mac").font(AppType.body).foregroundStyle(Tok.text2)
                     }
                 }
+                ToggleRow(label: "Blur behind zoom", on: m.bind(\.style.zoomBackgroundBlur))
+                if m.timeline.style.zoomBackgroundBlur {
+                    Text("Softens only the background. Screen text and cursor stay sharp.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }.card()
             VStack(spacing: 0) {
                 SliderRow(label: "Radius", v: m.bind(\.style.cornerRadius), range: 0...40, fmt: { "\(Int($0))" })
