@@ -21,9 +21,39 @@ public struct DirectorInput: Sendable {
     }
 }
 
+/// Reusable stage cache for interactive replans. Only stages that do not
+/// depend on the zoom/camera parameters are retained; everything else is
+/// still recomputed, so the result is identical to a cold derive.
+public struct DeriveCache: Sendable {
+    struct CursorKey: Equatable {
+        var style: CursorStyle
+        var taps: [TapIndicator]
+        var timeMap: [Double]
+    }
+    var cursorKey: CursorKey?
+    var cursor: (CursorTrack, [ClickFX])?
+    public init() {}
+}
+
+extension TimeMap {
+    /// Auto speed-ramp ids are regenerated per replan, so `==` on the ramp
+    /// array never matches a cached stage. Key on the values that matter.
+    var signature: [Double] {
+        [trimStart, trimEnd] + cuts.flatMap { [$0.start, $0.end] }
+            + ramps.flatMap { [$0.start, $0.end, $0.speed] }
+    }
+}
+
 public enum Director {
     /// Pure and deterministic: same input, same Timeline. Replaces only .auto zoom/ramps; .manual survive.
     public static func derive(_ tl: Timeline, input: DirectorInput, revision: Int) -> Timeline {
+        var cache = DeriveCache()
+        return derive(tl, input: input, revision: revision, cache: &cache)
+    }
+
+    /// Cache-aware overload used by the interactive editor. The returned
+    /// Timeline is byte-for-byte identical to the uncached call.
+    public static func derive(_ tl: Timeline, input: DirectorInput, revision: Int, cache: inout DeriveCache) -> Timeline {
         var t = tl
         let src = input.source
         var tm = t.timeMap
@@ -42,7 +72,15 @@ public enum Director {
             t.zoom = (manual + ZoomPlanner.plan(events: input.events, ax: input.ax, activity: input.activity, src: src, p: t.camera,
                                                 tm: tm, avoid: avoid)).sorted { $0.start < $1.start }
         }
-        let (cursor, clicks) = CursorPipeline.run(events: input.events, taps: t.overlays.taps, st: t.cursor, tm: tm, src: src)
+        let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature)
+        let cursor: CursorTrack, clicks: [ClickFX]
+        if cache.cursorKey == key, let cached = cache.cursor {
+            (cursor, clicks) = cached
+        } else {
+            let result = CursorPipeline.run(events: input.events, taps: t.overlays.taps, st: t.cursor, tm: tm, src: src)
+            cache.cursorKey = key; cache.cursor = result
+            (cursor, clicks) = result
+        }
         let size = SIMD2(Double(src.width), Double(src.height))
         let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size, outDur: tm.outputDuration, loop: t.cursor.loop)
         let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad,
@@ -64,7 +102,9 @@ public enum Director {
             for z in t.zoom {
                 let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
                 guard b - a > 0.2 else { continue }
-                let g = min(-12 + 6 * (z.scale - 1), 0)
+                // Small zooms still need an audible whoosh: floor at -9 dB,
+                // rise gently with zoom magnitude, never above -2 dB.
+                let g = clamp(-9 + 5 * (z.scale - 1), -9, -2)
                 cues.append(SFXCue(t: a, kind: .whooshIn, gainDb: g)); cues.append(SFXCue(t: b, kind: .whooshOut, gainDb: g))
             }
         }

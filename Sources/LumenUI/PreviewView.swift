@@ -8,8 +8,28 @@ import LumenRender
 
 private struct Unsafe<T>: @unchecked Sendable { let v: T }
 
-/// Metal preview. Same Renderer.encode as export. Driven by the display link's targetTimestamp; renders only when something changed
-/// (playhead, edit, resize); skips frames by time when the GPU is behind, never queues them.
+/// One render request. Latest wins: the stream keeps only the newest value,
+/// so a slow GPU skips frames by time instead of building a queue.
+private struct Tick: Sendable {
+    var timeline: Timeline
+    var t: Double
+    var size: SIMD2<Int>
+    var present: Double
+    var fps: Double
+    var uiTime: Double
+    var pointer: SIMD4<Float>
+    var backingScale: Double
+    var maskDirectory: URL?
+}
+
+private struct FrameKey: Equatable {
+    var version: Int, t: Double, width: Int, height: Int, phase: Int
+    var px: Int, py: Int, pz: Int
+}
+
+/// Metal preview. Same Renderer.encode as export. One long-lived render loop;
+/// content is evaluated for the vsync AFTER the next one and presented at
+/// exactly that time, so every frame has a full vsync of scheduling slack.
 struct PreviewView: NSViewRepresentable {
     let model: EditorModel
     func makeNSView(context: Context) -> PreviewNSView { PreviewNSView(model: model) }
@@ -17,24 +37,50 @@ struct PreviewView: NSViewRepresentable {
 }
 
 @MainActor final class PreviewNSView: NSView {
-    private let model: EditorModel, metal = CAMetalLayer()
+    private let model: EditorModel
+    private let metal: CAMetalLayer
     private var link: CADisplayLink?
-    private let busy = OSAllocatedUnfairLock(initialState: false)
-    private var lastKey: (Int, Double, Int, Int, Int) = (-1, -1, 0, 0, 0)
+    private var lastKey = FrameKey(version: -1, t: -1, width: 0, height: 0, phase: 0, px: 0, py: 0, pz: 0)
     private let t0 = CACurrentMediaTime()
     private var pointer = SIMD3<Double>(0.5, 0.5, 0)
     private var pointerTarget = SIMD3<Double>(0.5, 0.5, 0)
     private var lastPointerTime = 0.0
     private var pointerTrackingArea: NSTrackingArea?
+    private let feed: AsyncStream<Tick>.Continuation
+    private let loop: Task<Void, Never>
 
     init(model: EditorModel) {
-        self.model = model; super.init(frame: .zero)
-        wantsLayer = true; layer = metal
-        metal.device = model.renderer.device; metal.pixelFormat = .bgra8Unorm; metal.framebufferOnly = true
-        metal.colorspace = CGColorSpace(name: CGColorSpace.displayP3); metal.displaySyncEnabled = true; metal.maximumDrawableCount = 3
-        metal.isOpaque = true
-        metal.masksToBounds = true
-        metal.cornerRadius = Radius.card
+        self.model = model
+        let ml = CAMetalLayer(); metal = ml
+        let (stream, continuation) = AsyncStream<Tick>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        feed = continuation
+        let renderer = model.renderer, session = model.session, metalLayer = Unsafe(v: ml)
+        loop = Task.detached(priority: .userInitiated) {
+            for await tick in stream {
+                if Task.isCancelled { break }
+                let sourceTime = tick.timeline.timeMap.source(atOutput: tick.t)
+                guard let screen = try? await session.screen.frame(atSource: sourceTime) else { continue }
+                let webcam = tick.timeline.webcam != nil
+                    ? try? await session.webcam?.frame(atSource: sourceTime) : nil
+                let request = RenderRequest(timeline: tick.timeline, t: tick.t, screen: screen, webcam: webcam,
+                                            canvas: tick.size, fps: tick.fps, backingScale: tick.backingScale,
+                                            quality: .preview, uiTime: tick.uiTime, pointer: tick.pointer,
+                                            personMaskDirectory: tick.maskDirectory)
+                var tries = 0
+                while !renderer.draw(request, to: metalLayer.v, presentAt: tick.present), tries < 4 {
+                    tries += 1
+                    try? await Task.sleep(for: .milliseconds(6))
+                }
+            }
+        }
+        super.init(frame: .zero)
+        wantsLayer = true; layer = ml
+        ml.device = renderer.device; ml.pixelFormat = .bgra8Unorm; ml.framebufferOnly = true
+        ml.colorspace = CGColorSpace(name: CGColorSpace.displayP3); ml.displaySyncEnabled = true
+        ml.maximumDrawableCount = 3
+        ml.isOpaque = true
+        ml.masksToBounds = true
+        ml.cornerRadius = Radius.card
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -72,35 +118,36 @@ struct PreviewView: NSViewRepresentable {
         // The export owns the GPU until encoding finishes. The paused editor
         // does not compete for frames or media engine bandwidth.
         if case .running = model.exportState { return }
-        let t = model.clock.time(at: l.targetTimestamp)
-        if model.clock.playing { model.tick(t) }
-        let (tl, ver) = model.box.get(), ds = metal.drawableSize
-        // The dither field is a living surface: redraw every display tick. Static backgrounds stay cache-stable.
+        let interval = max(l.targetTimestamp - l.timestamp, 1.0 / 240)
+        let present = l.targetTimestamp + interval          // the vsync after next
+        let now = l.targetTimestamp
+        if model.clock.playing { model.tick(model.clock.time(at: now)) }
+        let (tl, version) = model.box.get(), ds = metal.drawableSize
         let animated = (tl.style.background == .dither || tl.style.background == .wave || tl.style.background == .field)
             && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let dt = lastPointerTime > 0 ? min(max(l.targetTimestamp - lastPointerTime, 0), 0.1) : 0
-        lastPointerTime = l.targetTimestamp
+        let dt = lastPointerTime > 0 ? min(max(now - lastPointerTime, 0), 0.1) : 0
+        lastPointerTime = now
         pointer += (pointerTarget - pointer) * (1 - exp(-dt * 7))
-        let uiTime = animated ? (model.clock.playing ? t : l.targetTimestamp - t0) : 0
+        let t = model.clock.time(at: present)
+        let uiTime = animated ? (model.clock.playing ? t : now - t0) : 0
         let phase = animated ? Int(uiTime * 240) : 0
-        let key = (ver, t, Int(ds.width), Int(ds.height), phase)
-        guard key != lastKey, ds.width > 2, busy.withLock({ let b = $0; $0 = true; return !b }) else { return }
+        let key = FrameKey(version: version, t: t, width: Int(ds.width), height: Int(ds.height), phase: phase,
+                           px: Int(pointer.x * 1000), py: Int(pointer.y * 1000), pz: Int(pointer.z * 1000))
+        guard key != lastKey, ds.width > 2 else { return }
         lastKey = key
-        let renderer = model.renderer, session = model.session, layer = Unsafe(v: metal), busy = busy
-        let pointerValue = animated ? SIMD4(Float(pointer.x), Float(pointer.y), Float(pointer.z), 0) : .zero
-        Task.detached(priority: .userInitiated) {
-            defer { busy.withLock { $0 = false } }
-            let s = tl.timeMap.source(atOutput: t)
-            guard let sf = try? await session.screen.frame(atSource: s) else { return }
-            let wf = tl.webcam != nil ? try? await session.webcam?.frame(atSource: s) : nil
-            let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: SIMD2(Int(ds.width), Int(ds.height)), fps: 60,
-                                    backingScale: session.meta.source.backingScale, quality: .preview, uiTime: uiTime,
-                                    pointer: pointerValue,
-                                    personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true))
-            renderer.draw(req, to: layer.v)
-        }
+        feed.yield(Tick(timeline: tl, t: t, size: SIMD2(Int(ds.width), Int(ds.height)), present: present,
+                        fps: 1 / interval, uiTime: uiTime,
+                        pointer: animated ? SIMD4(Float(pointer.x), Float(pointer.y), Float(pointer.z), 0) : .zero,
+                        backingScale: model.session.meta.source.backingScale,
+                        maskDirectory: model.session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true)))
     }
-    deinit { MainActor.assumeIsolated { link?.invalidate() } }
+    deinit {
+        feed.finish()
+        loop.cancel()
+        // AppKit tears views down on the main thread; the guard keeps a
+        // non-main release from trapping in assumeIsolated.
+        if Thread.isMainThread { MainActor.assumeIsolated { link?.invalidate() } }
+    }
 }
 
 /// Drag a rectangle on the preview to frame the selected zoom segment (maps through the live camera back to source coords).

@@ -102,16 +102,42 @@ private final class MipCache {
     }
 }
 
+/// Counts presented frames and how often a frame missed its expected vsync.
+/// This turns "feels smooth" into a number the debug HUD can show.
+public final class PresentStats: @unchecked Sendable {
+    private let state = OSAllocatedUnfairLock<(last: Double, frames: Int, late: Int, worst: Double)>(initialState: (0, 0, 0, 0))
+    public init() {}
+    public func record(_ time: Double, expected: Double) {
+        guard time > 0 else { return }
+        state.withLock { s in
+            if s.last > 0 {
+                let delta = time - s.last
+                s.frames += 1
+                if delta > expected * 1.5 { s.late += 1 }
+                s.worst = max(s.worst, delta)
+            }
+            s.last = time
+        }
+    }
+    public var snapshot: (frames: Int, late: Int, worstMs: Double) {
+        state.withLock { ($0.frames, $0.late, $0.worst * 1000) }
+    }
+    public func reset() { state.withLock { $0 = (0, 0, 0, 0) } }
+}
+
 /// Pure-ish renderer: output depends only on (RenderRequest). Owned by ONE render queue; not thread-safe.
 /// Preview and export call the same `encode`. Triple-buffered; the frame loop allocates nothing after warm-up.
 public final class Renderer: @unchecked Sendable {
     public let device: MTLDevice
+    public let presentStats = PresentStats()
     private let queue: MTLCommandQueue
     private let lib: MTLLibrary
     private let pBackdrop, pContent, pCursor, pRing, pWeb, pPrivacy, pAccum: MTLRenderPipelineState
     private var pResolve: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     private var personMatte: PersonMatteSequence?
     private let sem = DispatchSemaphore(value: 3)
+    /// EMA of GPU seconds per motion-blur sample, used to size preview blur.
+    private let perSample = OSAllocatedUnfairLock<Double>(initialState: 0)
     private var slot = 0
     private var work: [MTLTexture] = [], accum: [MTLTexture] = []
     private var backdrop: MTLTexture?
@@ -238,11 +264,16 @@ public final class Renderer: @unchecked Sendable {
     // MARK: Entry points
 
     /// Preview: renders into the layer's next drawable. Never blocks: returns false when all 3 frames are in flight.
+    /// `presentAt` lets the caller present on an exact host-clock instant, so a
+    /// frame rendered one vsync ahead has a full frame of scheduling slack.
     @discardableResult
-    public func draw(_ r: RenderRequest, to layer: CAMetalLayer) -> Bool {
+    public func draw(_ r: RenderRequest, to layer: CAMetalLayer, presentAt: Double? = nil) -> Bool {
         guard let dr = layer.nextDrawable(), let cb = queue.makeCommandBuffer() else { return false }
         guard encode(r, output: dr.texture, commandBuffer: cb, wait: false) else { return false }
-        cb.present(dr); cb.commit(); return true
+        let stats = presentStats, expected = 1 / max(r.fps, 1)
+        dr.addPresentedHandler { d in stats.record(d.presentedTime, expected: expected) }
+        if let t = presentAt, t > CACurrentMediaTime() { cb.present(dr, atTime: t) } else { cb.present(dr) }
+        cb.commit(); return true
     }
 
     /// Export: renders into an IOSurface-backed BGRA8 or ARGB2101010 pixel buffer. `completion` fires when the GPU is done.
@@ -381,8 +412,13 @@ public final class Renderer: @unchecked Sendable {
             e.setFragmentTexture(K > 1 ? accum[s] : work[s], index: 0); e.setFragmentTexture(bd, index: 1)
             e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); e.endEncoding()
         }
-        let sem = self.sem, keep = Keep(o: (r.screen, r.webcam))
-        cb.addCompletedHandler { _ in withExtendedLifetime(keep) {}; sem.signal() }
+        let sem = self.sem, keep = Keep(o: (r.screen, r.webcam)), cost = perSample, samples = Double(K)
+        cb.addCompletedHandler { b in
+            withExtendedLifetime(keep) {}
+            let gpu = b.gpuEndTime - b.gpuStartTime
+            if gpu > 0 { cost.withLock { $0 = $0 == 0 ? gpu / samples : $0 * 0.9 + 0.1 * gpu / samples } }
+            sem.signal()
+        }
         return true
     }
 
@@ -396,7 +432,16 @@ public final class Renderer: @unchecked Sendable {
         let zoom = abs(log(Double(b.cameraScale) / Double(a.cameraScale))) * g.content.z * 0.5
         let cur = Double(simd_length(b.cursor.position - a.cursor.position)) * k * sc
         let n = Int(ceil(max(cam, zoom, cur) / 2))
-        return min(max(n, 1), r.quality == .preview ? min(2, tl.camera.maxSamples) : tl.camera.maxSamples)
+        var cap = tl.camera.maxSamples
+        if r.quality == .preview {
+            // Spend at most half of the frame budget on blur samples. Once
+            // the GPU cost is measured, this can rise above 2 on fast Macs
+            // and falls back to 2 before the first measurement.
+            let per = perSample.withLock { $0 }
+            let budget = per > 0 ? min(max(Int(0.5 / max(r.fps, 1) / per), 1), 4) : 2
+            cap = min(budget, tl.camera.maxSamples)
+        }
+        return min(max(n, 1), cap)
     }
 
     private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, st: FrameState, r: RenderRequest, g: Geometry,
