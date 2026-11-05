@@ -24,7 +24,10 @@ enum CameraSolver {
         var tr = CameraTrack(count: n)
         let soft = 8 / src.x, base = 4.5 / max(p.omegaZoom, 1)
         func cursorN(_ t: Double) -> SIMD2<Double> {
-            let i = min(max(Int(t * gridRate), 0), cursor.x.count - 1)
+            // Delay only follow/pan targets. Click-based fixed focal points
+            // remain synchronized with the original click timestamps.
+            let sampledTime = max(0, t - clamp(p.followDelay, 0, 0.5))
+            let i = min(max(Int(sampledTime * gridRate), 0), cursor.x.count - 1)
             return SIMD2(Double(cursor.x[i]) / src.x, Double(cursor.y[i]) / src.y)
         }
         let shots: [Shot] = zoom.filter { $0.end - $0.start > 0.1 && $0.scale > 1.001 && $0.start < outDur }
@@ -76,7 +79,13 @@ enum CameraSolver {
             case .fixed(let x, let y): c = SIMD2(x, y)
             case .element(let x, let y, let w, let h): c = SIMD2(x + w / 2, y + h / 2)
             }
-            return SIMD2(softClamp(c.x, hw, 1 - hw, soft), softClamp(c.y, hw, 1 - hw, soft))
+            // A positive view-space cursor offset moves the camera in the
+            // opposite direction, leaving the cursor right/below center.
+            let view = exp(-sh.lz)
+            let bx = clamp(p.centerOffsetX, -0.25, 0.25) * view
+            let by = clamp(p.centerOffsetY, -0.25, 0.25) * view
+            return SIMD2(softClamp(c.x - bx, hw, 1 - hw, soft),
+                         softClamp(c.y - by, hw, 1 - hw, soft))
         }
         var cx = [Double](repeating: 0.5, count: n), cy = cx, cz = [Double](repeating: 0, count: n)
         var x1 = SIMD2<Double>(0.5, 0.5), v1 = SIMD2<Double>.zero, x2 = x1, v2 = SIMD2<Double>.zero
