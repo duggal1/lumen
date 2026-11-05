@@ -265,6 +265,18 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     }
 }
 
+public enum WebcamBackdrop: String, Codable, CaseIterable, Sendable {
+    case original = "Original"
+    case transparent = "Remove background"
+    case wallpaper = "Desktop wallpaper"
+    case canvas = "Canvas color"
+}
+
+public enum WebcamEnhancement: String, Codable, CaseIterable, Sendable {
+    case natural = "Natural"
+    case crisp = "Crisp"
+}
+
 public struct WebcamLayout: Codable, Equatable, Sendable {
     public enum Corner: String, Codable, CaseIterable, Sendable { case topLeft, topRight, bottomLeft, bottomRight }
     public enum Shape: String, Codable, CaseIterable, Sendable { case circle, roundRect }
@@ -274,8 +286,11 @@ public struct WebcamLayout: Codable, Equatable, Sendable {
     public var mirror = true, border = true, shadow = true, autoFrame = true
     public var faceFill = 0.31
     public var faceZoom = 0.6
+    public var backdrop: WebcamBackdrop = .original
+    public var enhancement: WebcamEnhancement = .natural
+    public var detailAmount = 0.5
     public init() {}
-    enum CodingKeys: String, CodingKey { case corner, size, shape, mirror, border, shadow, autoFrame, faceFill, faceZoom }
+    enum CodingKeys: String, CodingKey { case corner, size, shape, mirror, border, shadow, autoFrame, faceFill, faceZoom, backdrop, enhancement, detailAmount }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         corner = try c.decodeIfPresent(Corner.self, forKey: .corner) ?? corner
@@ -287,6 +302,9 @@ public struct WebcamLayout: Codable, Equatable, Sendable {
         autoFrame = try c.decodeIfPresent(Bool.self, forKey: .autoFrame) ?? autoFrame
         faceFill = try c.decodeIfPresent(Double.self, forKey: .faceFill) ?? faceFill
         faceZoom = try c.decodeIfPresent(Double.self, forKey: .faceZoom) ?? faceZoom
+        backdrop = try c.decodeIfPresent(WebcamBackdrop.self, forKey: .backdrop) ?? backdrop
+        enhancement = try c.decodeIfPresent(WebcamEnhancement.self, forKey: .enhancement) ?? enhancement
+        detailAmount = try c.decodeIfPresent(Double.self, forKey: .detailAmount) ?? detailAmount
     }
 }
 
