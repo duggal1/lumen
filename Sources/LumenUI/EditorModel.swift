@@ -240,6 +240,19 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
 
     /// External voice-over sits on an independent OUTPUT-time lane so translated
     /// narration isn't resampled a second time by source-time speed ramps.
+    func importWebcamBackground() {
+        let picker = NSOpenPanel()
+        picker.allowedContentTypes = [.image]
+        picker.allowsMultipleSelection = false
+        picker.prompt = "Choose background"
+        if picker.runModal() == .OK, let url = picker.url {
+            edit { tl in
+                tl.webcam?.backdropImagePath = url.path
+                tl.webcam?.backdrop = .image
+            }
+        }
+    }
+
     func importVoiceover() {
         let picker = NSOpenPanel()
         picker.allowedContentTypes = [.audio]
