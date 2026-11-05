@@ -308,6 +308,14 @@ struct Inspector: View {
         return VStack(spacing: 24) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Clean mic", on: m.bind(\.audio.micClean))
+                Row(label: "Voice profile") {
+                    LSegmented(sel: m.bind(\.audio.voiceProfile),
+                               items: [(.natural, "Natural"), (.studio, "Studio")]).frame(width: 156)
+                }
+                if m.timeline.audio.voiceProfile == .studio {
+                    SliderRow(label: "Polish", v: m.bind(\.audio.studioAmount), range: 0...1,
+                              fmt: { "\(Int($0 * 100))%" })
+                }
                 ToggleRow(label: "Click sounds", on: m.bind(\.audio.clickSounds))
                 if m.timeline.audio.clickSounds {
                     Row(label: "Click tone") {
@@ -335,16 +343,45 @@ struct Inspector: View {
     private var webcam: some View {
         let m = model
         return VStack(spacing: 0) {
-            Row(label: "Corner") { LDropdown(sel: Binding(get: { m.timeline.webcam?.corner ?? .bottomRight }, set: { v in m.edit { $0.webcam?.corner = v } }),
+            Row(label: "Corner") { LDropdown(sel: layoutBinding(.cameraOverlay, \.corner),
                 options: WebcamLayout.Corner.allCases.map { ($0, $0.rawValue, "rectangle.inset.filled") }).frame(width: 130) }
-            SliderRow(label: "Size", v: Binding(get: { m.timeline.webcam?.size ?? 0.22 }, set: { v in m.edit(coalesce: true) { $0.webcam?.size = v } }), range: 0.1...0.4)
-            Row(label: "Shape") { LSegmented(sel: Binding(get: { m.timeline.webcam?.shape ?? .circle }, set: { v in m.edit { $0.webcam?.shape = v } }),
+            SliderRow(label: "Size", v: layoutBinding(.cameraOverlay, \.size), range: 0.1...0.4)
+            Row(label: "Shape") { LSegmented(sel: layoutBinding(.cameraOverlay, \.shape),
                                              items: [(.circle, "Circle"), (.roundRect, "Square")]).frame(width: 130) }
-            ToggleRow(label: "Mirror", on: Binding(get: { m.timeline.webcam?.mirror ?? true }, set: { v in m.edit { $0.webcam?.mirror = v } }))
-            ToggleRow(label: "Border", on: Binding(get: { m.timeline.webcam?.border ?? true }, set: { v in m.edit { $0.webcam?.border = v } }))
-            ToggleRow(label: "Auto framing", on: Binding(get: { m.timeline.webcam?.autoFrame ?? true }, set: { v in m.edit { $0.webcam?.autoFrame = v } }))
+            ToggleRow(label: "Mirror", on: layoutBinding(.cameraOverlay, \.mirror))
+            ToggleRow(label: "Border", on: layoutBinding(.cameraOverlay, \.border))
+            ToggleRow(label: "Auto framing", on: layoutBinding(.cameraOverlay, \.autoFrame))
             SliderRow(label: "Face zoom", v: Binding(get: { m.timeline.webcam?.faceZoom ?? 0.6 }, set: { v in m.edit(coalesce: true) { $0.webcam?.faceZoom = v } }), range: 0...1)
             SliderRow(label: "Face size", v: Binding(get: { m.timeline.webcam?.faceFill ?? 0.31 }, set: { v in m.edit(coalesce: true) { $0.webcam?.faceFill = v } }), range: 0.2...0.5)
+        }.card()
+        VStack(spacing: 0) {
+            Row(label: "Video polish") {
+                LSegmented(sel: Binding(get: { m.timeline.webcam?.enhancement ?? .natural },
+                                        set: { v in m.edit { $0.webcam?.enhancement = v } }),
+                           items: [(.natural, "Natural"), (.crisp, "Crisp")]).frame(width: 156)
+            }
+            if m.timeline.webcam?.enhancement == .crisp {
+                SliderRow(label: "Detail", v: Binding(get: { m.timeline.webcam?.detailAmount ?? 0.5 },
+                                                    set: { v in m.edit(coalesce: true) { $0.webcam?.detailAmount = v } }),
+                          range: 0...1, fmt: { "\(Int($0 * 100))%" })
+            }
+            Row(label: "Background") {
+                LDropdown(sel: Binding(get: { m.timeline.webcam?.backdrop ?? .original },
+                                      set: { v in m.edit { $0.webcam?.backdrop = v } }),
+                          options: WebcamBackdrop.allCases.map { ($0, $0.rawValue, "person.crop.rectangle") })
+                    .frame(width: 168)
+            }
+            if m.timeline.webcam?.backdrop != .original {
+                Text("Person mask generated locally using Vision. It may take time to analyze a recording.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Row(label: "4K output") {
+                LToggle(on: Binding(get: { m.exportSettings.resolution == .ultraHD },
+                                    set: { on in m.updateExportSettings { $0.resolution = on ? .source : .ultraHD } }),
+                        label: "4K composition")
+            }
+            Text("4K output increases pixel dimensions; it cannot restore detail the camera never captured.")
+                .font(AppType.caption).foregroundStyle(Tok.text2).frame(maxWidth: .infinity, alignment: .leading)
         }.card()
     }
 

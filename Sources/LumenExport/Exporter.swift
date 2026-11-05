@@ -52,7 +52,9 @@ public enum FrameImage {
         let wf = tl.webcam != nil ? try? await session.webcam?.frame(atSource: s) : nil
         guard let pb = makeBuffer(canvas.x, canvas.y) else { throw ExportError.render }
         let latch = Latch()
-        let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: canvas, fps: fps, backingScale: session.meta.source.backingScale)
+        let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: canvas, fps: fps,
+                                backingScale: session.meta.source.backingScale,
+                                personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true))
         guard renderer.render(req, into: pb, completion: { latch.fire() }) else { throw ExportError.render }
         await latch.wait(); return pb
     }
@@ -179,7 +181,8 @@ public enum Exporter {
             guard let pb = pbo else { throw ExportError.render }
             let latch = Latch()
             let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: SIMD2(w, h), fps: Double(fps),
-                                    backingScale: session.meta.source.backingScale)
+                                    backingScale: session.meta.source.backingScale,
+                                    personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true))
             let compositeStart = HostClock.now()
             guard renderer.render(req, into: pb, completion: { latch.fire() }) else { throw ExportError.render }
             compositeSeconds += HostClock.now() - compositeStart

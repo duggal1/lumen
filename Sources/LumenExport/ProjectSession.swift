@@ -43,7 +43,8 @@ public final class ProjectSession: @unchecked Sendable {
                                       vocabulary: timeline.captions.vocabulary, includeSpeech: timeline.captions.enabled,
                                       includeActivity: !snapshot.events.contains(where: \.hasPosition),
                                       includeFace: meta.webcam != nil,
-                                      includePersonMask: timeline.layouts.contains { $0.kind == .cameraCutout })
+                                      includePersonMask: timeline.layouts.contains { $0.kind == .cameraCutout }
+                                          || (timeline.webcam?.backdrop != nil && timeline.webcam?.backdrop != .original))
         let result = await AnalysisService.shared.run(request)
         guard !Task.isCancelled else { return result }
         inputState.withLock { current in

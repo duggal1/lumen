@@ -26,7 +26,8 @@ public final class AudioMixer: @unchecked Sendable {
     private let mic: [Float]?, micOffset: Double, sys: [Float]?, sysOffset: Double
     private let bank = SFXBank()
     private let lock = NSLock()
-    private var voice: (clean: Bool, x: [Float])?
+    private struct VoiceKey: Equatable { var clean: Bool; var profile: VoiceProfile; var amount: Double }
+    private var voice: (key: VoiceKey, x: [Float])?
     private var music: MusicCache?
     public var denoiser: any Denoiser = defaultDenoiser
 
@@ -36,22 +37,28 @@ public final class AudioMixer: @unchecked Sendable {
 
     // MARK: Cached stages
 
-    private func voiceChain(_ clean: Bool) -> [Float]? {
+    private func voiceChain(_ plan: AudioPlan) -> [Float]? {
         lock.lock(); defer { lock.unlock() }
-        if let v = voice, v.clean == clean { return v.x }
+        let key = VoiceKey(clean: plan.micClean, profile: plan.voiceProfile,
+                           amount: max(0, min(plan.studioAmount, 1)))
+        if let v = voice, v.key == key { return v.x }
         guard let m = mic else { return nil }
         let fs = AudioIO.fs
         var hp = Biquad.highpass(80, fs: fs), eq = Biquad.peaking(3000, q: 1, db: 2, fs: fs)
         var x = m.map { Float(hp.run(Double($0))) }
-        if clean { x = denoiser.process(x) }
+        if plan.micClean { x = denoiser.process(x) }
         x = x.map { Float(eq.run(Double($0))) }
-        x = Compressor().process(x, fs: fs)
+        if plan.voiceProfile == .studio {
+            x = StudioVoice.process(x, amount: key.amount, fs: fs)
+        } else {
+            x = Compressor().process(x, fs: fs)
+        }
         let lu = Loudness.integrated([x])
         if lu > -69 {
-            let g = Float(pow(10, clamp(Self.voiceRefLUFS - lu, -24, 24) / 20))
+            let g = Float(pow(10, clamp((plan.voiceProfile == .studio ? -14.5 : Self.voiceRefLUFS) - lu, -24, 24) / 20))
             x = vDSP.multiply(g, x)
         }
-        voice = (clean, x)
+        voice = (key, x)
         return x
     }
 
@@ -125,7 +132,7 @@ public final class AudioMixer: @unchecked Sendable {
         var L = [Float](repeating: 0, count: n), R = L
         var hasProgram = false                                   // voice / system / music (not just SFX)
 
-        if let v = voiceChain(a.micClean) {
+        if let v = voiceChain(a) {
             let y = Self.mapped(v, offset: micOffset, tm: tm, n: n, muteRamps: a.muteMicInRamps)
             for i in 0..<n { L[i] += y[i]; R[i] += y[i] }
             hasProgram = true

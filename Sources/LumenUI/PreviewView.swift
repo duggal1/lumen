@@ -95,7 +95,8 @@ struct PreviewView: NSViewRepresentable {
             let wf = tl.webcam != nil ? try? await session.webcam?.frame(atSource: s) : nil
             let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: SIMD2(Int(ds.width), Int(ds.height)), fps: 60,
                                     backingScale: session.meta.source.backingScale, quality: .preview, uiTime: uiTime,
-                                    pointer: pointerValue)
+                                    pointer: pointerValue,
+                                    personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true))
             renderer.draw(req, to: layer.v)
         }
     }

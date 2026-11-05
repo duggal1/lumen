@@ -17,14 +17,17 @@ public struct RenderRequest: @unchecked Sendable {
     public var timeline: Timeline, t: Double
     public var screen: SourceFrame, webcam: SourceFrame?
     public var canvas: SIMD2<Int>, fps: Double, backingScale: Double, quality: RenderQuality
+    /// The analysis cache, if this recording has generated on-device person mattes.
+    public var personMaskDirectory: URL?
     /// Preview-only animation phase for the pixel-dither backdrop. Always 0 for export, so output stays deterministic.
     public var uiTime: Double
     public var pointer: SIMD4<Float>
     public init(timeline: Timeline, t: Double, screen: SourceFrame, webcam: SourceFrame? = nil, canvas: SIMD2<Int>,
                 fps: Double = 60, backingScale: Double = 2, quality: RenderQuality = .export, uiTime: Double = 0,
-                pointer: SIMD4<Float> = .zero) {
+                pointer: SIMD4<Float> = .zero, personMaskDirectory: URL? = nil) {
         self.timeline = timeline; self.t = t; self.screen = screen; self.webcam = webcam
         self.canvas = canvas; self.fps = fps; self.backingScale = backingScale; self.quality = quality; self.uiTime = uiTime; self.pointer = pointer
+        self.personMaskDirectory = personMaskDirectory
     }
 }
 
@@ -54,8 +57,13 @@ private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; 
 private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float }
-private struct WebU { var crop: SIMD4<Float>; var bubble: SIMD4<Float>; var radius: Float; var shape: Float; var mirror: Float; var border: Float
-                      var shadow: Float; var bw: Float; var minif: Float; var margin: Float }
+private struct WebU {
+    var crop: SIMD4<Float>; var bubble: SIMD4<Float>
+    var radius: Float; var shape: Float; var mirror: Float; var border: Float
+    var shadow: Float; var bw: Float; var minif: Float; var margin: Float
+    var opacity: Float; var maskMode: Float; var matteMix: Float; var detail: Float
+    var canvasColor: SIMD4<Float>
+}
 private struct AccU { var weight: Float }
 private struct ResU { var levels: Float; var seed: UInt32 }
 private struct BackdropKey: Equatable { var style: Style; var size: SIMD2<Int>; var wall: String; var phase: Double; var pointer: SIMD4<Float> }
@@ -91,6 +99,7 @@ public final class Renderer: @unchecked Sendable {
     private let lib: MTLLibrary
     private let pBackdrop, pContent, pCursor, pRing, pWeb, pAccum: MTLRenderPipelineState
     private var pResolve: [MTLPixelFormat: MTLRenderPipelineState] = [:]
+    private var personMatte: PersonMatteSequence?
     private let sem = DispatchSemaphore(value: 3)
     private var slot = 0
     private var work: [MTLTexture] = [], accum: [MTLTexture] = []
@@ -236,13 +245,26 @@ public final class Renderer: @unchecked Sendable {
         guard let srcTex = screenMip.texture(for: r.screen, device: device, cb: cb), let bd = backdrop else { sem.signal(); return false }
         var webTex: MTLTexture?
         if tl.webcam != nil, let w = r.webcam { webTex = webMip.texture(for: w, device: device, cb: cb) }
+        // Cache a bounded, timestamped pair of Vision mask textures per Metal
+        // in-flight slot. Both preview and export traverse this same path.
+        var matte: PersonMatteSequence.Pair?
+        if tl.webcam != nil, let info = tl.derived?.personMask,
+           let dir = r.personMaskDirectory {
+            let url = dir.appendingPathComponent(info.file)
+            if personMatte?.url != url || personMatte?.info != info {
+                personMatte = PersonMatteSequence(url: url, info: info)
+            }
+            matte = personMatte?.sample(at: tl.timeMap.source(atOutput: r.t), slot: s, device: device)
+        } else {
+            personMatte = nil
+        }
         if atlas == nil || atlasPack != tl.cursor.pack {
             atlas = CursorAtlas(device: device, queue: queue, pack: tl.cursor.pack, customs: customs); atlasPack = tl.cursor.pack
         }
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y))
 
         // 1. backdrop cache (style or size change only)
-        if tl.style.background == .wallpaper { loadWallpaperIfNeeded() }
+        if tl.style.background == .wallpaper || tl.webcam?.backdrop == .wallpaper { loadWallpaperIfNeeded() }
         let patterned = tl.style.background == .wave || tl.style.background == .field
         let backgroundTime = patterned ? (r.quality == .export ? r.t : r.uiTime)
             : (tl.style.background == .dither && r.quality == .preview ? r.uiTime : 0)
@@ -289,7 +311,7 @@ public final class Renderer: @unchecked Sendable {
             let off = ((Double(i) + 0.5) / Double(K) - 0.5) * tl.camera.shutter * dt
             var st = r.live ?? tl.evaluate(at: r.t + off)
             if r.live == nil, tl.derived == nil { st.cameraCenter = SIMD2<Float>(Float(g.src.x / 2), Float(g.src.y / 2)) }
-            scene(cb, into: work[s], st: st, r: r, g: g, src: srcTex, web: webTex)
+            scene(cb, into: work[s], st: st, r: r, g: g, src: srcTex, web: webTex, matte: matte)
             if K > 1 {
                 let pd = MTLRenderPassDescriptor()
                 pd.colorAttachments[0].texture = accum[s]; pd.colorAttachments[0].loadAction = i == 0 ? .clear : .load
@@ -332,7 +354,8 @@ public final class Renderer: @unchecked Sendable {
         return min(max(n, 1), r.quality == .preview ? min(2, tl.camera.maxSamples) : tl.camera.maxSamples)
     }
 
-    private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, st: FrameState, r: RenderRequest, g: Geometry, src: MTLTexture, web: MTLTexture?) {
+    private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, st: FrameState, r: RenderRequest, g: Geometry,
+                       src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
         let tl = r.timeline
         let pd = MTLRenderPassDescriptor()
         pd.colorAttachments[0].texture = tex; pd.colorAttachments[0].loadAction = .clear; pd.colorAttachments[0].storeAction = .store
@@ -374,18 +397,51 @@ public final class Renderer: @unchecked Sendable {
             e.setFragmentTexture(atlas.texture, index: 0); draw()
         }
 
-        // webcam bubble
+        // Webcam placement is solved by the Director at output time. Never
+        // replace its animated position with a hard-coded corner.
         if let wl = tl.webcam, let web {
-            let m = g.canvas.x * 0.03, size = g.canvas.x * wl.size, margin = 40 * g.ui
-            let x = (wl.corner == .topLeft || wl.corner == .bottomLeft) ? m : g.canvas.x - m - size
-            let y = (wl.corner == .topLeft || wl.corner == .topRight) ? m : g.canvas.y - m - size
-            let crop = st.webcamCrop, ww = Double(web.width)
-            e.setRenderPipelineState(pWeb)
-            quad(e, SIMD4<Float>(Float(x - margin), Float(y - margin), Float(size + 2 * margin), Float(size + 2 * margin)), canvasF)
-            frag(e, WebU(crop: crop, bubble: SIMD4<Float>(Float(x), Float(y), Float(size), Float(size)), radius: Float(size * 0.22),
-                         shape: wl.shape == .circle ? 0 : 1, mirror: wl.mirror ? 1 : 0, border: wl.border ? 1 : 0, shadow: wl.shadow ? 1 : 0,
-                         bw: Float(3 * g.ui), minif: Float(Double(crop.z) * ww / size), margin: Float(margin)))
-            e.setFragmentTexture(web, index: 0); draw()
+            let settings = tl.layoutSettings[st.layoutKind]
+            let rect = st.layout.cameraRect
+            let opacity = tl.derived == nil ? 1 : max(0, min(st.layout.cameraOpacity, 1))
+            let m = g.canvas.x * 0.03, legacySize = g.canvas.x * wl.size
+            let legacyX = (wl.corner == .topLeft || wl.corner == .bottomLeft) ? m : g.canvas.x - m - legacySize
+            let legacyY = (wl.corner == .topLeft || wl.corner == .topRight) ? m : g.canvas.y - m - legacySize
+            let x = tl.derived == nil ? legacyX : Double(rect.x) * g.canvas.x
+            let y = tl.derived == nil ? legacyY : Double(rect.y) * g.canvas.y
+            let width = tl.derived == nil ? legacySize : Double(rect.z) * g.canvas.x
+            let height = tl.derived == nil ? legacySize : Double(rect.w) * g.canvas.y
+            if opacity > 0.001, width > 1, height > 1 {
+                let margin = 24 * g.ui
+                let crop = st.webcamCrop, ww = Double(web.width)
+                let region = SIMD4<Float>(Float(x), Float(y), Float(width), Float(height))
+                let cutout = st.layout.cutoutBlend > 0.5 && wl.backdrop == .original
+                var maskMode: Float = switch wl.backdrop {
+                case .original: cutout ? 1 : 0
+                case .transparent: 1
+                case .wallpaper: wallTex == nil ? 3 : 2
+                case .canvas: 3
+                }
+                if matte == nil { maskMode = 0 } // Never simulate a missing AI mask.
+                let color = tl.style.colors.first?.simd ?? SIMD4<Float>(0.1, 0.1, 0.1, 1)
+                let detail: Float = wl.enhancement == .crisp ? Float(min(max(wl.detailAmount, 0), 1)) : 0
+                e.setRenderPipelineState(pWeb)
+                quad(e, SIMD4<Float>(Float(x - margin), Float(y - margin),
+                                    Float(width + 2 * margin), Float(height + 2 * margin)), canvasF)
+                frag(e, WebU(crop: crop, bubble: region, radius: Float(min(width, height) * Double(st.layout.cameraRadius)),
+                             shape: st.layout.cameraRadius > 0.4 ? 0 : 1, mirror: settings.mirror ? 1 : 0,
+                             border: settings.border && maskMode == 0 ? 1 : 0,
+                             shadow: settings.shadow && maskMode == 0 ? 1 : 0,
+                             bw: Float(3 * g.ui), minif: Float(Double(crop.z) * ww / max(width, 1)),
+                             margin: Float(margin), opacity: opacity, maskMode: maskMode,
+                             matteMix: matte?.fraction ?? 0, detail: detail, canvasColor: color))
+                e.setFragmentTexture(web, index: 0)
+                if let matte {
+                    e.setFragmentTexture(matte.previous, index: 1)
+                    e.setFragmentTexture(matte.next, index: 2)
+                }
+                if maskMode == 2, let wallTex { e.setFragmentTexture(wallTex, index: 3) }
+                draw()
+            }
         }
         e.endEncoding()
     }

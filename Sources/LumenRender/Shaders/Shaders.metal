@@ -202,19 +202,59 @@ fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]]) {
 }
 
 // ---- Webcam bubble (shadow + mask + border in one quad)
-struct WebU { float4 crop; float4 bubble; float radius; float shape; float mirror; float border; float shadow; float bw; float minif; float margin; };
-fragment float4 webFS(VO in [[stage_in]], constant WebU &u [[buffer(0)]], texture2d<float> tex [[texture(0)]]) {
+struct WebU {
+    float4 crop; float4 bubble;
+    float radius; float shape; float mirror; float border;
+    float shadow; float bw; float minif; float margin;
+    float opacity; float maskMode; float matteMix; float detail;
+    float4 canvasColor;
+};
+fragment float4 webFS(VO in [[stage_in]], constant WebU &u [[buffer(0)]],
+                       texture2d<float> tex [[texture(0)]],
+                       texture2d<float> maskA [[texture(1)]],
+                       texture2d<float> maskB [[texture(2)]],
+                       texture2d<float> wallpaper [[texture(3)]]) {
     float2 h = u.bubble.zw * 0.5, p = in.px - (u.bubble.xy + h);
-    float d = u.shape < 0.5 ? length(p) - h.x : sdSquircle(p, h, u.radius);
+    float d = u.shape < 0.5 ? length(p) - min(h.x, h.y) : sdSquircle(p, h, u.radius);
     float w = max(fwidth(d), 1e-3);
     float a = clamp(0.5 - d / w, 0.0, 1.0);
-    float ds = length(p - float2(0.0, u.margin * 0.25)) - h.x;
-    float sh = u.shadow * 0.45 * (1.0 - smoothstep(-u.margin * 0.4, u.margin * 0.8, ds));
     float2 q = (p + h) / u.bubble.zw;
     float2 uvw = u.crop.xy + float2(u.mirror > 0.5 ? 1.0 - q.x : q.x, q.y) * u.crop.zw;
+
+    // Catmull-Rom preserves edges when displaying a lower-resolution webcam
+    // in a 4K composition. The constrained high-pass improves acutance, but
+    // does not pretend to recover detail absent from the original recording.
     float3 rgb = sampleMip(tex, uvw, u.minif);
+    if (u.detail > 0.001) {
+        float2 tx = 1.0 / float2(tex.get_width(), tex.get_height());
+        float3 near = (tex.sample(linClamp, uvw - float2(tx.x, 0)).rgb
+                     + tex.sample(linClamp, uvw + float2(tx.x, 0)).rgb
+                     + tex.sample(linClamp, uvw - float2(0, tx.y)).rgb
+                     + tex.sample(linClamp, uvw + float2(0, tx.y)).rgb) * 0.25;
+        rgb = clamp(rgb + clamp(rgb - near, float3(-0.06), float3(0.06)) * (u.detail * 0.75), 0.0, 1.0);
+    }
+
+    if (u.maskMode > 0.5) {
+        // Vision mattes are timestamped in source time. Interpolating adjacent
+        // mattes removes the hard 30Hz edge jump on 60fps exports.
+        float m0 = maskA.sample(linClamp, uvw).r;
+        float m1 = maskB.sample(linClamp, uvw).r;
+        float person = smoothstep(0.055, 0.94, mix(m0, m1, u.matteMix));
+        if (u.maskMode < 1.5) {
+            float alpha = a * person * u.opacity;
+            return float4(rgb * alpha, alpha);
+        }
+        float3 backdrop = u.maskMode < 2.5 ? wallpaper.sample(linClamp, q).rgb : u.canvasColor.rgb;
+        float3 combined = mix(backdrop, rgb, person);
+        float alpha = a * u.opacity;
+        return float4(combined * alpha, alpha);
+    }
+
     rgb = mix(rgb, float3(1.0), u.border * 0.9 * clamp(0.5 + (d + u.bw) / w, 0.0, 1.0));
-    return float4(rgb * a, a + (1.0 - a) * sh);
+    float ds = length(p - float2(0.0, u.margin * 0.25)) - min(h.x, h.y);
+    float sh = u.shadow * 0.45 * (1.0 - smoothstep(-u.margin * 0.4, u.margin * 0.8, ds));
+    float alpha = clamp(a + (1.0 - a) * sh, 0.0, 1.0) * u.opacity;
+    return float4(rgb * a * u.opacity, alpha);
 }
 
 // ---- Motion-blur accumulation (premultiplied RGBA, additive)
