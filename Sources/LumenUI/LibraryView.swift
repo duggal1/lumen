@@ -174,6 +174,26 @@ struct LibrarySurface: View {
             }
             .frame(height: 32)
             compactToggle("Microphone", Bindable(app).mic)
+            if app.mic {
+                VStack(alignment: .leading, spacing: Space.s2) {
+                    Text("Audio inputs").font(AppType.caption).foregroundStyle(Tok.text2)
+                    ForEach(app.availableAudioInputs, id: \.id) { device in
+                        HStack(spacing: Space.s4) {
+                            Text(device.name).font(AppType.label).foregroundStyle(Tok.text)
+                                .lineLimit(1)
+                            Spacer(minLength: Space.s2)
+                            LToggle(on: Binding(
+                                get: { app.micInputIDs.contains(device.id) },
+                                set: { app.selectAudioInput(device.id, enabled: $0) }),
+                                label: device.name)
+                        }.frame(height: 28)
+                    }
+                    Text(app.micInputIDs.isEmpty
+                         ? "Using the system default microphone."
+                         : "\(app.micInputIDs.count) input(s), captured independently. First input is the primary voice.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                }
+            }
             compactToggle("System audio", Bindable(app).system)
             compactToggle("Webcam", Bindable(app).webcam)
             Text(preview).font(AppType.caption).foregroundStyle(Tok.text2)
