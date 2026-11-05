@@ -15,7 +15,7 @@ public enum VideoCodec: String, Codable, CaseIterable, Sendable {
     }
     /// 10-bit HEVC needs 10-bit input or the extra bits are wasted. (Verify with the probe on your hardware: spike 5.)
     public var pixelFormat: OSType { self == .hevc10 ? kCVPixelFormatType_ARGB2101010LEPacked : kCVPixelFormatType_32BGRA }
-    var title: String {
+    public var title: String {
         switch self { case .h264: "H.264"; case .hevc: "8-bit HEVC"; case .hevc10: "10-bit HEVC"; case .prores: "ProRes" }
     }
 }
