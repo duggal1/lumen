@@ -323,10 +323,45 @@ struct Inspector: View {
                 }
             }.card()
             VStack(alignment: .leading, spacing: Space.s2) {
-                Text("Masks").font(AppType.title).foregroundStyle(Tok.text)
-                Text(detected == 0 ? "No sensitive text found." : "\(detected) mask\(detected == 1 ? "" : "s") follow the content through zooms.")
+                HStack(spacing: Space.s2) {
+                    Text("Manual masks").font(AppType.title).foregroundStyle(Tok.text)
+                    Spacer(minLength: Space.s2)
+                    LButton(title: m.maskEditing ? "Cancel" : "Draw mask",
+                            icon: m.maskEditing ? "xmark" : "rectangle.dashed",
+                            kind: .secondary) {
+                        m.focusEditing = false
+                        m.maskEditing.toggle()
+                    }
+                }
+                Text(m.maskEditing
+                     ? "Drag over the video to cover sensitive content."
+                     : "Masks protect the selected region from the playhead to the end of this recording.")
                     .font(AppType.caption).foregroundStyle(Tok.text2)
-                Text("Manual masks and highlights are added from the timeline.")
+                ForEach(m.timeline.overlays.masks.filter { $0.origin == .manual }) { mask in
+                    Row(label: String(format: "%.1fs", mask.start)) {
+                        HStack(spacing: Space.s2) {
+                            LDropdown(
+                                sel: Binding(
+                                    get: { m.timeline.overlays.masks.first(where: { $0.id == mask.id })?.mode ?? mask.mode },
+                                    set: { value in
+                                        m.edit { tl in
+                                            if let i = tl.overlays.masks.firstIndex(where: { $0.id == mask.id }) {
+                                                tl.overlays.masks[i].mode = value
+                                            }
+                                        }
+                                    }),
+                                options: MaskMode.allCases.map { ($0, $0.rawValue.capitalized, "eye.slash") })
+                                .frame(width: 104)
+                            LButton(title: "Remove", icon: "trash", kind: .quiet) {
+                                m.edit { $0.overlays.masks.removeAll { $0.id == mask.id } }
+                            }
+                        }
+                    }
+                }
+            }.card()
+            VStack(alignment: .leading, spacing: Space.s2) {
+                Text("Automatic detection").font(AppType.title).foregroundStyle(Tok.text)
+                Text(detected == 0 ? "No sensitive text found." : "\(detected) detected mask\(detected == 1 ? "" : "s") follow content through zooms.")
                     .font(AppType.caption).foregroundStyle(Tok.text2)
             }.card()
         }
