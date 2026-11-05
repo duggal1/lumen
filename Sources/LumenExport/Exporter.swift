@@ -13,7 +13,10 @@ import LumenRender
 import LumenAudio
 
 public enum ExportError: Error { case writer(String), render, noTimeline }
-public struct ExportProgress: Sendable { public var frame: Int, total: Int, notice: String? }
+public struct ExportProgress: Sendable {
+    public var frame: Int, total: Int, notice: String?
+    public init(frame: Int, total: Int, notice: String?) { self.frame = frame; self.total = total; self.notice = notice }
+}
 
 /// Await-able GPU completion.
 final class Latch: @unchecked Sendable {
