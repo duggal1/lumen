@@ -314,6 +314,22 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         activeExportID = UUID()
         let exportID = activeExportID
         let start = HostClock.now()
+
+        // One job per aspect. The primary output keeps the project's own ratio.
+        var jobs: [(url: URL, timeline: Timeline, preset: ExportPreset)] = [(url, tl, preset)]
+        if settings.batchAspects, settings.kind == .video {
+            for (index, aspect) in [CanvasAspect.r1x1, .r9x16].enumerated() {
+                var variant = tl
+                variant.style.customAspect = aspect.ratio
+                let derived = session.derive(variant, revision: (tl.derived?.revision ?? 0) + index + 1)
+                let suffix = aspect == .r1x1 ? "-1x1" : "-9x16"
+                let base = url.deletingPathExtension().lastPathComponent + suffix
+                let extra = url.deletingLastPathComponent().appendingPathComponent(base)
+                    .appendingPathExtension(settings.fileExtension)
+                jobs.append((extra, derived, settings.preset(source: session.meta.source, aspect: aspect.ratio)))
+            }
+        }
+
         exportState = .running(0)
         exportTask = Task { [weak self] in
             let report: @Sendable (ExportProgress) -> Void = { [weak self] pr in
@@ -329,26 +345,38 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                 }
             }
             do {
-                if settings.kind == .gif {
-                    try await Exporter.gif(session: session, timeline: tl, to: url, progress: report)
-                } else {
-                    try await Exporter.run(session: session, timeline: tl, preset: preset, to: url,
-                                           includeAudio: settings.includeAudio, audioBitrate: settings.audioBitrate,
-                                           progress: report)
+                var lastURL = url
+                let jobCount = jobs.count
+                for (index, job) in jobs.enumerated() {
+                    try Task.checkCancellation()
+                    let jobReport: @Sendable (ExportProgress) -> Void = { pr in
+                        let inner = Double(pr.frame) / Double(max(pr.total, 1))
+                        let base = Double(index) / Double(jobCount)
+                        report(ExportProgress(frame: Int(((base + inner / Double(jobCount)) * 1000).rounded()),
+                                              total: 1000, notice: pr.notice))
+                    }
+                    if settings.kind == .gif {
+                        try await Exporter.gif(session: session, timeline: job.timeline, to: job.url, progress: jobReport)
+                    } else {
+                        try await Exporter.run(session: session, timeline: job.timeline, preset: job.preset, to: job.url,
+                                               includeAudio: settings.includeAudio, audioBitrate: settings.audioBitrate,
+                                               progress: jobReport)
+                    }
+                    lastURL = job.url
                 }
                 let elapsed = max(HostClock.now() - start, 0.001)
                 let (w, h) = settings.dimensions(source: session.meta.source, aspect: tl.style.aspectRatio)
-                let pixels = Double(w) * Double(h) * Double(preset.fps) * tl.timeMap.outputDuration
+                let pixels = Double(w) * Double(h) * Double(preset.fps) * tl.timeMap.outputDuration * Double(jobs.count)
                 UserDefaults.standard.set(pixels / elapsed, forKey: "lumen.export.pixelsPerSecond")
                 guard let self, self.activeExportID == exportID else { return }
                 self.exportElapsed = elapsed
                 self.exportETA = nil
                 if clipboard {
                     NSPasteboard.general.clearContents()
-                    _ = NSPasteboard.general.writeObjects([url as NSURL])
+                    _ = NSPasteboard.general.writeObjects([lastURL as NSURL])
                     self.notice = "Copied to clipboard."
                 }
-                self.exportState = .done(url)
+                self.exportState = .done(lastURL)
             } catch is CancellationError {
                 if self?.activeExportID == exportID { self?.exportState = .idle }
             } catch {
