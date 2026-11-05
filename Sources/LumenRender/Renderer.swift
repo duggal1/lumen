@@ -66,7 +66,7 @@ private struct WebU {
     var canvasColor: SIMD4<Float>
 }
 private struct AccU { var weight: Float }
-private struct ResU { var levels: Float; var seed: UInt32 }
+private struct ResU { var levels: Float; var seed: UInt32; var blur: Float }
 private struct BackdropKey: Equatable { var style: Style; var size: SIMD2<Int>; var wall: String; var phase: Double; var pointer: SIMD4<Float> }
 private struct Keep: @unchecked Sendable { let o: Any }
 
@@ -106,6 +106,7 @@ public final class Renderer: @unchecked Sendable {
     private var work: [MTLTexture] = [], accum: [MTLTexture] = []
     private var backdrop: MTLTexture?
     private var backdropKey: BackdropKey?
+    private var backdropMipmapped = false
     private var size = SIMD2<Int>(0, 0)
     private var wallTex: MTLTexture?
     private var wallID = ""
@@ -204,16 +205,22 @@ public final class Renderer: @unchecked Sendable {
         wallTex = tex
     }
 
-    private func ensureTargets(_ s: SIMD2<Int>) {
-        guard s != size else { return }
+    private func ensureTargets(_ s: SIMD2<Int>, backdropBlur: Bool) {
+        guard s != size || backdropMipmapped != backdropBlur else { return }
         for _ in 0..<3 { sem.wait() }
-        func mk() -> MTLTexture {
-            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: s.x, height: s.y, mipmapped: false)
+        func mk(mipmapped: Bool = false) -> MTLTexture {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float,
+                                                               width: s.x, height: s.y, mipmapped: mipmapped)
             d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
             return device.makeTexture(descriptor: d)!
         }
         work = (0..<3).map { _ in mk() }; accum = (0..<3).map { _ in mk() }
-        backdrop = mk(); backdropKey = nil; size = s
+        // Allocate mip storage only when the user enables blur. Ordinary video
+        // exports keep their previous memory footprint and renderer stages.
+        backdrop = mk(mipmapped: backdropBlur)
+        backdropMipmapped = backdropBlur
+        backdropKey = nil
+        size = s
         for _ in 0..<3 { sem.signal() }
     }
 
@@ -252,10 +259,10 @@ public final class Renderer: @unchecked Sendable {
     public func encode(_ r: RenderRequest, output: MTLTexture, commandBuffer cb: MTLCommandBuffer, wait: Bool = true) -> Bool {
         let cs = r.canvas
         guard output.width == cs.x, output.height == cs.y, cs.x > 0, cs.y > 0 else { return false }
-        ensureTargets(cs)
+        let tl = r.timeline
+        ensureTargets(cs, backdropBlur: tl.style.zoomBackgroundBlur)
         if wait { sem.wait() } else if sem.wait(timeout: .now()) != .success { return false }
         let s = slot; slot = (slot + 1) % 3
-        let tl = r.timeline
         let g = Geometry(canvas: cs, src: SIMD2(Double(r.screen.texture.width), Double(r.screen.texture.height)), style: tl.style)
 
         guard let srcTex = screenMip.texture(for: r.screen, device: device, cb: cb), let bd = backdrop else { sem.signal(); return false }
@@ -319,6 +326,12 @@ public final class Renderer: @unchecked Sendable {
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()
             }
+            if tl.style.zoomBackgroundBlur, let blit = cb.makeBlitCommandEncoder() {
+                // Generate the full mip pyramid only after the backdrop
+                // itself changed. Screen content never enters these mipmaps.
+                blit.generateMipmaps(for: bd)
+                blit.endEncoding()
+            }
         }
 
         // 2. sub-frames (motion blur): scene over transparent, accumulated, resolved over the backdrop
@@ -349,7 +362,11 @@ public final class Renderer: @unchecked Sendable {
         pd.colorAttachments[0].texture = output; pd.colorAttachments[0].loadAction = .dontCare; pd.colorAttachments[0].storeAction = .store
         if let e = cb.makeRenderCommandEncoder(descriptor: pd) {
             e.setRenderPipelineState(pr); quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
-            frag(e, ResU(levels: fmt == .bgr10a2Unorm ? 1023 : 255, seed: UInt32(truncatingIfNeeded: Int(r.t * 1000))))
+            let zoom = r.live?.cameraScale ?? tl.evaluate(at: r.t).cameraScale
+            frag(e, ResU(levels: fmt == .bgr10a2Unorm ? 1023 : 255,
+                         seed: UInt32(truncatingIfNeeded: Int(r.t * 1000)),
+                         blur: BackdropBlur.mipLevel(enabled: tl.style.zoomBackgroundBlur,
+                                                     cameraScale: zoom)))
             e.setFragmentTexture(K > 1 ? accum[s] : work[s], index: 0); e.setFragmentTexture(bd, index: 1)
             e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); e.endEncoding()
         }
