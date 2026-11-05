@@ -80,6 +80,7 @@ struct ExportInspector: View {
                         }
                     }
                 }
+                ToggleRow(label: "Also 1:1 and 9:16", on: model.exportBinding(\.batchAspects))
             }
         }.card()
     }
