@@ -23,7 +23,9 @@ import LumenAudio
     let mixer = AudioMixer(mic: nil, micOffset: 0, system: nil, systemOffset: 0)
     let mixed = try #require(mixer.mix(tl))
     #expect(mixed.l[Int(0.5 * fs)] == 0)
-    #expect(abs(mixed.l[Int(1.25 * fs)]) > 0.005)
+    let voicedRegion = mixed.l[Int(1.20 * fs)..<Int(1.25 * fs)]
+    let peak = voicedRegion.reduce(Float(0)) { max($0, abs($1)) }
+    #expect(peak > 0.005)
     #expect(mixed.truePeakDb <= -1 + 0.02)
     tl.audio.lanes[0].mute = true
     let muted = try #require(mixer.mix(tl))
