@@ -343,9 +343,7 @@ public struct ResidualSuppressor: Sendable {
                 prev[k] = g * g * gam[i]
                 raw[k] = g
             }
-            for k in 0..<bins {
-                gs[k] = 0.25 * raw[max(k - 1, 0)] + 0.5 * raw[k] + 0.25 * raw[min(k + 1, bins - 1)]
-            }
+            for k in 0..<bins { gs[k] = 0.25 * raw[max(k - 1, 0)] + 0.5 * raw[k] + 0.25 * raw[min(k + 1, bins - 1)] }
             for k in 0..<bins {
                 let i = l * bins + k
                 re[k] = xr[i] * gs[k]; im[k] = xi[i] * gs[k]

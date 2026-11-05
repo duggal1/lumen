@@ -28,10 +28,11 @@ import LumenDirector
     plan.micClean = false
     plan.micMode = .standard
     plan.studio = 0
-    let dry = VoiceStudio.finish(raw, vad: [0.0...1.0], plan: plan, denoiser: nil)
+    let dryPlan = plan
+    let dry = VoiceStudio.finish(raw, vad: [0.0...1.0], plan: dryPlan, denoiser: nil)
     plan.studio = 0.65
     let wet = VoiceStudio.finish(raw, vad: [0.0...1.0], plan: plan, denoiser: nil)
-    #expect(dry == VoiceStudio.finish(raw, vad: [0.0...1.0], plan: plan, denoiser: nil))
+    #expect(dry == VoiceStudio.finish(raw, vad: [0.0...1.0], plan: dryPlan, denoiser: nil))
     #expect(wet != dry)
     #expect(wet.allSatisfy { $0.isFinite })
     #expect(wet.reduce(Float(0)) { max($0, abs($1)) } < 1.0)

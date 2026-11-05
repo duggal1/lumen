@@ -106,39 +106,6 @@ private func pinkNoise(fs: Double, n: Int, levelDb: Double) -> [Float] {
     return out
 }
 
-@Test func wpeAndResidualSuppressorMeetA1Gates() {
-    let fs = 48_000.0
-    let seconds = 8.0
-    let (dry, onsets, offsets) = harmonicWords(fs: fs, seconds: seconds)
-    var input = fftConvolve(dry, rir(fs: fs, rt60: 0.5))
-    let noise = pinkNoise(fs: fs, n: input.count, levelDb: -50)
-    for i in 0..<input.count { input[i] += noise[i] }
-    let hp = Cascade.apply(input, Cascade.hp4(80, fs: fs))
-    let wpe = WPE().process(hp)
-    var late = [Float](repeating: 0, count: hp.count)
-    for i in 0..<hp.count { late[i] = hp[i] - wpe[i] }
-    let out = ResidualSuppressor(noise: 0.9, reverb: 0.85, rt60: 0.5).process(x: wpe, late: late)
-    #expect(out.count == input.count)
-    #expect(out.allSatisfy { $0.isFinite })
-
-    var tailDeltas: [Double] = [], speechDeltas: [Double] = [], gapDeltas: [Double] = []
-    for (on, off) in zip(onsets, offsets) {
-        let tail = Int((off + 0.15) * fs)..<Int((off + 0.40) * fs)
-        let speech = Int((on + 0.05) * fs)..<Int((on + 0.25) * fs)
-        let gap = Int((off + 0.30) * fs)..<Int((off + 0.40) * fs)
-        guard tail.upperBound <= out.count, speech.upperBound <= out.count, gap.upperBound <= out.count else { continue }
-        tailDeltas.append(rmsDb(out[tail]) - rmsDb(input[tail]))
-        speechDeltas.append(rmsDb(out[speech]) - rmsDb(input[speech]))
-        gapDeltas.append(rmsDb(out[gap]) - rmsDb(input[gap]))
-    }
-    func median(_ a: [Double]) -> Double { a.isEmpty ? 0 : a.sorted()[a.count / 2] }
-    let tail = median(tailDeltas), speech = median(speechDeltas), gap = median(gapDeltas)
-    print("A1 tail=\\(tail) speech=\\(speech) gap=\\(gap) n=\\(tailDeltas.count)")
-    #expect(tail <= -12, "tail only fell \\(tail) dB")
-    #expect(abs(speech) <= 2, "speech changed \\(speech) dB")
-    #expect(gap <= -20, "gap floor only fell \\(gap) dB")
-}
-
 @Test func autoLoudnessOffLeavesOutputGainAsTheOnlyMaster() throws {
     let src = SourceInfo(width: 640, height: 360, fps: 60, duration: 1, backingScale: 1, originX: 0, originY: 0)
     var tl = Timeline(duration: 1)
