@@ -71,7 +71,7 @@ final class ExtraMicrophoneRecorder: NSObject, AVCaptureAudioDataOutputSampleBuf
                        from connection: AVCaptureConnection) {
         guard sampleBuffer.isValid else { return }
         let timestamp: Double
-        if let clock = session.masterClock {
+        if let clock = session.synchronizationClock {
             timestamp = CMSyncConvertTime(sampleBuffer.presentationTimeStamp,
                                           from: clock, to: CMClockGetHostTimeClock()).seconds
         } else {
