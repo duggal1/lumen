@@ -205,7 +205,12 @@ enum ZoomPlanner {
         }
         var first = 0
         for i in presses.indices where i == presses.count - 1 || presses[i + 1].t - presses[i].t > 0.9 {
-            if i - first + 1 >= 3, let anchor = typingAnchor(presses[first].t) {
+            let count = i - first + 1
+            let hasClickedField = clicked.contains { $0.t <= presses[first].t && presses[first].t - $0.t < 20 }
+            // Two keys after a known field click indicate actual typing;
+            // unanchored keys still require three to reject keyboard noise.
+            if (count >= 3 || (count >= 2 && hasClickedField)),
+               let anchor = typingAnchor(presses[first].t) {
                 points.append(Pt(t: presses[first].t, x: anchor.x, y: anchor.y, w: 2))
                 points.append(Pt(t: presses[i].t, x: anchor.x, y: anchor.y, w: 0))
             }
@@ -271,8 +276,10 @@ enum ZoomPlanner {
                 } else {
                     focus = .fixed(x: cx / width, y: cy / height)
                 }
-                let panRate = max(min(p.omegaPan, p.omegaZoom), 1)
-                let anticipation = clamp(max(p.leadIn, 2.4 / panRate), 0.25, 1.2)
+                // CameraSolver already performs the critically damped
+                // entrance on this timeline. Extra spring settle time here
+                // shifted the entire zoom hundreds of milliseconds too early.
+                let anticipation = clamp(p.leadIn, 0.15, 0.30)
                 let start = max(tm.trimStart, group[0].t - anticipation)
                 let end = min(tm.trimEnd,
                               max(group[group.count - 1].t + max(p.tail, 0.8),
