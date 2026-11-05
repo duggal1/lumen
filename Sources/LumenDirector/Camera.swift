@@ -6,16 +6,28 @@ import LumenProject
     let t = clamp(x, 0, 1); return t * t * t * t * (35 + t * (-84 + t * (70 - 20 * t)))
 }
 
-@inline(__always) func scaledSpring(_ x: inout Double, _ v: inout Double, target: Double, omega w: Double, dt: Double, scale s: Double) {
-    let d = (x - target) * s, vs = v * s, e = exp(-w * dt)
-    let nd = (d + (vs + w * d) * dt) * e
-    let nv = (vs - w * (vs + w * d) * dt) * e
-    x = target + nd / s; v = nv / s
-}
-
 enum CameraSolver {
     private struct Shot { var start: Double, end: Double, lz: Double, focus: Focus, ease: Double, automatic: Bool }
     private struct Key { var t: Double; var shot: Int }
+
+    /// Forward and backward dead-zone tracking. The average does not bias
+    /// the target toward where the pointer came from. Jitter remains suppressed
+    /// without dragging the viewport behind a deliberate movement.
+    static func centredPlay(_ samples: [Double], halfZone: Double) -> [Double] {
+        guard let first = samples.first, let last = samples.last else { return samples }
+        func pass(_ input: [Double], start: Double) -> [Double] {
+            var result = input, value = start
+            for i in input.indices {
+                if input[i] > value + halfZone { value = input[i] - halfZone }
+                else if input[i] < value - halfZone { value = input[i] + halfZone }
+                result[i] = value
+            }
+            return result
+        }
+        let forward = pass(samples, start: first)
+        let backward = Array(pass(Array(samples.reversed()), start: last).reversed())
+        return zip(forward, backward).map { ($0 + $1) / 2 }
+    }
 
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams, src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
         let zoom = zoom.map { z in ZoomSegment(id: z.id, start: tm.output(atSource: z.start), end: tm.output(atSource: z.end), scale: z.scale, focus: z.focus, easing: z.easing, origin: z.origin) }
@@ -23,12 +35,20 @@ enum CameraSolver {
         let n = max(Int(outDur * gridRate) + 1, 2), dt = 1 / gridRate
         var tr = CameraTrack(count: n)
         let soft = 8 / src.x, base = 4.5 / max(p.omegaZoom, 1)
+        // Cursor is already output-time and click-pinned. Never sample t -
+        // followDelay: that creates visible lag proportional to the setting.
+        // Noncausal follow is appropriate for recorded, offline footage.
+        let halfZone = clamp(p.deadZone, 0.05, 0.45) / max(p.maxScale, 1)
+        let followOmega = 1 / max(clamp(p.followDelay, 0, 0.5), 0.045)
+        let rawX = (0..<n).map { Double(cursor.x[min($0, cursor.x.count - 1)]) / src.x }
+        let rawY = (0..<n).map { Double(cursor.y[min($0, cursor.y.count - 1)]) / src.y }
+        let fx = zeroPhaseSmooth(centredPlay(rawX, halfZone: halfZone),
+                                 omega: followOmega, dt: dt)
+        let fy = zeroPhaseSmooth(centredPlay(rawY, halfZone: halfZone),
+                                 omega: followOmega, dt: dt)
         func cursorN(_ t: Double) -> SIMD2<Double> {
-            // Delay only follow/pan targets. Click-based fixed focal points
-            // remain synchronized with the original click timestamps.
-            let sampledTime = max(0, t - clamp(p.followDelay, 0, 0.5))
-            let i = min(max(Int(sampledTime * gridRate), 0), cursor.x.count - 1)
-            return SIMD2(Double(cursor.x[i]) / src.x, Double(cursor.y[i]) / src.y)
+            let i = min(max(Int((t * gridRate).rounded()), 0), n - 1)
+            return SIMD2(fx[i], fy[i])
         }
         let shots: [Shot] = zoom.filter { $0.end - $0.start > 0.1 && $0.scale > 1.001 && $0.start < outDur }
             .sorted { $0.start < $1.start }
@@ -84,12 +104,18 @@ enum CameraSolver {
             let view = exp(-sh.lz)
             let bx = clamp(p.centerOffsetX, -0.25, 0.25) * view
             let by = clamp(p.centerOffsetY, -0.25, 0.25) * view
-            return SIMD2(softClamp(c.x - bx, hw, 1 - hw, soft),
-                         softClamp(c.y - by, hw, 1 - hw, soft))
+            // Fixed and AX-element targets must land EXACTLY on the feasible
+            // center, including a button only a few pixels from a screen edge.
+            // Soft clamping nudges a legal edge target by ~3 source pixels.
+            if case .follow = sh.focus {
+                return SIMD2(softClamp(c.x - bx, hw, 1 - hw, soft),
+                             softClamp(c.y - by, hw, 1 - hw, soft))
+            }
+            return SIMD2(clamp(c.x - bx, hw, 1 - hw),
+                         clamp(c.y - by, hw, 1 - hw))
         }
         var cx = [Double](repeating: 0.5, count: n), cy = cx, cz = [Double](repeating: 0, count: n)
-        var x1 = SIMD2<Double>(0.5, 0.5), v1 = SIMD2<Double>.zero, x2 = x1, v2 = SIMD2<Double>.zero
-        var tgt = SIMD2<Double>(0.5, 0.5), ki = 0
+        var ki = 0
         for i in 0..<n {
             let t = Double(i) * dt
             while ki + 1 < keys.count && keys[ki + 1].t <= t { ki += 1 }
@@ -99,16 +125,8 @@ enum CameraSolver {
             let lzA = a >= 0 ? shots[a].lz : 0, lzB = b >= 0 ? shots[b].lz : 0
             let lz = lerp(lzA, lzB, pr)
             // Scale and clamp must use the SAME zoom value at every frame.
-            let sc = exp(lz), half = p.deadZone / sc, hw = 0.5 / sc
-            let cur = cursorN(t)
-            for k in 0..<2 {
-                let d = cur[k] - tgt[k]
-                if d > half { tgt[k] = cur[k] - half } else if d < -half { tgt[k] = cur[k] + half }
-                let lim = clamp(tgt[k], hw, 1 - hw)
-                scaledSpring(&x1[k], &v1[k], target: lim, omega: p.omegaPan, dt: dt, scale: sc)
-                scaledSpring(&x2[k], &v2[k], target: x1[k], omega: p.omegaPan, dt: dt, scale: sc)
-            }
-            let cA = center(a, x2), cB = center(b, x2)
+            let follow = cursorN(t)
+            let cA = center(a, follow), cB = center(b, follow)
             let wA = exp(-lzA), wB = exp(-lzB), w = exp(-lz)
             let q = abs(wB - wA) > 1e-5 ? (w - wA) / (wB - wA) : pr
             let c = cA + (cB - cA) * q, h = 0.5 / exp(lz)
