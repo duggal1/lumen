@@ -354,6 +354,35 @@ struct Inspector: View {
             SliderRow(label: "Face zoom", v: Binding(get: { m.timeline.webcam?.faceZoom ?? 0.6 }, set: { v in m.edit(coalesce: true) { $0.webcam?.faceZoom = v } }), range: 0...1)
             SliderRow(label: "Face size", v: Binding(get: { m.timeline.webcam?.faceFill ?? 0.31 }, set: { v in m.edit(coalesce: true) { $0.webcam?.faceFill = v } }), range: 0.2...0.5)
         }.card()
+        VStack(spacing: 0) {
+            Row(label: "Video polish") {
+                LSegmented(sel: Binding(get: { m.timeline.webcam?.enhancement ?? .natural },
+                                        set: { v in m.edit { $0.webcam?.enhancement = v } }),
+                           items: [(.natural, "Natural"), (.crisp, "Crisp")]).frame(width: 156)
+            }
+            if m.timeline.webcam?.enhancement == .crisp {
+                SliderRow(label: "Detail", v: Binding(get: { m.timeline.webcam?.detailAmount ?? 0.5 },
+                                                    set: { v in m.edit(coalesce: true) { $0.webcam?.detailAmount = v } }),
+                          range: 0...1, fmt: { "\(Int($0 * 100))%" })
+            }
+            Row(label: "Background") {
+                LDropdown(sel: Binding(get: { m.timeline.webcam?.backdrop ?? .original },
+                                      set: { v in m.edit { $0.webcam?.backdrop = v } }),
+                          options: WebcamBackdrop.allCases.map { ($0, $0.rawValue, "person.crop.rectangle") })
+                    .frame(width: 168)
+            }
+            if m.timeline.webcam?.backdrop != .original {
+                Text("Person mask generated locally using Vision. It may take time to analyze a recording.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Row(label: "4K output") {
+                LToggle(on: Binding(get: { m.exportSettings.resolution == .ultraHD },
+                                    set: { on in m.updateExportSettings { $0.resolution = on ? .source : .ultraHD } }),
+                        label: "4K composition")
+            }
+            Text("4K output increases pixel dimensions; it cannot restore detail the camera never captured.")
+                .font(AppType.caption).foregroundStyle(Tok.text2).frame(maxWidth: .infinity, alignment: .leading)
+        }.card()
     }
 
     private var export: some View { ExportInspector(model: model) }
