@@ -160,7 +160,11 @@ private func pinkNoise(fs: Double, n: Int, levelDb: Double) -> [Float] {
     tl.audio.studio = 0
     tl = Director.derive(tl, input: DirectorInput(events: [], source: src), revision: 1)
     let fs = AudioIO.fs
-    let samples = (0..<Int(fs * 2)).map { Float(0.1 * sin(2 * Double.pi * 180 * Double($0) / fs)) }
+    // Use speech-like onset/offset so VAD exercises the WPE cache path.
+    let samples = (0..<Int(fs * 2)).map { i -> Float in
+        let t = Double(i) / fs
+        return t >= 0.2 && t < 1.7 ? Float(0.1 * sin(2 * Double.pi * 180 * t)) : 0
+    }
     let a = AudioMixer(mic: samples, micOffset: 0, system: nil, systemOffset: 0, cacheDir: dir)
     _ = try #require(a.mix(tl))
     let url = dir.appendingPathComponent("voice-wpe-v1.f32")
