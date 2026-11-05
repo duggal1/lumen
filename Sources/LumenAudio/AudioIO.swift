@@ -104,6 +104,13 @@ public enum AudioIO {
         return MusicTrack(l: l, r: r)
     }
 
+    /// IEEE 32-bit float WAV for lossless handoff to Premiere, Resolve,
+    /// Final Cut or any editor. File type is inferred from the .wav extension.
+    public static func writeWAV(_ l: [Float], _ r: [Float], to url: URL) throws {
+        precondition(url.pathExtension.lowercased() == "wav", "Stems must have .wav extension")
+        try writeCAF(l, r, to: url)
+    }
+
     /// Float32 stereo CAF (the exporter reads this back and AAC-encodes it).
     public static func writeCAF(_ l: [Float], _ r: [Float], to url: URL) throws {
         let fmt = stereoFormat

@@ -14,6 +14,20 @@ public struct MixedAudio: Sendable {
     }
 }
 
+/// An isolated, unmastered 32-bit float audio stem for professional editors.
+/// Stems preserve the voice/system gain but do not duplicate effects or the
+/// combined master limiter. Recombining stems needs mastering in the NLE.
+public struct AudioStem: Sendable {
+    public let name: String
+    public let left: [Float]
+    public let right: [Float]
+    public init(name: String, left: [Float], right: [Float]) {
+        self.name = name
+        self.left = left
+        self.right = right
+    }
+}
+
 /// Offline mix of the whole timeline. Preview plays this buffer; export encodes it. One code path = they always match.
 /// Voice chain (HP, denoise, EQ, compressor, -16 LUFS reference) is cached by `micClean`. Thread-safe.
 public final class AudioMixer: @unchecked Sendable {
@@ -140,6 +154,50 @@ public final class AudioMixer: @unchecked Sendable {
     }
 
     // MARK: Mix
+
+    /// Separate WAV stems in the same OUTPUT timeline as the encoded movie.
+    /// This is intentionally opt-in, since it requires extra offline processing.
+    public func stems(_ tl: Timeline) -> [AudioStem] {
+        guard let d = tl.derived else { return [] }
+        let fs = AudioIO.fs, n = Int(d.outputDuration * fs) + 1
+        guard n > 0 else { return [] }
+        let a = tl.audio, tm = tl.timeMap
+        var result: [AudioStem] = []
+
+        if a.micMode != .off, let voice = voiceChain(a) {
+            let mapped = Self.mapped(voice, offset: micOffset, tm: tm,
+                                     n: n, muteRamps: a.muteMicInRamps)
+            let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
+            let channel = mapped.map { $0 * gain }
+            result.append(AudioStem(name: "microphone", left: channel, right: channel))
+        }
+
+        if let system = sys {
+            let mapped = Self.mapped(system, offset: sysOffset, tm: tm, n: n, muteRamps: true)
+            let gain = Float(pow(10, clamp(a.systemGainDb, -60, 24) / 20))
+            let channel = mapped.map { $0 * gain }
+            result.append(AudioStem(name: "system", left: channel, right: channel))
+        }
+
+        var voiceIndex = 0
+        for lane in a.lanes where lane.role == .voiceover && !lane.mute {
+            guard let path = lane.path, let track = importTrack(path) else { continue }
+            voiceIndex += 1
+            var left = [Float](repeating: 0, count: n), right = left
+            let start = max(0, Int(lane.placement * fs))
+            guard start < n else { continue }
+            let count = min(track.l.count, n - start)
+            let gain = Float(pow(10, clamp(lane.gainDb, -60, 24) / 20))
+            let fade = min(Int(fs * 0.01), count / 2)
+            for i in 0..<count {
+                let edge = fade > 0 ? min(1, Float(min(i, count - i - 1)) / Float(fade)) : 1
+                left[start + i] = track.l[i] * gain * edge
+                right[start + i] = track.r[i] * gain * edge
+            }
+            result.append(AudioStem(name: "voiceover-\(voiceIndex)", left: left, right: right))
+        }
+        return result
+    }
 
     public func mix(_ tl: Timeline) -> MixedAudio? {
         guard let d = tl.derived else { return nil }

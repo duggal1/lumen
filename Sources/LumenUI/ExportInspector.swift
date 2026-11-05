@@ -81,6 +81,14 @@ struct ExportInspector: View {
                     }
                 }
                 ToggleRow(label: "Also 1:1 and 9:16", on: model.exportBinding(\.batchAspects))
+                ToggleRow(label: "Separate WAV stems",
+                          on: Binding(get: { model.exportSeparateStems },
+                                      set: { model.setSeparateWavStems($0) }))
+                if model.exportSeparateStems {
+                    Text("Microphone, system sound and voice-over export as separate 32-bit float WAV files alongside the movie.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }.card()
     }

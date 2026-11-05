@@ -41,6 +41,17 @@ struct Inspector: View {
         }
     }
 
+    private func paddingEdge(_ key: WritableKeyPath<EdgeInsetsN, Double>) -> Binding<Double> {
+        Binding(get: { model.timeline.style.insets[keyPath: key] },
+                set: { value in
+                    model.edit(coalesce: true) { timeline in
+                        var insets = timeline.style.insets
+                        insets[keyPath: key] = value
+                        timeline.style.paddingInsets = insets
+                    }
+                })
+    }
+
     private var look: some View {
         let m = model
         return VStack(spacing: 24) {
@@ -50,7 +61,24 @@ struct Inspector: View {
                 }
                 Row(label: "Canvas") { LDropdown(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, "rectangle.dashed") }).frame(width: 130) }
                 SliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
-                SliderRow(label: "Padding", v: m.bind(\.style.padding), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
+                ToggleRow(label: "Independent padding",
+                          on: Binding(get: { m.timeline.style.paddingInsets != nil },
+                                      set: { enabled in
+                                          m.edit { $0.style.paddingInsets = enabled
+                                              ? EdgeInsetsN(all: $0.style.padding) : nil }
+                                      }))
+                if m.timeline.style.paddingInsets == nil {
+                    SliderRow(label: "Padding", v: m.bind(\.style.padding), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
+                } else {
+                    SliderRow(label: "Top", v: paddingEdge(\.top), range: 0...0.2,
+                              fmt: { "\(Int($0 * 100))%" })
+                    SliderRow(label: "Right", v: paddingEdge(\.right), range: 0...0.2,
+                              fmt: { "\(Int($0 * 100))%" })
+                    SliderRow(label: "Bottom", v: paddingEdge(\.bottom), range: 0...0.2,
+                              fmt: { "\(Int($0 * 100))%" })
+                    SliderRow(label: "Left", v: paddingEdge(\.left), range: 0...0.2,
+                              fmt: { "\(Int($0 * 100))%" })
+                }
             }.card()
             VStack(spacing: 0) {
                 Row(label: "Background") {
@@ -170,6 +198,18 @@ struct Inspector: View {
             VStack(spacing: 0) {
                 SliderRow(label: "Dead zone", v: m.bind(\.camera.deadZone), range: 0.1...0.45)
                 SliderRow(label: "Motion blur", v: m.bind(\.camera.shutter), range: 0...1)
+                SliderRow(label: "Hover sensitivity", v: m.bind(\.camera.sensitivity), range: 0...1,
+                          fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Follow delay", v: m.bind(\.camera.followDelay), range: 0...0.5,
+                          fmt: { "\(Int($0 * 1000)) ms" })
+                SliderRow(label: "Focus X", v: m.bind(\.camera.centerOffsetX), range: (-0.2)...0.2,
+                          fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Focus Y", v: m.bind(\.camera.centerOffsetY), range: (-0.2)...0.2,
+                          fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Anticipation", v: m.bind(\.camera.leadIn), range: 0.15...0.30,
+                          fmt: { "\(Int($0 * 1000)) ms" })
+                SliderRow(label: "Zoom hold", v: m.bind(\.camera.tail), range: 0.8...1.5,
+                          fmt: { String(format: "%.1f s", $0) })
                 ToggleRow(label: "Focus debug", on: Binding(get: { m.zoomDebug }, set: { m.zoomDebug = $0 }))
             }.card()
         }

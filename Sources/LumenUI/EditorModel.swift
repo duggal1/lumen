@@ -38,6 +38,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     var selection: UUID?
     var exportState = ExportState.idle
     var exportSettings: ExportSettings
+    var exportSeparateStems = UserDefaults.standard.bool(forKey: "lumen.export.separateWavStems")
     var exportPanelRequest = 0
     var exportPanelActive = false
     var zoomDebug = false
@@ -301,6 +302,11 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         return pixels / throughput
     }
 
+    func setSeparateWavStems(_ enabled: Bool) {
+        exportSeparateStems = enabled
+        UserDefaults.standard.set(enabled, forKey: "lumen.export.separateWavStems")
+    }
+
     func exportVideo() { startExport(settings: exportSettings, clipboard: false) }
 
     /// The Clipboard preset: a short 1080p H.264 file placed on the pasteboard as a file URL.
@@ -361,6 +367,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         }
 
         exportState = .running(0)
+        let stemExportEnabled = exportSeparateStems && !clipboard && settings.kind == .video
         exportTask = Task { [weak self] in
             let report: @Sendable (ExportProgress) -> Void = { [weak self] pr in
                 guard let model = self else { return }
@@ -390,7 +397,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                     } else {
                         try await Exporter.run(session: session, timeline: job.timeline, preset: job.preset, to: job.url,
                                                includeAudio: settings.includeAudio, audioBitrate: settings.audioBitrate,
-                                               progress: jobReport)
+                                               exportStems: stemExportEnabled, progress: jobReport)
                     }
                     lastURL = job.url
                 }

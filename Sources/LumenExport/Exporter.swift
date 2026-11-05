@@ -79,7 +79,7 @@ private final class AudioFeeder: @unchecked Sendable {
 public enum Exporter {
     /// Offline export: GPU renders frame i+1 while the encoder consumes frame i (depth-2 pipeline).
     public static func run(session: ProjectSession, timeline tl: Timeline, preset p: ExportPreset, to url: URL,
-                           includeAudio: Bool = true, audioBitrate: Int = 256_000,
+                           includeAudio: Bool = true, audioBitrate: Int = 256_000, exportStems: Bool = false,
                            progress: @escaping @Sendable (ExportProgress) -> Void) async throws {
         guard let d = tl.derived else { throw ExportError.noTimeline }
         let benchmark = ProcessInfo.processInfo.environment["LUMEN_BENCHMARK"] == "1"
@@ -197,10 +197,45 @@ public enum Exporter {
         await writer.finishWriting()
         if writer.status != .completed { throw ExportError.writer(writer.error?.localizedDescription ?? "export failed") }
         try Task.checkCancellation()
+
+        // Optionally export independent, unmastered float-WAV files for editing
+        // in a professional NLE. They share the movie's output timeline and
+        // remain silent in regions without their particular source.
+        var stagedStems: [(temporary: URL, final: URL)] = []
+        defer {
+            for entry in stagedStems { try? FileManager.default.removeItem(at: entry.temporary) }
+        }
+        if exportStems {
+            let sourceTracks = await Task.detached(priority: .userInitiated) {
+                session.mixer.stems(tl)
+            }.value
+            guard !sourceTracks.isEmpty else {
+                throw ExportError.writer("No microphone, system audio, or voice-over tracks are available.")
+            }
+            let basename = url.deletingPathExtension().lastPathComponent
+            let directory = url.deletingLastPathComponent()
+            for stem in sourceTracks {
+                try Task.checkCancellation()
+                let name = basename + "-" + stem.name + ".wav"
+                let destination = directory.appendingPathComponent(name)
+                let temporary = directory.appendingPathComponent(".lumen-stem-\(UUID().uuidString).wav")
+                try AudioIO.writeWAV(stem.left, stem.right, to: temporary)
+                stagedStems.append((temporary: temporary, final: destination))
+            }
+        }
+
         if FileManager.default.fileExists(atPath: url.path) {
             _ = try FileManager.default.replaceItemAt(url, withItemAt: stagedURL)
         } else {
             try FileManager.default.moveItem(at: stagedURL, to: url)
+        }
+        for stem in stagedStems {
+            try Task.checkCancellation()
+            if FileManager.default.fileExists(atPath: stem.final.path) {
+                _ = try FileManager.default.replaceItemAt(stem.final, withItemAt: stem.temporary)
+            } else {
+                try FileManager.default.moveItem(at: stem.temporary, to: stem.final)
+            }
         }
         if benchmark {
             let elapsed = HostClock.now() - startedAt

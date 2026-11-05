@@ -92,7 +92,13 @@ import LumenExport
     timeline.audio.speedRampsAuto = false
     timeline.audio.clickSounds = false
     timeline.audio.whooshes = false
-    try bundle.save(ProjectFile(meta: ProjectMeta(name: "Integration", source: source, clock: RecordingClock()), timeline: timeline))
+    let micSamples = (0..<48_000).map { i -> Float in
+        Float(0.12 * sin(Double(i) * 2 * .pi * 440 / 48_000))
+    }
+    try AudioIO.writeCAF(micSamples, micSamples, to: bundle.micURL)
+    var meta = ProjectMeta(name: "Integration", source: source, clock: RecordingClock())
+    meta.mic = TrackMeta(file: "mic.caf", startHostSeconds: 0)
+    try bundle.save(ProjectFile(meta: meta, timeline: timeline))
     try EventCodec.header().write(to: bundle.eventsURL)
     let renderer = try Renderer()
     let (session, loaded) = try await ProjectSession.open(bundle, device: renderer.device)
@@ -126,6 +132,14 @@ import LumenExport
     #expect(largeGeometry.content.z > smallGeometry.content.z)
     let output = root.appendingPathComponent("export.mp4")
     try await Exporter.run(session: session, timeline: derived, preset: ExportPreset(name: "test", codec: .h264, height: 180, fps: 30), to: output) { _ in }
+    let stemOutput = root.appendingPathComponent("stem-export.mp4")
+    try await Exporter.run(session: session, timeline: derived,
+                           preset: ExportPreset(name: "stem-test", codec: .h264, height: 180, fps: 30),
+                           to: stemOutput, exportStems: true) { _ in }
+    let wav = root.appendingPathComponent("stem-export-microphone.wav")
+    #expect(FileManager.default.fileExists(atPath: wav.path))
+    let stemFile = try AVAudioFile(forReading: wav)
+    #expect(stemFile.length >= 47_900)
     let asset = AVURLAsset(url: output)
     let duration = try await asset.load(.duration).seconds
     #expect(abs(duration - 1) < 0.02)
