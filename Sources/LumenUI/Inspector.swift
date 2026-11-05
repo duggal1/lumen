@@ -308,6 +308,14 @@ struct Inspector: View {
         return VStack(spacing: 24) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Clean mic", on: m.bind(\.audio.micClean))
+                Row(label: "Voice profile") {
+                    LSegmented(sel: m.bind(\.audio.voiceProfile),
+                               items: [(.natural, "Natural"), (.studio, "Studio")]).frame(width: 156)
+                }
+                if m.timeline.audio.voiceProfile == .studio {
+                    SliderRow(label: "Polish", v: m.bind(\.audio.studioAmount), range: 0...1,
+                              fmt: { "\(Int($0 * 100))%" })
+                }
                 ToggleRow(label: "Click sounds", on: m.bind(\.audio.clickSounds))
                 if m.timeline.audio.clickSounds {
                     Row(label: "Click tone") {
