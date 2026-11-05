@@ -24,8 +24,12 @@ enum ExportQuality: String, Codable, CaseIterable {
         switch self { case .low: 0.03; case .medium: 0.05; case .high: 0.08; case .max: 0.12 }
     }
 }
+enum ExportKind: String, Codable, CaseIterable {
+    case video = "Video", gif = "GIF"
+}
 
 struct ExportSettings: Codable, Equatable {
+    var kind: ExportKind = .video
     var container: ExportContainer = .mp4
     var codec: VideoCodec = .hevc
     var quality: ExportQuality = .high
@@ -40,8 +44,9 @@ struct ExportSettings: Codable, Equatable {
 
     /// ProRes cannot be written into an MP4, so the container follows the codec.
     var resolvedContainer: ExportContainer { codec == .prores ? .mov : container }
+    var fileExtension: String { kind == .gif ? "gif" : resolvedContainer.ext }
 
-    private static let key = "lumen.export.settings.v1"
+    private static let key = "lumen.export.settings.v2"
 
     static func load(defaultName: String) -> ExportSettings {
         if let data = UserDefaults.standard.data(forKey: key),
@@ -81,8 +86,9 @@ struct ExportSettings: Codable, Equatable {
         let base = filename.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !base.isEmpty, base != ".", base != "..", !base.contains("/"), !base.contains(":") else { return nil }
         let lower = base.lowercased()
-        let stem = lower.hasSuffix(".mp4") || lower.hasSuffix(".mov") ? String(base.dropLast(4)) : base
-        let name = stem + "." + resolvedContainer.ext
+        let stem = lower.hasSuffix(".mp4") || lower.hasSuffix(".mov") || lower.hasSuffix(".gif")
+            ? String(base.dropLast(4)) : base
+        let name = stem + "." + fileExtension
         return URL(fileURLWithPath: (folder as NSString).expandingTildeInPath, isDirectory: true).appendingPathComponent(name)
     }
 
