@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import LumenCore
 import LumenProject
-import LumenDirector
+@testable import LumenDirector
 
 private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
                                          duration: 6, backingScale: 1,
