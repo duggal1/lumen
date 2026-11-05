@@ -64,7 +64,23 @@ public final class ProjectSession: @unchecked Sendable {
         var mic: [Float]?, sys: [Float]?, micOff = 0.0, sysOff = 0.0
         if let m = meta.mic { mic = try? AudioIO.readMono(b.micURL); micOff = m.startHostSeconds - origin }
         if let s = meta.system { sys = try? AudioIO.readMono(b.systemURL); sysOff = s.startHostSeconds - origin }
-        let vad = (mic.map { VAD.regions($0) } ?? []).map { ($0.lowerBound + micOff) ... ($0.upperBound + micOff) }
+        // Older projects have no extra tracks. An unavailable/missing device
+        // recording is skipped on reopen without losing the rest of the project.
+        let extras: [RecordedMicrophone] = meta.additionalMicrophones.compactMap { item in
+            let url = b.url.appendingPathComponent(item.track.file)
+            guard url.deletingLastPathComponent().standardizedFileURL == b.url.standardizedFileURL,
+                  let samples = try? AudioIO.readMono(url), !samples.isEmpty else { return nil }
+            return RecordedMicrophone(deviceName: item.deviceName, samples: samples,
+                                      offset: item.track.startHostSeconds - origin)
+        }
+        let primaryVAD = (mic.map { VAD.regions($0) } ?? [])
+            .map { ($0.lowerBound + micOff) ... ($0.upperBound + micOff) }
+        let secondaryVAD = extras.flatMap { track in
+            VAD.regions(track.samples).map {
+                ($0.lowerBound + track.offset) ... ($0.upperBound + track.offset)
+            }
+        }
+        let vad = (primaryVAD + secondaryVAD).sorted { $0.lowerBound < $1.lowerBound }
         let wave = mic.map { envelope($0, offset: micOff) } ?? []
         let sharedDevice = SendableMetalDevice(device)
         let screen = try await ReaderFrameSource(url: b.screenURL, device: sharedDevice)
@@ -77,7 +93,8 @@ public final class ProjectSession: @unchecked Sendable {
         }
         let input = DirectorInput(events: events, source: meta.source, vad: vad, ax: ax, face: [], webcamAspect: aspect)
         let s = ProjectSession(bundle: b, meta: meta, screen: screen, webcam: web, input: input,
-                               mixer: AudioMixer(mic: mic, micOffset: micOff, system: sys, systemOffset: sysOff),
+                               mixer: AudioMixer(mic: mic, micOffset: micOff, system: sys, systemOffset: sysOff,
+                                                 additionalMicrophones: extras),
                                waveform: wave, cursors: CursorLibrary.load(from: b.cursorsURL))
         return (s, file.timeline)
     }

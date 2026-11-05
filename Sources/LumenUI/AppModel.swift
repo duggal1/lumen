@@ -50,6 +50,21 @@ import LumenCapture
         didSet { UserDefaults.standard.set(fps, forKey: "LumenDefaultFPS") }
     }
     var mic = true
+    /// Empty means use the macOS default input. When nonempty, the first
+    /// input uses ScreenCaptureKit and remaining inputs are independent CAFs.
+    var micInputIDs: [String] = UserDefaults.standard.stringArray(forKey: "LumenMicrophoneInputIDs") ?? [] {
+        didSet { UserDefaults.standard.set(micInputIDs, forKey: "LumenMicrophoneInputIDs") }
+    }
+    var availableAudioInputs: [(id: String, name: String)] {
+        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio,
+                                         position: .unspecified).devices
+            .map { (id: $0.uniqueID, name: $0.localizedName) }
+    }
+    func selectAudioInput(_ id: String, enabled: Bool) {
+        var selected = micInputIDs.filter { $0 != id }
+        if enabled { selected.append(id) }
+        micInputIDs = selected
+    }
     var system = false
     var webcam = false
     var livePreview = false
@@ -198,6 +213,15 @@ import LumenCapture
             cfg = RecordingConfig(source: .region(r.display, r.rect))
         }
         cfg.fps = fps; cfg.mic = mic && Permissions.mic; cfg.systemAudio = system
+        if cfg.mic && !micInputIDs.isEmpty {
+            let available = Set(availableAudioInputs.map(\.id))
+            guard micInputIDs.allSatisfy({ available.contains($0) }) else {
+                error = "A selected audio input is disconnected. Update microphone inputs before recording."
+                return
+            }
+            cfg.micDeviceID = micInputIDs.first
+            cfg.additionalMicDeviceIDs = Array(micInputIDs.dropFirst())
+        }
         cfg.webcamDeviceID = webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
         phase = .preparing
         let sourceDisplay: CGDirectDisplayID?

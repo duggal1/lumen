@@ -16,6 +16,9 @@ public struct RecordingConfig: Sendable {
     public var fps = 60
     public var mic = true
     public var micDeviceID: String?
+    /// Extra independent sources, e.g. BlackHole alongside a real microphone.
+    /// The primary mic remains on ScreenCaptureKit's low-overhead audio path.
+    public var additionalMicDeviceIDs: [String] = []
     public var systemAudio = false
     public var webcamDeviceID: String?
     public init(source: Source) { self.source = source }
@@ -32,7 +35,7 @@ public final class CAFWriter: @unchecked Sendable {
     public let first = OSAllocatedUnfairLock<Double?>(initialState: nil)
     init(url: URL) { self.url = url }
 
-    func append(_ sb: CMSampleBuffer) {
+    func append(_ sb: CMSampleBuffer, hostTime: Double? = nil) {
         guard let fd = CMSampleBufferGetFormatDescription(sb),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fd) else { return }
         var d = asbd.pointee
@@ -46,7 +49,7 @@ public final class CAFWriter: @unchecked Sendable {
             let rms = (s / Float(n)).squareRoot()
             level.withLock { $0 = rms }
         }
-        let pts = sb.presentationTimeStamp.seconds, box = AudioBox(buf: buf)
+        let pts = hostTime ?? sb.presentationTimeStamp.seconds, box = AudioBox(buf: buf)
         q.async { [self] in
             if file == nil {
                 var settings = box.buf.format.settings
