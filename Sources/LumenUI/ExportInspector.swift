@@ -28,9 +28,10 @@ struct ExportInspector: View {
                     LDropdown(sel: model.exportBinding(\.container),
                               options: ExportContainer.allCases.map { ($0, $0.rawValue, "film") })
                         .frame(width: 90)
+                        .disabled(settings.codec == .prores)
                     LDropdown(sel: model.exportBinding(\.codec),
-                              options: [(VideoCodec.h264, "H.264", "video"), (.hevc, "HEVC", "video")])
-                        .frame(width: 90)
+                              options: VideoCodec.allCases.map { ($0, $0.title, "video") })
+                        .frame(width: 110)
                 }
             }
             Row(label: "Resolution") {
