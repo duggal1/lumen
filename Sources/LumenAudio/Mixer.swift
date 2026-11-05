@@ -74,8 +74,9 @@ public final class AudioMixer: @unchecked Sendable {
 
     /// WPE is the expensive stage, so it is written next to the project and reused on reopen.
     /// Only the primary mic is persisted on disk; extra mics run WPE in memory.
+    // Called only by voiceChain while holding `lock`. Re-acquiring NSLock here
+    // deadlocks every microphone mix, including the CI audio tests.
     private func stageA(_ m: [Float], index: Int, needWPE: Bool) -> StageA {
-        lock.lock(); defer { lock.unlock() }
         if let s = stages[index], !needWPE || s.wpe != nil { return s }
         let hp = Cascade.apply(m, Cascade.hp4(80, fs: AudioIO.fs))
         guard needWPE else {
