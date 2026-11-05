@@ -38,29 +38,16 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         super.init()
         guard let dev = deviceID.flatMap({ AVCaptureDevice(uniqueID: $0) }) ?? AVCaptureDevice.default(for: .video) else { throw CaptureError.noSource }
         session.beginConfiguration()
-        // Camera hardware resolution is chosen before starting the session.
-        // The former fixed 720p preset threw away pixels from 1080p/4K devices.
-        let native = dev.formats.compactMap { format -> (format: AVCaptureDevice.Format, area: Int, fps: Double)? in
-            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-            guard dimensions.width >= 640, dimensions.height >= 480,
-                  dimensions.width <= 4096, dimensions.height <= 2160,
-                  format.videoSupportedFrameRateRanges.contains(where: { $0.maxFrameRate >= 29.97 }) else { return nil }
-            return (format, Int(dimensions.width) * Int(dimensions.height),
-                    format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0)
-        }.max { lhs, rhs in lhs.area == rhs.area ? lhs.fps < rhs.fps : lhs.area < rhs.area }
-        if let native {
-            try dev.lockForConfiguration()
-            dev.activeFormat = native.format
-            let fps = native.fps >= 59.9 && native.area <= 1920 * 1080 ? 60 : 30
-            let interval = CMTime(value: 1, timescale: CMTimeScale(fps))
-            dev.activeVideoMinFrameDuration = interval
-            dev.activeVideoMaxFrameDuration = interval
-            dev.unlockForConfiguration()
-            session.sessionPreset = .inputPriority
-        } else {
-            session.sessionPreset = .high
+        // macOS does not expose AVCaptureSession.Preset.inputPriority. Use the
+        // highest *supported* session preset, then encode the actual buffer
+        // dimensions reported by the camera, never a fictional 4K resolution.
+        let input = try AVCaptureDeviceInput(device: dev)
+        guard session.canAddInput(input) else { throw CaptureError.noSource }
+        session.addInput(input)
+        let presets: [AVCaptureSession.Preset] = [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
+        if let best = presets.first(where: { session.canSetSessionPreset($0) }) {
+            session.sessionPreset = best
         }
-        session.addInput(try AVCaptureDeviceInput(device: dev))
         let out = AVCaptureVideoDataOutput()
         out.alwaysDiscardsLateVideoFrames = true
         out.setSampleBufferDelegate(self, queue: q)
