@@ -331,7 +331,7 @@ fragment float4 resolveFS(VO in [[stage_in]], constant ResU &u [[buffer(0)]],
 struct TextSpriteU { float opacity; };
 fragment float4 textSpriteFS(VO in [[stage_in]], constant TextSpriteU &u [[buffer(0)]],
                             texture2d<float> image [[texture(0)]]) {
-    return image.sample(linClamp, in.q) * clamp(u.opacity, 0.0, 1.0);
+    return image.sample(linClamp, float2(in.q.x, 1.0 - in.q.y)) * clamp(u.opacity, 0.0, 1.0);
 }
 
 struct HighlightU {
