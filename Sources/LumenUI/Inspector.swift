@@ -163,6 +163,7 @@ struct Inspector: View {
             VStack(spacing: 0) {
                 ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
                 Row(label: "Preset") { LDropdown(sel: Binding(get: { m.timeline.camera.preset }, set: { v in m.edit { $0.camera.apply(preset: v) } }), options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "plus.magnifyingglass") }).frame(width: 130) }
+                Row(label: "Tilt") { LDropdown(sel: m.bind(\.camera.tilt), options: TiltMode.allCases.map { ($0, $0.rawValue.capitalized, "move.3d") }).frame(width: 130) }
                 SliderRow(label: "Max zoom", v: m.bind(\.camera.maxScale), range: 1.2...4, fmt: { String(format: "%.1f×", $0) })
                 SliderRow(label: "Smoothness", v: smooth, range: 0...1)
             }.card()
