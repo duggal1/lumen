@@ -28,6 +28,18 @@ public struct AudioStem: Sendable {
     }
 }
 
+/// Extra recorded audio devices are separate immutable source files, on the
+/// same host clock as the original screen and microphone.
+public struct RecordedMicrophone: Sendable {
+    public let deviceName: String, samples: [Float]
+    public let offset: Double
+    public init(deviceName: String, samples: [Float], offset: Double) {
+        self.deviceName = deviceName
+        self.samples = samples
+        self.offset = offset
+    }
+}
+
 /// Offline mix of the whole timeline. Preview plays this buffer; export encodes it. One code path = they always match.
 /// Voice chain (HP, denoise, EQ, compressor, -16 LUFS reference) is cached by `micClean`. Thread-safe.
 public final class AudioMixer: @unchecked Sendable {
@@ -38,42 +50,69 @@ public final class AudioMixer: @unchecked Sendable {
     static let voiceRefLUFS = -16.0, musicRefLUFS = -10.0
 
     private let mic: [Float]?, micOffset: Double, sys: [Float]?, sysOffset: Double
+    private let extraMicrophones: [RecordedMicrophone]
     private let bank = SFXBank()
     private let lock = NSLock()
     private struct VoiceKey: Equatable { var clean: Bool; var profile: VoiceProfile; var amount: Double }
     private var voice: (key: VoiceKey, x: [Float])?
+    private var extraVoices: [Int: (key: VoiceKey, x: [Float])] = [:]
     private var music: MusicCache?
     private var imported: [String: MusicTrack] = [:]
     public var denoiser: any Denoiser = defaultDenoiser
 
-    public init(mic: [Float]?, micOffset: Double, system: [Float]?, systemOffset: Double) {
+    public init(mic: [Float]?, micOffset: Double, system: [Float]?, systemOffset: Double,
+                additionalMicrophones: [RecordedMicrophone] = []) {
         self.mic = mic; self.micOffset = micOffset; sys = system; sysOffset = systemOffset
+        extraMicrophones = additionalMicrophones
     }
 
     // MARK: Cached stages
 
-    private func voiceChain(_ plan: AudioPlan) -> [Float]? {
-        lock.lock(); defer { lock.unlock() }
-        let key = VoiceKey(clean: plan.micClean, profile: plan.voiceProfile,
-                           amount: max(0, min(plan.studioAmount, 1)))
-        if let v = voice, v.key == key { return v.x }
-        guard let m = mic else { return nil }
+    private func voiceKey(_ plan: AudioPlan) -> VoiceKey {
+        VoiceKey(clean: plan.micClean, profile: plan.voiceProfile,
+                 amount: max(0, min(plan.studioAmount, 1)))
+    }
+
+    /// Every microphone is enhanced independently, never mixed before
+    /// denoising/compression. A shared model can otherwise attenuate the
+    /// quieter presenter's voice when a louder loopback source is active.
+    private func processVoice(_ samples: [Float], plan: AudioPlan, key: VoiceKey) -> [Float] {
         let fs = AudioIO.fs
         var hp = Biquad.highpass(80, fs: fs), eq = Biquad.peaking(3000, q: 1, db: 2, fs: fs)
-        var x = m.map { Float(hp.run(Double($0))) }
-        if plan.micClean { x = denoiser.process(x) }
+        var x = samples.map { Float(hp.run(Double($0))) }
+        if key.clean { x = denoiser.process(x) }
         x = x.map { Float(eq.run(Double($0))) }
-        if plan.voiceProfile == .studio {
+        if key.profile == .studio {
             x = StudioVoice.process(x, amount: key.amount, fs: fs)
         } else {
             x = Compressor().process(x, fs: fs)
         }
         let lu = Loudness.integrated([x])
         if lu > -69 {
-            let g = Float(pow(10, clamp((plan.voiceProfile == .studio ? -14.5 : Self.voiceRefLUFS) - lu, -24, 24) / 20))
+            let target = key.profile == .studio ? -14.5 : Self.voiceRefLUFS
+            let g = Float(pow(10, clamp(target - lu, -24, 24) / 20))
             x = vDSP.multiply(g, x)
         }
+        return x
+    }
+
+    private func voiceChain(_ plan: AudioPlan) -> [Float]? {
+        lock.lock(); defer { lock.unlock() }
+        let key = voiceKey(plan)
+        if let cached = voice, cached.key == key { return cached.x }
+        guard let mic else { return nil }
+        let x = processVoice(mic, plan: plan, key: key)
         voice = (key, x)
+        return x
+    }
+
+    private func extraVoiceChain(_ index: Int, plan: AudioPlan) -> [Float]? {
+        guard extraMicrophones.indices.contains(index) else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        let key = voiceKey(plan)
+        if let cached = extraVoices[index], cached.key == key { return cached.x }
+        let x = processVoice(extraMicrophones[index].samples, plan: plan, key: key)
+        extraVoices[index] = (key, x)
         return x
     }
 
@@ -171,6 +210,17 @@ public final class AudioMixer: @unchecked Sendable {
             let channel = mapped.map { $0 * gain }
             result.append(AudioStem(name: "microphone", left: channel, right: channel))
         }
+        if a.micMode != .off {
+            for index in extraMicrophones.indices {
+                guard let processed = extraVoiceChain(index, plan: a) else { continue }
+                let input = extraMicrophones[index]
+                let mapped = Self.mapped(processed, offset: input.offset,
+                                         tm: tm, n: n, muteRamps: a.muteMicInRamps)
+                let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
+                let channel = mapped.map { $0 * gain }
+                result.append(AudioStem(name: "microphone-\(index + 2)", left: channel, right: channel))
+            }
+        }
 
         if let system = sys {
             let mapped = Self.mapped(system, offset: sysOffset, tm: tm, n: n, muteRamps: true)
@@ -210,6 +260,16 @@ public final class AudioMixer: @unchecked Sendable {
             let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
             for i in 0..<n { L[i] += y[i] * gain; R[i] += y[i] * gain }
             hasProgram = true
+        }
+        if a.micMode != .off {
+            for index in extraMicrophones.indices {
+                guard let processed = extraVoiceChain(index, plan: a) else { continue }
+                let mapped = Self.mapped(processed, offset: extraMicrophones[index].offset,
+                                         tm: tm, n: n, muteRamps: a.muteMicInRamps)
+                let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
+                for i in 0..<n { L[i] += mapped[i] * gain; R[i] += mapped[i] * gain }
+                hasProgram = true
+            }
         }
         if let s = sys {
             let y = Self.mapped(s, offset: sysOffset, tm: tm, n: n, muteRamps: true)
