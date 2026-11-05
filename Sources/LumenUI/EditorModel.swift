@@ -96,6 +96,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         let analysisChanged = old.overlays.privacy != new.overlays.privacy || old.captions.enabled != new.captions.enabled
             || old.captions.locale != new.captions.locale || old.captions.vocabulary != new.captions.vocabulary
             || old.layouts != new.layouts
+            || old.webcam?.backdrop != new.webcam?.backdrop
         if analysisChanged { analyzeInBackground(new) }
         if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap
             || old.audio != new.audio || old.webcam != new.webcam || old.overlays.taps != new.overlays.taps
