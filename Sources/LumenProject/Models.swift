@@ -270,6 +270,7 @@ public enum WebcamBackdrop: String, Codable, CaseIterable, Sendable {
     case transparent = "Remove background"
     case wallpaper = "Desktop wallpaper"
     case canvas = "Canvas color"
+    case image = "Choose image"
 }
 
 public enum WebcamEnhancement: String, Codable, CaseIterable, Sendable {
@@ -287,10 +288,11 @@ public struct WebcamLayout: Codable, Equatable, Sendable {
     public var faceFill = 0.31
     public var faceZoom = 0.6
     public var backdrop: WebcamBackdrop = .original
+    public var backdropImagePath: String?
     public var enhancement: WebcamEnhancement = .natural
     public var detailAmount = 0.5
     public init() {}
-    enum CodingKeys: String, CodingKey { case corner, size, shape, mirror, border, shadow, autoFrame, faceFill, faceZoom, backdrop, enhancement, detailAmount }
+    enum CodingKeys: String, CodingKey { case corner, size, shape, mirror, border, shadow, autoFrame, faceFill, faceZoom, backdrop, backdropImagePath, enhancement, detailAmount }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         corner = try c.decodeIfPresent(Corner.self, forKey: .corner) ?? corner
@@ -303,6 +305,7 @@ public struct WebcamLayout: Codable, Equatable, Sendable {
         faceFill = try c.decodeIfPresent(Double.self, forKey: .faceFill) ?? faceFill
         faceZoom = try c.decodeIfPresent(Double.self, forKey: .faceZoom) ?? faceZoom
         backdrop = try c.decodeIfPresent(WebcamBackdrop.self, forKey: .backdrop) ?? backdrop
+        backdropImagePath = try c.decodeIfPresent(String.self, forKey: .backdropImagePath)
         enhancement = try c.decodeIfPresent(WebcamEnhancement.self, forKey: .enhancement) ?? enhancement
         detailAmount = try c.decodeIfPresent(Double.self, forKey: .detailAmount) ?? detailAmount
     }
