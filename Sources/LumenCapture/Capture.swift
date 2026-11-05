@@ -16,6 +16,9 @@ public struct RecordingConfig: Sendable {
     public var fps = 60
     public var mic = true
     public var micDeviceID: String?
+    /// Extra independent sources, e.g. BlackHole alongside a real microphone.
+    /// The primary mic remains on ScreenCaptureKit's low-overhead audio path.
+    public var additionalMicDeviceIDs: [String] = []
     public var systemAudio = false
     public var webcamDeviceID: String?
     public init(source: Source) { self.source = source }
