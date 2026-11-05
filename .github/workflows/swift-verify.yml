@@ -20,14 +20,10 @@ jobs:
         run: |
           swift --version
           xcodebuild -version
-      - name: Install Metal toolchain
+      - name: Check Metal compiler
         run: |
           xcode-select -p
-          # Xcode 16 ships the `metal` driver but not the compiler component on
-          # the hosted runners. Without it SwiftPM copies Shaders.metal as a
-          # resource and the renderer fails with "no default library was found".
-          xcodebuild -downloadComponent MetalToolchain
-          xcrun -sdk macosx metal -v
+          xcrun -sdk macosx metal --version
       - name: Build debug
         run: swift build
       - name: Run unit and integration tests
