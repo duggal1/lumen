@@ -23,51 +23,61 @@ struct ExportInspector: View {
     private var output: some View {
         VStack(alignment: .leading, spacing: Space.s2) {
             Text("Video").font(AppType.title).foregroundStyle(Tok.text)
-            Row(label: "Format") {
-                HStack(spacing: Space.s2) {
-                    LDropdown(sel: model.exportBinding(\.container),
-                              options: ExportContainer.allCases.map { ($0, $0.rawValue, "film") })
-                        .frame(width: 90)
-                        .disabled(settings.codec == .prores)
-                    LDropdown(sel: model.exportBinding(\.codec),
-                              options: VideoCodec.allCases.map { ($0, $0.title, "video") })
-                        .frame(width: 110)
-                }
-            }
-            Row(label: "Resolution") {
-                LDropdown(sel: model.exportBinding(\.resolution),
-                          options: ExportResolution.allCases.map { ($0, $0.rawValue, "rectangle.dashed") })
+            Row(label: "Kind") {
+                LSegmented(sel: model.exportBinding(\.kind),
+                           items: [(.video, "Video"), (.gif, "GIF")])
                     .frame(width: 132)
             }
-            if settings.resolution == .custom {
-                HStack(spacing: Space.s2) {
-                    TextField("Width", value: model.exportBinding(\.customWidth), format: .number)
-                        .textFieldStyle(.plain).font(AppType.body).frame(width: 88).field()
-                    Text("×").font(AppType.caption).foregroundStyle(Tok.text2)
-                    TextField("Height", value: model.exportBinding(\.customHeight), format: .number)
-                        .textFieldStyle(.plain).font(AppType.body).frame(width: 88).field()
-                }
-            }
-            let dimensions = settings.dimensions(source: source, aspect: aspect)
-            Text("\(dimensions.0) × \(dimensions.1) px")
-                .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
-            Row(label: "Frame rate") {
-                LDropdown(sel: model.exportBinding(\.frameRate),
-                          options: ExportRate.allCases.map { ($0, $0.rawValue == "Source" ? "Source" : "\($0.rawValue) fps", "film.stack") })
-                    .frame(width: 132)
-            }
-            Row(label: "Quality") {
-                LDropdown(sel: model.exportBinding(\.quality),
-                          options: ExportQuality.allCases.map { ($0, $0.rawValue, "slider.horizontal.3") })
-                    .frame(width: 132)
-            }
-            Row(label: "Audio") {
-                HStack(spacing: Space.s2) {
-                    LToggle(on: model.exportBinding(\.includeAudio), label: "Include audio")
-                    if settings.includeAudio {
-                        LDropdown(sel: model.exportBinding(\.audioBitrate),
-                                  options: [128, 192, 256, 320].map { ($0 * 1000, "\($0) kbps", "waveform") })
+            if settings.kind == .gif {
+                Text("800 px wide, 15 fps, loops forever.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+            } else {
+                Row(label: "Format") {
+                    HStack(spacing: Space.s2) {
+                        LDropdown(sel: model.exportBinding(\.container),
+                                  options: ExportContainer.allCases.map { ($0, $0.rawValue, "film") })
+                            .frame(width: 90)
+                            .disabled(settings.codec == .prores)
+                        LDropdown(sel: model.exportBinding(\.codec),
+                                  options: VideoCodec.allCases.map { ($0, $0.title, "video") })
                             .frame(width: 110)
+                    }
+                }
+                Row(label: "Resolution") {
+                    LDropdown(sel: model.exportBinding(\.resolution),
+                              options: ExportResolution.allCases.map { ($0, $0.rawValue, "rectangle.dashed") })
+                        .frame(width: 132)
+                }
+                if settings.resolution == .custom {
+                    HStack(spacing: Space.s2) {
+                        TextField("Width", value: model.exportBinding(\.customWidth), format: .number)
+                            .textFieldStyle(.plain).font(AppType.body).frame(width: 88).field()
+                        Text("×").font(AppType.caption).foregroundStyle(Tok.text2)
+                        TextField("Height", value: model.exportBinding(\.customHeight), format: .number)
+                            .textFieldStyle(.plain).font(AppType.body).frame(width: 88).field()
+                    }
+                }
+                let dimensions = settings.dimensions(source: source, aspect: aspect)
+                Text("\(dimensions.0) × \(dimensions.1) px")
+                    .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                Row(label: "Frame rate") {
+                    LDropdown(sel: model.exportBinding(\.frameRate),
+                              options: ExportRate.allCases.map { ($0, $0.rawValue == "Source" ? "Source" : "\($0.rawValue) fps", "film.stack") })
+                        .frame(width: 132)
+                }
+                Row(label: "Quality") {
+                    LDropdown(sel: model.exportBinding(\.quality),
+                              options: ExportQuality.allCases.map { ($0, $0.rawValue, "slider.horizontal.3") })
+                        .frame(width: 132)
+                }
+                Row(label: "Audio") {
+                    HStack(spacing: Space.s2) {
+                        LToggle(on: model.exportBinding(\.includeAudio), label: "Include audio")
+                        if settings.includeAudio {
+                            LDropdown(sel: model.exportBinding(\.audioBitrate),
+                                      options: [128, 192, 256, 320].map { ($0 * 1000, "\($0) kbps", "waveform") })
+                                .frame(width: 110)
+                        }
                     }
                 }
             }
@@ -102,20 +112,33 @@ struct ExportInspector: View {
     private var action: some View {
         VStack(alignment: .leading, spacing: Space.s3) {
             Text("Estimate").font(AppType.title).foregroundStyle(Tok.text)
-            let bytes = settings.estimatedBytes(source: source, aspect: aspect, outputDuration: model.duration)
-            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
-                .font(AppType.metric).foregroundStyle(Tok.text)
-            if let seconds = model.estimatedExportSeconds {
-                Text("Around \(Int(seconds.rounded())) s based on your last export")
+            if settings.kind == .gif {
+                Text("GIF").font(AppType.metric).foregroundStyle(Tok.text)
+                Text("Small, silent and loopable.")
                     .font(AppType.caption).foregroundStyle(Tok.text2)
             } else {
-                Text("Export time is measured after the first export.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
+                let bytes = settings.estimatedBytes(source: source, aspect: aspect, outputDuration: model.duration)
+                Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                    .font(AppType.metric).foregroundStyle(Tok.text)
+                if let seconds = model.estimatedExportSeconds {
+                    Text("Around \(Int(seconds.rounded())) s based on your last export")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                } else {
+                    Text("Export time is measured after the first export.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                }
             }
             switch model.exportState {
             case .idle:
-                LButton(title: "Export", icon: "square.and.arrow.up", kind: .primary, height: 32) {
-                    model.exportVideo()
+                HStack(spacing: Space.s2) {
+                    LButton(title: "Export", icon: "square.and.arrow.up", kind: .primary, height: 32) {
+                        model.exportVideo()
+                    }
+                    if settings.kind == .video {
+                        LButton(title: "Copy to clipboard", icon: "doc.on.clipboard", kind: .secondary, height: 32) {
+                            model.exportToClipboard()
+                        }
+                    }
                 }
             case .running(let fraction):
                 progress(fraction)
