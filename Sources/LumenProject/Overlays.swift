@@ -101,7 +101,7 @@ public struct LayoutSettings: Codable, Equatable, Sendable {
     public var mirror = true, border = true, shadow = true, autoFrame = true
     public var avoidCursor = true
     public var avoidMargin = 48.0
-    public var snapDwell = 1.5
+    public var snapDwell = 0.45
     public var behindFace: BehindFace = .move
     public var hideOnSilence = false
     public var silenceHold = 0.6
