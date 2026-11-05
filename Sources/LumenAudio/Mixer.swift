@@ -29,6 +29,7 @@ public final class AudioMixer: @unchecked Sendable {
     private struct VoiceKey: Equatable { var clean: Bool; var profile: VoiceProfile; var amount: Double }
     private var voice: (key: VoiceKey, x: [Float])?
     private var music: MusicCache?
+    private var imported: [String: MusicTrack] = [:]
     public var denoiser: any Denoiser = defaultDenoiser
 
     public init(mic: [Float]?, micOffset: Double, system: [Float]?, systemOffset: Double) {
@@ -70,6 +71,20 @@ public final class AudioMixer: @unchecked Sendable {
         let c = MusicCache(path: path, track: t, lufs: t.map { Loudness.integrated([$0.l, $0.r]) } ?? -70)
         music = c
         return c
+    }
+
+    private func importTrack(_ path: String) -> MusicTrack? {
+        lock.lock()
+        let cached = imported[path]
+        lock.unlock()
+        if let cached { return cached }
+        guard let (l, r) = try? AudioIO.readStereo(URL(fileURLWithPath: path)),
+              !l.isEmpty, l.count == r.count else { return nil }
+        let result = MusicTrack(l: l, r: r)
+        lock.lock()
+        imported[path] = result
+        lock.unlock()
+        return result
     }
 
     // MARK: Building blocks
@@ -132,15 +147,33 @@ public final class AudioMixer: @unchecked Sendable {
         var L = [Float](repeating: 0, count: n), R = L
         var hasProgram = false                                   // voice / system / music (not just SFX)
 
-        if let v = voiceChain(a) {
+        if a.micMode != .off, let v = voiceChain(a) {
             let y = Self.mapped(v, offset: micOffset, tm: tm, n: n, muteRamps: a.muteMicInRamps)
-            for i in 0..<n { L[i] += y[i]; R[i] += y[i] }
+            let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
+            for i in 0..<n { L[i] += y[i] * gain; R[i] += y[i] * gain }
             hasProgram = true
         }
         if let s = sys {
             let y = Self.mapped(s, offset: sysOffset, tm: tm, n: n, muteRamps: true)
-            let g: Float = 0.7
-            for i in 0..<n { L[i] += y[i] * g; R[i] += y[i] * g }
+            let gain = Float(pow(10, clamp(a.systemGainDb, -60, 24) / 20))
+            for i in 0..<n { L[i] += y[i] * gain; R[i] += y[i] * gain }
+            hasProgram = true
+        }
+        for lane in a.lanes where !lane.mute && (lane.role == .voiceover || lane.role == .music) {
+            guard let path = lane.path, let track = importTrack(path) else { continue }
+            let offset = Int(max(0, lane.placement) * fs)
+            guard offset < n else { continue }
+            let count = min(n - offset, track.l.count)
+            let gain = Float(pow(10, clamp(lane.gainDb, -60, 24) / 20))
+            // Short, click-free ramps when placing a voice-over on the timeline.
+            let fadeLength = min(Int(0.01 * fs), count / 2)
+            for i in 0..<count {
+                let fadeIn = fadeLength > 0 ? min(1, Float(i) / Float(fadeLength)) : 1
+                let fadeOut = fadeLength > 0 ? min(1, Float(count - i - 1) / Float(fadeLength)) : 1
+                let g = gain * min(fadeIn, fadeOut)
+                L[offset + i] += track.l[i] * g
+                R[offset + i] += track.r[i] * g
+            }
             hasProgram = true
         }
         if let mc = loadMusic(a.musicPath), let mt = mc.track {
