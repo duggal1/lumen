@@ -9,10 +9,13 @@ enum ExportResolution: String, Codable, CaseIterable {
     case source = "Source", ultraHD = "4K", p1440 = "1440p", p1080 = "1080p", p720 = "720p", custom = "Custom"
 }
 enum ExportRate: String, Codable, CaseIterable {
-    case source = "Source", f24 = "24", f30 = "30", f60 = "60"
+    case source = "Source", f24 = "24", f30 = "30", f60 = "60", f120 = "120", f144 = "144", f240 = "240"
     func fps(source: Double) -> Int {
-        switch self { case .source: max(1, Int(source.rounded()))
-        case .f24: 24; case .f30: 30; case .f60: 60 }
+        switch self {
+        case .source: max(1, Int(source.rounded()))
+        case .f24: 24; case .f30: 30; case .f60: 60
+        case .f120: 120; case .f144: 144; case .f240: 240
+        }
     }
 }
 enum ExportQuality: String, Codable, CaseIterable {
@@ -34,6 +37,9 @@ struct ExportSettings: Codable, Equatable {
     var folder: String = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)
         .first?.path ?? NSHomeDirectory() + "/Movies"
     var filename = "Lumen export"
+
+    /// ProRes cannot be written into an MP4, so the container follows the codec.
+    var resolvedContainer: ExportContainer { codec == .prores ? .mov : container }
 
     private static let key = "lumen.export.settings.v1"
 
@@ -76,7 +82,7 @@ struct ExportSettings: Codable, Equatable {
         guard !base.isEmpty, base != ".", base != "..", !base.contains("/"), !base.contains(":") else { return nil }
         let lower = base.lowercased()
         let stem = lower.hasSuffix(".mp4") || lower.hasSuffix(".mov") ? String(base.dropLast(4)) : base
-        let name = stem + "." + container.ext
+        let name = stem + "." + resolvedContainer.ext
         return URL(fileURLWithPath: (folder as NSString).expandingTildeInPath, isDirectory: true).appendingPathComponent(name)
     }
 
