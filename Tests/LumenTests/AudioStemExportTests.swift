@@ -51,7 +51,9 @@ import LumenAudio
     timeline = Director.derive(timeline, input: DirectorInput(events: [], source: source), revision: 1)
     let mic = (0..<Int(fs * 4)).map { i -> Float in
         let t = Double(i) / fs
-        return t >= 2 && t <= 2.2 ? 0.15 : 0
+        // A real voice waveform survives the input high-pass filter.
+        // A constant plateau is DC and would correctly be removed.
+        return t >= 2 && t <= 2.2 ? Float(0.15 * sin(2 * .pi * 440 * t)) : 0
     }
     let stems = AudioMixer(mic: mic, micOffset: 0, system: nil, systemOffset: 0).stems(timeline)
     #expect(stems.count == 1)
