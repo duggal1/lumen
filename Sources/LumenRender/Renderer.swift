@@ -465,7 +465,8 @@ public final class Renderer: @unchecked Sendable {
     }
 
     /// Adaptive K = ceil(max screen-space px/frame / 2), clamped; static scenes cost nothing. Preview <= 2.
-    private func sampleCount(_ r: RenderRequest, _ g: Geometry) -> Int {
+    /// Internal (not private) so tests can prove sub-frame accumulation.
+    func sampleCount(_ r: RenderRequest, _ g: Geometry) -> Int {
         let tl = r.timeline
         guard tl.camera.shutter > 0, tl.derived != nil, r.fps > 0 else { return 1 }
         let dt = 1 / r.fps, a = tl.evaluate(at: r.t - dt / 2), b = tl.evaluate(at: r.t + dt / 2)

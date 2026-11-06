@@ -3,15 +3,9 @@ import LumenCore
 
 public enum ClickEffect: String, Codable, CaseIterable, Sendable { case none, ripple, pulse, burst }
 
-public enum LoopMode: Codable, Equatable, Sendable { case off, cursorAndCamera(duration: Double) }
-
-public struct MotionBlurParams: Codable, Equatable, Sendable {
-    public var enabled = true
-    public var shutter = 0.5
-    public var maxSamples = 8
-    public var previewSamples = 2
-    public init() {}
-}
+// NOTE: MotionBlurParams/LoopMode used to live here but were dead code
+// (never read). Real motion-blur controls are CameraParams.shutter /
+// maxSamples (Renderer.sampleCount) and CursorStyle.loop (CursorPipeline).
 
 public struct UpscaleParams: Codable, Equatable, Sendable {
     public var enabled = true
