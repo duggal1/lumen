@@ -22,6 +22,7 @@ public struct LibraryRoot: View {
 
 struct LibrarySurface: View {
     let app: AppModel
+    private enum RecordTab: Int, CaseIterable, Hashable { case capture, audio, captions }
     @Environment(MenuHost.self) private var menu
     @Environment(\.openWindow) private var openWindow
     @State private var showRecord = false
@@ -168,10 +169,97 @@ struct LibrarySurface: View {
 
     // MARK: Record dialog
 
+    @State private var recordTab: RecordTab = .capture
+
     private var recordDialog: some View {
-        LDialog(title: "New recording", subtitle: "Choose what to capture.", confirmTitle: "Record",
-                confirmEnabled: canRecord, cancel: { showRecord = false },
-                confirm: { showRecord = false; app.toggle() }) {
+        GeometryReader { geo in
+            ZStack {
+                Tok.modalScrim.ignoresSafeArea().onTapGesture { }
+                VStack(alignment: .leading, spacing: 0) {
+                    // Header
+                    HStack(alignment: .top, spacing: 12) {
+                        PixelLens(cell: 2).padding(.top, 2)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("New recording").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
+                            Text("Choose what to capture.").font(AppType.caption).foregroundStyle(Tok.text2)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.bottom, 16)
+
+                    // Tab control (fixed)
+                    LSegmented(sel: $recordTab, items: RecordTab.allCases.map { ($0, tabTitle($0)) })
+                        .frame(height: 24)
+                        .padding(.bottom, 16)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel("Recording sections")
+
+                    // Content region (fixed to tallest tab)
+                    ScrollView {
+                        ZStack(alignment: .topLeading) {
+                            captureTab.opacity(recordTab == .capture ? 1 : 0)
+                                .accessibilityHidden(recordTab != .capture)
+                            audioTab.opacity(recordTab == .audio ? 1 : 0)
+                                .accessibilityHidden(recordTab != .audio)
+                            captionsTab.opacity(recordTab == .captions ? 1 : 0)
+                                .accessibilityHidden(recordTab != .captions)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: recordTab)
+                    }
+                    .frame(maxHeight: .infinity)
+
+                    // Footer pinned
+                    HStack(spacing: 8) {
+                        Spacer()
+                        LButton(title: "Cancel", kind: .secondary, height: 32, action: { showRecord = false })
+                        LButton(title: "Record", kind: .primary, height: 32, action: { showRecord = false; app.toggle() })
+                            .disabled(!canRecord)
+                    }
+                    .padding(.top, 16)
+                }
+                .padding(24)
+                .frame(width: 480)
+                .frame(maxHeight: geo.size.height - 48)
+                .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
+                .clipped()
+            }
+        }
+        .focusable()
+        .focusEffectDisabled()
+        .onAppear { recordTab = lastRecordTab }
+        .onDisappear { lastRecordTab = recordTab }
+        .onKeyPress { press in
+            if press.modifiers.contains(.command) {
+                if press.key == "1" { recordTab = .capture; return .handled }
+                if press.key == "2" { recordTab = .audio; return .handled }
+                if press.key == "3" { recordTab = .captions; return .handled }
+                if press.key == .return { if canRecord { showRecord = false; app.toggle() }; return .handled }
+            }
+            if press.key == .leftArrow { moveRecordTab(-1); return .handled }
+            if press.key == .rightArrow { moveRecordTab(1); return .handled }
+            if press.key == .escape { showRecord = false; return .handled }
+            return .ignored
+        }
+        .accessibilityAddTraits(.isModal)
+    }
+
+    @State private var lastRecordTab: RecordTab = .capture
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private func moveRecordTab(_ d: Int) {
+        let cases = RecordTab.allCases
+        guard let i = cases.firstIndex(of: recordTab) else { return }
+        let j = (i + d + cases.count) % cases.count
+        recordTab = cases[j]
+    }
+
+    private func tabTitle(_ t: RecordTab) -> String {
+        switch t { case .capture: "Capture"; case .audio: "Audio"; case .captions: "Captions" }
+    }
+
+    private var captureTab: some View {
+        VStack(alignment: .leading, spacing: 16) {
             LSegmented(sel: Bindable(app).kind,
                        items: AppModel.SourceKind.allCases.map { ($0, label($0)) },
                        track: Tok.control, thumb: Tok.controlHover)
@@ -196,35 +284,39 @@ struct LibrarySurface: View {
                            track: Tok.control, thumb: Tok.controlHover)
                     .frame(width: 180)
             }
-            .frame(height: 32)
-            compactToggle("Microphone", Bindable(app).mic)
-            if app.mic {
-                VStack(alignment: .leading, spacing: Space.s2) {
-                    Text("Audio inputs").font(AppType.caption).foregroundStyle(Tok.text2)
-                    ForEach(app.availableAudioInputs, id: \.id) { device in
-                        HStack(spacing: Space.s4) {
-                            Text(device.name).font(AppType.label).foregroundStyle(Tok.text)
-                                .lineLimit(1)
-                            Spacer(minLength: Space.s2)
-                            LToggle(on: Binding(
-                                get: { app.micInputIDs.contains(device.id) },
-                                set: { app.selectAudioInput(device.id, enabled: $0) }),
-                                label: device.name)
-                        }.frame(height: 28)
-                    }
-                    Text(app.micInputIDs.isEmpty
-                         ? "Using the system default microphone."
-                         : "\(app.micInputIDs.count) input(s), captured independently. First input is the primary voice.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                }
-            }
-            compactToggle("System audio", Bindable(app).system)
-            compactToggle("Webcam", Bindable(app).webcam)
-            LiveCaptionRows(note: app.liveNote, app: app)
+            .frame(height: 48)
             Text(preview).font(AppType.caption).foregroundStyle(Tok.text2)
                 .contentTransition(.opacity)
         }
-        .onAppear { menu.close() }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var audioTab: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            compactToggle("Microphone", Bindable(app).mic)
+            if app.mic {
+                HStack(spacing: Space.s4) {
+                    Text(selectedMicName).font(AppType.label).foregroundStyle(Tok.text)
+                    Spacer(minLength: Space.s4)
+                }
+                .frame(height: 48)
+            }
+            compactToggle("System audio", Bindable(app).system)
+            compactToggle("Webcam", Bindable(app).webcam)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var captionsTab: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            LiveCaptionRows(note: app.liveNote, app: app)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var selectedMicName: String {
+        app.availableAudioInputs.first(where: { app.micInputIDs.contains($0.id) })?.name
+            ?? "System default microphone"
     }
 
     private func compactToggle(_ label: String, _ on: Binding<Bool>) -> some View {
@@ -233,7 +325,7 @@ struct LibrarySurface: View {
             Spacer(minLength: Space.s4)
             LToggle(on: on, label: label)
         }
-        .frame(height: 32)
+        .frame(height: 48)
     }
 
     private func field<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {

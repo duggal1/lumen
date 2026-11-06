@@ -113,6 +113,8 @@ struct LSegmented<T: Hashable>: View {
                         .lineLimit(1).frame(maxWidth: .infinity).frame(height: 24)
                         .background { if sel == v { Capsule().fill(thumb).matchedGeometryEffect(id: "thumb", in: ns) } }
                 }.buttonStyle(.plain).pointerStyle(.link)
+                .accessibilityLabel(title)
+                .accessibilityAddTraits(sel == v ? .isSelected : [])
             }
         }.padding(2).background(Capsule().fill(track)).animation(reduceMotion ? nil : Motion.slide, value: sel)
     }
