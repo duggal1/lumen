@@ -39,7 +39,7 @@
     return all().filter(i=>(state.filter==="All"||i.area===state.filter) &&
       (!q || [i.id,i.title,i.area,i.summary,i.cause,i.impact,i.confidence,
         ...(i.files||[]),...(i.repro||[]),...(i.fix||[])].join(" ").toLowerCase().includes(q)))
-      .sort((a,b)=>(priorityOrder[a.priority]??3)-(priorityOrder[b.priority]??3) || (a.state==="blocked"?-1:0)-(b.state==="blocked"?-1) || a.id.localeCompare(b.id));
+      .sort((a,b)=>(priorityOrder[a.priority]??3)-(priorityOrder[b.priority]??3) || (a.state==="blocked"?-1:0)-(b.state==="blocked"?-1:0) || a.id.localeCompare(b.id));
   }
   function icon(n){return ({overview:"▣",issues:"≡",agent:"⌘",regressions:"↺"})[n] || "·"}
   function nav(id,title,count=""){
