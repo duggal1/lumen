@@ -660,7 +660,7 @@ public final class Renderer: @unchecked Sendable {
         var sprites: [TextOverlaySprite] = []
         if drawingContent, let caption = st.caption, tl.captions.enabled,
            let sprite = textCache.caption(caption, style: tl.captions.style,
-                                          time: r.t, canvas: r.canvas, device: device) {
+                                          time: r.t, canvas: r.canvas, videoRect: g.content, device: device) {
             sprites.append(sprite)
         }
         if drawingContent {
