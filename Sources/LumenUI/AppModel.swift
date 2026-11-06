@@ -9,6 +9,10 @@ import LumenProject
 import LumenCapture
 import LumenSpeech
 
+public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q1080, q720
+    var title: String { switch self { case .auto: "Auto"; case .q4k: "4K"; case .q1080: "1080p"; case .q720: "720p" } }
+}
+
 @MainActor @Observable public final class AppModel {
     public enum Phase: Equatable { case idle, preparing, countdown(Int), recording, finishing }
     enum SourceKind: String, CaseIterable { case display, window, region }
@@ -46,6 +50,8 @@ import LumenSpeech
     public var phase = Phase.idle
     /// Mirrors `RecordingSession.isPaused` for the HUD.
     public var paused = false
+    public var micTesting = false
+    public var micTestLevel: Float = 0
     /// Bundles that crashed mid-recording and can be rebuilt from their journal.
     var recoverable: [ProjectBundle] = []
     var kind = SourceKind(rawValue: UserDefaults.standard.string(forKey: "LumenDefaultSource") ?? "") ?? .display {
@@ -74,6 +80,7 @@ import LumenSpeech
     }
     var system = false
     var webcam = false
+    var webcamQuality: WebcamQuality = .auto
     var livePreview = false
     private var livePreviewController: LivePreviewController?
     var displays: [(id: CGDirectDisplayID, name: String)] = []
@@ -298,6 +305,31 @@ import LumenSpeech
             error = "That project link points at a missing file."; return
         }
         onFinished?(bundle)
+    }
+
+    func testMicrophone() {
+        guard !micTesting else { return }
+        micTesting = true
+        micTestLevel = 0
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+            guard let ch = buffer.floatChannelData?[0] else { return }
+            let n = Int(buffer.frameLength)
+            var sum: Float = 0
+            for i in 0..<n { sum += ch[i] * ch[i] }
+            let rms = (sum / Float(max(n, 1))).squareRoot()
+            Task { @MainActor in self.micTestLevel = max(self.micTestLevel * 0.8, rms) }
+        }
+        do { try engine.start() } catch { micTesting = false; return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            engine.stop()
+            input.removeTap(onBus: 0)
+            self.micTesting = false
+            self.micTestLevel = 0
+        }
     }
 
     func start() async {

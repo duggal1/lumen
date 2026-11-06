@@ -21,6 +21,7 @@ public struct RecordingConfig: Sendable {
     public var additionalMicDeviceIDs: [String] = []
     public var systemAudio = false
     public var webcamDeviceID: String?
+    public var webcamQuality: String = "auto"
     public init(source: Source) { self.source = source }
 }
 

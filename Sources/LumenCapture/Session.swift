@@ -32,10 +32,12 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     private var input: AVAssetWriterInput?
     private var started = false
     private let paused = OSAllocatedUnfairLock(initialState: false)
+    private let quality: String
     let first = OSAllocatedUnfairLock<Double?>(initialState: nil)
 
-    init(url: URL, deviceID: String?) throws {
+    init(url: URL, deviceID: String?, quality: String = "auto") throws {
         writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        self.quality = quality
         super.init()
         guard let dev = deviceID.flatMap({ AVCaptureDevice(uniqueID: $0) }) ?? AVCaptureDevice.default(for: .video) else { throw CaptureError.noSource }
         session.beginConfiguration()
@@ -45,7 +47,12 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         let input = try AVCaptureDeviceInput(device: dev)
         guard session.canAddInput(input) else { throw CaptureError.noSource }
         session.addInput(input)
-        let presets: [AVCaptureSession.Preset] = [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
+        let presets: [AVCaptureSession.Preset] = switch quality {
+            case "q4k": [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
+            case "q1080": [.hd1920x1080, .hd1280x720, .high]
+            case "q720": [.hd1280x720, .high]
+            default: [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
+        }
         if let best = presets.first(where: { session.canSetSessionPreset($0) }) {
             session.sessionPreset = best
         }
@@ -133,7 +140,7 @@ public actor RecordingSession {
             }
             input = i
         }
-        if config.webcamDeviceID != nil { webcam = try WebcamRecorder(url: b.webcamURL, deviceID: config.webcamDeviceID) }
+        if config.webcamDeviceID != nil { webcam = try WebcamRecorder(url: b.webcamURL, deviceID: config.webcamDeviceID, quality: config.webcamQuality) }
         // Device IDs are unique and checked before recording starts; never
         // quietly substitute the system default if a requested device vanished.
         extraMicrophones = try Array(Set(config.additionalMicDeviceIDs))

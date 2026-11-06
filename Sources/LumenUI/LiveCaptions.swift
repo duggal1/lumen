@@ -283,11 +283,11 @@ struct LiveCaptionRows: View {
         if live {
             Row(label: "Caption style", icon: "paintbrush") { LSegmented(sel: $theme, items: [(.glass, "Glass"), (.lumen, "Lumen")]).frame(width: 130) }
             if installed {
-                Row(label: "Speech model", icon: "checkmark.circle") { Text("Installed").font(AppType.caption).foregroundStyle(Tok.text2) }
+                Row(label: "Speech model", icon: "waveform.circle") { Text("Installed").font(AppType.caption).foregroundStyle(Tok.text2) }
             } else if let p = (size == .tiny ? app.modelDownloadProgress : nil) ?? downloadProgress {
-                Row(label: "Speech model", icon: "arrow.down.circle") { ProgressView(value: p).frame(width: 120) }
+                Row(label: "Speech model", icon: "waveform.circle") { ProgressView(value: p).frame(width: 120) }
             } else {
-                Row(label: "Speech model", icon: "arrow.down.circle") {
+                Row(label: "Speech model", icon: "waveform.circle") {
                     HStack(spacing: 8) {
                         LButton(title: "Download", icon: "arrow.down.circle", height: 24) { download() }
                         LButton(title: "Import…", icon: "folder", height: 24) { importModel() }

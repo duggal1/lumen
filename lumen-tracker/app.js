@@ -32,30 +32,32 @@
   const badge = (t, c = "neutral", wrap = false) => '<span class="badge ' + c + (wrap ? " wrap" : "") + '">' + esc(t) + "</span>";
   const pad = n => String(n).padStart(2, "0");
   const issueUrl = n => GH + "/issues/" + encodeURIComponent(n);
+  const GH_MARK = '<svg class="gh" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
+  const CHECK = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5 4.5 9 10 3.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
   const stamp = iso => {
     if (!iso) return "Unknown";
     const d = new Date(iso);
     return Number.isNaN(+d) ? "Unknown" : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   };
-  const CHECK = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5 4.5 9 10 3.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
 
   /* ───────── state ───────── */
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch {}
   const store = {
-    custom: Array.isArray(saved.custom) ? saved.custom : [], // carried through untouched so old exports keep working
+    custom: Array.isArray(saved.custom) ? saved.custom : [],
     notes: saved.notes && typeof saved.notes === "object" ? saved.notes : {},
     logs: Array.isArray(saved.logs) ? saved.logs : []
   };
   const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch { toast("Storage unavailable. Export your data."); } };
 
   const state = { view: "overview", selected: seed.issues[0] && seed.issues[0].id, query: "", filter: "All", ci: null, prs: null, syncTime: null, syncing: false, issues: null, issuesError: null };
-  const auth = { token: null, user: null };
-  const ui = { modal: null, busy: false, draft: {}, originId: null, published: null, reflectionKey: null, backTo: null };
+  const auth = { token: null, user: null, key: null };
+  const ui = { modal: null, busy: false, draft: { title: "", body: "" }, ctx: null, originId: null, published: null, backTo: null, hint: "" };
 
   const all = () => seed.issues;
   const issue = id => all().find(x => x.id === id) || all()[0];
   const cmp = (a, b) => (RANK[a.priority] ?? 3) - (RANK[b.priority] ?? 3) || (b.state === "blocked") - (a.state === "blocked") || a.id.localeCompare(b.id);
+  const prio = i => badge(i.priority, PRIORITY_COLOR[i.priority] || "neutral");
 
   function codeStatus(i) {
     const p = i.pr != null && state.prs && state.prs[i.pr];
@@ -67,6 +69,8 @@
     if (i.code === "unknown") return { label: "Scope unknown", color: "neutral", merged: false, source: "unverified" };
     return { label: "Plan only", color: "neutral", merged: false, source: "not merged" };
   }
+
+  const causeOf = i => i.confidence === "confirmed" ? ["Cause confirmed", "green"] : i.confidence === "tentative" ? ["Cause tentative", "orange"] : ["Cause unknown", "neutral"];
 
   function ciInfo() {
     const ci = state.ci || seed.ci, s = ci.status;
@@ -172,10 +176,10 @@
       '<nav aria-label="Primary"><div class="nav-label">Workspace</div><div class="nav-list">' +
         nav("overview", "Overview") + nav("issues", "Issue map", all().length) + nav("agent", "Agent workspace") + nav("regressions", "Regression log", store.logs.length) +
       "</div></nav>" +
-      '<div class="side-foot"><span class="pix ' + (ci.kind === "ok" || ci.kind === "bad" ? ci.kind : "") + '"></span><span>Main build ' + ci.foot + "</span></div></aside>" +
-      '<main class="main"><header class="top"><div class="crumb"><span>lumen</span><i>/</i><strong>' + TITLES[v] + '</strong><i>/</i><span class="mono">main</span></div>' +
+      '<div class="side-foot"><span class="pix ' + (ci.kind === "ok" || ci.kind === "bad" ? ci.kind : "") + '"></span><span' + (ci.kind === "run" ? ' class="shimmer"' : "") + ">Main build " + ci.foot + "</span></div></aside>" +
+      '<main class="main"><header class="top"><div class="crumb"><span>lumen</span><i>/</i><strong>' + TITLES[v] + '</strong><i>/</i><span>main</span></div>' +
         '<div class="top-r"><span class="muted">' + (state.syncTime ? "Live check " + esc(stamp(state.syncTime)) : "Snapshot") + "</span>" +
-        '<button class="btn sm" data-a="connect" type="button">' + (auth.user ? "@" + esc(auth.user) : "Connect GitHub") + "</button>" +
+        '<button class="btn sm" data-a="connect" type="button">' + GH_MARK + (auth.user ? "@" + esc(auth.user) : "Connect GitHub") + "</button>" +
         '<button class="btn sm" id="sync-btn" data-a="sync" type="button"><span class="wait" aria-hidden="true"><i></i><i></i><i></i></span><span id="sync-label">Sync GitHub</span></button></div></header>' +
       '<div class="page"><div class="head"><div><h1 class="title">' + TITLES[v] + '<span class="aperture" aria-hidden="true"></span></h1><p class="sub">' + SUBS[v] + "</p></div>" +
         '<div class="head-r"><button class="btn' + (headPrimary ? " primary" : "") + '" data-a="compose" type="button">New issue</button></div></div>' +
@@ -188,16 +192,16 @@
     const blocked = all().filter(i => i.state === "blocked").length;
     const verified = all().filter(i => store.notes[i.id] && store.notes[i.id].result === "manual-pass").length;
     const stats = [
-      ["Latest CI on main", ci.word, ci.stage || "Swift verification", ci.kind === "bad"],
-      ["Source issues", pad(all().length), blocked + " blocked"],
-      ["Merged fixes", pad(merged), "Merged is not runtime verified"],
-      ["Device verified", pad(verified), "Local notes, not release proof"]
+      ["Latest CI on main", ci.word, ci.stage || "Swift verification", ci.kind],
+      ["Source issues", pad(all().length), blocked + " blocked", ""],
+      ["Merged fixes", pad(merged), "Merged is not runtime verified", ""],
+      ["Device verified", pad(verified), "Local notes, not release proof", ""]
     ];
     const next = all().slice().sort(cmp).filter(i => !codeStatus(i).merged).slice(0, 3);
-    return '<div class="ledger">' + stats.map(s => '<div class="stat"><span class="stat-k">' + esc(s[0]) + '</span><strong class="stat-v' + (s[3] ? " bad" : "") + '">' + esc(s[1]) + '</strong><span class="stat-n">' + esc(s[2]) + "</span></div>").join("") + "</div>" +
+    return '<div class="ledger">' + stats.map(s => '<div class="stat"><span class="stat-k">' + esc(s[0]) + '</span><strong class="stat-v' + (s[3] === "bad" ? " bad" : s[3] === "run" ? " shimmer" : "") + '">' + esc(s[1]) + '</strong><span class="stat-n">' + esc(s[2]) + "</span></div>").join("") + "</div>" +
       '<section class="block"><div class="block-h"><h2>Next fixes</h2><span class="muted">Ranked by priority</span></div><div class="card list">' +
-      (next.length ? next.map(i => '<button class="row" type="button" data-a="open" data-id="' + esc(i.id) + '">' + badge(i.priority, PRIORITY_COLOR[i.priority] || "neutral") +
-        '<span class="row-m"><span class="row-t">' + esc(i.title) + '</span><span class="row-s">' + esc(i.impact) + '</span></span><span class="mono muted">' + esc(i.id) + "</span></button>").join("") : '<div class="empty">Every issue has a merged implementation.</div>') +
+      (next.length ? next.map(i => '<button class="row" type="button" data-a="open" data-id="' + esc(i.id) + '">' + prio(i) +
+        '<span class="row-m"><span class="row-t">' + esc(i.title) + '</span><span class="row-s">' + esc(i.impact) + '</span></span><span class="muted">' + esc(i.id) + "</span></button>").join("") : '<div class="empty">Every issue has a merged implementation.</div>') +
       "</div></section>" + liveIssues();
   }
 
@@ -206,7 +210,7 @@
     const body = state.issuesError ? '<div class="empty bad">' + esc(state.issuesError) + "</div>"
       : list === null ? '<div class="empty">Loading issues from GitHub…</div>'
       : !list.length ? '<div class="empty">No GitHub issues in ' + esc(REPO) + ". Audit findings are tracked separately.</div>"
-      : list.slice(0, 5).map(x => '<a class="row" href="' + issueUrl(x.number) + '" target="_blank" rel="noopener"><span class="row-m"><span class="row-t">#' + esc(x.number) + " " + esc(x.title) + '</span><span class="row-s">@' + esc(x.user || "unknown") + ", " +
+      : list.slice(0, 5).map(x => '<a class="row" href="' + issueUrl(x.number) + '" target="_blank" rel="noopener">' + GH_MARK + '<span class="row-m"><span class="row-t">#' + esc(x.number) + " " + esc(x.title) + '</span><span class="row-s">@' + esc(x.user || "unknown") + ", " +
         esc(new Date(x.updated_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })) + ", " + esc(x.comments || 0) + " comments</span></span>" + badge(x.state === "open" ? "Open" : "Closed", x.state === "open" ? "green" : "neutral") + "</a>").join("");
     return '<section class="block"><div class="block-h"><h2>GitHub issues' + (list === null && !state.issuesError ? "" : badge(state.issuesError ? "Error" : list.length + " live", state.issuesError ? "rose" : "green")) +
       '</h2><button class="btn sm" data-a="refresh" type="button">Refresh</button></div><div class="card list">' + body + "</div></section>";
@@ -228,21 +232,20 @@
       const c = codeStatus(i), t = i.tests.kind;
       const label = { failed: "Failed", skipped: "Skipped", "historical-pass": "Earlier pass", blocked: "Blocked" }[t] || "Unverified";
       return '<tr class="entry' + (state.selected === i.id ? " on" : "") + '" data-issue="' + esc(i.id) + '" tabindex="0" aria-selected="' + (state.selected === i.id) + '">' +
-        "<td>" + badge(i.priority, PRIORITY_COLOR[i.priority] || "neutral") + "</td>" +
-        '<td><span class="issue-id mono">' + esc(i.id) + '</span><div class="issue-t" title="' + esc(i.title) + '">' + esc(i.title) + "</div></td>" +
+        "<td>" + prio(i) + "</td>" +
+        '<td><span class="issue-id">' + esc(i.id) + '</span><div class="issue-t" title="' + esc(i.title) + '">' + esc(i.title) + "</div></td>" +
         "<td>" + esc(i.area) + "</td><td>" + badge(c.label, c.color) + "</td><td>" + badge(label, testColor(t)) + "</td></tr>";
     }).join("");
   }
 
   function detail(i) {
     if (!i) return '<div class="empty">Select an issue.</div>';
-    const c = codeStatus(i), n = store.notes[i.id] || {}, t = i.tests;
+    const c = codeStatus(i), n = store.notes[i.id] || {}, t = i.tests, cause = causeOf(i);
     const files = (i.files || []).length
       ? i.files.map(f => '<a class="file" href="' + GH + "/blob/main/" + encodeURI(f) + '" target="_blank" rel="noopener">' + esc(f) + "</a>").join("")
       : '<p class="muted">No owning source module established.</p>';
-    const cause = i.confidence === "confirmed" ? ["Cause confirmed", "green"] : i.confidence === "tentative" ? ["Cause tentative", "orange"] : ["Cause unknown", "neutral"];
-    return '<div class="d-top"><span class="mono muted">' + esc(i.id) + " / " + esc(i.area) + '</span><button class="btn quiet sm" data-a="agent" data-id="' + esc(i.id) + '" type="button">Agent work order</button></div>' +
-      '<div class="d-badges">' + badge(i.priority, PRIORITY_COLOR[i.priority] || "neutral") + badge(c.label, c.color) + badge(cause[0], cause[1]) + "</div>" +
+    return '<div class="d-top"><span class="muted">' + esc(i.id) + " / " + esc(i.area) + '</span><button class="btn quiet sm" data-a="agent" data-id="' + esc(i.id) + '" type="button">Agent work order</button></div>' +
+      '<div class="d-badges">' + prio(i) + badge(c.label, c.color) + badge(cause[0], cause[1]) + "</div>" +
       "<h2>" + esc(i.title) + '</h2><p class="d-sum">' + esc(i.summary) + "</p>" +
       '<div class="d-block"><span class="lbl">Impact</span><p class="copy">' + esc(i.impact) + "</p></div>" +
       '<div class="d-block"><span class="lbl">Reproduce and verify</span><ol class="steps">' + (i.repro || []).map(x => "<li>" + esc(x) + "</li>").join("") + "</ol></div>" +
@@ -255,9 +258,10 @@
       '<div class="d-block"><span class="lbl">Your verification notes, stored in this browser</span>' +
         dd("local-result", n.result || "", [["", "Not recorded"], ["manual-pass", "Observed pass (local only)"], ["manual-fail", "Observed failure (local only)"]]) +
         '<textarea class="field" id="local-note" style="margin-top:8px" placeholder="Trace, hardware, reproduction or test output">' + esc(n.text || "") + "</textarea>" +
-        '<div class="acts"><button class="btn sm" data-a="save-note" type="button">Save evidence</button><button class="btn sm quiet" data-a="regress" data-id="' + esc(i.id) + '" type="button">Log regression</button><button class="btn sm quiet" data-a="draft" type="button">Draft GitHub issue</button></div></div>';
+        '<div class="acts"><button class="btn sm" data-a="save-note" type="button">Save evidence</button><button class="btn sm quiet" data-a="regress" data-id="' + esc(i.id) + '" type="button">Log regression</button><button class="btn sm quiet" data-a="draft" type="button">' + GH_MARK + "Draft GitHub issue</button></div></div>";
   }
 
+  /* ───────── agent workspace ───────── */
   function buildPrompt(i) {
     const c = codeStatus(i), ci = ciInfo(), manual = store.notes[i.id];
     const evidence = i.tests.url || (i.pr ? GH + "/pull/" + i.pr : "No CI/run link verified");
@@ -305,16 +309,20 @@
   }
 
   function agent() {
-    const i = issue(state.selected), c = codeStatus(i), q = all().slice().sort(cmp);
-    return '<div class="split agent"><aside class="card queue"><h2 class="p-title">Queue<span class="n">' + q.length + "</span></h2><div class=\"list\" style=\"padding:0\">" +
-      q.map(x => '<button class="row stack' + (x.id === i.id ? " on" : "") + '" data-a="pick" data-id="' + esc(x.id) + '" type="button"><span class="row-s mono">' + esc(x.id) + " / " + esc(x.priority) + " / " + esc(x.area) + '</span><span class="row-t">' + esc(x.title) + "</span></button>").join("") + "</div></aside>" +
-      '<section class="card prompt"><div class="p-bar"><div style="min-width:0"><span class="lbl">Execution contract</span><h2 class="p-title">' + esc(i.id) + " " + esc(i.title) + '</h2></div>' +
-        '<div class="tools"><button class="btn sm" data-a="draft" type="button">Draft GitHub issue</button><button class="btn primary sm" data-a="copy-prompt" type="button">Copy prompt</button></div></div>' +
-      '<div class="strip nest">' + badge(c.label, c.color) + '<span class="grow"></span><a class="link" href="' + (i.pr ? GH + "/pull/" + i.pr : GH + "/actions") + '" target="_blank" rel="noopener">GitHub evidence</a></div>' +
+    const i = issue(state.selected), c = codeStatus(i), cause = causeOf(i), q = all().slice().sort(cmp);
+    return '<div class="agent"><aside class="card queue"><h2 class="p-title queue-h">Queue<span class="n">' + q.length + '</span></h2><div class="queue-list">' +
+      q.map(x => '<button class="q-row' + (x.id === i.id ? " on" : "") + '" data-a="pick" data-id="' + esc(x.id) + '" type="button">' +
+        '<span class="q-top"><span>' + esc(x.id) + " " + esc(x.area) + "</span>" + prio(x) + '</span><span class="q-title">' + esc(x.title) + "</span></button>").join("") +
+      "</div></aside>" +
+      '<section class="card prompt"><div class="pr-head"><div style="min-width:0"><h2 class="pr-title">' + esc(i.id) + " " + esc(i.title) + "</h2>" +
+        '<div class="pr-badges">' + prio(i) + badge(i.area) + badge(c.label, c.color) + badge(cause[0], cause[1]) + "</div></div>" +
+        '<div class="pr-acts"><button class="btn sm" data-a="draft" type="button">' + GH_MARK + 'Draft issue</button><button class="btn primary sm" data-a="copy-prompt" type="button">Copy prompt</button></div></div>' +
       '<textarea id="prompt-body" class="field prompt-text" spellcheck="false" aria-label="Implementation prompt">' + esc(buildPrompt(i)) + "</textarea>" +
-      '<p class="notice">Edit before copying. Status comes from GitHub PR metadata. This page never merges code or runs macOS tests.</p></section></div>';
+      '<div class="pr-foot"><span class="notice">Edit before copying. This page never merges code or runs tests.</span>' +
+        '<a class="link gh-link" href="' + (i.pr ? GH + "/pull/" + i.pr : GH + "/actions") + '" target="_blank" rel="noopener">' + GH_MARK + "GitHub evidence</a></div></section></div>";
   }
 
+  /* ───────── regressions ───────── */
   function regressions() {
     const logs = [...store.logs, ...SYSTEM_LOGS].sort((a, b) => new Date(b.date) - new Date(a.date));
     const color = r => r === "FAIL" ? "rose" : r === "PASS" ? "green" : "neutral";
@@ -325,7 +333,7 @@
       '<button class="btn primary" type="submit">Append observation</button><p class="notice">Manual logs never change merge state or the official CI status.</p></form></section>' +
       '<section class="card"><div class="p-head"><h2 class="p-title">History<span class="n">' + logs.length + '</span></h2><div class="tools"><button class="btn sm" data-a="import" type="button">Import</button><button class="btn sm" data-a="export" type="button">Export</button></div></div><div class="list">' +
       (logs.length ? logs.map(l => '<article class="log"><div class="log-top"><div class="log-tags">' + badge(l.result, color(l.result)) + '<span class="log-issue">' + esc(l.issue) + "</span>" + (l.system ? badge("CI evidence", "sky") : badge("Local")) + '</div><span class="muted">' + esc(stamp(l.date)) + "</span></div>" +
-        '<p class="log-note">' + esc(l.text) + '</p><div class="log-foot"><span class="mono muted">' + esc(l.id) + "</span>" +
+        '<p class="log-note">' + esc(l.text) + '</p><div class="log-foot"><span class="muted">' + esc(l.id) + "</span>" +
         (l.url ? '<a class="link" href="' + esc(l.url) + '" target="_blank" rel="noopener">Workflow</a>' : !l.system ? '<button class="btn sm quiet" data-a="delete-log" data-id="' + esc(l.id) + '" type="button">Remove</button>' : "") + "</div></article>").join("") : '<div class="empty">No regression entries yet.</div>') +
       '</div></section></div><input type="file" id="import-file" accept="application/json,.json" hidden>';
   }
@@ -346,7 +354,7 @@
     setTimeout(() => el.remove(), 3000);
   }
 
-  /* ───────── GitHub sync (public API, no token) ───────── */
+  /* ───────── GitHub sync ───────── */
   function setSync(on) {
     state.syncing = on;
     const b = $("sync-btn");
@@ -417,38 +425,55 @@
     } catch (e) { toast("Import rejected: " + String(e.message || e)); }
   }
 
-  /* ───────── GitHub issue composer ───────── */
-  const DRAFT_KEYS = ["title", "symptoms", "reproduction", "expected", "observed", "modules", "priority", "evidence", "body"];
+  /* ───────── issue composer: title + description, nothing else ───────── */
+  const SKELETON = "## Problem\n\n\n## Steps to reproduce\n1. \n\n## Expected\n\n\n## Actual\n";
 
-  function draftFor(i) {
-    if (!i) return { title: "", symptoms: "", reproduction: "", expected: "", observed: "", modules: "", priority: "P1", evidence: "", body: "" };
+  function bodyFor(i) {
+    const steps = (i.repro || []).map((s, n) => (n + 1) + ". " + s).join("\n") || "Not established";
+    const files = (i.files || []).map(f => "- " + f).join("\n") || "Not established";
+    return [
+      "## Problem", i.summary || "Not established", "",
+      "## Steps to reproduce", steps, "",
+      "## Affected files", files, "",
+      "## Evidence",
+      "Audit record " + i.id + ": " + ((i.tests && i.tests.text) || "Unknown"),
+      ...(i.tests && i.tests.url ? ["CI: " + i.tests.url] : []),
+      ...(i.pr ? ["PR: " + GH + "/pull/" + i.pr] : []),
+      "Suspected cause (" + i.confidence + "): " + (i.cause || "Unknown"), "",
+      "## Priority", i.priority + " (initial estimate)", "",
+      "## Acceptance",
+      "- Reproduce on the current source revision.",
+      "- Add a regression test where possible.",
+      "- Verify the exact merge and CI status before claiming completion."
+    ].join("\n");
+  }
+
+  function ctxFor(i) {
     return {
-      title: i.title || "", symptoms: i.summary || "", reproduction: (i.repro || []).join("\n"), expected: "", observed: "",
-      modules: (i.files || []).join("\n"), priority: i.priority || "P1",
-      evidence: "Audit record " + i.id + ": " + ((i.tests && i.tests.text) || "Unknown") +
-        (i.tests && i.tests.url ? "\nCI: " + i.tests.url : "") +
-        (i.pr ? "\nPR: " + GH + "/pull/" + i.pr : "") +
-        "\nSuspected cause (" + i.confidence + "): " + (i.cause || "Unknown"),
-      body: ""
+      symptoms: i.summary || "", reproduction: (i.repro || []).join("\n"), modules: (i.files || []).join("\n"), priority: i.priority || "P1",
+      evidence: "Audit record " + i.id + ": " + ((i.tests && i.tests.text) || "Unknown") + (i.tests && i.tests.url ? "\nCI: " + i.tests.url : "") +
+        (i.pr ? "\nPR: " + GH + "/pull/" + i.pr : "") + "\nSuspected cause (" + i.confidence + "): " + (i.cause || "Unknown")
     };
   }
 
   function captureDraft() {
     if (ui.modal !== "compose") return;
-    for (const k of DRAFT_KEYS) { const el = $("ix-" + k); if (el) ui.draft[k] = el.value; }
-    const key = $("ix-reflection-key");
-    if (key && key.value) ui.reflectionKey = key.value.trim();
+    const t = $("ix-title"), b = $("ix-body");
+    if (t) ui.draft.title = t.value;
+    if (b) ui.draft.body = b.value;
   }
 
   function openCompose(i) {
-    ui.originId = i ? i.id : null; ui.draft = draftFor(i); ui.published = null; ui.backTo = null; ui.modal = "compose"; showModal();
+    ui.originId = i ? i.id : null;
+    ui.ctx = i ? ctxFor(i) : null;
+    ui.draft = { title: i ? i.title : "", body: i ? bodyFor(i) : "" };
+    ui.published = null; ui.backTo = null; ui.modal = "compose"; showModal();
   }
   function openConnect() {
     captureDraft(); ui.backTo = ui.modal === "compose" ? "compose" : null; ui.modal = "connect"; showModal();
   }
-  function closeModal() {
-    captureDraft(); ui.modal = null; ui.busy = false; showModal();
-  }
+  function closeModal() { captureDraft(); ui.modal = null; ui.busy = false; showModal(); }
+  function backFromConnect() { ui.modal = ui.backTo === "compose" ? "compose" : null; ui.backTo = null; showModal(); }
 
   function showModal() {
     closeMenu();
@@ -464,46 +489,40 @@
   }
 
   function mHead(title, sub) {
-    return '<div class="m-head"><div><h2>' + title + "</h2><p class=\"muted\">" + sub + '</p></div><button class="x" data-a="close" type="button" aria-label="Close">' + ic("x") + "</button></div>";
+    return '<div class="m-head"><div><h2>' + title + '</h2><p class="muted">' + sub + '</p></div><button class="x" data-a="close" type="button" aria-label="Close">' + ic("x") + "</button></div>";
+  }
+
+  function composeView() {
+    const d = ui.draft;
+    return '<div class="modal" role="dialog" aria-modal="true" aria-label="New GitHub issue">' +
+      mHead("New GitHub issue", esc(REPO) + (ui.originId ? ", from " + esc(ui.originId) : "")) +
+      '<div class="m-body">' +
+        '<div><label class="lbl" for="ix-title">Title</label><input class="field" id="ix-title" maxlength="180" placeholder="State exactly what fails" value="' + esc(d.title) + '"></div>' +
+        '<div><div class="lbl-row"><label class="lbl" for="ix-body">Description</label><div class="tools"><button class="btn sm" data-a="template" type="button">Template</button><button class="btn sm" id="ix-generate" data-a="generate" type="button">Write with Beam</button></div></div>' +
+          '<textarea class="field body" id="ix-body" placeholder="What fails, how to reproduce it, what you expected. Markdown works.">' + esc(d.body) + "</textarea></div>" +
+        '<div id="ix-feedback" class="fb" aria-live="polite"></div></div>' +
+      '<div class="m-foot"><button class="btn quiet sm" data-a="connect" type="button">' + GH_MARK + (auth.user ? "@" + esc(auth.user) : "Connect GitHub") + "</button>" +
+        '<div class="tools"><button class="btn" data-a="close" type="button">Cancel</button><button class="btn primary deep" id="ix-publish" data-a="publish" type="button">Publish issue</button></div></div></div>';
   }
 
   function connectView() {
+    const hint = ui.hint || (auth.user ? "Connected as @" + auth.user : "");
+    ui.hint = "";
     return '<div class="modal narrow" role="dialog" aria-modal="true" aria-label="Connect GitHub">' +
       mHead("Connect GitHub", 'Use a <a class="link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained token</a> for ' + esc(REPO) + " with Issues: read and write.") +
-      '<div class="m-body"><div class="group"><div><label class="lbl" for="ix-token">Token</label><input type="password" class="field" id="ix-token" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…"></div>' +
-      '<div class="acts" style="margin-top:0"><button class="btn primary" data-a="verify" type="button">Verify connection</button>' + (auth.token ? '<button class="btn quiet" data-a="disconnect" type="button">Disconnect</button>' : "") + "</div>" +
-      '<div id="ix-feedback" class="fb" aria-live="polite">' + (auth.user ? "Connected as @" + esc(auth.user) : "") + "</div></div></div>" +
-      '<div class="m-foot"><span class="muted">Kept in this tab only. Forgotten on refresh.</span></div></div>';
+      '<div class="m-body"><div><label class="lbl" for="ix-token">Token</label><input type="password" class="field" id="ix-token" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…"></div>' +
+        '<div><label class="lbl" for="ix-key">Reflection API key, optional</label><input type="password" class="field" id="ix-key" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="' + (auth.key ? "Key set for this tab" : "Only needed for Write with Beam") + '"></div>' +
+        '<div id="ix-feedback" class="fb" aria-live="polite">' + esc(hint) + "</div></div>" +
+      '<div class="m-foot"><span class="muted">Kept in this tab only.</span><div class="tools">' + (auth.token ? '<button class="btn quiet" data-a="disconnect" type="button">Disconnect</button>' : "") +
+        '<button class="btn" data-a="close" type="button">Cancel</button><button class="btn primary" data-a="verify" type="button">Verify</button></div></div></div>';
   }
 
   function doneView() {
     const p = ui.published;
     return '<div class="modal narrow" role="dialog" aria-modal="true" aria-label="Issue created">' +
       mHead("Issue #" + esc(p.number) + " created", "Published to " + esc(REPO) + " as @" + esc(auth.user || "your account")) +
-      '<div class="m-body"><div class="group"><span class="g-title">' + esc(p.title) + '</span><a class="link" href="' + issueUrl(p.number) + '" target="_blank" rel="noopener">View on GitHub</a></div></div>' +
-      '<div class="m-foot"><span></span><div class="tools"><button class="btn" data-a="close" type="button">Close</button><button class="btn primary" data-a="another" type="button">Create another</button></div></div></div>';
-  }
-
-  function composeView() {
-    const d = ui.draft, v = k => esc(d[k] || "");
-    return '<div class="modal" role="dialog" aria-modal="true" aria-label="New GitHub issue">' +
-      mHead("New GitHub issue", esc(REPO) + (ui.originId ? ", from " + esc(ui.originId) : "")) +
-      '<div class="m-body">' +
-      '<div class="group bar">' + (auth.user ? badge("@" + auth.user, "green") : badge("Not connected")) + '<span class="muted grow">' + (auth.user ? "" : "Posting needs a token with Issues: write.") + "</span>" +
-        '<button class="btn sm" data-a="connect" type="button">' + (auth.token ? "Change token" : "Connect GitHub") + "</button></div>" +
-      '<div class="group"><div><label class="lbl" for="ix-title">Title</label><input class="field" id="ix-title" maxlength="180" placeholder="State exactly what fails" value="' + v("title") + '"></div>' +
-        '<div class="cols"><div><label class="lbl" for="ix-symptoms">Problem and evidence</label><textarea class="field" id="ix-symptoms" rows="4" placeholder="Observed symptom and environment">' + v("symptoms") + "</textarea></div>" +
-        '<div><label class="lbl" for="ix-reproduction">Steps to reproduce</label><textarea class="field" id="ix-reproduction" rows="4" placeholder="One step per line. No guessed steps.">' + v("reproduction") + "</textarea></div></div>" +
-        '<div class="cols"><div><label class="lbl" for="ix-expected">Expected behavior</label><textarea class="field" id="ix-expected" style="min-height:72px" placeholder="What should happen?">' + v("expected") + "</textarea></div>" +
-        '<div><label class="lbl" for="ix-observed">Actual behavior</label><textarea class="field" id="ix-observed" style="min-height:72px" placeholder="What actually happened?">' + v("observed") + "</textarea></div></div>" +
-        '<div class="cols"><div><label class="lbl" for="ix-modules">Affected files</label><textarea class="field" id="ix-modules" style="min-height:72px" placeholder="Sources/LumenCapture/…">' + v("modules") + "</textarea></div>" +
-        '<div><label class="lbl" for="ix-evidence">Logs and links</label><textarea class="field" id="ix-evidence" style="min-height:72px" placeholder="CI run URL, commit, trace">' + v("evidence") + "</textarea></div></div>" +
-        '<div class="narrow-field"><span class="lbl">Priority estimate</span>' + dd("ix-priority", d.priority || "P1", ["P0", "P1", "P2", "P3"]) + "</div></div>" +
-      '<div class="group"><div class="g-head"><span class="g-title">Issue body</span><div class="acts"><button class="btn sm" data-a="template" type="button">Use template</button><button class="btn sm" id="ix-generate" data-a="generate" type="button">Generate with Beam</button></div></div>' +
-        '<textarea class="field body" id="ix-body" placeholder="Generate with Beam, use the template, or write Markdown">' + v("body") + "</textarea>" +
-        '<input class="field" type="password" id="ix-reflection-key" autocomplete="off" autocapitalize="off" placeholder="' + (ui.reflectionKey ? "Reflection key set for this tab" : "Reflection API key, optional if the server has one") + '">' +
-        '<div id="ix-feedback" class="fb" aria-live="polite"></div></div></div>' +
-      '<div class="m-foot"><span class="muted">Nothing is published until you click Publish.</span><div class="tools"><button class="btn" data-a="close" type="button">Cancel</button><button class="btn primary" id="ix-publish" data-a="publish" type="button"' + (auth.token ? "" : " disabled") + ">Publish issue</button></div></div></div>";
+      '<div class="m-body"><div class="done nest"><span class="row-t">' + esc(p.title) + '</span><a class="link gh-link" href="' + issueUrl(p.number) + '" target="_blank" rel="noopener">' + GH_MARK + "View on GitHub</a></div></div>" +
+      '<div class="m-foot"><span></span><div class="tools"><button class="btn" data-a="close" type="button">Close</button><button class="btn primary deep" data-a="another" type="button">Create another</button></div></div></div>';
   }
 
   function feedback(text, type = "err") {
@@ -511,45 +530,27 @@
     if (el) { el.className = "fb " + type; el.textContent = text; }
   }
 
-  function makeTemplate(d) {
-    const line = s => String(s || "").trim() || "Not established";
-    const steps = line(d.reproduction);
-    return [
-      "## Observed problem", line(d.symptoms || d.observed), "",
-      "## Reproduction", steps === "Not established" ? "To verify: reproducible steps and environment have not been documented." : steps.split("\n").filter(Boolean).map((s, i) => (i + 1) + ". " + s.replace(/^\d+[.)]\s*/, "")).join("\n"), "",
-      "## Expected behavior", line(d.expected), "",
-      "## Actual behavior", line(d.observed || d.symptoms), "",
-      "## Affected source files", line(d.modules), "",
-      "## Evidence", line(d.evidence), "",
-      "## Priority", line(d.priority) + " (initial estimate)", "",
-      "## Acceptance criteria",
-      "- Reproduce the reported failure on the current source revision.",
-      "- Add a deterministic regression test for the confirmed failure where possible.",
-      "- Make the smallest source change and document what was verified.",
-      "- Run the applicable Swift build, tests and release gates on macOS; distinguish hardware tests.",
-      "- Link the resulting PR and verify the exact merge status before claiming completion.", "",
-      "## Unknowns", "Exact root cause and final device verification are not established unless independently evidenced."
-    ].join("\n");
-  }
-
   async function verify() {
     if (ui.busy) return;
-    const token = $("ix-token") && $("ix-token").value.trim();
-    if (!token) { feedback("Enter a fine-grained GitHub token first."); return; }
+    const token = $("ix-token").value.trim(), key = $("ix-key").value.trim();
+    if (key) auth.key = key;
+    if (!token) {
+      if (key) { toast("Reflection key saved"); backFromConnect(); return; }
+      feedback("Enter a fine-grained GitHub token first."); return;
+    }
     ui.busy = true;
     const btn = document.querySelector('[data-a="verify"]');
-    if (btn) { btn.disabled = true; btn.textContent = "Checking GitHub"; }
+    if (btn) { btn.disabled = true; btn.textContent = "Checking"; }
     try {
       const r = await fetch("/api/github", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ action: "verify" }) });
       const payload = await r.json();
       if (!r.ok) throw Error(payload.error || "GitHub rejected this token");
       auth.token = token; auth.user = payload.login; ui.busy = false;
-      ui.modal = ui.backTo === "compose" ? "compose" : null; ui.backTo = null;
-      showModal(); render(); refreshIssues();
+      backFromConnect(); render(); refreshIssues();
       toast("Connected as @" + payload.login);
     } catch (e) {
       ui.busy = false; feedback(String(e.message || e));
-      if (btn) { btn.disabled = false; btn.textContent = "Verify connection"; }
+      if (btn) { btn.disabled = false; btn.textContent = "Verify"; }
     }
   }
 
@@ -557,9 +558,9 @@
     if (ui.busy) return;
     captureDraft();
     const d = ui.draft;
-    if (!auth.token) { feedback("Connect GitHub with Issues: write permission first."); return; }
-    if (!d.title || d.title.trim().length < 6) { feedback("Enter a precise title of at least 6 characters."); return; }
-    if (!d.body || !d.body.trim()) { feedback("The Markdown body is empty. Generate or write the issue first."); return; }
+    if (!d.title.trim() || d.title.trim().length < 6) { feedback("Enter a precise title of at least 6 characters."); return; }
+    if (!d.body.trim()) { feedback("The description is empty."); return; }
+    if (!auth.token) { ui.hint = "Connect GitHub with Issues: write to publish."; openConnect(); return; }
     ui.busy = true;
     const btn = $("ix-publish");
     if (btn) { btn.disabled = true; btn.textContent = "Publishing"; }
@@ -578,8 +579,10 @@
   async function generate() {
     if (ui.busy) return;
     captureDraft();
-    const d = ui.draft;
-    if (!d.title || !d.title.trim() || !((d.symptoms && d.symptoms.trim()) || (d.observed && d.observed.trim()))) { feedback("Add a precise title and the observed problem first."); return; }
+    const d = ui.draft, ctx = ui.ctx;
+    if (!d.title.trim()) { feedback("Add a title first."); return; }
+    const notes = ctx ? ctx.symptoms : d.body;
+    if (!notes.trim()) { feedback("Write rough notes in the description first."); return; }
     ui.busy = true;
     const btn = $("ix-generate"), ta = $("ix-body");
     if (btn) { btn.disabled = true; btn.textContent = "Writing"; }
@@ -587,9 +590,13 @@
     feedback("Connecting to Reflection Beam…", "ok");
     try {
       const headers = { "Content-Type": "application/json" };
-      if (ui.reflectionKey) headers["X-Reflection-Key"] = ui.reflectionKey;
+      if (auth.key) headers["X-Reflection-Key"] = auth.key;
       if (auth.token) headers["X-GitHub-Token"] = auth.token;
-      const r = await fetch("/api/ai", { method: "POST", headers, body: JSON.stringify(d) });
+      const payload = {
+        title: d.title.trim(), symptoms: notes, reproduction: ctx ? ctx.reproduction : "", expected: "", observed: "",
+        modules: ctx ? ctx.modules : "", priority: ctx ? ctx.priority : "P1", evidence: ctx ? ctx.evidence : "", body: ""
+      };
+      const r = await fetch("/api/ai", { method: "POST", headers, body: JSON.stringify(payload) });
       if (!r.ok) { const j = await r.json().catch(() => ({})); throw Error(j.error || "Reflection request failed (" + r.status + ")"); }
       const reader = r.body && r.body.getReader();
       if (!reader) throw Error("Streaming response unavailable");
@@ -599,9 +606,9 @@
         const event = (frame.match(/^event:\s*(.+)$/m) || [])[1] || "token";
         const content = (frame.match(/^data:\s*(.+)$/m) || [])[1];
         if (!content) return;
-        const payload = JSON.parse(content);
-        if (event === "error") { finalError = payload.error || "Model stopped early"; return; }
-        if (event === "token" && typeof payload.content === "string") { count += payload.content.length; if (ta) { ta.value += payload.content; ta.scrollTop = ta.scrollHeight; } }
+        const p = JSON.parse(content);
+        if (event === "error") { finalError = p.error || "Model stopped early"; return; }
+        if (event === "token" && typeof p.content === "string") { count += p.content.length; if (ta) { ta.value += p.content; ta.scrollTop = ta.scrollHeight; } }
       };
       for (;;) {
         const next = await reader.read();
@@ -622,7 +629,7 @@
     finally {
       ui.busy = false;
       const b = $("ix-generate"), t = $("ix-body");
-      if (b) { b.disabled = false; b.textContent = "Generate with Beam"; }
+      if (b) { b.disabled = false; b.textContent = "Write with Beam"; }
       if (t) t.disabled = false;
     }
   }
@@ -631,7 +638,12 @@
   const actions = {
     view: el => setView(el.dataset.view),
     open: el => { state.selected = el.dataset.id; setView("issues"); },
-    pick: el => { state.selected = el.dataset.id; render(); },
+    pick: el => {
+      const l = document.querySelector(".queue-list"), top = l ? l.scrollTop : 0;
+      state.selected = el.dataset.id; render();
+      const n = document.querySelector(".queue-list");
+      if (n) n.scrollTop = top;
+    },
     agent: el => { state.selected = el.dataset.id; setView("agent"); },
     regress: el => { state.selected = el.dataset.id; setView("regressions"); },
     filter: el => { state.filter = el.dataset.filter; render(); },
@@ -642,18 +654,17 @@
     compose: () => openCompose(null),
     draft: () => openCompose(issue(state.selected)),
     connect: openConnect,
-    disconnect: () => { auth.token = null; auth.user = null; ui.modal = ui.backTo === "compose" ? "compose" : null; ui.backTo = null; showModal(); render(); refreshIssues(); toast("Token forgotten"); },
+    disconnect: () => { auth.token = null; auth.user = null; auth.key = null; backFromConnect(); render(); refreshIssues(); toast("Disconnected"); },
     verify, publish, generate,
     another: () => openCompose(null),
     template: () => {
-      captureDraft(); ui.draft.body = makeTemplate(ui.draft);
-      $("ix-body").value = ui.draft.body;
-      feedback("Template filled from your evidence. Review before publishing.", "ok");
+      captureDraft();
+      if (ui.draft.body.trim()) { toast("Description already has content"); return; }
+      ui.draft.body = SKELETON; $("ix-body").value = SKELETON; $("ix-body").focus();
     },
     close: () => {
       if (ui.busy) return;
-      if (ui.modal === "connect" && ui.backTo === "compose") { ui.modal = "compose"; ui.backTo = null; showModal(); }
-      else closeModal();
+      if (ui.modal === "connect") backFromConnect(); else closeModal();
     },
     "save-note": () => {
       const i = issue(state.selected);

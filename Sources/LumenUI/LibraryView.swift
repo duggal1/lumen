@@ -314,6 +314,24 @@ struct LibrarySurface: View {
             }
             compactToggle("System audio", Bindable(app).system)
             compactToggle("Webcam", Bindable(app).webcam)
+            if app.webcam {
+                HStack(spacing: Space.s4) {
+                    Text("Webcam quality").font(AppType.label).foregroundStyle(Tok.text)
+                    Spacer(minLength: Space.s4)
+                    LSegmented(sel: Bindable(app).webcamQuality, items: WebcamQuality.allCases.map { ($0, $0.title) },
+                               track: Tok.control, thumb: Tok.controlHover)
+                        .frame(width: 220)
+                }
+                .frame(height: 48)
+            }
+            HStack(spacing: Space.s4) {
+                Text("Microphone test").font(AppType.label).foregroundStyle(Tok.text)
+                Spacer(minLength: Space.s4)
+                LButton(title: app.micTesting ? "Testing…" : "Test", kind: .quiet, height: 24) { app.testMicrophone() }
+                    .disabled(app.micTesting)
+                ProgressView(value: Double(app.micTestLevel)).frame(width: 80)
+            }
+            .frame(height: 48)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
