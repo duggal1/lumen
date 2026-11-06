@@ -15,3 +15,14 @@ import LumenCore
     await recorder.stop()
     #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("ax.json").path))
 }
+
+@Test func eventTimestampFallbackNeverSilentlyDropsValidTapCallbacks() {
+    let clock = RecordingClock(originHostSeconds: 0, eventUnit: .machTicks)
+    let receivedAt = 12_345.25
+    // On some configurations a CGEvent timestamp is zero or uses a
+    // different timebase. The actual callback still carries the real click.
+    #expect(ClockCalibration.alignedHostSeconds(eventTimestamp: 0, clock: clock,
+                                                receivedAt: receivedAt) == receivedAt)
+    #expect(ClockCalibration.alignedHostSeconds(eventTimestamp: UInt64.max, clock: clock,
+                                                receivedAt: receivedAt) == receivedAt)
+}
