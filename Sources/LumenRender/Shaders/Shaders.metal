@@ -292,13 +292,23 @@ fragment float4 cursorFS(VO in [[stage_in]], constant CursorU &u [[buffer(0)]], 
 }
 
 // ---- Click ring
-struct RingU { float4 content; float4 color; float2 center; float radius; float progress; float cr; };
+struct RingU { float4 content; float4 color; float2 center; float radius; float progress; float cr; int mode; };
 fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]]) {
-    float p = u.progress, e = 1.0 - pow(1.0 - p, 3.0);
+    float p = clamp(u.progress, 0.0, 1.0), e = 1.0 - pow(1.0 - p, 3.0);
     float r = mix(0.25, 1.0, e) * u.radius * 0.9, wd = mix(0.16, 0.025, e) * u.radius;
-    float dd = abs(length(in.px - u.center) - r) - wd * 0.5;
+    float2 delta = in.px - u.center;
+    float distance = length(delta);
+    float dd = abs(distance - r) - wd * 0.5;
     float ring = clamp(0.5 - dd / max(fwidth(dd), 1e-3), 0.0, 1.0);
-    float a = ring * pow(max(1.0 - p, 0.0), 1.5) * u.color.a * rectMask(in.px, u.content, u.cr);
+    float ink = ring;
+    if (u.mode == 1) { // Pulse: a filled, expanding focus disc
+        ink = 0.45 * (1.0 - smoothstep(r - 2.0, r + 2.0, distance));
+    } else if (u.mode == 2) { // Burst: short radial rays at the clicked pixel
+        float rays = pow(abs(cos(atan2(delta.y, delta.x) * 6.0)), 18.0);
+        float band = 1.0 - smoothstep(wd * 0.5, wd * 2.0, abs(distance - r));
+        ink = max(ring * 0.3, rays * band);
+    }
+    float a = ink * pow(1.0 - p, 1.5) * u.color.a * rectMask(in.px, u.content, u.cr);
     return float4(u.color.rgb * a, a);
 }
 
