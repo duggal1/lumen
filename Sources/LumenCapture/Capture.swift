@@ -222,6 +222,10 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         sc.colorSpaceName = CGColorSpace.displayP3
         sc.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
         sc.queueDepth = 8
+        // Keep system audio on the same 48 kHz timeline used by the mixer
+        // and encoder. Mic hardware may still have its own native rate.
+        sc.sampleRate = 48_000
+        sc.channelCount = 2
         sc.showsCursor = false
         sc.scalesToFit = false
         sc.captureResolution = .best
