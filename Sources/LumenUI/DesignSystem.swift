@@ -48,6 +48,14 @@ enum Tok {
     static let accentFill = Color(light: 0xFFEDD5, dark: 0xFF6A00, darkAlpha: 0.50)
     static let activity = Color(hex: 0xEA580C)
     static let onAccent = Color(hex: 0x0A0A0A)     // near-black: white on orange fails contrast
+    // Timeline lanes (Screen Studio reference): auto zoom is violet, manual
+    // taps are fuchsia. Orange stays the brand/default for clicks + edits.
+    static let zoom = Color(light: 0x7C3AED, dark: 0x8B5CF6)
+    static let zoomSoft = Color(light: 0xEDE9FE, dark: 0x8B5CF6, darkAlpha: 0.30)
+    static let zoomText = Color(light: 0x5B21B6, dark: 0xC4B5FD)
+    static let tap = Color(light: 0xC026D3, dark: 0xE879F9)
+    static let tapSoft = Color(light: 0xFAE8FF, dark: 0xE879F9, darkAlpha: 0.30)
+    static let tapText = Color(light: 0x86198F, dark: 0xF0ABFC)
     // status, diff
     static let statusOK = Color(light: 0x16A34A, dark: 0x4ADE80)
     static let statusBad = Color(light: 0xE11D48, dark: 0xFB7185)   // rose, never red

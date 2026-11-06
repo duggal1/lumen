@@ -39,12 +39,13 @@ struct TimelineStrip: View {
             let zs = tm.output(atSource: z.start), ze = tm.output(atSource: z.end)
             guard ze > zs else { continue }
             let r = CGRect(x: x(zs), y: zoomLane.lowerBound, width: max(x(ze) - x(zs), 4), height: zoomLane.upperBound - zoomLane.lowerBound)
-            fill(r, z.origin == .manual ? Tok.accent : Tok.accentSoft)
-            fill(CGRect(x: r.minX, y: r.minY, width: 2, height: r.height), z.origin == .manual ? Tok.accentPressed : Tok.accentText)
-            fill(CGRect(x: r.maxX - 2, y: r.minY, width: 2, height: r.height), z.origin == .manual ? Tok.accentPressed : Tok.accentText)
+            // Auto zooms are violet (Screen Studio), manual zooms stay orange.
+            fill(r, z.origin == .manual ? Tok.accent : Tok.zoomSoft)
+            fill(CGRect(x: r.minX, y: r.minY, width: 2, height: r.height), z.origin == .manual ? Tok.accentPressed : Tok.zoom)
+            fill(CGRect(x: r.maxX - 2, y: r.minY, width: 2, height: r.height), z.origin == .manual ? Tok.accentPressed : Tok.zoom)
             if z.id == model.selection { fill(CGRect(x: r.minX, y: r.maxY - 3, width: r.width, height: 3), Tok.text) }
             c.draw(Text(String(format: "%.1f×", z.scale)).font(.system(size: 10, weight: .medium).monospacedDigit())
-                .foregroundStyle(z.origin == .manual ? Tok.onAccent : Tok.accentText), at: CGPoint(x: r.minX + 6, y: r.midY), anchor: .leading)
+                .foregroundStyle(z.origin == .manual ? Tok.onAccent : Tok.zoomText), at: CGPoint(x: r.minX + 6, y: r.midY), anchor: .leading)
         }
         // speed ramps (source -> output)
         for r in tm.ramps {
@@ -66,18 +67,30 @@ struct TimelineStrip: View {
             }
         }
         // Clicks are editable events, not barely visible 2 px dots.
+        // Recorded clicks are orange; manual taps (Tools > Add tap) are
+        // fuchsia so the two are never confused on the timeline.
+        func badge(at center: CGFloat, label: String, soft: Color, ink: Color) {
+            let rect = CGRect(x: center - 20, y: 82, width: 40, height: 16)
+            c.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(soft))
+            c.draw(Text(label).font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(ink),
+                   at: CGPoint(x: rect.midX, y: rect.midY))
+        }
         if let d = tl.derived {
             var lastBadgeX: CGFloat = -100
             for click in d.clicks {
                 let center = max(20, min(x(click.t), w - 20))
                 guard center - lastBadgeX >= 42 else { continue }
-                let rect = CGRect(x: center - 20, y: 82, width: 40, height: 16)
-                c.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(Tok.accentSoft))
-                c.draw(Text("Click").font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Tok.accentText),
-                       at: CGPoint(x: rect.midX, y: rect.midY))
+                badge(at: center, label: "Click", soft: Tok.accentSoft, ink: Tok.accentText)
                 lastBadgeX = center
             }
+        }
+        var lastTapX: CGFloat = -100
+        for tap in tl.overlays.taps {
+            let center = max(20, min(x(tm.output(atSource: tap.t)), w - 20))
+            guard center - lastTapX >= 42 else { continue }
+            badge(at: center, label: "Tap", soft: Tok.tapSoft, ink: Tok.tapText)
+            lastTapX = center
         }
     }
 
