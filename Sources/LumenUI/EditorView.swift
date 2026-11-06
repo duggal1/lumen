@@ -57,7 +57,9 @@ struct EditorView: View {
                 HStack(spacing: 0) {
                     VStack(spacing: 12) {
                         GeometryReader { area in
-                            let ratio = CGFloat(max(model.timeline.style.canvas.ratio, 0.1))
+                            // Use aspectRatio (customAspect-aware), not canvas.ratio:
+                            // custom 1:1 / 9:16 exports were previewed at 16:9.
+                            let ratio = CGFloat(max(model.timeline.style.aspectRatio, 0.1))
                             let w = min(area.size.width, area.size.height * ratio)
                             let h = min(area.size.height, area.size.width / ratio)
                             PreviewView(model: model)

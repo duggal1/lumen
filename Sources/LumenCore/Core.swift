@@ -65,22 +65,50 @@ public func median5(_ a: [Double]) -> [Double] {
 }
 
 /// Non-causal (zero-lag) Gaussian smoothing, sigma in samples, edge-clamped.
+/// For large sigma (cursor smoothing at 1440Hz: sigma ~50 samples) the exact
+/// kernel is O(n*sigma) and took ~10s for a 60s recording in debug builds —
+/// the editor-open stall. Three box passes approximate the same Gaussian
+/// (central-limit theorem) in O(n). Small sigmas keep the exact kernel.
 public func gaussianSmooth(_ a: [Double], sigma: Double) -> [Double] {
     guard sigma > 0.3, a.count > 1 else { return a }
-    let r = Int(ceil(3 * sigma)), n = a.count
-    var k = (-r...r).map { exp(-0.5 * pow(Double($0) / sigma, 2)) }
-    let s = k.reduce(0, +); k = k.map { $0 / s }
-    var out = [Double](repeating: 0, count: n)
-    a.withUnsafeBufferPointer { ap in
-        out.withUnsafeMutableBufferPointer { op in
-            for i in 0..<n {
-                var acc = 0.0
-                for j in -r...r { acc += k[j + r] * ap[min(max(i + j, 0), n - 1)] }
-                op[i] = acc
+    let n = a.count
+    let r = Int(ceil(3 * sigma))
+    if r <= 16 {
+        var k = (-r...r).map { exp(-0.5 * pow(Double($0) / sigma, 2)) }
+        let s = k.reduce(0, +); k = k.map { $0 / s }
+        var out = [Double](repeating: 0, count: n)
+        a.withUnsafeBufferPointer { ap in
+            out.withUnsafeMutableBufferPointer { op in
+                for i in 0..<n {
+                    var acc = 0.0
+                    for j in -r...r { acc += k[j + r] * ap[min(max(i + j, 0), n - 1)] }
+                    op[i] = acc
+                }
             }
         }
+        return out
     }
-    return out
+    // Box width whose variance matches sigma^2: w^2/12 = sigma^2.
+    var w = Int((sigma * (12.0).squareRoot()).rounded())
+    if w % 2 == 0 { w += 1 }
+    w = max(w, 3)
+    let half = w / 2
+    var current = a
+    for _ in 0..<3 {
+        var prefix = [Double](repeating: 0, count: n + 1)
+        for i in 0..<n { prefix[i + 1] = prefix[i] + current[i] }
+        var next = [Double](repeating: 0, count: n)
+        for i in 0..<n {
+            let lo = max(i - half, 0), hi = min(i + half, n - 1)
+            // Edge-clamped average: extend the window with edge values.
+            let leftPad = max(half - i, 0), rightPad = max(i + half - (n - 1), 0)
+            let sum = (prefix[hi + 1] - prefix[lo])
+                + current[0] * Double(leftPad) + current[n - 1] * Double(rightPad)
+            next[i] = sum / Double(w)
+        }
+        current = next
+    }
+    return current
 }
 
 // MARK: Clock

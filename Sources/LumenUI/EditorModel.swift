@@ -95,6 +95,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     private var exportTask: Task<Void, Never>?
     private var activeExportID = UUID()
     private var mixTask: Task<Void, Never>?
+    private var hasMixed = false
     private var playbackTask: Task<Void, Never>?
     private var wantsPlayback = false
     private let player = PreviewAudioPlayer()
@@ -103,7 +104,9 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         self.session = session; self.renderer = renderer; self.timeline = timeline; box = TimelineBox(timeline)
         self.exportSettings = ExportSettings.load(defaultName: AppModel.displayName(session.meta.name))
         renderer.setCustomCursors(session.cursors)
-        remix()
+        // No eager remix at open: the full offline mix (WPE + studio chain)
+        // is seconds of CPU and was competing with derive at open. It is
+        // built lazily on first Play (see play()).
         setTranscript(session.transcriptFile?.transcript.shifted(by: session.micOffset))
     }
 
@@ -126,7 +129,9 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         model.privacyScanning = scansPrivacy
         model.privacyAnalysisComplete = !scansPrivacy
         model.replan(remixAudio: true)
-        model.autoTranscribeIfNeeded()
+        // Auto-transcribe was also started here (Moonshine over the whole
+        // mic file = tens of seconds at open). It now runs after analysis
+        // finishes (see analyzeInBackground), still in the background.
         return model
     }
 
@@ -169,6 +174,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             // The result must be applied by the Director before export
             // is re-enabled. A completion of OCR alone is not sufficient.
             self.replan()
+            self.autoTranscribeIfNeeded()
         }
     }
     func setWebcam(_ on: Bool) { edit { $0.webcam = on ? ($0.webcam ?? WebcamLayout()) : nil } }
@@ -201,7 +207,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                 self.pendingInitialAnalysis = false
                 self.analyzeInBackground(out)
             }
-            if audioChanged { self.remix() }
+            if audioChanged, self.hasMixed { self.remix() }
             self.playhead = min(self.playhead, out.compositionDuration)
             self.published = self.playhead
             self.clock.seek(self.playhead)
@@ -210,6 +216,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     }
 
     private func remix() {
+        hasMixed = true
         let resume = wantsPlayback
         if clock.playing { pause() }
         wantsPlayback = resume
@@ -241,6 +248,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     }
     func play() {
         wantsPlayback = true
+        if !hasMixed { remix() }
         playbackTask?.cancel()
         let ready = mixTask
         playbackTask = Task { [weak self] in

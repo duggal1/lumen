@@ -455,7 +455,28 @@ private final class RegionView: NSView {
     init(_ app: AppModel, screen: NSScreen?) {
         self.screen = screen
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 64), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        p.contentView = NSHostingView(rootView: HUDView(app: app))
+        // Native Apple blur: a real NSVisualEffectView behind the SwiftUI
+        // content. SwiftUI `.ultraThinMaterial` alone over a clear NSPanel
+        // does not guarantee desktop blur, which is why the countdown
+        // looked flat. Dark appearance keeps the HUD dark over any wallpaper.
+        p.appearance = NSAppearance(named: .darkAqua)
+        let blur = NSVisualEffectView()
+        blur.material = .hudWindow
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        blur.wantsLayer = true
+        blur.layer?.cornerRadius = 16
+        blur.layer?.masksToBounds = true
+        let host = NSHostingView(rootView: HUDView(app: app))
+        host.translatesAutoresizingMaskIntoConstraints = false
+        blur.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
+            host.topAnchor.constraint(equalTo: blur.topAnchor),
+            host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+        ])
+        p.contentView = blur
         p.level = .statusBar; p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false
         p.sharingType = .none
         p.hidesOnDeactivate = false
@@ -532,13 +553,9 @@ struct HUDView: View {
             }
         }
         .background {
-            if case .countdown = app.phase {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.ultraThinMaterial)
-                    .overlay(RoundedRectangle(cornerRadius: 16).fill(Color.black.opacity(0.68)))
-            } else {
-                RoundedRectangle(cornerRadius: 16).fill(Tok.surface)
-            }
+            // Transparent: the panel's NSVisualEffectView provides the
+            // native blur + dark tint. A solid fill here would hide it.
+            RoundedRectangle(cornerRadius: 16).fill(Color.clear)
         }
     }
     private func time(_ t: Double) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
