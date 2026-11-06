@@ -1,27 +1,42 @@
 # Lumen reliability console
 
-A compact static dashboard for reliability triage of the **duggal1/lumen** macOS screen-recording app.
+This is the standalone, deployed engineering tracker for [duggal1/lumen](https://github.com/duggal1/lumen), living in `lumen-tracker/`. It never renames or modifies native Swift source directories.
 
-## Source boundaries
+## Facts and source-of-truth
 
-- Ships under \`lumen-tracker/\` and does not modify the macOS recording app.
-- Current GitHub main uses \`Sources/\` paths. No rename to \`studio/\` is performed. If the native app is later moved to \`studio/\`, update evidence paths after inspecting the actual commit.
-- A merged PR is not equivalent to a passing CI run; a CI pass is not proof of hardware/runtime behavior.
-- Initial issue entries are explicitly a GitHub-backed snapshot of Nov 6, 2026; inferred causes are labeled tentative/unknown.
-- The "paste" entry is a scope check, not a confirmed Lumen feature.
+- **Live GitHub issues** are fetched from the GitHub Issues REST API and shown separately from source-audit findings.
+- **Audit findings** are a labeled Nov 6, 2026 snapshot. They are not fabricated GitHub issue numbers or device test results.
+- **Merged**, **CI passed**, and **runtime verified** remain separate states. Github metadata is refreshed on demand.
+- The currently inspected native repository uses `Sources/`, not `studio/`. The tracker preserves real paths.
+- "Paste" in Lumen is an unverified feature boundary, not a confirmed bug.
+- Notes, custom audit entries and regression history are local to your browser. Export JSON to move them; no shared database exists.
 
-## Features
+## Real GitHub integration
 
-Searchable priority issue map; precise reproduction and suspected causes; modules and source links; build gate; quick next-three queue; coding-agent work orders; regression notes; local export/import; live GitHub PR/CI verification.
+Select **Connect GitHub**, create a fine-grained token scoped to `duggal1/lumen` with **Issues: Read and write**, paste it in the in-app connection dialog, and verify. The token exists only in tab memory (not localStorage or a server database) and is forwarded over HTTPS to GitHub by `api/github.js`. Refreshing the tab disconnects it.
 
-## Persistence and privacy
+To create a real GitHub issue: **Create issue** → add concrete observations and reproduction → use the manual template or AI → review Markdown → **Publish GitHub issue**. On success the app shows the actual GitHub issue number and canonical link returned by GitHub. It does not create placeholder issues or silently post.
 
-Only the user’s browser localStorage stores edits and regression entries. There is **no shared database, login or server write endpoint**. Export JSON to back up or move records. GitHub public REST endpoints are used read-only from the browser; rate limits and offline use are handled by keeping snapshot data clearly marked.
+Creating issues is never attempted without the user clicking Publish. GitHub enforces repository permissions, and GitHub may reject duplicates or rate-limit writes.
 
-## Deployment
+## Reflection Beam issue writer
 
-Link this repository to Vercel with **Root Directory: \`lumen-tracker\`** and Framework Preset **Other**. The site is pure HTML/CSS/JS, so no build command, runtime secrets, or package install is needed.
+`api/ai.js` streams an issue-body draft using `Beam-1.0-501B-A23B`, using the documented OpenAI-compatible Reflection API. No invented files, metrics, root causes or CI status. Generation leaves the draft editable; users must explicitly publish it.
 
-## Testing
+To enable AI choose either:
+1. Enter your own `REFLECTION_API_KEY` in the in-app issue composer. It is kept in tab memory only and forwarded through the Vercel function without storage.
+2. Configure a production Vercel server environment variable named `REFLECTION_API_KEY` in the project's settings. To prevent anonymous consumption of the owner's credits, server-backed generation requires GitHub authentication as `duggal1`.
 
-Desktop and mobile browse smoke test, search/filter, issue selection, work-order copy, save evidence note, regression add/export/import and GitHub synchronization. Verify the URL returns HTTP 200. CI results always link to the actual GitHub workflow.
+**Do not commit secrets or put keys in query strings, localStorage, public Javascript or this README.** The repository and Vercel Git integration do not automatically grant authentication to end-users of the deployed website.
+
+Without a Reflection key, the manual Markdown template and GitHub publishing still work.
+
+## UI
+
+Only sans-serif text with tight tracking. The Lumen wordmark and icon are copied from `App/public/assets/brand/logo`. The GitHub mark is the official Primer Octicon; navigation uses pinned Phosphor web icons. Dark surfaces, orange translucent badges, green field-focus indication, no card borders.
+
+## Verification
+
+`npm run check` performs script syntax checks. Production smoke tests should cover GET /, GET /styles.css, GET /integrations.js, GET /api/github?resource=issues, unauthenticated POST /api/github returns 401, and AI without an API key returns a documented 422/401. Authorized GitHub issue creation and Reflection generation require credentials and should never be simulated as successes.
+
+Linked Vercel root directory: `lumen-tracker/`; production branch: `main`.

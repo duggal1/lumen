@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img">
+  <title>Lumen</title>
+  <defs>
+    <path id="arrow" d="M12,10 L12,122 L38,98 L56,134 L74,125 L57,90 L92,90 Z" stroke-width="14" stroke-linejoin="round"/>
+    <linearGradient id="fill" gradientUnits="userSpaceOnUse" x1="12" y1="6" x2="80" y2="138">
+      <stop offset="0" stop-color="#FFB267"/>
+      <stop offset="0.5" stop-color="#F97316"/>
+      <stop offset="1" stop-color="#E4570A"/>
+    </linearGradient>
+    <filter id="arrowShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="16"/>
+      <feOffset dy="26"/>
+      <feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.45 0"/>
+    </filter>
+  </defs>
+  <g filter="url(#arrowShadow)">
+    <g transform="translate(512 512) scale(5.4) translate(-52 -72)">
+      <use href="#arrow" fill="#000" stroke="#000"/>
+    </g>
+  </g>
+  <g transform="translate(512 512) scale(5.4) translate(-52 -72)">
+    <use href="#arrow" fill="url(#fill)" stroke="url(#fill)"/>
+  </g>
+</svg>
