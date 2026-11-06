@@ -253,6 +253,29 @@ public final class CursorAtlas {
             }
             return [Double(hot.x), Double(hot.y)]
         }
+        if pack == .holiday {
+            // Snowflake: six spokes + center dot, winter pack. Hotspot is
+            // the flake center so clicks land where the eye points.
+            shadowed {
+                c.setStrokeColor(paper); c.setLineWidth(3.2)
+                c.setFillColor(ink)
+                for k in 0..<6 {
+                    let a = Double(k) * Double.pi / 3
+                    c.move(to: CGPoint(x: 16, y: 16))
+                    c.addLine(to: CGPoint(x: 16 + 11 * CGFloat(cos(a)), y: 16 + 11 * CGFloat(sin(a))))
+                }
+                c.strokePath()
+                c.setStrokeColor(ink); c.setLineWidth(1.4)
+                for k in 0..<6 {
+                    let a = Double(k) * Double.pi / 3
+                    c.move(to: CGPoint(x: 16, y: 16))
+                    c.addLine(to: CGPoint(x: 16 + 11 * CGFloat(cos(a)), y: 16 + 11 * CGFloat(sin(a))))
+                }
+                c.strokePath()
+                c.addEllipse(in: CGRect(x: 14, y: 14, width: 4, height: 4)); c.fillPath()
+            }
+            return [16, 16]
+        }
         if pack == .dot {
             shadowed {
                 c.addEllipse(in: CGRect(x: 11, y: 11, width: 10, height: 10)); c.setFillColor(ink); c.setStrokeColor(paper); c.setLineWidth(1.8)

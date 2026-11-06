@@ -1,6 +1,9 @@
 import Foundation
 import Testing
 import LumenProject
+import Metal
+@testable import LumenRender
+import LumenCore
 
 @Test func cursorClickArtworkSettingsSurviveProjectRoundTrip() throws {
     var style = CursorStyle()
@@ -30,4 +33,16 @@ import LumenProject
     let legacy = try JSONSerialization.data(withJSONObject: ["background": "solid", "colors": [["r": 0, "g": 0, "b": 0, "a": 1]]])
     let decoded = try JSONDecoder().decode(Style.self, from: legacy)
     #expect(decoded.ditherCell == Style().ditherCell)
+}
+
+@Test func holidayCursorPackLoadsIntoAtlas() throws {
+    // Pack survives Codable round-trip (old projects unaffected).
+    let restored = try JSONDecoder().decode(CursorPack.self, from: JSONEncoder().encode(CursorPack.holiday))
+    #expect(restored == .holiday)
+    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let atlas = try #require(CursorAtlas(device: device, queue: queue, pack: .holiday, customs: []))
+    #expect(atlas.entry(StockCursor.arrow.rawValue) != nil)
+    #expect(atlas.entry(StockCursor.pointingHand.rawValue) != nil)
+    let snow = try #require(atlas.entry(StockCursor.arrow.rawValue))
+    #expect(abs(snow.hot.x - 0.5) < 0.05 && abs(snow.hot.y - 0.5) < 0.05, "snowflake hotspot must be centered")
 }

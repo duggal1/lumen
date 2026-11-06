@@ -115,7 +115,7 @@ public struct Style: Codable, Equatable, Sendable {
     }
 }
 
-public enum CursorPack: String, Codable, CaseIterable, Sendable { case system, minimal, dot, ring, pro }
+public enum CursorPack: String, Codable, CaseIterable, Sendable { case system, minimal, dot, ring, pro, holiday }
 public struct CursorStyle: Codable, Equatable, Sendable {
     public var pack: CursorPack = .system
     public var size: Double = 1.0
