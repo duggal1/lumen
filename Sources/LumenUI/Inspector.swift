@@ -350,6 +350,7 @@ struct Inspector: View {
                 Row(label: "Tilt") { LDropdown(sel: m.bind(\.camera.tilt), options: TiltMode.allCases.map { ($0, $0.rawValue.capitalized, "move.3d") }).frame(width: 130) }
                 SliderRow(label: "Max zoom", v: m.bind(\.camera.maxScale), range: 1.2...4, fmt: { String(format: "%.1f×", $0) })
                 Row(label: "Max upscale") { LDropdown(sel: m.bind(\.camera.upscaleMaxFactor), options: [2, 3, 4, 5, 6, 8, 10].map { ($0, "\($0)×", "arrow.up.right.and.arrow.down.right") }).frame(width: 130) }
+                ToggleRow(label: "Real-time upscale", on: m.bind(\.camera.upscaleEnabled))
                 SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.05...2.5, fmt: { String(format: "%.2f×", $0) })
                 SliderRow(label: "Smoothness", v: smooth, range: 0...1)
             }.card()

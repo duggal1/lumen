@@ -181,6 +181,9 @@ public final class MCPTCPServer: @unchecked Sendable {
     private var source: DispatchSourceRead?
     private let lock = NSLock()
     private var clientFDs: Set<Int32> = []
+    /// Actual port bound by `start()`. Port 0 asks the kernel for a free port,
+    /// which keeps tests and local integration from colliding on 8765.
+    public private(set) var boundPort: UInt16?
 
     public init(port: UInt16, handler: @escaping Handler) {
         self.port = port; self.handler = handler
@@ -203,6 +206,14 @@ public final class MCPTCPServer: @unchecked Sendable {
         guard bound == 0, listen(fd, 4) == 0 else {
             close(fd); throw MCPError.socket("bind/listen failed on port \(port)")
         }
+        var actual = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &actual) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &length)
+            }
+        }
+        boundPort = UInt16(bigEndian: actual.sin_port)
         listenerFD = fd
         let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: acceptQueue)
         src.setEventHandler { [weak self] in self?.accept() }
@@ -218,6 +229,7 @@ public final class MCPTCPServer: @unchecked Sendable {
         lock.unlock()
         for fd in clients { close(fd) }
         if listenerFD >= 0 { close(listenerFD); listenerFD = -1 }
+        boundPort = nil
     }
 
     private func accept() {

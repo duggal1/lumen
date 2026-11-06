@@ -197,12 +197,14 @@ public struct CameraParams: Codable, Equatable, Sendable {
     /// User setting for the real-time upscaler cap (2...10, ladder
     /// {2,3,4,5,6,8,10}). Magnification picks the smallest factor >= need.
     public var upscaleMaxFactor = 8
+    /// Master switch for the real-time upscaler (A/B testing, low-end GPUs).
+    public var upscaleEnabled = true
     public var tilt: TiltMode = .off
     public var maxYaw = 8.0, maxPitch = 6.0, floatDeg = 1.2, omegaTilt = 5.0
     public var tiltSeed: UInt64 = 0xC11C
     enum CodingKeys: String, CodingKey {
         case preset, autoZoom, maxScale, minScale, minTrigger, leadIn, tail, mergeGap, panThroughGap, minHold, omegaPan, omegaZoom, lookahead, deadZone
-        case followDelay, centerOffsetX, centerOffsetY, sensitivity, clickWeight, shutter, maxSamples, upscaleMaxFactor, tilt, maxYaw, maxPitch, floatDeg, omegaTilt, tiltSeed
+        case followDelay, centerOffsetX, centerOffsetY, sensitivity, clickWeight, shutter, maxSamples, upscaleMaxFactor, upscaleEnabled, tilt, maxYaw, maxPitch, floatDeg, omegaTilt, tiltSeed
     }
     public init() {}
     public init(from d: Decoder) throws {
@@ -215,6 +217,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
         sensitivity = c.opt(.sensitivity, sensitivity); clickWeight = c.opt(.clickWeight, clickWeight); shutter = c.opt(.shutter, shutter)
         maxSamples = c.opt(.maxSamples, maxSamples)
         upscaleMaxFactor = min(max(c.opt(.upscaleMaxFactor, upscaleMaxFactor), 2), 10)
+        upscaleEnabled = c.opt(.upscaleEnabled, upscaleEnabled)
         tilt = c.opt(.tilt, tilt); maxYaw = c.opt(.maxYaw, maxYaw); maxPitch = c.opt(.maxPitch, maxPitch)
         floatDeg = c.opt(.floatDeg, floatDeg); omegaTilt = c.opt(.omegaTilt, omegaTilt); tiltSeed = c.opt(.tiltSeed, tiltSeed)
     }

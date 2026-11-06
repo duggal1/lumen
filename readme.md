@@ -59,11 +59,22 @@ Tests cover event encoding, time-map inversion and speech protection, manual
 zoom preservation, click positioning, camera bounds, repeatable audio and
 loudness, repeated frame rendering, and actual exported video frame count.
 
-`make verify` does not certify every acceptance criterion in the parent build
-plan. The flash-and-click sync harness, reference-image golden suite, long
-capture and memory tests, GPU performance measurements, and clean-machine
-permission checks still need implementation or hardware verification. The CLI
-sync command reports offsets only. Music uses loop/trim crossfades without beat
-detection; mesh backgrounds are static. Pause/resume, recovery of unfinished
-recordings, image/blurred-content backgrounds, and RNNoise vendoring are not
-implemented. The packaged build is not notarized.
+Validation harnesses are now in the tree and runnable:
+
+- `lumen-cli bench --frames 120` renders a real Metal loop and exits non-zero
+  when the p99/over-budget gate is missed (`LumenRender/PerformanceHarness.swift`).
+- `lumen-cli golden <project> --update` establishes reference PNGs;
+  later runs compare and fail on drift (`LumenExport/GoldenImage.swift`).
+- `LumenDirector/SyncHarness.swift` checks flash-and-click drift, cue drift and
+  early/late rings across cuts (`flashAndClickStayOnTheSameFrameAcrossCuts`).
+- Long-capture derive is covered by a synthetic 10-minute, 60 fps session with
+  a resident-memory ceiling (`longCaptureStaysWithinTimeAndMemoryBudget`).
+
+`make verify` still does not certify every acceptance criterion in the parent
+build plan. Clean-machine permission checks need hardware verification. The CLI
+`sync` command reports offsets only (it does not run the render-level sync
+harness); music uses loop/trim crossfades without beat detection; mesh
+backgrounds are static; RNNoise is not vendored. Photo backgrounds need an
+Unsplash access key and are cached under Application Support. Email
+notifications open a mailto draft, not SMTP. MCP control is localhost-only,
+opt-in, and has no authentication. The packaged build is not notarized.

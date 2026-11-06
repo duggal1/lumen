@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import Metal
 import CoreVideo
+import Darwin
 import LumenCore
 import LumenProject
 @testable import LumenDirector
@@ -105,6 +106,76 @@ private let png1x1 = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAA
 }
 
 // MARK: - MCP
+
+@Test func mcpPreferencesAreOptInAndClampThePort() throws {
+    let name = "lumen.mcp.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: name))
+    defer { defaults.removePersistentDomain(forName: name) }
+
+    #expect(defaults.bool(forKey: MCPPreferences.enabledKey) == false, "the server is opt-in")
+    #expect(MCPPreferences.port(defaults: defaults) == MCPPreferences.defaultPort)
+
+    defaults.set(0, forKey: MCPPreferences.portKey)
+    #expect(MCPPreferences.port(defaults: defaults) == MCPPreferences.defaultPort)
+    defaults.set(70_000, forKey: MCPPreferences.portKey)
+    #expect(MCPPreferences.port(defaults: defaults) == MCPPreferences.defaultPort)
+    defaults.set(43_210, forKey: MCPPreferences.portKey)
+    #expect(MCPPreferences.port(defaults: defaults) == 43_210)
+}
+
+@MainActor
+@Test func mcpHostStaysOffUntilEnabled() {
+    let host = MCPHost()
+    host.configure(enabled: false, port: 0, actions: FakeMCPActions())
+    #expect(host.runningPort == nil, "disabled means no listener is opened")
+}
+
+@Test func mcpListenerAnswersOnALoopbackSocket() async throws {
+    let server = MCPTCPServer(port: 0) { line in
+        line.contains("\"method\":\"initialize\"")
+            ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\"}}"
+            : nil
+    }
+    try server.start()
+    defer { server.stop() }
+    let port = try #require(server.boundPort)
+    #expect(port != 0)
+
+    let reply = try exchange(port: port, line: "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n")
+    #expect(reply.contains("\"protocolVersion\":\"2025-06-18\""))
+}
+
+/// Blocking loopback exchange. The server answers on the main actor, so the
+/// test deliberately stays off the main actor while waiting on `recv`.
+private func exchange(port: UInt16, line: String) throws -> String {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw MCPError.socket("socket() failed") }
+    defer { close(fd) }
+    var timeout = timeval(tv_sec: 3, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = port.bigEndian
+    addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+    let connected = withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    guard connected == 0 else { throw MCPError.socket("connect() failed") }
+
+    var bytes = Array(line.utf8)
+    _ = bytes.withUnsafeBytes { send(fd, $0.baseAddress, $0.count, 0) }
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    var reply = Data()
+    while !reply.contains(0x0A) {
+        let n = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
+        guard n > 0 else { break }
+        reply.append(buffer, count: n)
+    }
+    return String(decoding: reply, as: UTF8.self).trimmingCharacters(in: .newlines)
+}
 
 @MainActor
 private final class FakeMCPActions: MCPActions {
@@ -232,6 +303,23 @@ private final class SpyEmailTransport: EmailTransport, @unchecked Sendable {
     var disabled = prefs; disabled.enabled = false; disabled.save(defaults: defaults)
     #expect(await service.recordingFinished(project: URL(fileURLWithPath: "/tmp/Other.lumen"), duration: 2) == false)
     #expect(spy.messages.count == 1)
+}
+
+@Test func emailExportNotificationSendsOnlyWhenExportIsEnabled() async throws {
+    let name = "lumen.email.export.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: name))
+    defer { defaults.removePersistentDomain(forName: name) }
+    EmailPreferences(enabled: true, recipient: "editor@example.com",
+                     onRecordingFinished: false, onExportFinished: true).save(defaults: defaults)
+
+    let spy = SpyEmailTransport()
+    let service = EmailNotificationService(transport: spy, defaults: defaults)
+
+    #expect(await service.recordingFinished(project: URL(fileURLWithPath: "/tmp/Demo.lumen"), duration: 5) == false)
+    #expect(await service.exportFinished(file: URL(fileURLWithPath: "/tmp/Demo.mp4")))
+    #expect(spy.messages.count == 1)
+    #expect(spy.messages[0].subject.contains("Demo.mp4"))
+    #expect(spy.messages[0].body.contains("/tmp/Demo.mp4"))
 }
 
 @Test func mailtoDraftEncodesSubjectAndBody() throws {

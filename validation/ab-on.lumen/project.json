@@ -1,0 +1,345 @@
+{
+ "meta": {
+  "additionalMicrophones": [],
+  "analysisSalt": 4586179330924816502,
+  "clock": {
+   "eventUnit": "machTicks",
+   "originHostSeconds": 311899.129715666
+  },
+  "created": 815674769.782691,
+  "droppedFrames": 0,
+  "mic": {
+   "file": "mic.caf",
+   "startHostSeconds": 311899.18310416664
+  },
+  "name": "Recording 2026-11-06T161840",
+  "source": {
+   "backingScale": 2,
+   "duration": 45.535260499978904,
+   "fps": 60,
+   "height": 1800,
+   "originX": 0,
+   "originY": 0,
+   "width": 2880
+  }
+ },
+ "timeline": {
+  "audio": {
+   "clickSounds": true,
+   "clickTone": "mouse",
+   "declick": true,
+   "declickDepthDb": -12,
+   "dereverb": 0,
+   "duckAttack": 0.05,
+   "duckDepthDb": -14,
+   "duckRelease": 0.4,
+   "keySounds": false,
+   "lanes": [],
+   "micClean": false,
+   "micGainDb": 0,
+   "micMode": "standard",
+   "musicGainDb": -18,
+   "muteMicInRamps": true,
+   "normalize": true,
+   "outputGainDb": 0,
+   "sfxGainDb": -9,
+   "speedRampMaxSpeed": 8,
+   "speedRampMinIdle": 4,
+   "speedRampsAuto": true,
+   "studio": 0.25,
+   "systemGainDb": -3,
+   "targetLUFS": -16,
+   "whooshes": true
+  },
+  "camera": {
+   "autoZoom": false,
+   "centerOffsetX": 0,
+   "centerOffsetY": 0,
+   "clickWeight": 3,
+   "deadZone": 0.28,
+   "floatDeg": 1.2,
+   "followDelay": 0.12,
+   "leadIn": 0.45,
+   "lookahead": 0.2,
+   "maxPitch": 6,
+   "maxSamples": 8,
+   "maxScale": 2.2,
+   "maxYaw": 8,
+   "mergeGap": 2.5,
+   "minHold": 1,
+   "minScale": 1.5,
+   "minTrigger": 1.25,
+   "omegaPan": 7,
+   "omegaTilt": 5,
+   "omegaZoom": 6,
+   "panThroughGap": 1.5,
+   "preset": "balanced",
+   "sensitivity": 0.5,
+   "shutter": 0.5,
+   "tail": 0.7,
+   "tilt": "off",
+   "tiltSeed": 49436,
+   "upscaleEnabled": true,
+   "upscaleMaxFactor": 8
+  },
+  "captions": {
+   "deletedWords": [],
+   "enabled": false,
+   "locale": "en-US",
+   "maxLines": 2,
+   "style": {
+    "animation": "pop",
+    "bold": true,
+    "color": {
+     "a": 1,
+     "b": 1,
+     "g": 1,
+     "r": 1
+    },
+    "highlightColor": {
+     "a": 1,
+     "b": 0.08627451,
+     "g": 0.4509804,
+     "r": 0.9764706
+    },
+    "outline": false,
+    "pill": {
+     "a": 0.2,
+     "b": 1,
+     "g": 1,
+     "r": 1
+    },
+    "position": "auto",
+    "size": 0.06,
+    "wordHighlight": true
+   },
+   "textEdits": {},
+   "vocabulary": []
+  },
+  "clips": [],
+  "cursor": {
+   "clickRing": 0.45,
+   "constantSize": false,
+   "glide": 0.35,
+   "idleHide": 2,
+   "pack": "system",
+   "pressScale": 0.86,
+   "size": 1,
+   "smoothingSigma": 0.035,
+   "zoomCompensation": 0.5
+  },
+  "layoutSettings": {
+   "cameraCutout": {
+    "autoFrame": true,
+    "avoidCursor": true,
+    "avoidMargin": 48,
+    "behindFace": "move",
+    "border": true,
+    "corner": "bottomRight",
+    "hideOnSilence": false,
+    "mirror": true,
+    "shadow": true,
+    "shape": "circle",
+    "silenceHold": 0.6,
+    "size": 0.22,
+    "snapDwell": 0.45
+   },
+   "cameraFullscreen": {
+    "autoFrame": true,
+    "avoidCursor": true,
+    "avoidMargin": 48,
+    "behindFace": "move",
+    "border": true,
+    "corner": "bottomRight",
+    "hideOnSilence": false,
+    "mirror": true,
+    "shadow": true,
+    "shape": "circle",
+    "silenceHold": 0.6,
+    "size": 0.22,
+    "snapDwell": 0.45
+   },
+   "cameraOverlay": {
+    "autoFrame": true,
+    "avoidCursor": true,
+    "avoidMargin": 48,
+    "behindFace": "move",
+    "border": true,
+    "corner": "bottomRight",
+    "hideOnSilence": false,
+    "mirror": true,
+    "shadow": true,
+    "shape": "circle",
+    "silenceHold": 0.6,
+    "size": 0.22,
+    "snapDwell": 0.45
+   },
+   "screenOnly": {
+    "autoFrame": true,
+    "avoidCursor": true,
+    "avoidMargin": 48,
+    "behindFace": "move",
+    "border": true,
+    "corner": "bottomRight",
+    "hideOnSilence": false,
+    "mirror": true,
+    "shadow": true,
+    "shape": "circle",
+    "silenceHold": 0.6,
+    "size": 0.22,
+    "snapDwell": 0.45
+   },
+   "split": {
+    "autoFrame": true,
+    "avoidCursor": true,
+    "avoidMargin": 48,
+    "behindFace": "move",
+    "border": true,
+    "corner": "bottomRight",
+    "hideOnSilence": false,
+    "mirror": true,
+    "shadow": true,
+    "shape": "circle",
+    "silenceHold": 0.6,
+    "size": 0.22,
+    "snapDwell": 0.45
+   }
+  },
+  "layouts": [],
+  "overlays": {
+   "highlights": [],
+   "loupes": [
+    {
+     "border": 0.006,
+     "cx": 0.22,
+     "cy": 0.74,
+     "end": 7.5719285386835855,
+     "follow": true,
+     "id": "2025D5B1-77F5-4F4D-A912-64B628508775",
+     "magnification": 2,
+     "radius": 0.12,
+     "round": true,
+     "shadow": 0.45,
+     "start": 4.5719285386835855,
+     "x": 0,
+     "y": 0
+    }
+   ],
+   "masks": [],
+   "privacy": {
+    "autoApply": [
+     "apiKey",
+     "jwt",
+     "privateKey",
+     "envSecret",
+     "card",
+     "email",
+     "custom"
+    ],
+    "autoDetect": true,
+    "customPatterns": [],
+    "decisions": {},
+    "enabled": true,
+    "entropyThreshold": 3.5,
+    "mode": "blend",
+    "padding": 6
+   },
+   "taps": [
+    {
+     "id": "E4EFAC3C-506F-4F01-A1DE-7EA21BA4E9B2",
+     "t": 4.5719285386835855,
+     "x": 1440,
+     "y": 900
+    },
+    {
+     "id": "82E5FD8D-310E-4544-8764-3EE4855D7DC1",
+     "t": 4.5719285386835855,
+     "x": 1440,
+     "y": 900
+    },
+    {
+     "id": "0F00409E-0359-4D01-B138-6C1E0EB236F2",
+     "t": 4.5719285386835855,
+     "x": 1440,
+     "y": 900
+    },
+    {
+     "id": "8C044298-9F24-4A31-B916-0E9120697F6A",
+     "t": 4.5719285386835855,
+     "x": 1440,
+     "y": 900
+    },
+    {
+     "id": "0AAF13A0-9948-43F7-AE1E-540BFEAB4F04",
+     "t": 20.67712055314882,
+     "x": 1440,
+     "y": 900
+    },
+    {
+     "id": "572A9D5B-A770-4D6D-AB9A-E0318DE13E49",
+     "t": 24.942397136526335,
+     "x": 1440,
+     "y": 900
+    }
+   ],
+   "texts": []
+  },
+  "schemaVersion": 3,
+  "style": {
+   "background": "field",
+   "canvas": "r16x9",
+   "colors": [
+    {
+     "a": 1,
+     "b": 1,
+     "g": 0.9647059,
+     "r": 0.9372549
+    },
+    {
+     "a": 1,
+     "b": 0.92156863,
+     "g": 0.3882353,
+     "r": 0.14509805
+    }
+   ],
+   "contentScale": 1.0545312500000001,
+   "cornerRadius": 14,
+   "ditherCell": 4,
+   "ditherDensity": 0.55,
+   "gradientAngle": 35,
+   "innerBorder": true,
+   "padding": 0.032765625,
+   "paddingInsets": {
+    "bottom": 0.032765625,
+    "left": 0.032765625,
+    "right": 0.032765625,
+    "top": 0.0370390625
+   },
+   "shadow": 0.45,
+   "zoomBackgroundBlur": false
+  },
+  "timeMap": {
+   "cuts": [],
+   "ramps": [],
+   "sourceDuration": 45.535260499978904,
+   "trimEnd": 45.535260499978904,
+   "trimStart": 0
+  },
+  "zoom": [
+   {
+    "easing": null,
+    "end": 14.0,
+    "focus": {
+     "fixed": {
+      "x": 0.5,
+      "y": 0.5
+     }
+    },
+    "id": "48173b54-2de1-480d-9c5b-c9ab72f480f7",
+    "origin": "manual",
+    "scale": 2.2,
+    "start": 8.0
+   }
+  ]
+ }
+}

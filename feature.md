@@ -24,6 +24,14 @@ Status key: **WIRED** = implemented + tested. **PARTIAL** = exists but limited/o
 | Any aspect ratio export | WIRED | `CanvasAspect` + `customAspect`, batch 1:1/9:16 |
 | Automatic re-aim on aspect change | WIRED | Layout/caption/zoom re-derive on style change |
 | Backgrounds/padding/shadow | WIRED | solid/gradient/dither/wave/field/canvas/wallpaper, insets, radii, shadow |
+| Photo backgrounds (Unsplash) | WIRED | `Style.backgroundImagePath` + `BackgroundKind.image`, cover-fit backdrop shader; `LumenUI/PhotoBackground.swift` key from `LUMEN_UNSPLASH_ACCESS_KEY`/`LumenUnsplashAccessKey`, on-disk `PhotoCache`; `unsplashSearchDownloadsOnceAndCachesTheFile`, `downloadedPhotoBecomesTheCanvasBackground`, `unsplashMissingKeyFailsLoudly` |
+| Independent insets / corner radii / shadow | WIRED | `EdgeInsetsN`, `CornerRadii(tl,tr,br,bl)`, decoder back-compat; `independentPaddingRadiiAndShadowSurviveRoundTrip` |
+| MCP server control | WIRED | `LumenUI/MCPService.swift`: opt-in JSON-RPC 2.0 / MCP 2025-06-18 on `127.0.0.1:8765`, tools status/start/stop/pause/open/export; `MCPPreferences` port clamp, `MCPRouter`, loopback `MCPTCPServer`; `mcpInitializeListsToolsAndCallsStatus`, `mcpPreferencesAreOptInAndClampThePort`, `mcpHostStaysOffUntilEnabled`, `mcpListenerAnswersOnALoopbackSocket` |
+| Auto-email notifications | PARTIAL | `LumenUI/EmailNotifications.swift`: opt-in mailto draft on recording/export via `NSWorkspace`; no SMTP/credentials, so the user still clicks Send; `emailTriggerRespectsOptInAndSendsOneDraftPerEvent`, `emailExportNotificationSendsOnlyWhenExportIsEnabled`, `mailtoDraftEncodesSubjectAndBody` |
+| Flash-and-click sync harness | WIRED | `LumenDirector/SyncHarness.swift` measures click→output→first-frame drift, cue drift, early/late rings across cuts; `flashAndClickStayOnTheSameFrameAcrossCuts`, `syncHarnessCatchesAShiftedClickCue` |
+| GPU frame-budget benchmark | WIRED | `LumenRender/PerformanceHarness.swift` real Metal loop + p99/over-budget gate; `lumen-cli bench` exits 1 on miss; `renderBenchmarkRunsRealMetalFrames`, `frameBudgetPassesSixtyFPSAndFailsHalfRate`, `renderBenchmarkEnforcesTheFrameBudgetPolicy` |
+| Golden-image suite | WIRED | `LumenExport/GoldenImage.swift` RGBA8 compare/PNG/BGRA capture; `lumen-cli golden <project> --update` then fail on drift; `goldenComparisonDetectsChangedPixelsAndSizeMismatch`, `goldenPNGRoundTripsAndCapturesFromPixelBuffer` |
+| Long capture / memory gate | WIRED | synthetic 10-minute 60 fps derive (12k moves, 100 clicks) under a resident-memory ceiling; `longCaptureStaysWithinTimeAndMemoryBudget` |
 | Presets (Looks) | WIRED | `LookPreset` save/apply in Application Support |
 | Flexible capture (display/window/region) | WIRED | `RecordingConfig.Source`, region selector |
 | Multi-source (screen+webcam+mic+system) | WIRED | `CaptureEngine` + extra mics + webcam recorder |

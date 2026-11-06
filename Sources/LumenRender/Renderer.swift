@@ -525,7 +525,7 @@ public final class Renderer: @unchecked Sendable {
         // fragment path below remains the fallback. The backdrop resolve
         // still composites this work texture over the cached backdrop.
         var computeContent = false
-        if drawingContent, st.cameraTilt == .zero, let cp = contentPass, let up = upscaler {
+        if drawingContent, tl.camera.upscaleEnabled, st.cameraTilt == .zero, let cp = contentPass, let up = upscaler {
             let layout = ContentLayout(canvas: SIMD2<Int32>(Int32(g.canvas.x), Int32(g.canvas.y)),
                                        contentRect: content, radii: SIMD4<Float>(g.radii),
                                        srcSize: SIMD2<Float>(g.src))
