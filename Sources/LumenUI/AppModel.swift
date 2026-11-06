@@ -95,16 +95,12 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     private var hotKey: HotKey?
     private var poll: Task<Void, Never>?
     private var hiddenWindows: [NSWindow] = []
-    var modelDownloadProgress: Double?
-    var modelDownloadError: String?
-    private var modelDownloadTask: Task<Void, Never>?
 
     public init() {
         library = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
         try? FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
         refresh()
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.toggle() } }
-        ensureTinyModel()
     }
 
     func refresh() {
@@ -223,23 +219,6 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         catch { self.error = "Couldn’t duplicate this recording. \(error.localizedDescription)" }
     }
 
-
-    func ensureTinyModel() {
-        guard !ModelStore.isInstalled(.tiny) else { return }
-        modelDownloadTask?.cancel()
-        modelDownloadTask = Task { @MainActor in
-            modelDownloadProgress = 0
-            do {
-                try await ModelDownloader.download(size: .tiny) { p in
-                    Task { @MainActor in self.modelDownloadProgress = p }
-                }
-                modelDownloadProgress = nil
-            } catch {
-                modelDownloadError = error.localizedDescription
-                modelDownloadProgress = nil
-            }
-        }
-    }
 
     public func toggle() {
         switch phase { case .idle: Task { await start() }; case .recording: Task { await stop() }; default: break }
