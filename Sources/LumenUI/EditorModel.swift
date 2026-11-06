@@ -91,6 +91,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     private var published = -1.0
     private var replanTask: Task<Void, Never>?
     private var analysisTask: Task<Void, Never>?
+    private var pendingInitialAnalysis = false
     private var exportTask: Task<Void, Never>?
     private var activeExportID = UUID()
     private var mixTask: Task<Void, Never>?
@@ -115,8 +116,16 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         // Open the editor from persisted intent immediately. Cursor/camera
         // derivation is CPU-heavy and must not block the Studio window.
         let model = EditorModel(session: s, renderer: r, timeline: initial)
+        // Editor must open fast: OCR/face/mask analysis used to start here,
+        // competing with derive+mix for CPU and making open feel hung.
+        // Defer it until the first derive has published (see replan), so the
+        // window paints with persisted zooms first. Export stays gated by
+        // privacyScanning until the deferred scan finishes.
+        model.pendingInitialAnalysis = true
+        let scansPrivacy = initial.overlays.privacy.enabled && initial.overlays.privacy.autoDetect
+        model.privacyScanning = scansPrivacy
+        model.privacyAnalysisComplete = !scansPrivacy
         model.replan(remixAudio: true)
-        model.analyzeInBackground(initial)
         model.autoTranscribeIfNeeded()
         return model
     }
@@ -188,6 +197,10 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                 || snap.clips != out.clips || snap.derived?.cues != out.derived?.cues
                 || snap.derived?.duck != out.derived?.duck
             self.timeline = out; self.box.set(out); s.save(out)
+            if self.pendingInitialAnalysis {
+                self.pendingInitialAnalysis = false
+                self.analyzeInBackground(out)
+            }
             if audioChanged { self.remix() }
             self.playhead = min(self.playhead, out.compositionDuration)
             self.published = self.playhead

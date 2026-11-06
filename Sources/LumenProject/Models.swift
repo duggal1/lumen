@@ -105,7 +105,7 @@ public struct Style: Codable, Equatable, Sendable {
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         background = c.opt(.background, background); colors = c.opt(.colors, colors); gradientAngle = c.opt(.gradientAngle, gradientAngle)
-        ditherCell = c.opt(.ditherCell, 12); ditherDensity = c.opt(.ditherDensity, ditherDensity); contentScale = c.opt(.contentScale, contentScale)
+        ditherCell = c.opt(.ditherCell, ditherCell); ditherDensity = c.opt(.ditherDensity, ditherDensity); contentScale = c.opt(.contentScale, contentScale)
         padding = c.opt(.padding, padding); cornerRadius = c.opt(.cornerRadius, cornerRadius); shadow = c.opt(.shadow, shadow)
         innerBorder = c.opt(.innerBorder, innerBorder); canvas = c.opt(.canvas, canvas)
         paddingInsets = try? c.decodeIfPresent(EdgeInsetsN.self, forKey: .paddingInsets)
