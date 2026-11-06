@@ -102,3 +102,25 @@ private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
     let quiet = CameraSolver.centredPlay(noise, halfZone: 0.08)
     #expect(quiet.allSatisfy { abs($0 - 0.5) < 0.011 })
 }
+
+@Test func clickOffsetInsideAXElementMustTargetExactClickedPixel() {
+    let target = AXFrame(x: 850, y: 425, w: 120, h: 80)
+    // Click near the top of a large button rather than its center.
+    let x = 900.0, y = 440.0
+    let event = InputEvent(t: 2, kind: .down, x: Float(x), y: Float(y), axFrameIndex: 1)
+    var timeline = Timeline(duration: 6)
+    timeline.audio.speedRampsAuto = false
+    let output = Director.derive(timeline,
+        input: DirectorInput(events: [event], source: precisionSource, ax: [target]), revision: 1)
+    #expect(output.zoom.count == 1)
+    guard let zoom = output.zoom.first else { return }
+    if case .fixed(let focusX, let focusY) = zoom.focus {
+        #expect(abs(focusX * 1920 - x) < 1)
+        #expect(abs(focusY * 1080 - y) < 1)
+    } else {
+        Issue.record("A click far from the AX center must keep its actual coordinates")
+    }
+    let frame = output.evaluate(at: 2)
+    #expect(abs(Double(frame.cameraCenter.x) - x) < 2)
+    #expect(abs(Double(frame.cameraCenter.y) - y) < 2)
+}
