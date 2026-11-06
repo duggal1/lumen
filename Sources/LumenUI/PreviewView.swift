@@ -104,6 +104,30 @@ struct PreviewView: NSViewRepresentable {
         pointerTarget = SIMD3(Double(min(max(point.x / bounds.width, 0), 1)),
                               Double(min(max(1 - point.y / bounds.height, 0), 1)), 1)
     }
+    override func mouseDown(with event: NSEvent) {
+        guard model.placingTool != nil, bounds.width > 0, bounds.height > 0 else {
+            super.mouseDown(with: event)
+            return
+        }
+        let source = model.session.meta.source
+        guard source.width > 0, source.height > 0 else { return }
+        let canvas = metal.drawableSize
+        let point = convert(event.locationInWindow, from: nil)
+        let pixel = SIMD2(Double(point.x / bounds.width) * Double(canvas.width),
+                          Double(1 - point.y / bounds.height) * Double(canvas.height))
+        let tl = model.timeline
+        let frame = tl.evaluate(at: model.playhead)
+        let size = SIMD2(Double(source.width), Double(source.height))
+        let camera = tl.derived == nil ? size / 2 :
+            SIMD2(Double(frame.cameraCenter.x), Double(frame.cameraCenter.y))
+        let transform = ZoomTransform(canvas: SIMD2(Int(canvas.width), Int(canvas.height)),
+                                      source: size, style: tl.style,
+                                      cameraCenter: camera, scale: tl.derived == nil ? 1 : Double(frame.cameraScale))
+        let rect = transform.videoRect
+        guard pixel.x >= rect.x, pixel.y >= rect.y,
+              pixel.x <= rect.x + rect.z, pixel.y <= rect.y + rect.w else { return }
+        model.placeSelectedTool(at: transform.canvasToSource(pixel))
+    }
     override func layout() {
         super.layout()
         let s = window?.backingScaleFactor ?? 2
