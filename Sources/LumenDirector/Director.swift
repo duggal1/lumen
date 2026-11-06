@@ -45,6 +45,18 @@ extension TimeMap {
 }
 
 public enum Director {
+    /// Run only the event-based zoom planner at recording stop, without
+    /// rendering, speech analysis, waveform work or audio mixing.
+    public static func planRecordingZoom(events: [InputEvent], ax: [AXFrame],
+                                         source: SourceInfo, timeline: Timeline) -> [ZoomSegment] {
+        guard timeline.camera.autoZoom else { return timeline.zoom }
+        let manual = timeline.zoom.filter { $0.origin == .manual }
+        let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
+        return (manual + ZoomPlanner.plan(events: events, ax: ax, activity: [],
+                                          src: source, p: timeline.camera, tm: timeline.timeMap,
+                                          avoid: avoid)).sorted { $0.start < $1.start }
+    }
+
     /// Pure and deterministic: same input, same Timeline. Replaces only .auto zoom/ramps; .manual survive.
     public static func derive(_ tl: Timeline, input: DirectorInput, revision: Int) -> Timeline {
         var cache = DeriveCache()
