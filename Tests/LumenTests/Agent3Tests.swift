@@ -212,7 +212,7 @@ private final class SpyEmailTransport: EmailTransport, @unchecked Sendable {
     let name = "lumen.email.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: name))
     defer { defaults.removePersistentDomain(forName: name) }
-    var prefs = EmailPreferences(enabled: true, recipient: "  editor@example.com ",
+    let prefs = EmailPreferences(enabled: true, recipient: "  editor@example.com ",
                                  onRecordingFinished: true, onExportFinished: false)
     prefs.save(defaults: defaults)
 
