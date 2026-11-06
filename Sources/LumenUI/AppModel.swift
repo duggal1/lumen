@@ -93,6 +93,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     private let session = RecordingSession()
     private var hud: HUDController?
     private var hotKey: HotKey?
+    private var pauseHotKey: HotKey?
     private var poll: Task<Void, Never>?
     private var hiddenWindows: [NSWindow] = []
 
@@ -101,6 +102,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         try? FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
         refresh()
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.toggle() } }
+        // Cmd+Opt+P toggles pause while recording (start/stop is Cmd+Opt+R).
+        pauseHotKey = HotKey(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.togglePause() } }
     }
 
     func refresh() {
