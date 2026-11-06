@@ -262,8 +262,8 @@ private final class SpyEmailTransport: EmailTransport, @unchecked Sendable {
     let geometry = Geometry(canvas: SIMD2(1920, 1080), src: SIMD2(1920, 1080), style: restored)
     #expect(geometry.content.x > 300, "left inset must push the frame right")
     #expect(geometry.content.x + geometry.content.z < 1900, "right inset must shrink the frame")
-    #expect(geometry.radii.x > geometry.radii.y)
-    #expect(geometry.radii.w > geometry.radii.z)
+    #expect(geometry.radii.y > geometry.radii.x, "top-right radius is larger than top-left")
+    #expect(geometry.radii.w > geometry.radii.z, "bottom-left radius is larger than bottom-right")
 }
 
 @Test func offeredBackdropsAndPalettesStayBrandConsistent() {
@@ -384,7 +384,8 @@ private func syncTimeline(cut: ClosedRange<Double>? = nil) -> (Timeline, [InputE
     guard let pb = makeBGRABuffer(width: 2, height: 2) else { return }
     let captured = try GoldenImage(pixelBuffer: pb)
     #expect(captured.width == 2 && captured.height == 2)
-    #expect(captured.pixels[0] == 0 && captured.pixels[2] == 255, "BGRA source must become RGBA")
+    #expect(captured.pixels[0] == 255 && captured.pixels[2] == 0, "BGRA source must become RGBA")
+    #expect(captured.pixels[3] == 255)
 }
 
 private func makeBGRABuffer(width: Int, height: Int) -> CVPixelBuffer? {

@@ -51,9 +51,11 @@ public enum SyncHarness {
             maxDrift = max(maxDrift, drift)
 
             // Frame that should show the click: the first sample >= output time.
-            let firstFrame = min(ceil((actual.t / dt) - 1e-9) * dt, duration)
+            // Clamp up to the click time so floating-point rounding on the
+            // frame product never hides the ring on its own frame.
+            let firstFrame = min(max(ceil(actual.t / dt) * dt, actual.t), duration)
             // The frame immediately before the click must not show its ring.
-            let before = floor((actual.t / dt) - 1e-6) * dt
+            let before = floor(actual.t / dt - 1e-6) * dt
             if before >= 0 {
                 let rings = timeline.evaluate(at: before).clickFX
                 if rings.contains(where: { abs(Double($0.position.x) - Double(actual.x)) < 1

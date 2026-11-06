@@ -3,6 +3,7 @@ import Testing
 import Darwin
 import LumenCore
 import LumenProject
+import LumenRender
 @testable import LumenDirector
 
 /// Long-capture / memory entry point. Synthetic 10-minute session at 60 fps:
