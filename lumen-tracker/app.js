@@ -18,7 +18,15 @@
     agent: "Work orders for coding agents.",
     regressions: "Observations that never pass as release proof."
   };
-  const NAV_ICON = { overview: "chart-line-up", issues: "list-magnifying-glass", agent: "terminal-window", regressions: "clock-counter-clockwise" };
+  const NAV_ICON = { overview: "dashboard", issues: "issues", agent: "agent", regressions: "history" };
+  const NAV_SVG = {
+    dashboard: `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="dashboard-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="#fff" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M5 5H10V12H5V5Z"/><path d="M14 5H19V9H14V5Z"/><path d="M14 13H19V19H14V13Z"/><path d="M5 16H10V19H5V16Z"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#dashboard-m)"/></svg>`,
+    issues: `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="issues-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="#fff" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M20 12C20 16.4183 16.4183 20 12 20C7.5817 20 4 16.4183 4 12C4 7.5817 7.5817 4 12 4C16.4183 4 20 7.5817 20 12Z"/></g><g fill="none" stroke="#000" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M12 7.5V12.5"/></g><rect x="11" y="15.5" width="2" height="2" fill="#000"/></mask><rect width="24" height="24" fill="currentColor" mask="url(#issues-m)"/></svg>`,
+    agent: `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="agent-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="#fff" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M6 3H18V10H6V3Z"/><path d="M5 18H8V20H5V18Z"/><path d="M16 18H19V20H16V18Z"/></g><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M12 10V14"/><path d="M7 18V14H17V18"/></g><g fill="#000"><circle cx="9.5" cy="6.5" r="1.25"/><circle cx="14.5" cy="6.5" r="1.25"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#agent-m)"/></svg>`,
+    history: `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="history-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M4 12A8 8 0 1 0 6.34 6.34L4 9"/><path d="M4 4V9H9"/><path d="M12 8V12.5L15.5 14.5"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#history-m)"/></svg>`,
+    sync: `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="sync-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M4 12A8 8 0 0 1 17.66 6.34L20 9"/><path d="M20 4V9H15"/><path d="M20 12A8 8 0 0 1 6.34 17.66L4 15"/><path d="M4 20V15H9"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#sync-m)"/></svg>`,
+    "plus-one": `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="plus-one-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M3 12H11"/><path d="M7 8V16"/><path d="M15.5 9L18 7V17"/><path d="M15 17H21"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#plus-one-m)"/></svg>`
+  };
   const SYSTEM_LOGS = [
     { id: "CI-2026-11-06", issue: "LUM-001", result: "FAIL", date: "2026-11-06T10:34:31Z", text: "main af807d3: swift build failed at EditorModel.swift:381; downstream tests and packaging skipped.", url: "https://github.com/duggal1/lumen/actions/runs/42203513453", system: true },
     { id: "CI-2026-11-06-2", issue: "LUM-001", result: "FAIL", date: "2026-11-06T08:43:02Z", text: "Prior main revision 09ff779 also failed Build debug; exact error not independently established here.", url: "https://github.com/duggal1/lumen/actions/runs/42189670036", system: true },
@@ -164,7 +172,7 @@
 
   /* ───────── shell + views ───────── */
   function nav(id, label, count) {
-    return '<button type="button" class="nav-item' + (state.view === id ? " on" : "") + '" data-a="view" data-view="' + id + '" title="' + label + '"><span class="nav-ic">' + ic(NAV_ICON[id]) + '</span><span class="nav-text">' + label + "</span>" + (count != null ? '<span class="nav-count">' + count + "</span>" : "") + "</button>";
+    return '<button type="button" class="nav-item' + (state.view === id ? " on" : "") + '" data-a="view" data-view="' + id + '" title="' + label + '"><span class="nav-ic">' + (NAV_SVG[NAV_ICON[id]] || "") + '</span><span class="nav-text">' + label + "</span>" + (count != null ? '<span class="nav-count">' + count + "</span>" : "") + "</button>";
   }
 
   function shell() {
@@ -180,7 +188,7 @@
       '<main class="main"><header class="top"><div class="crumb"><span>lumen</span><i>/</i><strong>' + TITLES[v] + '</strong><i>/</i><span>main</span></div>' +
         '<div class="top-r"><span class="muted">' + (state.syncTime ? "Live check " + esc(stamp(state.syncTime)) : "Snapshot") + "</span>" +
         '<button class="btn sm" data-a="connect" type="button">' + GH_MARK + (auth.user ? "@" + esc(auth.user) : "Connect GitHub") + "</button>" +
-        '<button class="btn sm" id="sync-btn" data-a="sync" type="button"><span class="wait" aria-hidden="true"><i></i><i></i><i></i></span><span id="sync-label">Sync GitHub</span></button></div></header>' +
+        '<button class="btn sm" id="sync-btn" data-a="sync" type="button"><span class="wait" aria-hidden="true"><i></i><i></i><i></i></span>' + NAV_SVG.sync + '<span id="sync-label">Sync GitHub</span></button></div></header>' +
       '<div class="page"><div class="head"><div><h1 class="title">' + TITLES[v] + '<span class="aperture" aria-hidden="true"></span></h1><p class="sub">' + SUBS[v] + "</p></div>" +
         '<div class="head-r"><button class="btn' + (headPrimary ? " primary" : "") + '" data-a="compose" type="button">New issue</button></div></div>' +
         body + "</div></main></div>";

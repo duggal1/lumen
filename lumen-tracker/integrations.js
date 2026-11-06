@@ -7,6 +7,7 @@
     busy:false,draft:{},issues:null,fetching:false,lastSync:null,lastError:null,published:null};
   const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const ph=(name)=>'<i class="ph ph-'+name+'" aria-hidden="true"></i>';
+  const PLUS_ONE_SVG='<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="plus-one-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M3 12H11"/><path d="M7 8V16"/><path d="M15.5 9L18 7V17"/><path d="M15 17H21"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#plus-one-m)"/></svg>';
   const badge=(txt,kind="orange")=>'<span class="badge '+kind+'">'+esc(txt)+'</span>';
   const element=(tag,cls,html)=>{const d=document.createElement(tag);d.className=cls;d.innerHTML=html;return d};
   const safeUrl=(number)=>"https://github.com/"+REPO+"/issues/"+encodeURIComponent(String(number));
@@ -250,7 +251,7 @@
       const nav=root.querySelector(".nav-list");
       if(nav&&!nav.querySelector("#ix-nav-issue")){
         const button=element("button","nav-item nav-link-write",
-          '<span class="nav-glyph">'+ph("plus-circle")+'</span><span class="nav-text">Create issue</span>');
+          '<span class="nav-ic">'+PLUS_ONE_SVG+'</span><span class="nav-text">Create issue</span>');
         button.id="ix-nav-issue";button.type="button";button.setAttribute("data-ix","new");
         nav.appendChild(button);
       }
