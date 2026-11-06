@@ -6,6 +6,7 @@ import AppKit
 import os
 import LumenCore
 import LumenProject
+import LumenDirector
 
 public enum Permissions {
     public static var screen: Bool { CGPreflightScreenCaptureAccess() }
@@ -249,6 +250,18 @@ public actor RecordingSession {
         }
         tl.timeMap.cuts = pauses.sorted { $0.start < $1.start }
         if meta.webcam != nil { tl.webcam = WebcamLayout() }
+        do {
+            let recordedEvents = try b.events(origin: origin)
+            let ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
+            if recordedEvents.isEmpty {
+                NSLog("Lumen: event sidecar is empty; automatic zoom unavailable for this recording")
+            } else {
+                tl.zoom = Director.planRecordingZoom(events: recordedEvents, ax: ax,
+                                                     source: info, timeline: tl)
+            }
+        } catch {
+            NSLog("Lumen: could not read event sidecar; automatic zoom unavailable: %@", "\(error)")
+        }
         try b.save(ProjectFile(meta: meta, timeline: tl))
         b.clearJournal()
         return b
