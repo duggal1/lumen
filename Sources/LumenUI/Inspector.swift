@@ -214,7 +214,7 @@ struct Inspector: View {
                                 .map { ($0, $0 == .dither ? "Legacy" : $0.rawValue.capitalized, backgroundIcon($0)) })
                         .frame(width: 130)
                 }
-                if m.timeline.style.background != .wallpaper {
+                if m.timeline.style.background != .wallpaper && m.timeline.style.background != .image {
                     Row(label: "Palette") {
                         LDropdown(sel: paletteName(m),
                                   options: (DitherPalettes.all.map { ($0.0, $0.0, "circle.lefthalf.filled") }
@@ -240,6 +240,9 @@ struct Inspector: View {
                     Row(label: "Source") {
                         Text("This Mac").font(AppType.body).foregroundStyle(Tok.text2)
                     }
+                }
+                if m.timeline.style.background == .image {
+                    PhotoBackgroundRow(model: m)
                 }
                 ToggleRow(label: "Blur behind zoom", on: m.bind(\.style.zoomBackgroundBlur))
                 if m.timeline.style.zoomBackgroundBlur {
@@ -283,8 +286,10 @@ struct Inspector: View {
         case .field: "square.grid.3x3"
         case .canvas: "rectangle.fill"
         case .wallpaper: "photo"
+        case .image: "photo.on.rectangle"
         case .solid: "square.fill"
         case .gradient, .mesh: "square.fill.on.square"
+        case .image: "photo.stack"
         }
     }
 
