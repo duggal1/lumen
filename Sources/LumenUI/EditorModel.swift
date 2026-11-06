@@ -294,6 +294,40 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         transcribe()
     }
 
+    // MARK: Preview placement
+
+    /// Tools place source-pixel targets with a click in the actual recording.
+    /// Never substitute (0, 0) when input monitoring failed.
+    func placeSelectedTool(at point: SIMD2<Double>) {
+        guard let tool = placingTool, timeline.clip(atOutput: playhead) == nil else { return }
+        let source = session.meta.source
+        let width = Double(source.width), height = Double(source.height)
+        guard point.x.isFinite, point.y.isFinite,
+              point.x >= 0, point.y >= 0, point.x <= width, point.y <= height else { return }
+        placingTool = nil
+        let start = timeline.timeMap.source(atOutput: playhead)
+        let end = min(start + 3, timeline.timeMap.trimEnd)
+        switch tool {
+        case .tap:
+            dispatch(.addTapAtPlayhead(x: point.x, y: point.y))
+        case .highlight:
+            guard end > start else { return }
+            let w = width * 0.3, h = height * 0.16
+            let highlight = Highlight(start: start, end: end,
+                                      x: max(0, min(point.x - w / 2, width - w)),
+                                      y: max(0, min(point.y - h / 2, height - h)),
+                                      w: w, h: h, style: .dim)
+            dispatch(.addHighlight(highlight))
+            selection = highlight.id
+        case .loupe:
+            guard end > start else { return }
+            let loupe = Loupe(start: start, end: end, x: point.x, y: point.y,
+                              follow: false, cx: point.x / width, cy: point.y / height)
+            dispatch(.addLoupe(loupe))
+            selection = loupe.id
+        }
+    }
+
     // MARK: Zoom segments
 
     /// A manual region is stored in SOURCE pixels and SOURCE time.
