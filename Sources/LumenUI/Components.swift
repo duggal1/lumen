@@ -341,7 +341,7 @@ struct LDialog<Content: View>: View {
             }
             .padding(24)
             .frame(width: 480)
-            .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
             .scaleEffect(shown ? 1 : 0.97)
             .offset(y: shown ? 0 : 6)
             .opacity(shown ? 1 : 0)
