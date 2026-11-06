@@ -95,7 +95,7 @@ struct RecentRecordings: View {
                     }
                 }
                 .padding(Space.s2)
-                .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
             }
         }
     }
@@ -115,7 +115,7 @@ struct RecentRecordings: View {
         }
         .padding(Space.s5)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
         .accessibilityElement(children: .combine)
     }
 }
