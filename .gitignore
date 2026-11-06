@@ -4,3 +4,4 @@
 # remain tracked until deliberately migrated; ignore rules do not untrack them.
 App/public/assets/*.mp3
 App/public/assets/music/**/*.mp3
+validation/
