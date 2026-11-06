@@ -649,6 +649,16 @@ struct Inspector: View {
                         .frame(width: 138)
                 }
                 ToggleRow(label: "Clean mic", on: m.bind(\.audio.micClean))
+                Row(label: "Studio voice preset") {
+                    LButton(title: "Enhance voice", icon: "waveform", kind: .quiet) {
+                        m.edit {
+                            $0.audio.micMode = .podcast
+                            $0.audio.studio = 0.75
+                            $0.audio.micClean = true
+                            $0.audio.dereverb = 0
+                        }
+                    }
+                }
                 Row(label: "Natural voice") {
                     LButton(title: "Reset processing", icon: "arrow.counterclockwise", kind: .quiet) {
                         m.edit { $0.audio.micClean = false; $0.audio.dereverb = 0; $0.audio.studio = 0.25; $0.audio.micMode = .standard }
