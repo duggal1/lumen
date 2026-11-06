@@ -46,6 +46,13 @@ struct EditorView: View {
                             kind: model.exportPanelActive ? .secondary : .primary) { model.openExportPanel() }
                 }
             }
+            if model.session.input.events.isEmpty {
+                Label("No input events were recorded. Automatic zoom cannot be generated for this clip.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(AppType.caption).foregroundStyle(Tok.accentText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+            }
             GeometryReader { available in
                 HStack(spacing: 0) {
                     VStack(spacing: 12) {
@@ -56,9 +63,6 @@ struct EditorView: View {
                             PreviewView(model: model)
                                 .overlay { if model.focusEditing { FocusOverlay(model: model) } }
                                 .overlay { if model.maskEditing { ManualMaskOverlay(model: model) } }
-                                .overlay(alignment: .bottom) {
-                                    CaptionMonitor(model: model).padding(.bottom, 16).allowsHitTesting(false)
-                                }
                                 .overlay { if model.zoomDebug { ZoomDebugOverlay(model: model) } }
                                 .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                                 .frame(width: w, height: h)

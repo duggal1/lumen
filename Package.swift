@@ -24,7 +24,7 @@ let package = Package(
         lib("LumenProject", ["LumenCore"]),
         lib("LumenDirector", ["LumenCore", "LumenProject"]),
         lib("LumenAnalysis", ["LumenCore", "LumenProject"]),
-        lib("LumenCapture", ["LumenCore", "LumenProject"]),
+        lib("LumenCapture", ["LumenCore", "LumenProject", "LumenDirector"]),
         lib("LumenRender", ["LumenCore", "LumenProject", "LumenDirector"], resources: [.process("Shaders")]),
         lib("LumenAudio", ["LumenCore", "LumenProject", "LumenDirector"]),
         .target(name: "CMoonshine", path: "Sources/CMoonshine", publicHeadersPath: "include",

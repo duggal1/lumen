@@ -86,7 +86,7 @@ public struct Style: Codable, Equatable, Sendable {
     public var colors: [RGBA] = [RGBA(0xF4F4F4), RGBA(0xDADADA)]
     public var gradientAngle: Double = 35
     public var ditherCell: Double = 4, ditherDensity: Double = 0.55, contentScale: Double = 1
-    public var padding: Double = 0.06
+    public var padding: Double = 0.025
     public var cornerRadius: Double = 14
     public var shadow: Double = 0.45
     public var innerBorder = true
