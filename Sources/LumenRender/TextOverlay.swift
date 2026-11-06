@@ -116,6 +116,13 @@ final class TextOverlayCache {
                                        cornerWidth: padding, cornerHeight: padding, transform: nil))
                 context.fillPath()
             }
+            // Caption type remains legible over both white apps and dark footage
+            // without falling back to an opaque black rectangle.
+            if pill != nil {
+                context.setShadow(offset: CGSize(width: 0, height: -1),
+                                  blur: max(2, fontSize * 0.1),
+                                  color: CGColor(gray: 0, alpha: 0.70))
+            }
             for (index, line) in coreLines.enumerated() {
                 context.textPosition = CGPoint(x: (CGFloat(width) - widths[index]) / 2,
                     y: CGFloat(height) - padding - CGFloat(index + 1) * lineHeight + fontSize * 0.20)
