@@ -47,21 +47,22 @@ public final class AudioMixer: @unchecked Sendable {
     /// `musicGainDb` (-18) lands the bed ~12 dB under the voice at rest (plan 10.3).
     static let voiceRefLUFS = -16.0, musicRefLUFS = -10.0
 
-    private let mic: [Float]?, micOffset: Double, sys: [Float]?, sysOffset: Double
+    private let mic: [Float]?, micOffset: Double, sys: [Float]?, sysRight: [Float]?, sysOffset: Double
     private let extraMicrophones: [RecordedMicrophone]
     private let cacheDir: URL?
     private let bank = SFXBank()
     private let lock = NSLock()
     private var stages: [Int: StageA] = [:]
-    private var rt60s: [Int: Double] = [:]
     private var voice: [VoiceKey: [Float]] = [:]
     private var music: MusicCache?
     private var imported: [String: MusicTrack] = [:]
     public var denoiser: any Denoiser = defaultDenoiser
 
     public init(mic: [Float]?, micOffset: Double, system: [Float]?, systemOffset: Double,
+                systemRight: [Float]? = nil,
                 additionalMicrophones: [RecordedMicrophone] = [], cacheDir: URL? = nil) {
-        self.mic = mic; self.micOffset = micOffset; sys = system; sysOffset = systemOffset
+        self.mic = mic; self.micOffset = micOffset; sys = system
+        sysRight = systemRight; sysOffset = systemOffset
         extraMicrophones = additionalMicrophones; self.cacheDir = cacheDir
         if let cacheDir { try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true) }
     }
@@ -123,18 +124,21 @@ public final class AudioMixer: @unchecked Sendable {
         // tones), it can mistake the sustained signal for a room tail and erase it.
         let useWPE = plan.dereverb > 0.01 && !regions.isEmpty
         let st = stageA(samples, index: micIndex, needWPE: useWPE)
-        let base = useWPE ? (st.wpe ?? st.hp) : st.hp
-        var x: [Float]
-        if useWPE || plan.micClean {
-            var late = [Float](repeating: 0, count: base.count)
-            if useWPE { for i in 0..<base.count { late[i] = st.hp[i] - base[i] } }
-            if rt60s[micIndex] == nil { rt60s[micIndex] = RoomEstimate.rt60(samples, vad: regions) }
-            x = ResidualSuppressor(noise: plan.micClean ? 0.9 : 0, reverb: useWPE ? plan.dereverb : 0,
-                                   rt60: rt60s[micIndex] ?? 0.5).process(x: base, late: late)
-        } else {
-            x = base
+        // Keep the raw high-passed voice as the dry reference. Never cascade
+        // residual suppression and neural denoising, which erases syllables.
+        var x = st.hp
+        if useWPE, let dereverbed = st.wpe, dereverbed.count == x.count {
+            let wet = Float(min(max(plan.dereverb, 0), 1) * 0.30)
+            for i in x.indices { x[i] = x[i] * (1 - wet) + dereverbed[i] * wet }
         }
-        x = VoiceStudio.finish(x, vad: regions, plan: plan, denoiser: denoiser)
+        if plan.micClean {
+            let cleaned = denoiser.process(x)
+            if cleaned.count == x.count {
+                let wet: Float = 0.35
+                for i in x.indices { x[i] = x[i] * (1 - wet) + cleaned[i] * wet }
+            }
+        }
+        x = VoiceStudio.finish(x, vad: regions, plan: plan, denoiser: nil)
         let lu = Loudness.integrated([x])
         if lu > -69 {
             let g = Float(pow(10, clamp(Self.voiceRefLUFS - lu, -24, 24) / 20))
@@ -263,10 +267,11 @@ public final class AudioMixer: @unchecked Sendable {
         }
 
         if let system = sys {
-            let mapped = Self.mapped(system, offset: sysOffset, tm: tm, n: n, muteRamps: true)
+            let left = Self.mapped(system, offset: sysOffset, tm: tm, n: n, muteRamps: true)
+            let right = sysRight.map { Self.mapped($0, offset: sysOffset, tm: tm, n: n, muteRamps: true) } ?? left
             let gain = Float(pow(10, clamp(a.systemGainDb, -60, 24) / 20))
-            let channel = mapped.map { $0 * gain }
-            result.append(AudioStem(name: "system", left: channel, right: channel))
+            result.append(AudioStem(name: "system",
+                                    left: left.map { $0 * gain }, right: right.map { $0 * gain }))
         }
 
         var voiceIndex = 0
@@ -326,9 +331,10 @@ public final class AudioMixer: @unchecked Sendable {
             }
         }
         if let s = sys {
-            let y = Self.mapped(s, offset: sysOffset, tm: tm, n: n, muteRamps: true)
+            let left = Self.mapped(s, offset: sysOffset, tm: tm, n: n, muteRamps: true)
+            let right = sysRight.map { Self.mapped($0, offset: sysOffset, tm: tm, n: n, muteRamps: true) } ?? left
             let gain = Float(pow(10, clamp(a.systemGainDb, -60, 24) / 20))
-            for i in 0..<n { L[i] += y[i] * gain; R[i] += y[i] * gain }
+            for i in 0..<n { L[i] += left[i] * gain; R[i] += right[i] * gain }
             hasProgram = true
         }
         for lane in a.lanes where !lane.mute && (lane.role == .voiceover || lane.role == .music) {
