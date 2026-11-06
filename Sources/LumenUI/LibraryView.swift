@@ -178,7 +178,7 @@ struct LibrarySurface: View {
                 VStack(alignment: .leading, spacing: 0) {
                     // Header
                     HStack(alignment: .top, spacing: 12) {
-                        PixelLens(cell: 2).padding(.top, 2)
+                        Image(systemName: "camera.viewfinder").font(.system(size: 16, weight: .medium)).foregroundStyle(Tok.accent).padding(.top, 2)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("New recording").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
                             Text("Choose what to capture.").font(AppType.caption).foregroundStyle(Tok.text2)
@@ -216,7 +216,7 @@ struct LibrarySurface: View {
                 .padding(20)
                 .frame(width: min(520, max(320, geo.size.width - 32)))
                 .frame(height: min(recordTab == .audio ? 432 : 350, max(280, geo.size.height - 32)))
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
+                .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
             }
         }
         .focusable()
