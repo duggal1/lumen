@@ -119,12 +119,19 @@ struct LSegmented<T: Hashable>: View {
                 Button { sel = v } label: {
                     Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(sel == v ? Tok.text : Tok.text2)
                         .lineLimit(1).frame(maxWidth: .infinity).frame(height: 24)
-                        .background { if sel == v { Capsule().fill(thumb).matchedGeometryEffect(id: "thumb", in: ns) } }
+                        .background {
+                            if sel == v {
+                                Capsule().fill(.thinMaterial).matchedGeometryEffect(id: "thumb", in: ns)
+                                Capsule().fill(thumb.opacity(0.38))
+                            }
+                        }
                 }.buttonStyle(.plain).pointerStyle(.link)
                 .accessibilityLabel(title)
                 .accessibilityAddTraits(sel == v ? .isSelected : [])
             }
-        }.padding(2).background(Capsule().fill(track)).animation(reduceMotion ? nil : Motion.slide, value: sel)
+        }.padding(2)
+            .background(.regularMaterial, in: Capsule())
+            .animation(reduceMotion ? nil : Motion.slide, value: sel)
     }
 }
 
