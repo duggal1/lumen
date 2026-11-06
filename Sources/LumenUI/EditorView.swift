@@ -30,31 +30,52 @@ public struct EditorRoot: View {
 
 struct EditorView: View {
     let model: EditorModel
+    @State private var inspectorTab: Inspector.Tab = .look
+    @State private var showsInspector = true
+
     var body: some View {
         VStack(spacing: 0) {
             PageBar(title: AppModel.displayName(model.session.meta.name)) {
                 HStack(spacing: 8) {
                     LIconButton(icon: "arrow.uturn.backward", label: "Undo") { model.undo() }.disabled(!model.canUndo)
                     LIconButton(icon: "arrow.uturn.forward", label: "Redo") { model.redo() }.disabled(!model.canRedo)
-                    LIconButton(icon: "person.2.badge.plus", label: "Share project") { model.shareProject() }
+                    LIconButton(icon: "sidebar.right", label: showsInspector ? "Hide inspector" : "Show inspector") {
+                        showsInspector.toggle()
+                    }
                     LButton(title: "Export", icon: "square.and.arrow.up",
                             kind: model.exportPanelActive ? .secondary : .primary) { model.openExportPanel() }
                 }
             }
-            HStack(spacing: 0) {
-                VStack(spacing: 16) {
-                    PreviewView(model: model)
-                        .aspectRatio(model.timeline.style.canvas.ratio, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-                        .overlay { if model.focusEditing { FocusOverlay(model: model) } }
-                        .overlay { if model.maskEditing { ManualMaskOverlay(model: model) } }
-                        .overlay(alignment: .bottom) { CaptionMonitor(model: model).padding(.bottom, 16).padding(.horizontal, 16).allowsHitTesting(false) }
-                        .overlay { if model.zoomDebug { ZoomDebugOverlay(model: model) } }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    transport
-                    TimelineStrip(model: model)
-                }.padding(.horizontal, 32).padding(.bottom, 24)
-                Inspector(model: model)
+            GeometryReader { available in
+                HStack(spacing: 0) {
+                    VStack(spacing: 12) {
+                        GeometryReader { area in
+                            let ratio = CGFloat(max(model.timeline.style.canvas.ratio, 0.1))
+                            let w = min(area.size.width, area.size.height * ratio)
+                            let h = min(area.size.height, area.size.width / ratio)
+                            PreviewView(model: model)
+                                .overlay { if model.focusEditing { FocusOverlay(model: model) } }
+                                .overlay { if model.maskEditing { ManualMaskOverlay(model: model) } }
+                                .overlay(alignment: .bottom) {
+                                    CaptionMonitor(model: model).padding(.bottom, 16).allowsHitTesting(false)
+                                }
+                                .overlay { if model.zoomDebug { ZoomDebugOverlay(model: model) } }
+                                .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+                                .frame(width: w, height: h)
+                                .position(x: area.size.width / 2, y: area.size.height / 2)
+                        }
+                        transport
+                        TimelineStrip(model: model)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
+                    if showsInspector {
+                        Inspector(model: model, tab: $inspectorTab,
+                                  width: min(320, max(268, available.size.width * 0.29)))
+                    }
+                }
             }
         }
         .background(Tok.bg)
@@ -76,13 +97,10 @@ struct EditorView: View {
             Spacer()
             LButton(title: "Cut", icon: "scissors", kind: .quiet) { model.cutAtPlayhead() }
             LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
-            LButton(title: "Loupe", icon: "magnifyingglass.circle", kind: .quiet) { model.addLoupe() }
-            LButton(title: "Tap", icon: "cursorarrow.click", kind: .quiet) { model.addTapAtPlayhead() }
-            LButton(title: "Import clip", icon: "film", kind: .quiet) { model.importClips() }
-            LButton(title: "Frame it", icon: "viewfinder", kind: .quiet) { if model.selection != nil { model.focusEditing.toggle() } }
-            LButton(title: "Title", icon: "textformat", kind: .quiet) { model.addManualTitle() }
-            LButton(title: "Highlight", icon: "highlighter", kind: .quiet) { model.addManualHighlight() }
-            LButton(title: "Delete", icon: "trash", kind: .quiet) { model.deleteSelected() }.disabled(model.selection == nil)
+            LButton(title: "Tools", icon: "slider.horizontal.3", kind: .secondary) {
+                showsInspector = true
+                inspectorTab = .tools
+            }
         }
     }
     private func fmt(_ t: Double) -> String { String(format: "%d:%04.1f", Int(t) / 60, t.truncatingRemainder(dividingBy: 60)) }

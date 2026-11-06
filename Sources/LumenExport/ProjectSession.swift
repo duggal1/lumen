@@ -56,6 +56,9 @@ public final class ProjectSession: @unchecked Sendable {
 
     public func derive(_ tl: Timeline, revision: Int) -> Timeline { Director.derive(tl, input: input, revision: revision) }
     public func save(_ tl: Timeline) { try? bundle.save(ProjectFile(meta: meta, timeline: tl)) }
+    public func updateTranscript(_ transcript: Transcript) {
+        inputState.withLock { $0.transcript = transcript }
+    }
 
     @discardableResult
     public func analyze(_ timeline: Timeline) async -> AnalysisResult {
@@ -67,7 +70,9 @@ public final class ProjectSession: @unchecked Sendable {
                                       mic: meta.mic == nil ? nil : bundle.micURL, cacheDirectory: bundle.cacheURL,
                                       webcamOffset: webcamOffset, micOffset: micOffset, projectSalt: meta.analysisSalt,
                                       privacy: timeline.overlays.privacy, locale: timeline.captions.locale,
-                                      vocabulary: timeline.captions.vocabulary, includeSpeech: timeline.captions.enabled,
+                                      vocabulary: timeline.captions.vocabulary, // Caption recognition runs once with Moonshine after capture, not
+                                       // concurrently with the UI's file transcriber.
+                                       includeSpeech: false,
                                       includeActivity: !snapshot.events.contains(where: \.hasPosition),
                                       includeFace: meta.webcam != nil,
                                       includePersonMask: timeline.layouts.contains { $0.kind == .cameraCutout }
@@ -119,7 +124,8 @@ public final class ProjectSession: @unchecked Sendable {
             if let tr = try? await AVURLAsset(url: b.webcamURL).loadTracks(withMediaType: .video).first,
                let sz = try? await tr.load(.naturalSize), sz.height > 0 { aspect = Float(sz.width / sz.height) }
         }
-        let input = DirectorInput(events: events, source: meta.source, vad: vad, ax: ax, face: [], webcamAspect: aspect)
+        let input = DirectorInput(events: events, source: meta.source, vad: vad, ax: ax, face: [],
+                                  webcamAspect: aspect, transcript: tf?.transcript.shifted(by: micOff))
         let s = ProjectSession(bundle: b, meta: meta, screen: screen, webcam: web, input: input,
                                mixer: AudioMixer(mic: mic, micOffset: micOff, system: sys, systemOffset: sysOff,
                                                  additionalMicrophones: extras, cacheDir: b.cacheURL),

@@ -7,8 +7,9 @@ import LumenAudio
 
 struct Inspector: View {
     let model: EditorModel
-    enum Tab: String, CaseIterable { case look = "Look", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export", transcript = "Transcript" }
-    @State private var tab = Tab.look
+    enum Tab: String, CaseIterable { case look = "Look", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export", transcript = "Transcript" }
+    @Binding var tab: Tab
+    var width: CGFloat = Metrics.inspector
     @State private var presets = EditorModel.loadPresets()
     @State private var newName = ""
 
@@ -18,7 +19,7 @@ struct Inspector: View {
                 LDropdown(sel: $tab, options: Tab.allCases.filter { $0 != .webcam || model.timeline.webcam != nil }.map { ($0, $0.rawValue, icon($0)) })
                 tabBody
             }.padding(20)
-        }.frame(width: Metrics.inspector).frame(maxHeight: .infinity).background(Tok.bg)
+        }.frame(width: width).frame(maxHeight: .infinity).background(Tok.bg)
         .onChange(of: model.exportPanelRequest) { _, _ in tab = .export }
         .onChange(of: tab) { _, selected in model.exportPanelActive = selected == .export }
     }
@@ -29,6 +30,7 @@ struct Inspector: View {
         } else {
             switch tab {
             case .look: look
+            case .tools: tools
             case .cursor: cursor
             case .camera: camera
             case .layout: layout
@@ -45,9 +47,27 @@ struct Inspector: View {
 
     private var transcriptTab: some View { TranscriptTab(model: model) }
 
+    /// Secondary editor actions live in the inspector, not the preview transport.
+    private var tools: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            LButton(title: "Add loupe", icon: "magnifyingglass.circle") { model.addLoupe() }
+            LButton(title: "Add tap", icon: "cursorarrow.click") { model.addTapAtPlayhead() }
+            LButton(title: "Import clip", icon: "film") { model.importClips() }
+            LButton(title: "Frame selection", icon: "viewfinder") { model.focusEditing.toggle() }
+                .disabled(model.selection == nil)
+            LButton(title: "Add title", icon: "textformat") { model.addManualTitle() }
+            LButton(title: "Add highlight", icon: "highlighter") { model.addManualHighlight() }
+            LButton(title: "Delete selection", icon: "trash") { model.deleteSelected() }
+                .disabled(model.selection == nil)
+            LButton(title: "Share project", icon: "person.2.badge.plus") { model.shareProject() }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+    }
+
     private func icon(_ t: Tab) -> String {
         switch t {
-        case .look: "paintpalette"; case .cursor: "cursorarrow"; case .camera: "video"
+        case .look: "paintpalette"; case .tools: "slider.horizontal.3"; case .cursor: "cursorarrow"; case .camera: "video"
         case .layout: "rectangle.3.group"; case .audio: "waveform"; case .webcam: "person.crop.circle"
         case .captions: "captions.bubble"; case .timeline: "timeline.selection"; case .privacy: "lock"; case .export: "square.and.arrow.up"; case .transcript: "text.alignleft"
         }
@@ -609,6 +629,11 @@ struct Inspector: View {
                         .frame(width: 138)
                 }
                 ToggleRow(label: "Clean mic", on: m.bind(\.audio.micClean))
+                Row(label: "Natural voice") {
+                    LButton(title: "Reset processing", icon: "arrow.counterclockwise", kind: .quiet) {
+                        m.edit { $0.audio.micClean = false; $0.audio.dereverb = 0; $0.audio.studio = 0.25; $0.audio.micMode = .standard }
+                    }
+                }
                 SliderRow(label: "Voice level", v: m.bind(\.audio.micGainDb), range: -18...12,
                           fmt: { String(format: "%+.0f dB", $0) })
                 SliderRow(label: "Room echo", v: m.bind(\.audio.dereverb), range: 0...1,

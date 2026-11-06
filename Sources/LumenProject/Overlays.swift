@@ -164,10 +164,10 @@ public struct LayoutSet: Codable, Equatable, Sendable {
 public enum CaptionAnimation: String, Codable, CaseIterable, Sendable { case none, fade, pop, slide }
 public enum CaptionPosition: String, Codable, CaseIterable, Sendable { case auto, bottom, top }
 public struct CaptionStyle: Codable, Equatable, Sendable {
-    public var size = 0.042                                         // fraction of canvas height
+    public var size = 0.060                                         // fraction of canvas height
     public var bold = true
     public var color = RGBA(0xFFFFFF)
-    public var pill: RGBA? = RGBA(0x000000, a: 0.55)
+    public var pill: RGBA? = RGBA(0xFFFFFF, a: 0.20)
     public var outline = false
     public var animation: CaptionAnimation = .pop
     public var wordHighlight = true
@@ -176,7 +176,7 @@ public struct CaptionStyle: Codable, Equatable, Sendable {
     public init() {}
 }
 public struct CaptionPlan: Codable, Equatable, Sendable {
-    public var enabled = false
+    public var enabled = true
     public var style = CaptionStyle()
     public var maxLines = 2
     public var maxCharsPerLine: Int?                                // nil = aspect-adaptive

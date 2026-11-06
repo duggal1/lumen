@@ -10,7 +10,7 @@ enum CaptionKeys {
 
 enum CaptionTheme: String, CaseIterable, Hashable, Sendable {
     case glass, lumen
-    var font: Font { .system(size: self == .glass ? 20 : 19, weight: .medium) }
+    var font: Font { .system(size: self == .glass ? 26 : 24, weight: .semibold) }
     var tracking: CGFloat { self == .glass ? 0 : -0.2 }
     var radius: CGFloat { self == .glass ? 22 : 16 }
     func palette(monitor: Bool) -> CaptionPalette {
@@ -81,7 +81,7 @@ struct CaptionSurface<C: View>: View {
         content.padding(.horizontal, 20).padding(.vertical, 14)
             .background {
                 switch theme {
-                case .glass: VisualEffect()
+                case .glass: RoundedRectangle(cornerRadius: theme.radius).fill(.regularMaterial)
                 case .lumen: Tok.surface
                 }
             }
@@ -262,7 +262,7 @@ struct CaptionMonitor: View {
                 CaptionBlock(rows: Array(rows[start..<min(start + 2, rows.count)]), palette: theme.palette(monitor: true), font: theme.font,
                              tracking: theme.tracking, reduce: reduce)
             }
-            .frame(maxWidth: 560).frame(height: 96)
+            .frame(maxWidth: 700).frame(height: 112)
         }
     }
 }

@@ -4,10 +4,11 @@ import Testing
 import LumenProject
 import LumenDirector
 
-@Test func studioPlanDecodesWithLegacyDefaults() throws {
+@Test func studioPlanDecodesWithNaturalDefaults() throws {
     let p = try JSONDecoder().decode(AudioPlan.self, from: Data("{}".utf8))
-    #expect(p.studio == 0.8)
-    #expect(p.dereverb == 0.85)
+    #expect(!p.micClean)
+    #expect(p.studio == 0.25)
+    #expect(p.dereverb == 0)
     var new = p
     new.studio = 0.65
     new.dereverb = 0.4

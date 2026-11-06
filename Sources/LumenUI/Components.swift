@@ -22,7 +22,15 @@ struct LButtonStyle: ButtonStyle {
             }
             let fg: Color = kind == .primary ? (off ? Tok.text2 : Tok.onAccent) : kind == .quiet && !hover ? Tok.text2 : Tok.text
             c.label.font(AppType.label).foregroundStyle(fg).padding(.horizontal, 12).frame(height: height)
-                .background(Capsule().fill(bg)).scaleEffect(c.isPressed ? 0.98 : 1).opacity(kind != .primary && off ? 0.4 : 1)
+                .background {
+                    if kind == .quiet {
+                        Capsule().fill(bg)
+                    } else {
+                        Capsule().fill(.regularMaterial)
+                        Capsule().fill(bg.opacity(kind == .primary ? 0.94 : 0.42))
+                    }
+                }
+                .scaleEffect(c.isPressed ? 0.98 : 1).opacity(kind != .primary && off ? 0.4 : 1)
                 .onHover { hover = $0 }.pointerStyle(enabled ? .link : .default)
                 .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
                 .animation(reduceMotion ? nil : Motion.hoverIn, value: c.isPressed)
