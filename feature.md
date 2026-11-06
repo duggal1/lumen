@@ -7,20 +7,20 @@ Status key: **WIRED** = implemented + tested. **PARTIAL** = exists but limited/o
 | Automatic zoom (clicks) | WIRED | `LumenDirector/Planner.swift`, click-wins focus, `ZoomPrecisionTests` |
 | Manual zoom (add/position) | WIRED | `Commands.addZoom*`, `TimelineStrip` drag, Inspector Camera |
 | Smart framing (webcam vs cursor) | WIRED | `Placement.swift` predictive click avoidance |
-| 6.5× upscaler | PARTIAL | Training-free Lanczos2/shock upscaler (`Upscaler.swift`), not a trained AI model |
-| Glass loupe | WIRED | `Loupe`, `loupeFS`, placement by preview click |
+| 6.5× upscaler | PARTIAL | Measured: ladder {2,3,4,6,8}, mag 6.5→8×; `upscalerProducesMeasuredResolution` proves 256px@6×→1536px. Training-free, not a trained AI model |
+| Glass loupe | WIRED | `Loupe`, `loupeFS`, placement by preview click; `glassLoupeMagnifiesAndFollowsCursor` |
 | Zoom depth/duration/easing/focus | WIRED | `CameraParams` + Inspector Camera tab + per-segment easing |
 | Multiple layouts | WIRED | `LayoutKind` (5), `LayoutSolver` 120Hz spring |
 | Camera cutout (on-device) | PARTIAL | Vision person matte `.lmask`, renderer integration exists; needs webcam on |
 | Face tracking | WIRED | `FaceAnalyzer` + `WebcamFraming` |
-| Hide during silence | WIRED | `LayoutSettings.hideOnSilence` + VAD placement |
+| Hide during silence | WIRED | `LayoutSettings.hideOnSilence` + VAD placement; `webcamHidesDuringSilence` |
 | Smooth layout transitions | WIRED | Single 12-float spring over all layouts |
 | Smooth cursor | WIRED | PCHIP + median + Gaussian + min-jerk glide, click pinning |
-| Motion blur | WIRED | Adaptive subframe accumulation in `Renderer` (preview ≤2, export up to maxSamples) |
+| Motion blur | WIRED | Adaptive subframe accumulation in `Renderer`; `motionBlurAccumulatesSubframesUnderMotionOnly` (dead `MotionBlurParams` removed) |
 | Click effects (ripple/pulse/burst) | WIRED | `ClickEffect`, `ringFS`, color/duration persisted + tested |
 | Cursor styling (pack/size) | WIRED | `CursorAtlas` vector art + captured custom cursors (id ≥1000) |
-| Hide when idle | WIRED | `CursorStyle.idleHide` |
-| Loop cursor position | WIRED | `CursorStyle.loop` min-jerk tail glide |
+| Hide when idle | WIRED | `CursorStyle.idleHide`; `cursorHidesWhenIdleAndReturnsOnMove` |
+| Loop cursor position | WIRED | `CursorStyle.loop` min-jerk tail glide; `loopCursorGlidesBackToStart` |
 | Any aspect ratio export | WIRED | `CanvasAspect` + `customAspect`, batch 1:1/9:16 |
 | Automatic re-aim on aspect change | WIRED | Layout/caption/zoom re-derive on style change |
 | Backgrounds/padding/shadow | WIRED | solid/gradient/dither/wave/field/canvas/wallpaper, insets, radii, shadow |
@@ -29,8 +29,8 @@ Status key: **WIRED** = implemented + tested. **PARTIAL** = exists but limited/o
 | Multi-source (screen+webcam+mic+system) | WIRED | `CaptureEngine` + extra mics + webcam recorder |
 | Crash recovery | WIRED | 1s `RecordingJournal`, `recoverFromJournal`, RecoveryScanner |
 | Pause & resume | WIRED | Pause spans become cuts; audio silence inserted |
-| Countdown & hotkeys | WIRED | 3-2-1 HUD, Cmd+Opt+R global hotkey |
-| iPhone/iPad USB recording | MISSING | No device capture path in codebase |
+| Countdown & hotkeys | WIRED | 3-2-1 HUD, Cmd+Opt+R start/stop, Cmd+Opt+P pause; `appModelHotkeyStateMachineStartsIdle`, `countdownPhaseReportsSeconds` |
+| iPhone/iPad USB recording | PARTIAL | `DeviceCapture` Continuity discovery + loud failure; screen needs companion app (documented). `deviceDiscoveryNeverCrashesAndUnknownDeviceFailsLoudly` |
 | Transcript editing (delete text = cut) | WIRED | Word delete/edit + filler removal; `TranscriptOps.sentences/sentenceCut` (sentence = one cut); `sentenceDeleteProducesCutForWholeSentence` |
 | Cursor relink for external edit | WIRED | `CursorRelink` sidecar (`<name>.cursor-relink.json`) next to cursor layer; validation + instructions; `cursorRelinkSidecarRoundTripsAndValidatesReplacement` |
 | Filler/pause removal | WIRED | `TranscriptOps` filler + pause cuts, suggestions merged |
