@@ -110,13 +110,8 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             let (session, timeline) = try await ProjectSession.open(ProjectBundle(url: url), device: renderer.device)
             return (renderer, session, session.derive(timeline, revision: 0))
         }.value
-        var out = derived
-        if out.style.background == .gradient || out.style.background == .mesh {
-            out.style.background = .dither
-            out.style.colors = DitherPalettes.all[0].1
-        }
-        let model = EditorModel(session: s, renderer: r, timeline: out)
-        model.analyzeInBackground(out)
+        let model = EditorModel(session: s, renderer: r, timeline: derived)
+        model.analyzeInBackground(derived)
         model.autoTranscribeIfNeeded()
         return model
     }
