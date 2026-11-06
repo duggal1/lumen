@@ -148,6 +148,8 @@ public struct CursorStyle: Codable, Equatable, Sendable {
         try c.encode(pack, forKey: .pack); try c.encode(size, forKey: .size); try c.encode(smoothingSigma, forKey: .smoothingSigma)
         try c.encode(glide, forKey: .glide); try c.encode(idleHide, forKey: .idleHide); try c.encode(pressScale, forKey: .pressScale)
         try c.encode(clickRing, forKey: .clickRing); try c.encode(zoomCompensation, forKey: .zoomCompensation)
+        try c.encode(clickEffect, forKey: .clickEffect); try c.encode(clickDuration, forKey: .clickDuration)
+        try c.encode(clickColor, forKey: .clickColor)
         try c.encode(constantSize, forKey: .constantSize); try c.encodeIfPresent(loop, forKey: .loop)
     }
 }
