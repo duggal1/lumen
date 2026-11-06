@@ -10,6 +10,7 @@ import LumenRender
 import LumenAudio
 import LumenExport
 import LumenSpeech
+import LumenAnalysis
 
 /// Host-clock playback time. Read by the display link on the main thread and by audio start.
 final class PlaybackClock: @unchecked Sendable {
@@ -288,7 +289,12 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
 
     func transcribe() {
         guard session.meta.mic != nil else { return }
-        guard MoonshineRuntime.isAvailable, ModelStore.isInstalled(.current) else { transcribeState = .notInstalled; return }
+        guard MoonshineRuntime.isAvailable, ModelStore.isInstalled(.current) else {
+            // No Moonshine runtime/model: fall back to Apple Speech instead of
+            // leaving the timeline untranscribed (model download stays optional).
+            transcribeWithAppleSpeech()
+            return
+        }
         let b = session.bundle, off = session.micOffset, size = MoonshineSize.current
         transcribeState = .running(0); transcribeTask?.cancel()
         transcribeTask = Task { [weak self] in
@@ -303,6 +309,28 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                 self.replan()
                 self.transcribeState = .idle
             case .failure(let e): self.transcribeState = .failed(e.description)
+            }
+        }
+    }
+
+    /// On-device Apple Speech path used when the optional Moonshine model
+    /// is not installed. Same commit path (save + align + replan) as Moonshine.
+    private func transcribeWithAppleSpeech() {
+        let b = session.bundle, off = session.micOffset
+        transcribeState = .running(0); transcribeTask?.cancel()
+        transcribeTask = Task { [weak self] in
+            do {
+                let tr = try await AppleSpeechEngine().transcribe(audio: b.micURL, locale: Locale(identifier: "en-US"), vocabulary: [])
+                guard let self, !Task.isCancelled else { return }
+                try? b.saveTranscript(TranscriptFile(engine: "apple-speech", complete: true, transcript: tr))
+                let aligned = tr.shifted(by: off)
+                self.setTranscript(aligned)
+                self.session.updateTranscript(aligned)
+                self.replan()
+                self.transcribeState = .idle
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.transcribeState = .failed("Apple Speech: \(error)")
             }
         }
     }
