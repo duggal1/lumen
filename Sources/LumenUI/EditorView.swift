@@ -47,7 +47,7 @@ struct EditorView: View {
                 }
             }
             if model.session.input.events.isEmpty {
-                Label("No input events were recorded. Automatic zoom cannot be generated for this clip.",
+                Label("No saved pointer events for this clip. Check Input Monitoring for future recordings; use Tools → Add tap to place clicks manually.",
                       systemImage: "exclamationmark.triangle")
                     .font(AppType.caption).foregroundStyle(Tok.accentText)
                     .frame(maxWidth: .infinity, alignment: .leading)
