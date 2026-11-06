@@ -192,7 +192,13 @@ public final class InputRecorder: @unchecked Sendable {
             ev.axFrameIndex = reserveAX(loc)
         case .leftMouseUp, .rightMouseUp, .otherMouseUp:
             ev.kind = .up; ev.button = UInt8(truncatingIfNeeded: e.getIntegerValueField(.mouseEventButtonNumber))
-        case .scrollWheel: ev.kind = .scroll
+        case .scrollWheel:
+            ev.kind = .scroll
+            // Wheel delta was previously discarded entirely; without it no
+            // scroll smoothing (or even scroll velocity) is possible.
+            let lines = e.getIntegerValueField(.scrollWheelEventDeltaAxis1)
+            let fixed = e.getIntegerValueField(CGEventField(rawValue: 93)!)   // FixedPtDeltaAxis1, 1/16 line
+            ev.scrollDelta = lines != 0 ? Float(lines) : Float(fixed) / 16.0
         case .keyDown:
             guard e.getIntegerValueField(.keyboardEventAutorepeat) == 0 else { return }
             ev.kind = .keyDown; ev.keyCode = UInt16(truncatingIfNeeded: e.getIntegerValueField(.keyboardEventKeycode))   // key codes only, never characters

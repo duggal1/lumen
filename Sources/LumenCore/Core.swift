@@ -117,10 +117,14 @@ public struct InputEvent: Sendable, Equatable {
     public var flags: UInt16
     public var cursorShape: UInt16
     public var axFrameIndex: UInt32
+    /// Signed wheel delta in lines for `.scroll` events (positive = up).
+    /// Previously discarded at capture, so scroll smoothing was impossible.
+    public var scrollDelta: Float
     public init(t: Double = 0, kind: Kind = .move, x: Float = 0, y: Float = 0, button: UInt8 = 0, keyCode: UInt16 = 0,
-                flags: UInt16 = 0, cursorShape: UInt16 = 0, axFrameIndex: UInt32 = 0) {
+                flags: UInt16 = 0, cursorShape: UInt16 = 0, axFrameIndex: UInt32 = 0, scrollDelta: Float = 0) {
         self.t = t; self.kind = kind; self.x = x; self.y = y; self.button = button; self.keyCode = keyCode
         self.flags = flags; self.cursorShape = cursorShape; self.axFrameIndex = axFrameIndex
+        self.scrollDelta = scrollDelta
     }
     public var hasPosition: Bool {
         switch kind { case .move, .down, .up, .drag, .scroll: true; default: false }
@@ -139,7 +143,7 @@ public enum EventCodec {
     public static func encode(_ e: InputEvent, into b: inout [UInt8]) {
         func put<T: FixedWidthInteger>(_ v: T) { withUnsafeBytes(of: v.littleEndian) { b.append(contentsOf: $0) } }
         put(e.t.bitPattern); put(e.x.bitPattern); put(e.y.bitPattern); put(e.axFrameIndex)
-        put(e.keyCode); put(e.flags); put(e.cursorShape); put(e.kind.rawValue); put(e.button); put(UInt32(0))
+        put(e.keyCode); put(e.flags); put(e.cursorShape); put(e.kind.rawValue); put(e.button); put(e.scrollDelta.bitPattern)
     }
     public static func decode(_ d: Data) -> [InputEvent] {
         guard d.count >= headerSize else { return [] }
@@ -154,7 +158,8 @@ public enum EventCodec {
                 func u8(_ k: Int) -> UInt8 { raw.loadUnaligned(fromByteOffset: o + k, as: UInt8.self) }
                 out.append(InputEvent(t: Double(bitPattern: u64(0)), kind: .init(rawValue: u8(26)) ?? .move,
                                       x: Float(bitPattern: u32(8)), y: Float(bitPattern: u32(12)), button: u8(27),
-                                      keyCode: u16(20), flags: u16(22), cursorShape: u16(24), axFrameIndex: u32(16)))
+                                      keyCode: u16(20), flags: u16(22), cursorShape: u16(24), axFrameIndex: u32(16),
+                                      scrollDelta: Float(bitPattern: u32(28))))
             }
         }
         return out

@@ -150,3 +150,26 @@ private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
     #expect(abs(Double(frame.cameraCenter.x) - 900) < 2)
     #expect(abs(Double(frame.cameraCenter.y) - 440) < 2)
 }
+
+@Test func scrollDeltaSurvivesEventCodecRoundTrip() {
+    var bytes: [UInt8] = Array(EventCodec.header())
+    EventCodec.encode(InputEvent(t: 1.5, kind: .scroll, x: 100, y: 200, scrollDelta: -7), into: &bytes)
+    let decoded = EventCodec.decode(Data(bytes))
+    #expect(decoded.count == 1)
+    #expect(decoded[0].kind == .scroll)
+    #expect(decoded[0].scrollDelta == -7)
+}
+
+@Test func scrollSmootherGlidesFastFlickInsteadOfJumping() {
+    // Two scroll events 40ms apart jumping 0 -> 1000px. Smoothed first
+    // position must be pulled toward the second (glide), not stay at 0.
+    let events = [
+        InputEvent(t: 1.0, kind: .scroll, x: 0, y: 0, scrollDelta: 10),
+        InputEvent(t: 1.04, kind: .scroll, x: 1000, y: 1000, scrollDelta: 10),
+        InputEvent(t: 1.5, kind: .scroll, x: 1000, y: 1000, scrollDelta: 1),
+    ]
+    let pos = ScrollSmoother.positions(events: events)
+    #expect(pos[0]!.x > 100)          // pulled forward by the flick
+    #expect(pos[0]!.x < 1000)         // but not teleported
+    #expect(pos[2]!.x == 1000)        // isolated event unchanged
+}

@@ -35,6 +35,27 @@ enum SpeedRamps {
     }
 }
 
+/// Scroll-wheel positions jitter event-to-event. Smooth them with a
+/// time-windowed Gaussian (sigma 80ms) so a fast flick becomes a glide
+/// instead of a camera jump. Pure and deterministic.
+enum ScrollSmoother {
+    static func positions(events: [InputEvent], sigma: Double = 0.08) -> [Int: (x: Double, y: Double)] {
+        let idx = events.indices.filter { events[$0].kind == .scroll }
+        var out: [Int: (x: Double, y: Double)] = [:]
+        for i in idx {
+            var wx = 0.0, wy = 0.0, wsum = 0.0
+            for j in idx {
+                let dt = events[j].t - events[i].t
+                if abs(dt) > 3 * sigma { continue }
+                let w = exp(-0.5 * (dt / sigma) * (dt / sigma))
+                wx += Double(events[j].x) * w; wy += Double(events[j].y) * w; wsum += w
+            }
+            if wsum > 0 { out[i] = (wx / wsum, wy / wsum) }
+        }
+        return out
+    }
+}
+
 enum ZoomPlanner {
     /// Source-pixel target with an optional verified AX rect. Path interactions
     /// can follow; ordinary clicks always choose a stationary target.
@@ -149,9 +170,10 @@ enum ZoomPlanner {
             t.isFinite && t >= tm.trimStart && t <= cutoff && !tm.isCut(t)
         }
         let sorted = events.sorted { $0.t < $1.t }
+        let smoothedScroll = ScrollSmoother.positions(events: sorted)
         var points: [Pt] = []
         var lastDrag = -1.0, lastScroll = -1.0
-        for event in sorted where usable(event.t) {
+        for (sortedIndex, event) in sorted.enumerated() where usable(event.t) {
             let x = Double(event.x), y = Double(event.y)
             switch event.kind {
             case .down:
@@ -182,7 +204,8 @@ enum ZoomPlanner {
                 }
             case .scroll:
                 if x >= 0, x <= width, y >= 0, y <= height, event.t - lastScroll > 0.25 {
-                    points.append(Pt(t: event.t, x: x, y: y, w: 1, path: true))
+                    let smoothed = smoothedScroll[sortedIndex]
+                    points.append(Pt(t: event.t, x: smoothed?.x ?? x, y: smoothed?.y ?? y, w: 1, path: true))
                     lastScroll = event.t
                 }
             default: break
