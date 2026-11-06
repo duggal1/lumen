@@ -66,11 +66,26 @@ extension StockCursor {
 }
 
 public enum ClockCalibration {
-    /// Samples CGEvent.timestamp against mach ticks and uptime-ns; picks the closer unit. (Spike 1: verify on hardware.)
+    /// Samples CGEvent.timestamp against mach ticks and uptime-ns; picks the closer unit.
     public static func eventUnit() -> EventTimeUnit {
         guard let e = CGEvent(source: nil) else { return .machTicks }
         let ts = Double(e.timestamp), mach = Double(mach_absolute_time()), ns = Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
         return abs(ts - mach) / mach <= abs(ts - ns) / ns ? .machTicks : .nanoseconds
+    }
+
+    /// Convert timestamps from REAL event callbacks. A synthetic calibration
+    /// event may report a different clock (or zero). Never discard a genuine
+    /// mouse-down because the saved calibration guessed the wrong unit.
+    public static func alignedHostSeconds(eventTimestamp: UInt64, clock: RecordingClock,
+                                          receivedAt now: Double) -> Double {
+        let preferred = clock.hostSeconds(eventTimestamp: eventTimestamp)
+        if preferred.isFinite && abs(preferred - now) <= 1 { return preferred }
+        let alternate = clock.eventUnit == .machTicks
+            ? Double(eventTimestamp) / 1e9 : HostClock.seconds(machTicks: eventTimestamp)
+        if alternate.isFinite && abs(alternate - now) <= 1 { return alternate }
+        // The event tap is listen-only and invoked synchronously. Receipt time
+        // is a better bounded estimate than silently losing the click entirely.
+        return now
     }
 }
 
@@ -165,10 +180,8 @@ public final class InputRecorder: @unchecked Sendable {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }; return
         }
-        // The event timestamp unit is calibrated once per recording, not
-        // guessed separately for each event. Never replace a bad PTS with now.
-        let eventHost = clock.hostSeconds(eventTimestamp: e.timestamp)
-        guard abs(eventHost - HostClock.now()) < 5 else { return }
+        let eventHost = ClockCalibration.alignedHostSeconds(
+            eventTimestamp: e.timestamp, clock: clock, receivedAt: HostClock.now())
         var ev = InputEvent(t: eventHost)
         let loc = e.location                                   // Quartz global space: already top-left origin
         ev.x = Float((loc.x - origin.x) * scale); ev.y = Float((loc.y - origin.y) * scale)
