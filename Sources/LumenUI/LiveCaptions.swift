@@ -63,7 +63,7 @@ struct TranscriptTab: View {
                         if ModelStore.isInstalled(size) {
                             Text("Installed").font(AppType.caption).foregroundStyle(Tok.text2)
                         } else if let p = downloadProgress {
-                            ProgressView(value: p).frame(width: 120)
+                            ProgressView(value: p).tint(Tok.accent).frame(width: 120)
                         } else {
                             LButton(title: "Download", icon: "arrow.down.circle") { download() }
                         }
