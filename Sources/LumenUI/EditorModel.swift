@@ -76,6 +76,8 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     var privacyScanning = false
     var privacyScanError: String?
     private var privacyAnalysisComplete = true
+    enum PlacementTool: String { case tap = "tap", loupe = "loupe", highlight = "highlight" }
+    var placingTool: PlacementTool?
     var focusEditing = false
     var maskEditing = false
     var canUndo: Bool { !undoStack.isEmpty }
