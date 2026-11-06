@@ -69,7 +69,7 @@ private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; 
                            var time: Float; var pointer: SIMD4<Float> }
 private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float; var tilt: SIMD2<Float>; var radii: SIMD4<Float> }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
-private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float }
+private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32 }
 private struct PrivacyU {
     var content: SIMD4<Float>
     var sourceRect: SIMD4<Float>
@@ -586,8 +586,13 @@ public final class Renderer: @unchecked Sendable {
             for ring in st.clickFX {
                 let c = g.toCanvas(SIMD2<Double>(Double(ring.position.x), Double(ring.position.y)), cam: cam, scale: sc)
                 quad(e, SIMD4<Float>(Float(c.x - R), Float(c.y - R), Float(2 * R), Float(2 * R)), canvasF)
-                frag(e, RingU(content: content, color: SIMD4(1, 1, 1, 0.7), center: SIMD2<Float>(c), radius: Float(R),
-                              progress: ring.progress, cr: Float(g.radius)))
+                let mode: Int32 = switch tl.cursor.clickEffect {
+                case .none, .ripple: 0
+                case .pulse: 1
+                case .burst: 2
+                }
+                frag(e, RingU(content: content, color: tl.cursor.clickColor.simd, center: SIMD2<Float>(c), radius: Float(R),
+                              progress: ring.progress, cr: Float(g.radius), mode: mode))
                 draw()
             }
         }
