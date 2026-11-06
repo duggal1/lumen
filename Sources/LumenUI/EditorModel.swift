@@ -383,11 +383,9 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         dispatch(.cutAtPlayhead(length: 1))
     }
 
-    /// Marks a click at the playhead location. Useful for device recordings
-    /// that have no pointer events at all.
+    /// Arm manual click placement at the current playhead time.
     func addTapAtPlayhead() {
-        let st = timeline.evaluate(at: playhead)
-        dispatch(.addTapAtPlayhead(x: Double(st.cursor.position.x), y: Double(st.cursor.position.y)))
+        placingTool = .tap
     }
 
     /// Glass loupe under the pointer for the next three seconds.
