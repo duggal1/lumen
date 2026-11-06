@@ -17,7 +17,7 @@ struct TimelineStrip: View {
         }
         .frame(height: 128)
         .overlay { PlayheadLine(model: model) }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(RoundedRectangle(cornerRadius: 12).fill(Tok.surface))
         .accessibilityLabel("Timeline").accessibilityHint("Drag to seek. Drag a zoom segment to move or resize it.")
     }
 

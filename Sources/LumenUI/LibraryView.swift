@@ -178,7 +178,7 @@ struct LibrarySurface: View {
                 VStack(alignment: .leading, spacing: 0) {
                     // Header
                     HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "camera.viewfinder").font(.system(size: 16, weight: .medium)).foregroundStyle(Tok.accent).padding(.top, 2)
+                        PixelLens(cell: 2).padding(.top, 2)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("New recording").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
                             Text("Choose what to capture.").font(AppType.caption).foregroundStyle(Tok.text2)
@@ -215,7 +215,7 @@ struct LibrarySurface: View {
                 }
                 .padding(20)
                 .frame(width: min(520, max(320, geo.size.width - 32)))
-                .frame(height: min(recordTab == .audio ? 432 : 350, max(280, geo.size.height - 32)))
+                .frame(height: min(recordTab == .audio ? 480 : 400, max(280, geo.size.height - 32)))
                 .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
             }
         }
@@ -312,7 +312,7 @@ struct LibrarySurface: View {
             compactToggle("Webcam", icon: "video.fill", Bindable(app).webcam)
             if app.webcam {
                 HStack(spacing: Space.s4) {
-                    Label("Webcam quality", systemImage: "camera.aperture")
+                    Label("Webcam quality", systemImage: "camera.fill")
                         .font(AppType.label).foregroundStyle(Tok.text)
                     Spacer(minLength: Space.s4)
                     LSegmented(sel: Bindable(app).webcamQuality, items: WebcamQuality.allCases.map { ($0, $0.title) },

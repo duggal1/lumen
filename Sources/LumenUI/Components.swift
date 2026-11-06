@@ -22,14 +22,7 @@ struct LButtonStyle: ButtonStyle {
             }
             let fg: Color = kind == .primary ? (off ? Tok.text2 : Tok.onAccent) : kind == .quiet && !hover ? Tok.text2 : Tok.text
             c.label.font(AppType.label).foregroundStyle(fg).padding(.horizontal, 12).frame(height: height)
-                .background {
-                    if kind == .quiet {
-                        Capsule().fill(bg)
-                    } else {
-                        Capsule().fill(.regularMaterial)
-                        Capsule().fill(bg.opacity(kind == .primary ? 0.94 : 0.42))
-                    }
-                }
+                .background(Capsule().fill(bg))
                 .scaleEffect(c.isPressed ? 0.98 : 1).opacity(kind != .primary && off ? 0.4 : 1)
                 .onHover { hover = $0 }.pointerStyle(enabled ? .link : .default)
                 .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
@@ -121,17 +114,14 @@ struct LSegmented<T: Hashable>: View {
                         .lineLimit(1).frame(maxWidth: .infinity).frame(height: 24)
                         .background {
                             if sel == v {
-                                Capsule().fill(.thinMaterial).matchedGeometryEffect(id: "thumb", in: ns)
-                                Capsule().fill(thumb.opacity(0.38))
+                                Capsule().fill(thumb).matchedGeometryEffect(id: "thumb", in: ns)
                             }
                         }
                 }.buttonStyle(.plain).pointerStyle(.link)
                 .accessibilityLabel(title)
                 .accessibilityAddTraits(sel == v ? .isSelected : [])
             }
-        }.padding(2)
-            .background(.regularMaterial, in: Capsule())
-            .animation(reduceMotion ? nil : Motion.slide, value: sel)
+        }.padding(2).background(Capsule().fill(track)).animation(reduceMotion ? nil : Motion.slide, value: sel)
     }
 }
 
@@ -341,7 +331,7 @@ struct LDialog<Content: View>: View {
             }
             .padding(24)
             .frame(width: 480)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
+            .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
             .scaleEffect(shown ? 1 : 0.97)
             .offset(y: shown ? 0 : 6)
             .opacity(shown ? 1 : 0)
@@ -371,7 +361,7 @@ struct UndoToast: View {
             }.buttonStyle(.plain).pointerStyle(.link)
         }
         .padding(.leading, 16).padding(.trailing, 8).frame(height: 40)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background(Capsule().fill(Tok.washStrong))
         .accessibilityElement(children: .combine)
     }
 }

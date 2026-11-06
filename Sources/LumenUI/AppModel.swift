@@ -517,7 +517,7 @@ struct HUDView: View {
                 .frame(width: 520, height: 64)
             }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .background(RoundedRectangle(cornerRadius: 16).fill(Tok.surface))
     }
     private func time(_ t: Double) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
 }
