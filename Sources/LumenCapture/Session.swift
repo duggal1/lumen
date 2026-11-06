@@ -116,8 +116,6 @@ public actor RecordingSession {
     private var journalTask: Task<Void, Never>?
     private var journalStart = Date()
     public private(set) var isPaused = false
-    private var micTap: AudioTap?
-    public func setMicTap(_ t: AudioTap?) { micTap = t }
     public init() {}
 
     public func setLiveHooks(frame: (@Sendable (CVPixelBuffer) -> Void)?, event: (@Sendable (InputEvent) -> Void)?) {
@@ -131,7 +129,6 @@ public actor RecordingSession {
         bundle = b
         let e = CaptureEngine(bundle: b)
         try await e.prepare(config)
-        e.mic?.setTap(micTap)
         engine = e
         unit = ClockCalibration.eventUnit()
         if let info = e.info {
