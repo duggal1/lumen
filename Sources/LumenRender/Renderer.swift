@@ -189,6 +189,8 @@ public final class Renderer: @unchecked Sendable {
     private let outCache: CVMetalTextureCache
     public let fxKernels: FXKernels?
     public let upscaler: Upscaler?
+    private let contentPass: ContentPass?
+    private var transparentTex: MTLTexture?
 
     public init() throws {
         guard let d = MTLCreateSystemDefaultDevice(), let q = d.makeCommandQueue() else { throw RenderError.noDevice }
@@ -211,6 +213,7 @@ public final class Renderer: @unchecked Sendable {
         let fk = try? FXKernels(device: d)
         fxKernels = fk
         upscaler = fk.map(Upscaler.init(kernels:))
+        contentPass = fk.map(ContentPass.init(kernels:))
     }
 
     /// Prefer the metallib SwiftPM builds. Older Xcode toolchains only copy
@@ -511,19 +514,41 @@ public final class Renderer: @unchecked Sendable {
     private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, st: FrameState, r: RenderRequest, g: Geometry,
                        src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
         let tl = r.timeline
-        let pd = MTLRenderPassDescriptor()
-        pd.colorAttachments[0].texture = tex; pd.colorAttachments[0].loadAction = .clear; pd.colorAttachments[0].storeAction = .store
-        pd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return }
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y)), content = SIMD4<Float>(g.content)
         let sc = max(Double(st.cameraScale), 1)
         let cam = ZoomTransform.clamp(SIMD2<Double>(Double(st.cameraCenter.x), Double(st.cameraCenter.y)), source: g.src, scale: sc)
         let pxPerSrc = g.content.z / g.src.x
+        let drawingContent = !r.cursorOnly
+        // Real-time upscaler path (was dead code: ContentPass/Upscaler were
+        // never called). When magnification is high and tilt is off, the
+        // compute content pass draws from the upscaled texture; the
+        // fragment path below remains the fallback. The backdrop resolve
+        // still composites this work texture over the cached backdrop.
+        var computeContent = false
+        if drawingContent, st.cameraTilt == .zero, let cp = contentPass, let up = upscaler {
+            let layout = ContentLayout(canvas: SIMD2<Int32>(Int32(g.canvas.x), Int32(g.canvas.y)),
+                                       contentRect: content, radii: SIMD4<Float>(g.radii),
+                                       srcSize: SIMD2<Float>(g.src))
+            var params = UpscaleParams()
+            params.maxFactor = tl.camera.upscaleMaxFactor
+            if let upscaled = try? cp.prepareUpscale(up, cb, layout: layout, camCenter: SIMD2<Float>(cam),
+                                                     zoom: Float(sc), source: src, sourceID: r.screen.id, params: params),
+               let ce = cb.makeComputeCommandEncoder(),
+               let transparent = transparentTexture() {
+                try? cp.encode(ce, layout: layout, camCenter: SIMD2<Float>(cam), zoom: Float(sc),
+                               backdrop: transparent, canvas: tex, source: src, upscaled: upscaled)
+                ce.endEncoding()
+                computeContent = true
+            }
+        }
+        let pd = MTLRenderPassDescriptor()
+        pd.colorAttachments[0].texture = tex; pd.colorAttachments[0].loadAction = computeContent ? .load : .clear; pd.colorAttachments[0].storeAction = .store
+        pd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return }
         func draw() { e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
 
-        // content
-        let drawingContent = !r.cursorOnly
-        if drawingContent {
+        // content (fragment fallback when the upscaler did not engage)
+        if drawingContent, !computeContent {
             e.setRenderPipelineState(pContent); quad(e, content, canvasF)
             frag(e, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam), scale: Float(sc),
                              radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0,
@@ -708,6 +733,18 @@ public final class Renderer: @unchecked Sendable {
             }
         }
         e.endEncoding()
+    }
+
+    private func transparentTexture() -> MTLTexture? {
+        if let transparentTex { return transparentTex }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
+        desc.usage = [.shaderRead]
+        desc.storageMode = .shared
+        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
+        var zero: SIMD4<Float> = .zero
+        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &zero, bytesPerRow: 16)
+        transparentTex = tex
+        return tex
     }
 
     private func quad(_ e: MTLRenderCommandEncoder, _ rect: SIMD4<Float>, _ canvas: SIMD2<Float>) {

@@ -25,9 +25,13 @@ public final class Upscaler {
 
     public init(kernels: FXKernels) { k = kernels }
 
-    static let ladder = [2, 3, 4, 6, 8]
+    /// Available factors. The user setting (`CameraParams.upscaleMaxFactor`,
+    /// 2...10) caps this ladder; magnification then picks the smallest
+    /// factor >= the needed magnification. So "5×"/"8×"/"10×" are settings,
+    /// not fixed claims: mag 4.5 with cap 10 picks 5×, mag 6.5 picks 8×.
+    static let ladder = [2, 3, 4, 5, 6, 8, 10]
     static func stages(_ f: Int) -> [Int] {
-        switch f { case 2: [2]; case 3: [3]; case 4: [2, 2]; case 6: [2, 3]; default: [2, 2, 2] }
+        switch f { case 2: [2]; case 3: [3]; case 4: [2, 2]; case 5: [5]; case 6: [2, 3]; case 10: [2, 5]; default: [2, 2, 2] }
     }
 
     public static func factor(forMagnification m: Double, maxFactor: Int) -> Int {
