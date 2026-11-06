@@ -363,20 +363,9 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         selection = title.id
     }
 
-    /// Place a source-space spotlight around the current pointer.
+    /// Arm placement so the highlight lands where the user clicks in the preview.
     func addManualHighlight() {
-        guard let size = timeline.derived?.sourceSize else { return }
-        let start = timeline.timeMap.source(atOutput: playhead)
-        let end = min(start + 3, timeline.timeMap.trimEnd)
-        guard end > start else { return }
-        let cursor = timeline.evaluate(at: playhead).cursor.position
-        let w = size.x * 0.3, h = size.y * 0.16
-        let x = max(0, min(Double(cursor.x) - w / 2, size.x - w))
-        let y = max(0, min(Double(cursor.y) - h / 2, size.y - h))
-        let highlight = Highlight(start: start, end: end,
-                                  x: x, y: y, w: w, h: h, style: .dim)
-        dispatch(.addHighlight(highlight))
-        selection = highlight.id
+        placingTool = .highlight
     }
 
     func addZoom() {
