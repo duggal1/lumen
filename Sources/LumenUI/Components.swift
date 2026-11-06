@@ -1,5 +1,25 @@
 import SwiftUI
 import AppKit
+import Synchronization
+
+/// Resolves an SF Symbol name, falling back when the build's symbol set doesn't
+/// have it, so dropdown icons never render as missing glyphs.
+enum IconSymbols {
+    final class Box: @unchecked Sendable {
+        let lock = NSLock(); var map: [String: Bool] = [:]
+    }
+    private static let box = Box()
+    static func exists(_ name: String) -> Bool {
+        box.lock.lock(); defer { box.lock.unlock() }
+        if let hit = box.map[name] { return hit }
+        let ok = NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
+        box.map[name] = ok
+        return ok
+    }
+    static func resolve(_ name: String, fallback: String = "circle") -> String {
+        exists(name) ? name : fallback
+    }
+}
 
 // MARK: Button
 
@@ -184,7 +204,7 @@ struct MenuLayer: View {
                 let col = it.destructive ? Tok.statusBad : Tok.text
                 Button { host.close(); it.action() } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: it.icon).font(.system(size: 14)).frame(width: 20)
+                        Image(systemName: IconSymbols.resolve(it.icon)).font(.system(size: 14)).frame(width: 20)
                         Text(it.title).font(AppType.label).lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         Spacer(minLength: 16)
                         Image(systemName: "checkmark").font(.system(size: 12)).foregroundStyle(Tok.accentText).frame(width: 20).opacity(it.checked ? 1 : 0)

@@ -219,6 +219,32 @@ struct PixelMeter: View {
     }
 }
 
+/// Rolling live waveform: 48 bars of mic history, newest white. Samples
+/// arrive at ~20 Hz (stats poll); the bars scroll smoothly between them.
+struct LiveWaveform: View {
+    let level: Float
+    @State private var history: [Float] = []
+    var body: some View {
+        Canvas { c, size in
+            let bars = max(1, Int(size.width / 5))
+            let shown = Array(history.suffix(bars))
+            for (i, v) in shown.enumerated() {
+                let h = max(2, min(size.height, Double(v) * Double(size.height) * 1.6))
+                let x = CGFloat(i) * 5
+                let isHead = i == shown.count - 1
+                c.fill(Path(CGRect(x: x, y: (size.height - CGFloat(h)) / 2, width: 3, height: CGFloat(h))),
+                       with: .color(isHead ? Tok.text : Ramp.o[3]), style: FillStyle(antialiased: false))
+            }
+        }
+        .frame(width: 160, height: 18)
+        .onChange(of: level) { _, v in
+            history = Array(history.suffix(47)) + [v]
+        }
+        .animation(.smooth(duration: 0.06), value: history)
+        .accessibilityHidden(true)
+    }
+}
+
 /// Three 2 pt cells stepping every 160 ms. Indeterminate waits only.
 struct PixelWait: View {
     var body: some View {

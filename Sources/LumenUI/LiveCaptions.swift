@@ -52,7 +52,9 @@ struct TranscriptTab: View {
     @State private var downloadProgress: Double?
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 20) {
+            // Transcription gets one Apple-blur card: native material, never a
+            // flat black fill, so the transcript reads like a system surface.
             VStack(spacing: 0) {
                 Row(label: "Model") {
                     LDropdown(sel: $size, options: MoonshineSize.allCases.map { ($0, $0.title + (installed.contains($0) ? "" : " · not installed"), "waveform") }).frame(width: 170)
@@ -70,7 +72,10 @@ struct TranscriptTab: View {
                         LButton(title: "Import…", icon: "folder") { importModel() }
                     }
                 }
-            }.card()
+            }
+            .padding(20)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
+            .environment(\.layoutDirection, .leftToRight)
             VStack(alignment: .leading, spacing: 12) {
                 Text(size.detail).font(AppType.caption).foregroundStyle(Tok.text2)
                 if let e = error { Text(e).font(AppType.caption).foregroundStyle(Tok.statusBad) }
@@ -92,8 +97,12 @@ struct TranscriptTab: View {
                     }
                 }
                 if model.transcript != nil { TranscriptList(model: model) }
-            }.card()
+            }
+            .padding(20)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
+            .environment(\.layoutDirection, .leftToRight)
         }
+        .environment(\.layoutDirection, .leftToRight)
         .onAppear { refresh() }
     }
     private func refresh() { installed = Set(MoonshineSize.allCases.filter(ModelStore.isInstalled)) }
@@ -147,13 +156,16 @@ private struct TranscriptList: View {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.sentence == b.sentence && a.active == b.active && a.words == b.words }
     var body: some View {
         Button(action: seek) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(String(format: "%d:%02d", Int(sentence.start) / 60, Int(sentence.start) % 60)).font(AppType.caption.monospacedDigit())
-                    .foregroundStyle(Tok.text2).frame(width: 34, alignment: .leading)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(String(format: "%d:%02d", Int(sentence.start) / 60, Int(sentence.start) % 60)).font(AppType.mono)
+                    .foregroundStyle(Tok.text2)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(Tok.washStrong))
                 Text(attributed).frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 8).fill(active != nil ? Tok.wash : Color.clear))
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: Radius.field).fill(active != nil ? Tok.accentSoft : Tok.wash))
+            .environment(\.layoutDirection, .leftToRight)
         }.buttonStyle(.plain).accessibilityLabel(words.map(\.text).joined(separator: " "))
     }
     private var attributed: AttributedString {

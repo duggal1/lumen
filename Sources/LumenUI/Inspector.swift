@@ -13,6 +13,26 @@ struct Inspector: View {
     @State private var presets = EditorModel.loadPresets()
     @State private var newName = ""
 
+    // Per-option Apple icons for inspector menus.
+    private static func canvasIcon(_ c: CanvasAspect) -> String {
+        switch c { case .r16x9: "rectangle"; case .r16x10: "rectangle"; case .r4x3: "rectangle.righthalf.inset.filled"; case .r5x4: "rectangle"; case .r3x2: "rectangle"; case .r1x1: "square"; case .r4x5: "rectangle.portrait"; case .r9x16: "rectangle.portrait"; case .r21x9: "rectangle.wide" }
+    }
+    private static func layoutIcon(_ k: LayoutKind) -> String {
+        switch k { case .screenOnly: "display"; case .cameraOverlay: "rectangle.3.group"; case .split: "rectangle.split.2x1"; case .cameraFullscreen: "video"; case .cameraCutout: "person" }
+    }
+    private static func captionPositionIcon(_ p: CaptionPosition) -> String {
+        switch p { case .auto: "sparkles"; case .bottom: "arrow.down"; case .top: "arrow.up" }
+    }
+    private static func captionAnimationIcon(_ a: CaptionAnimation) -> String {
+        switch a { case .none: "minus"; case .fade: "eye"; case .pop: "sparkles"; case .slide: "arrow.right" }
+    }
+    private static func micModeIcon(_ m: MicMode) -> String {
+        switch m { case .standard: "mic"; case .loud: "mic.fill"; case .podcast: "waveform.and.mic"; case .off: "mic.slash" }
+    }
+    private static func maskModeIcon(_ m: MaskMode) -> String {
+        switch m { case .blur: "eye.slash"; case .pixelate: "square.grid.3x3"; case .solid: "rectangle.fill"; case .blend: "circle.lefthalf.filled" }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -186,7 +206,7 @@ struct Inspector: View {
                 if m.session.webcam != nil {
                     ToggleRow(label: "Show face cam", on: Binding(get: { m.timeline.webcam != nil }, set: { m.setWebcam($0) }))
                 }
-                Row(label: "Canvas") { LDropdown(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, "rectangle.dashed") }).frame(width: 130) }
+                Row(label: "Canvas") { LDropdown(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, Self.canvasIcon($0)) }).frame(width: 130) }
                 SliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
                 ToggleRow(label: "Independent padding",
                           on: Binding(get: { m.timeline.style.paddingInsets != nil },
@@ -382,7 +402,7 @@ struct Inspector: View {
                 Row(label: "Layout") {
                     LDropdown(sel: layoutKind, options: LayoutKind.allCases.map {
                         ($0, $0 == .screenOnly ? "Screen only" : $0 == .cameraOverlay ? "Camera overlay"
-                            : $0 == .cameraFullscreen ? "Camera fullscreen" : $0 == .cameraCutout ? "Cutout" : "Split", "rectangle.3.group")
+                            : $0 == .cameraFullscreen ? "Camera fullscreen" : $0 == .cameraCutout ? "Cutout" : "Split", Self.layoutIcon($0))
                     }).frame(width: 150)
                 }
                 Row(label: "Camera size") {
@@ -423,12 +443,12 @@ struct Inspector: View {
                 ToggleRow(label: "Captions", on: m.bind(\.captions.enabled))
                 Row(label: "Position") {
                     LDropdown(sel: m.bind(\.captions.style.position), options: CaptionPosition.allCases.map {
-                        ($0, $0.rawValue.capitalized, "text.alignleft")
+                        ($0, $0.rawValue.capitalized, Self.captionPositionIcon($0))
                     }).frame(width: 130)
                 }
                 Row(label: "Animation") {
                     LDropdown(sel: m.bind(\.captions.style.animation), options: CaptionAnimation.allCases.map {
-                        ($0, $0.rawValue.capitalized, "sparkles")
+                        ($0, $0.rawValue.capitalized, Self.captionAnimationIcon($0))
                     }).frame(width: 130)
                 }
             }.card()
@@ -550,7 +570,7 @@ struct Inspector: View {
                 ToggleRow(label: "Detect sensitive data", on: m.bind(\.overlays.privacy.autoDetect))
                 Row(label: "Mask style") {
                     LDropdown(sel: m.bind(\.overlays.privacy.mode), options: MaskMode.allCases.map {
-                        ($0, $0.rawValue.capitalized, "eye.slash")
+                        ($0, $0.rawValue.capitalized, Self.maskModeIcon($0))
                     }).frame(width: 130)
                 }
                 SliderRow(label: "Padding", v: m.bind(\.overlays.privacy.padding), range: 0...24, fmt: { "\(Int($0)) px" })
@@ -652,7 +672,7 @@ struct Inspector: View {
             VStack(spacing: 0) {
                 Row(label: "Microphone") {
                     LDropdown(sel: m.bind(\.audio.micMode),
-                              options: MicMode.allCases.map { ($0, $0.rawValue.capitalized, "mic") })
+                              options: MicMode.allCases.map { ($0, $0.rawValue.capitalized, Self.micModeIcon($0)) })
                         .frame(width: 138)
                 }
                 ToggleRow(label: "Clean mic", on: m.bind(\.audio.micClean))

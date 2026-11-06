@@ -102,10 +102,7 @@ struct RecentRecordings: View {
 
     private var empty: some View {
         HStack(spacing: Space.s4) {
-            Image(systemName: "video")
-                .font(.system(size: 20))
-                .foregroundStyle(Tok.text2)
-                .frame(width: 44, height: 44)
+            PixelLens(cell: 3)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: Space.s1) {
                 Text("Nothing here yet.").font(AppType.label).foregroundStyle(Tok.text)

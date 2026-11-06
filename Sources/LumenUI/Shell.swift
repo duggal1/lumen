@@ -210,12 +210,13 @@ private struct OpenProjectSurface: View {
             VStack {
                 Spacer()
                 HStack(spacing: Space.s4) {
-                    FrameLock(cell: 4)
+                    PixelLens(cell: 4)
                     VStack(alignment: .leading, spacing: Space.s1) {
                         Text("Open a recording.").font(AppType.label).foregroundStyle(Tok.text)
                         Text("Choose one in Library.").font(AppType.body).foregroundStyle(Tok.text2)
                     }
                 }
+                .accessibilityElement(children: .combine)
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

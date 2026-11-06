@@ -29,9 +29,28 @@ final class LiveHub: @unchecked Sendable {
         guard let r = try? Renderer(), let src = LiveFrameSource(device: r.device) else { return nil }
         r.setCustomCursors([])
         hub = LiveHub(source: src)
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 480, height: 270), styleMask: [.borderless, .nonactivatingPanel],
+        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 488, height: 278), styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
-        p.contentView = LivePreviewNSView(renderer: r, hub: hub)
+        p.appearance = NSAppearance(named: .darkAqua)
+        // Apple native blur card: the floating preview sits on a real
+        // NSVisualEffectView so it reads as a system surface, not a black box.
+        let blur = NSVisualEffectView()
+        blur.material = .hudWindow
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        blur.wantsLayer = true
+        blur.layer?.cornerRadius = 20
+        blur.layer?.masksToBounds = true
+        let preview = LivePreviewNSView(renderer: r, hub: hub)
+        preview.translatesAutoresizingMaskIntoConstraints = false
+        blur.addSubview(preview)
+        NSLayoutConstraint.activate([
+            preview.leadingAnchor.constraint(equalTo: blur.leadingAnchor, constant: 4),
+            preview.trailingAnchor.constraint(equalTo: blur.trailingAnchor, constant: -4),
+            preview.topAnchor.constraint(equalTo: blur.topAnchor, constant: 4),
+            preview.bottomAnchor.constraint(equalTo: blur.bottomAnchor, constant: -4),
+        ])
+        p.contentView = blur
         p.level = .floating; p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = true
         p.sharingType = .none; p.hidesOnDeactivate = false; p.isMovableByWindowBackground = true
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]

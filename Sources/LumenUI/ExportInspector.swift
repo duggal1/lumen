@@ -12,6 +12,23 @@ struct ExportInspector: View {
     private var source: LumenProject.SourceInfo { model.session.meta.source }
     private var aspect: Double { model.timeline.style.aspectRatio }
 
+    // Per-option Apple icons, so export menus read as crafted, not generic.
+    private static func codecIcon(_ c: VideoCodec) -> String {
+        switch c { case .h264: "video"; case .hevc: "play.tv"; case .hevc10: "play.tv.fill"; case .prores: "movieclapper"; case .prores4444: "film.fill" }
+    }
+    private static func resolutionIcon(_ r: ExportResolution) -> String {
+        switch r { case .source: "rectangle.dashed"; case .ultraHD8K: "4k.tv"; case .ultraHD: "4k.tv"; case .p1440: "tv"; case .p1080: "tv.fill"; case .p720: "rectangle"; case .custom: "slider.horizontal.3" }
+    }
+    private static func rateIcon(_ r: ExportRate) -> String {
+        switch r { case .source: "timer"; case .f24: "clock"; case .f30: "clock.fill"; case .f60: "speedometer"; case .f120: "gauge"; case .f144: "gauge"; case .f240: "gauge.with.dots.needle.67percent" }
+    }
+    private static func qualityIcon(_ q: ExportQuality) -> String {
+        switch q { case .low: "signal"; case .medium: "signal.2"; case .high: "signal.3"; case .max: "signal.3.fill" }
+    }
+    private static func bitrateIcon(_ kbps: Int) -> String {
+        switch kbps { case 128: "speaker.wave.1"; case 192: "speaker.wave.2"; case 256: "speaker.wave.3"; default: "speaker.wave.3.fill" }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s6) {
             output
@@ -35,17 +52,17 @@ struct ExportInspector: View {
                 Row(label: "Format") {
                     HStack(spacing: Space.s2) {
                         LDropdown(sel: model.exportBinding(\.container),
-                                  options: ExportContainer.allCases.map { ($0, $0.rawValue, "film") })
+                                  options: ExportContainer.allCases.map { ($0, $0.rawValue, $0 == .mp4 ? "film" : "film.stack") })
                             .frame(width: 90)
                             .disabled(settings.codec.isProRes || settings.alpha)
                         LDropdown(sel: model.exportBinding(\.codec),
-                                  options: VideoCodec.allCases.map { ($0, $0.title, "video") })
+                                  options: VideoCodec.allCases.map { ($0, $0.title, Self.codecIcon($0)) })
                             .frame(width: 130)
                     }
                 }
                 Row(label: "Resolution") {
                     LDropdown(sel: model.exportBinding(\.resolution),
-                              options: ExportResolution.allCases.map { ($0, $0.rawValue, "rectangle.dashed") })
+                              options: ExportResolution.allCases.map { ($0, $0.rawValue, Self.resolutionIcon($0)) })
                         .frame(width: 132)
                 }
                 if settings.resolution == .custom {
@@ -62,12 +79,12 @@ struct ExportInspector: View {
                     .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
                 Row(label: "Frame rate") {
                     LDropdown(sel: model.exportBinding(\.frameRate),
-                              options: ExportRate.allCases.map { ($0, $0.rawValue == "Source" ? "Source" : "\($0.rawValue) fps", "film.stack") })
+                              options: ExportRate.allCases.map { ($0, $0.rawValue == "Source" ? "Source" : "\($0.rawValue) fps", Self.rateIcon($0)) })
                         .frame(width: 132)
                 }
                 Row(label: "Quality") {
                     LDropdown(sel: model.exportBinding(\.quality),
-                              options: ExportQuality.allCases.map { ($0, $0.rawValue, "slider.horizontal.3") })
+                              options: ExportQuality.allCases.map { ($0, $0.rawValue, Self.qualityIcon($0)) })
                         .frame(width: 132)
                 }
                 Row(label: "Audio") {
@@ -75,7 +92,7 @@ struct ExportInspector: View {
                         LToggle(on: model.exportBinding(\.includeAudio), label: "Include audio")
                         if settings.includeAudio {
                             LDropdown(sel: model.exportBinding(\.audioBitrate),
-                                      options: [128, 192, 256, 320].map { ($0 * 1000, "\($0) kbps", "waveform") })
+                                      options: [128, 192, 256, 320].map { ($0 * 1000, "\($0) kbps", Self.bitrateIcon($0)) })
                                 .frame(width: 110)
                         }
                     }

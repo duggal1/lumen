@@ -58,6 +58,7 @@ struct LibrarySurface: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Tok.bg)
         .overlay { if showRecord { recordDialog.transition(.opacity) } }
+        .onDisappear { app.stopMicrophoneTest() }
         .overlay(alignment: .bottom) {
             if let undo {
                 UndoToast(text: "Deleted \(undo.row.name).", actionTitle: "Undo") { restore(undo) }
@@ -321,15 +322,27 @@ struct LibrarySurface: View {
                 }
                 .frame(height: 48)
             }
-            HStack(spacing: Space.s4) {
-                PixelMic(cell: 2)
-                Text("Microphone test").font(AppType.label).foregroundStyle(Tok.text)
-                Spacer(minLength: Space.s4)
-                LButton(title: app.micTesting ? "Testing…" : "Test", kind: .secondary, height: 24) { app.testMicrophone() }
-                    .disabled(app.micTesting)
-                PixelMeter(level: app.micTestLevel).frame(width: 80)
+            VStack(alignment: .leading, spacing: Space.s2) {
+                HStack(spacing: Space.s4) {
+                    PixelMic(cell: 2)
+                    Text("Microphone test").font(AppType.label).foregroundStyle(Tok.text)
+                    Spacer(minLength: Space.s4)
+                    LButton(title: app.micTesting ? "Stop" : "Test", kind: app.micTesting ? .primary : .secondary, height: 24) { app.testMicrophone() }
+                }
+                if app.micTesting {
+                    HStack(spacing: Space.s3) {
+                        LiveWaveform(level: app.micTestLevel)
+                            .frame(width: 220, height: 28)
+                            .background(Capsule().fill(Tok.accent))
+                            .padding(2)
+                        Text(Int(app.micTestLevel * 100).description + "%" + (app.micTestLevel < 0.03 ? " · No sound yet. Check your microphone." : ""))
+                            .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                    }
+                    .transition(.opacity)
+                }
+                if let e = app.micTestError { Text(e).font(AppType.caption).foregroundStyle(Tok.statusBad) }
             }
-            .frame(height: 48)
+            .frame(minHeight: 48)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

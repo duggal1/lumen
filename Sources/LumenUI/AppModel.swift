@@ -278,41 +278,85 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         onFinished?(bundle)
     }
 
+    public var micTestError: String?
+    private var micTestToken = UUID()
+
+    /// Toggle mic testing with a live waveform. Permission, missing devices
+    /// and engine failures surface as state, never as a crash. The test runs
+    /// until the user stops it (toggle off, dialog closes, or 60 s failsafe).
     public func testMicrophone() {
+        if micTesting { stopMicrophoneTest(); return }
         guard !micTesting else { return }
-        micTesting = true
-        micTestLevel = 0
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: break
+        case .notDetermined:
+            Task { await Permissions.requestMedia(); if !Permissions.mic { micTestError = "Microphone is off." } else { testMicrophone() } }
+            return
+        default: micTestError = "Microphone is off. Allow mic access in Settings."; return
+        }
+        let token = UUID(); micTestToken = token
+        micTesting = true; micTestError = nil; micTestLevel = 0
         let engine = AVAudioEngine()
         micTestEngine = engine
+        engine.prepare()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else {
-            micTesting = false
-            micTestEngine = nil
+            micTesting = false; micTestEngine = nil
+            micTestError = "No microphone input is available."
             return
         }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable [weak self] buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 512, format: format) { @Sendable [weak self, token] buffer, _ in
             guard let ch = buffer.floatChannelData?[0] else { return }
-            let n = Int(buffer.frameLength)
-            guard n > 0 else { return }
-            var sum: Float = 0
-            for i in 0..<n { sum += ch[i] * ch[i] }
+            let n = Int(buffer.frameLength); guard n > 0 else { return }
+            var sum: Float = 0; for i in 0..<n { sum += ch[i] * ch[i] }
             let rms = (sum / Float(n)).squareRoot()
             DispatchQueue.main.async {
-                guard let self else { return }
-                MainActor.assumeIsolated {
-                    self.micTestLevel = max(self.micTestLevel * 0.8, rms)
+                Task { @MainActor in
+                    guard let self, self.micTesting, self.micTestToken == token else { return }
+                    let shown = min(rms * 6, 1)
+                    self.micTestLevel = max(shown, self.micTestLevel * 0.75)
                 }
             }
         }
-        do { try engine.start() } catch { micTesting = false; micTestEngine = nil; return }
+        do { try engine.start() } catch {
+            input.removeTap(onBus: 0)
+            micTesting = false; micTestEngine = nil
+            micTestError = "Couldn’t start the microphone. \(error.localizedDescription)"
+            return
+        }
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2))
-            self.micTestEngine?.inputNode.removeTap(onBus: 0)
-            self.micTestEngine?.stop()
-            self.micTestEngine = nil
-            self.micTesting = false
-            self.micTestLevel = 0
+            try? await Task.sleep(for: .seconds(60))
+            guard micTestToken == token else { return }
+            stopMicrophoneTest()
+        }
+    }
+
+    public func stopMicrophoneTest() {
+        micTestToken = UUID()
+        micTestEngine?.inputNode.removeTap(onBus: 0)
+        micTestEngine?.stop()
+        micTestEngine = nil
+        micTesting = false
+        micTestLevel = 0
+    }
+
+    /// Discards the in-progress recording entirely: stops capture, deletes
+    /// the bundle, and returns to the library without opening the project.
+    public func discard() {
+        if phase != .recording && phase != .preparing {
+            if case .countdown = phase {} else { return }
+        }
+        phase = .finishing; poll?.cancel()
+        Task {
+            do {
+                let bundle = try await session.stop()
+                try FileManager.default.trashItem(at: bundle.url, resultingItemURL: nil)
+            } catch { self.error = "Couldn’t discard this recording. \(error.localizedDescription)" }
+            paused = false
+            hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
+            phase = .idle; refresh()
+            restoreLibraryAfterFailure()
         }
     }
 
@@ -367,7 +411,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             try await session.start()
             phase = .recording
             hud?.showControls()
-            poll = Task { while !Task.isCancelled { stats = await session.stats(); try? await Task.sleep(for: .milliseconds(250)) } }
+            poll = Task { while !Task.isCancelled { stats = await session.stats(); try? await Task.sleep(for: .milliseconds(50)) } }
         } catch { fail(error) }
     }
 
@@ -544,11 +588,12 @@ struct HUDView: View {
                 Text(app.paused ? "Paused" : "Recording").font(AppType.label)
                     .foregroundStyle(app.paused ? Tok.activity : Tok.text).fixedSize(horizontal: true, vertical: false)
                 Text(time(app.stats?.elapsed ?? 0)).font(AppType.label.monospacedDigit()).foregroundStyle(Tok.text)
-                PixelMeter(level: app.stats?.micLevel ?? 0)
+                LiveWaveform(level: app.stats?.micLevel ?? 0)
                 if (app.stats?.dropped ?? 0) > 0 { PixelBadge(kind: .caution, text: "\(app.stats?.dropped ?? 0) dropped") }
                 Spacer()
                 LButton(title: app.paused ? "Resume" : "Pause",
                         icon: app.paused ? "play.fill" : "pause.fill", kind: .secondary) { app.togglePause() }
+                LButton(title: "Discard", icon: "trash", kind: .quiet) { app.discard() }
                 LButton(title: "Stop", icon: "stop.fill", kind: .primary) { app.toggle() }
                     default:
                         PixelWait()
