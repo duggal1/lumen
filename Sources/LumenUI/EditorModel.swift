@@ -388,14 +388,9 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         placingTool = .tap
     }
 
-    /// Glass loupe under the pointer for the next three seconds.
+    /// Arm a glass loupe for placement on a visible source detail.
     func addLoupe() {
-        let start = timeline.timeMap.source(atOutput: playhead)
-        let end = min(start + 3, timeline.timeMap.trimEnd)
-        guard end - start > 0.2 else { return }
-        let loupe = Loupe(start: start, end: end)
-        dispatch(.addLoupe(loupe))
-        selection = loupe.id
+        placingTool = .loupe
     }
 
     func updateLoupe(_ loupe: Loupe) { dispatch(.updateLoupe(loupe)) }
