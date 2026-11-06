@@ -287,12 +287,12 @@ struct LibrarySurface: View {
 
     private var audioTab: some View {
         VStack(alignment: .leading, spacing: 16) {
-            compactToggle("Microphone", icon: "mic.fill", Bindable(app).mic)
+            compactToggle("Microphone", Bindable(app).mic)
             if app.mic {
                 ForEach(app.availableAudioInputs, id: \.id) { device in
                     HStack(spacing: Space.s4) {
-                        Label(device.name, systemImage: "waveform")
-                            .font(AppType.label).foregroundStyle(Tok.text).lineLimit(1)
+                        Text(device.name).font(AppType.label).foregroundStyle(Tok.text)
+                            .lineLimit(1)
                         Spacer(minLength: Space.s2)
                         LToggle(on: Binding(
                             get: { app.micInputIDs.contains(device.id) },
@@ -308,12 +308,11 @@ struct LibrarySurface: View {
                         : "\(app.micInputIDs.count) microphones captured independently; first is primary.")
                     .font(AppType.caption).foregroundStyle(Tok.text2)
             }
-            compactToggle("System audio", icon: "speaker.wave.2.fill", Bindable(app).system)
-            compactToggle("Webcam", icon: "video.fill", Bindable(app).webcam)
+            compactToggle("System audio", Bindable(app).system)
+            compactToggle("Webcam", Bindable(app).webcam)
             if app.webcam {
                 HStack(spacing: Space.s4) {
-                    Label("Webcam quality", systemImage: "camera.fill")
-                        .font(AppType.label).foregroundStyle(Tok.text)
+                    Text("Webcam quality").font(AppType.label).foregroundStyle(Tok.text)
                     Spacer(minLength: Space.s4)
                     LSegmented(sel: Bindable(app).webcamQuality, items: WebcamQuality.allCases.map { ($0, $0.title) },
                                track: Tok.control, thumb: Tok.controlHover)
@@ -322,10 +321,10 @@ struct LibrarySurface: View {
                 .frame(height: 48)
             }
             HStack(spacing: Space.s4) {
-                Label("Microphone test", systemImage: "waveform")
-                    .font(AppType.label).foregroundStyle(Tok.text)
+                PixelMic(cell: 2)
+                Text("Microphone test").font(AppType.label).foregroundStyle(Tok.text)
                 Spacer(minLength: Space.s4)
-                LButton(title: app.micTesting ? "Testing…" : "Test", kind: .quiet, height: 24) { app.testMicrophone() }
+                LButton(title: app.micTesting ? "Testing…" : "Test", kind: .secondary, height: 24) { app.testMicrophone() }
                     .disabled(app.micTesting)
                 PixelMeter(level: app.micTestLevel).frame(width: 80)
             }
@@ -334,9 +333,9 @@ struct LibrarySurface: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func compactToggle(_ label: String, icon: String, _ on: Binding<Bool>) -> some View {
+    private func compactToggle(_ label: String, _ on: Binding<Bool>) -> some View {
         HStack(spacing: Space.s4) {
-            Label(label, systemImage: icon).font(AppType.label).foregroundStyle(Tok.text)
+            Text(label).font(AppType.label).foregroundStyle(Tok.text)
             Spacer(minLength: Space.s4)
             LToggle(on: on, label: label)
         }
@@ -344,7 +343,7 @@ struct LibrarySurface: View {
     }
 
     private func field<C: View>(_ label: String, icon: String, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: Space.s1) {
+        VStack(alignment: .leading, spacing: Space.s2) {
             Label(label, systemImage: icon).font(AppType.caption).foregroundStyle(Tok.text2)
             content()
         }

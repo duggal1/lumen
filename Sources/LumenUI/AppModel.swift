@@ -51,6 +51,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     public var paused = false
     public var micTesting = false
     public var micTestLevel: Float = 0
+    private var micTestEngine: AVAudioEngine?
     /// Bundles that crashed mid-recording and can be rebuilt from their journal.
     var recoverable: [ProjectBundle] = []
     var kind = SourceKind(rawValue: UserDefaults.standard.string(forKey: "LumenDefaultSource") ?? "") ?? .display {
@@ -276,21 +277,29 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         micTesting = true
         micTestLevel = 0
         let engine = AVAudioEngine()
+        micTestEngine = engine
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            micTesting = false
+            micTestEngine = nil
+            return
+        }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
             guard let ch = buffer.floatChannelData?[0] else { return }
             let n = Int(buffer.frameLength)
+            guard n > 0 else { return }
             var sum: Float = 0
             for i in 0..<n { sum += ch[i] * ch[i] }
-            let rms = (sum / Float(max(n, 1))).squareRoot()
+            let rms = (sum / Float(n)).squareRoot()
             Task { @MainActor in self.micTestLevel = max(self.micTestLevel * 0.8, rms) }
         }
-        do { try engine.start() } catch { micTesting = false; return }
+        do { try engine.start() } catch { micTesting = false; micTestEngine = nil; return }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
-            engine.stop()
-            input.removeTap(onBus: 0)
+            self.micTestEngine?.inputNode.removeTap(onBus: 0)
+            self.micTestEngine?.stop()
+            self.micTestEngine = nil
             self.micTesting = false
             self.micTestLevel = 0
         }

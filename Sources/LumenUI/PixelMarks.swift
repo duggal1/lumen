@@ -5,6 +5,7 @@ enum Bitmap {
     static let disc = ["..###..", ".#####.", "#######", "#######", "#######", ".#####.", "..###.."]
     static let arrowRight = ["....#..", ".....#.", "#######", ".....#.", "....#.."]
     static let failed = ["#...#", ".#.#.", "..#..", ".#.#.", "#...#"]
+    static let mic = ["..#..", ".###.", "#####", "#####", ".###.", "..#..", "..#.."]
     static let bang = ["..#..", "..#..", "..#..", ".....", "..#.."]
     /// The lens is the aperture at dialog scale: rim in accent, head in white.
     static let lens = ["..###..", ".#...#.", "#.....#", "#..W..#", "#.....#", ".#...#.", "..###.."]
@@ -28,6 +29,12 @@ struct PixelBitmap: View {
 struct PixelLens: View {
     var cell: CGFloat = 2
     var body: some View { PixelBitmap(rows: Bitmap.lens, cell: cell, color: Tok.accent) }
+}
+
+/// Pixelated microphone for the mic test row.
+struct PixelMic: View {
+    var cell: CGFloat = 2
+    var body: some View { PixelBitmap(rows: Bitmap.mic, cell: cell, color: Tok.text) }
 }
 
 /// 11 x 11 frame lock: empty states. Corners are brackets, centre is the head, edge midpoints are dust.
