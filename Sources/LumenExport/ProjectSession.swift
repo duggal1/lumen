@@ -93,9 +93,13 @@ public final class ProjectSession: @unchecked Sendable {
         let file = try b.load(), meta = file.meta, origin = meta.clock.originHostSeconds
         let events = (try? b.events(origin: origin)) ?? []
         let ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
-        var mic: [Float]?, sys: [Float]?, micOff = 0.0, sysOff = 0.0
+        var mic: [Float]?, sys: [Float]?, sysRight: [Float]?
+        var micOff = 0.0, sysOff = 0.0
         if let m = meta.mic { mic = try? AudioIO.readMono(b.micURL); micOff = m.startHostSeconds - origin }
-        if let s = meta.system { sys = try? AudioIO.readMono(b.systemURL); sysOff = s.startHostSeconds - origin }
+        if let s = meta.system {
+            if let (left, right) = try? AudioIO.readStereo(b.systemURL) { sys = left; sysRight = right }
+            sysOff = s.startHostSeconds - origin
+        }
         // Older projects have no extra tracks. An unavailable/missing device
         // recording is skipped on reopen without losing the rest of the project.
         let extras: [RecordedMicrophone] = meta.additionalMicrophones.compactMap { item in
@@ -128,6 +132,7 @@ public final class ProjectSession: @unchecked Sendable {
                                   webcamAspect: aspect, transcript: tf?.transcript.shifted(by: micOff))
         let s = ProjectSession(bundle: b, meta: meta, screen: screen, webcam: web, input: input,
                                mixer: AudioMixer(mic: mic, micOffset: micOff, system: sys, systemOffset: sysOff,
+                                                 systemRight: sysRight,
                                                  additionalMicrophones: extras, cacheDir: b.cacheURL),
                                transcriptFile: tf, micOffset: micOff, waveform: wave, cursors: CursorLibrary.load(from: b.cursorsURL), device: sharedDevice)
         return (s, file.timeline)
