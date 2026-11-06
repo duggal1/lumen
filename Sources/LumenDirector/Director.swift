@@ -232,7 +232,8 @@ extension Timeline {
         let cs = CursorSample(position: pos, velocity: vel, opacity: cf(cr(u.opacity, f), 0, 1), press: cr(u.press, f),
                               shape: u.shape[min(Int(f.rounded()), u.shape.count - 1)])
         var rings: [ClickRing] = []
-        if let dur = cursor.clickRing, !d.clicks.isEmpty {
+        if cursor.clickRing != nil, cursor.clickEffect != .none, !d.clicks.isEmpty {
+            let dur = max(cursor.clickDuration, 0.05)
             var lo = 0, hi = d.clicks.count
             while lo < hi { let m = (lo + hi) / 2; if d.clicks[m].t <= t - dur { lo = m + 1 } else { hi = m } }
             var i = lo
