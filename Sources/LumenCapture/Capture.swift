@@ -59,12 +59,25 @@ public final class CAFWriter: @unchecked Sendable {
         let pts = hostTime ?? sb.presentationTimeStamp.seconds, box = AudioBox(buf: buf)
         q.async { [self] in
             if file == nil {
-                var settings = box.buf.format.settings
-                settings[AVLinearPCMIsNonInterleaved] = false
-                file = try? AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+                // File and buffer processing formats must agree. Previously
+                // forcing interleaved settings while using a planar writer
+                // could fail silently and discard the captured microphone.
+                let format = box.buf.format
+                do {
+                    file = try AVAudioFile(forWriting: url, settings: format.settings,
+                                           commonFormat: .pcmFormatFloat32,
+                                           interleaved: format.isInterleaved)
+                } catch {
+                    NSLog("Lumen audio writer creation failed: %@", String(describing: error))
+                    return
+                }
                 first.withLock { $0 = pts }
             }
-            try? file?.write(from: box.buf)
+            do {
+                try file?.write(from: box.buf)
+            } catch {
+                NSLog("Lumen audio buffer write failed: %@", String(describing: error))
+            }
         }
     }
     func close() { q.sync { file = nil } }
