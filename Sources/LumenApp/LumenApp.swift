@@ -7,6 +7,7 @@ struct LumenApp: App {
     var body: some Scene {
         Window("Lumen", id: "library") {
             LibraryRoot(app).background(WindowChrome())
+                .onOpenURL { app.openURL($0) }
         }
         .defaultSize(width: Metrics.windowW, height: Metrics.windowH)
         .windowStyle(.hiddenTitleBar)
@@ -19,7 +20,7 @@ struct LumenApp: App {
         MenuBarExtra {
             MenuBarContent(app)
         } label: {
-            Label(app.recordingStatus, systemImage: app.phase == .recording ? "record.circle.fill" : "record.circle")
+            Label(app.recordingStatus, systemImage: app.phase == .recording ? (app.paused ? "pause.circle.fill" : "record.circle.fill") : "record.circle")
         }
     }
 }

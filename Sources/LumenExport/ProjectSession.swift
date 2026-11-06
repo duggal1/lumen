@@ -18,13 +18,40 @@ public final class ProjectSession: @unchecked Sendable {
     private let inputState: OSAllocatedUnfairLock<DirectorInput>
     public var input: DirectorInput { inputState.withLock { $0 } }
     public let mixer: AudioMixer
+    public let transcriptFile: TranscriptFile?
+    public let micOffset: Double
     public let waveform: [Float]                 // 100 Hz peaks in SOURCE time, 0...1
     public let cursors: [CustomCursor]
+    /// Shared across the project's decoder; imported clips open their own
+    /// `ReaderFrameSource` lazily and keep it for the life of the session.
+    private let device: SendableMetalDevice
+    private let clipSources = OSAllocatedUnfairLock<[String: ReaderFrameSource]>(initialState: [:])
     init(bundle: ProjectBundle, meta: ProjectMeta, screen: ReaderFrameSource, webcam: (any FrameSource)?, input: DirectorInput,
-         mixer: AudioMixer, waveform: [Float], cursors: [CustomCursor]) {
+         mixer: AudioMixer, transcriptFile: TranscriptFile?, micOffset: Double, waveform: [Float], cursors: [CustomCursor], device: SendableMetalDevice) {
         self.bundle = bundle; self.meta = meta; self.screen = screen; self.webcam = webcam
         inputState = OSAllocatedUnfairLock(initialState: input)
-        self.mixer = mixer; self.waveform = waveform; self.cursors = cursors
+        self.mixer = mixer; self.transcriptFile = transcriptFile; self.micOffset = micOffset; self.waveform = waveform; self.cursors = cursors; self.device = device
+    }
+
+    /// One frame for an OUTPUT time. Recording times read the screen track at
+    /// the source time the TimeMap resolves; imported clips read their own file.
+    /// Preview and export both go through here so a clip and the recording
+    /// cannot disagree about what is on screen at a given moment.
+    public func frames(atOutput t: Double, timeline tl: Timeline) async throws -> (screen: SourceFrame, webcam: SourceFrame?) {
+        if let (clip, time) = tl.clipSource(atOutput: t) {
+            let source = try await clipSource(for: clip.url)
+            return (try await source.frame(atSource: time), nil)
+        }
+        let s = tl.timeMap.source(atOutput: t)
+        let wf = tl.webcam != nil ? try? await webcam?.frame(atSource: s) : nil
+        return (try await screen.frame(atSource: s), wf)
+    }
+
+    private func clipSource(for url: URL) async throws -> ReaderFrameSource {
+        if let existing = clipSources.withLock({ $0[url.path] }) { return existing }
+        let source = try await ReaderFrameSource(url: url, device: device)
+        clipSources.withLock { $0[url.path] = source }
+        return source
     }
 
     public func derive(_ tl: Timeline, revision: Int) -> Timeline { Director.derive(tl, input: input, revision: revision) }
@@ -81,6 +108,7 @@ public final class ProjectSession: @unchecked Sendable {
             }
         }
         let vad = (primaryVAD + secondaryVAD).sorted { $0.lowerBound < $1.lowerBound }
+        let tf = b.loadTranscript()
         let wave = mic.map { envelope($0, offset: micOff) } ?? []
         let sharedDevice = SendableMetalDevice(device)
         let screen = try await ReaderFrameSource(url: b.screenURL, device: sharedDevice)
@@ -95,7 +123,7 @@ public final class ProjectSession: @unchecked Sendable {
         let s = ProjectSession(bundle: b, meta: meta, screen: screen, webcam: web, input: input,
                                mixer: AudioMixer(mic: mic, micOffset: micOff, system: sys, systemOffset: sysOff,
                                                  additionalMicrophones: extras, cacheDir: b.cacheURL),
-                               waveform: wave, cursors: CursorLibrary.load(from: b.cursorsURL))
+                               transcriptFile: tf, micOffset: micOff, waveform: wave, cursors: CursorLibrary.load(from: b.cursorsURL), device: sharedDevice)
         return (s, file.timeline)
     }
 

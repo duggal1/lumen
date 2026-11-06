@@ -171,19 +171,32 @@ static float3 sampleMip(texture2d<float> t, float2 uv, float minif) {
 // `tilt` is (yaw, pitch) in degrees. A small perspective divide is enough to
 // sell depth without ever sampling outside the source: the warp is clamped so
 // the visible rectangle can never exceed the original frame.
-struct ContentU { float4 content; float2 src; float2 cam; float scale; float radius; float border; float p; float2 tilt; };
+struct ContentU { float4 content; float2 src; float2 cam; float scale; float radius; float border; float p; float2 tilt; float4 radii; };
+
+// Standard rounded box with one radius per corner (tl, tr, br, bl). Only used
+// when the four corners actually differ; the squircle path stays for uniform
+// corners so existing looks do not change.
+static float sdCorners(float2 p, float2 h, float4 r) {
+    float rr = (p.x < 0.0) ? ((p.y < 0.0) ? r.x : r.w) : ((p.y < 0.0) ? r.y : r.z);
+    rr = clamp(rr, 0.5, min(h.x, h.y));
+    float2 q = abs(p) - h + rr;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rr;
+}
 
 fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]], texture2d<float> src [[texture(0)]]) {
     float2 h = u.content.zw * 0.5;
-    float d = sdSquircle(in.px - (u.content.xy + h), h, u.radius);
+    float4 R = u.radii;
+    float d = (R.x == R.y && R.y == R.z && R.z == R.w)
+        ? sdSquircle(in.px - (u.content.xy + h), h, R.x)
+        : sdCorners(in.px - (u.content.xy + h), h, R);
     float w = max(fwidth(d), 1e-3);
     float a = clamp(0.5 - d / w, 0.0, 1.0);
     if (a <= 0.0) return float4(0.0);
     float2 view = u.src / u.scale;
     float2 n = (in.px - u.content.xy) / u.content.zw - 0.5;
     if (abs(u.tilt.x) + abs(u.tilt.y) > 0.001) {
-        float ky = tan(radians(clamp(u.tilt.x, -18.0, 18.0)));
-        float kx = tan(radians(clamp(u.tilt.y, -18.0, 18.0)));
+        float ky = tan(clamp(u.tilt.x, -18.0, 18.0) * 0.01745329252);
+        float kx = tan(clamp(u.tilt.y, -18.0, 18.0) * 0.01745329252);
         n = clamp(float2(n.x * (1.0 + ky * n.y * 2.0), n.y * (1.0 + kx * n.x * 2.0)),
                   float2(-0.5), float2(0.5));
     }

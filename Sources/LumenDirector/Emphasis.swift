@@ -23,8 +23,12 @@ public struct HighlightFrame: Sendable, Equatable, Identifiable {
 
 public struct LoupeFrame: Sendable, Equatable, Identifiable {
     public var id: UUID
-    public var center: SIMD2<Float>
+    /// SOURCE pixel the glass looks at (follows the cursor when the loupe does).
+    public var target: SIMD2<Float>
+    /// Canvas-normalized centre where the glass itself sits.
+    public var glass: SIMD2<Float>
     public var radius: Float
+    public var border: Float
     public var magnification: Float
     public var round: Bool
     public var opacity: Float
@@ -91,9 +95,11 @@ enum Emphasis {
 
     private static func loupeFrame(_ loupe: Loupe, t: Double, cursor: SIMD2<Float>) -> LoupeFrame? {
         guard t >= loupe.start, t < loupe.end else { return nil }
-        let center = loupe.follow ? cursor : SIMD2(Float(loupe.x), Float(loupe.y))
-        return LoupeFrame(id: loupe.id, center: center, radius: Float(max(loupe.radius, 0)),
-                          magnification: Float(clamp(loupe.magnification, 1.5, 4)), round: loupe.round,
+        let target = loupe.follow ? cursor : SIMD2(Float(loupe.x), Float(loupe.y))
+        return LoupeFrame(id: loupe.id, target: target,
+                          glass: SIMD2(Float(clamp(loupe.cx, 0.05, 0.95)), Float(clamp(loupe.cy, 0.05, 0.95))),
+                          radius: Float(max(loupe.radius, 0.02)), border: Float(max(loupe.border, 0.001)),
+                          magnification: Float(clamp(loupe.magnification, 1.2, 6)), round: loupe.round,
                           opacity: envelope(t, start: loupe.start, end: loupe.end))
     }
 

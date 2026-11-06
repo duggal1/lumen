@@ -26,6 +26,9 @@ public struct RecordingConfig: Sendable {
 
 private struct AudioBox: @unchecked Sendable { let buf: AVAudioPCMBuffer }
 
+/// (samples, count, sampleRate, hostSeconds of the buffer's first sample). Called on the audio queue; must not block or allocate.
+public typealias AudioTap = @Sendable (UnsafePointer<Float>, Int, Double, Double) -> Void
+
 /// Float32 PCM CAF writer. Owns its file; all file IO on a private serial queue.
 public final class CAFWriter: @unchecked Sendable {
     private let url: URL
@@ -33,6 +36,8 @@ public final class CAFWriter: @unchecked Sendable {
     private let q = DispatchQueue(label: "lumen.caf")
     public let level = OSAllocatedUnfairLock<Float>(initialState: 0)
     public let first = OSAllocatedUnfairLock<Double?>(initialState: nil)
+    private let tapBox = OSAllocatedUnfairLock<AudioTap?>(initialState: nil)
+    public func setTap(_ t: AudioTap?) { tapBox.withLock { $0 = t } }
     init(url: URL) { self.url = url }
 
     func append(_ sb: CMSampleBuffer, hostTime: Double? = nil) {
@@ -48,6 +53,7 @@ public final class CAFWriter: @unchecked Sendable {
             var s: Float = 0; for i in 0..<Int(n) { s += ch[i] * ch[i] }
             let rms = (s / Float(n)).squareRoot()
             level.withLock { $0 = rms }
+            if let tap = tapBox.withLock({ $0 }) { tap(ch, Int(n), fmt.sampleRate, sb.presentationTimeStamp.seconds) }
         }
         let pts = hostTime ?? sb.presentationTimeStamp.seconds, box = AudioBox(buf: buf)
         q.async { [self] in

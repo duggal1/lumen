@@ -131,12 +131,20 @@ enum CursorPipeline {
             let up = ups.first(where: { $0.t > d.t })?.t ?? (d.t + 0.2)
             windows.append((d.t - 0.12, min(up, d.t + 10) + 0.30))
         }
+        // Captured system cursors arrive as ids >= 1000 (see CursorCatalog).
+        // They are real artwork, so they win over both the arrow and the
+        // synthetic press-window hand: swapping a custom cursor for the stock
+        // hand would show the wrong pointer at the moment of a click.
+        let customFloor: UInt16 = 1000
+        let shapeEv = events.filter { $0.cursorShape > 0 && $0.t >= lo && $0.t <= hi }.sorted { $0.t < $1.t }
         var shape = [UInt16](repeating: arrowID, count: n)
-        var wi = 0
+        var si = 0, current = arrowID, wi = 0
         for i in 0..<n {
             let t = lo + Double(i) / rate
+            while si < shapeEv.count && shapeEv[si].t <= t { current = shapeEv[si].cursorShape; si += 1 }
             while wi < windows.count && windows[wi].1 < t { wi += 1 }
-            if wi < windows.count, windows[wi].0 <= t { shape[i] = handID }
+            let pressing = wi < windows.count && windows[wi].0 <= t
+            shape[i] = (pressing && current < customFloor) ? handID : current
         }
 
         // source time -> output time resample (smoothing ran in source time)

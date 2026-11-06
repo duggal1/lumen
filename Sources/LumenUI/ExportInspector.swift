@@ -37,10 +37,10 @@ struct ExportInspector: View {
                         LDropdown(sel: model.exportBinding(\.container),
                                   options: ExportContainer.allCases.map { ($0, $0.rawValue, "film") })
                             .frame(width: 90)
-                            .disabled(settings.codec == .prores)
+                            .disabled(settings.codec.isProRes || settings.alpha)
                         LDropdown(sel: model.exportBinding(\.codec),
                                   options: VideoCodec.allCases.map { ($0, $0.title, "video") })
-                            .frame(width: 110)
+                            .frame(width: 130)
                     }
                 }
                 Row(label: "Resolution") {
@@ -81,6 +81,19 @@ struct ExportInspector: View {
                     }
                 }
                 ToggleRow(label: "Also 1:1 and 9:16", on: model.exportBinding(\.batchAspects))
+                ToggleRow(label: "Transparent background", on: model.exportBinding(\.alpha))
+                if settings.alpha {
+                    Text("Writes ProRes 4444 with a premultiplied alpha channel. Background, shadow and padding become transparent.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ToggleRow(label: "Separate cursor layer",
+                          on: model.exportBinding(\.cursorLayer))
+                if settings.cursorLayer {
+                    Text("Also writes a cursor-only ProRes 4444 .mov with alpha beside the movie, for editors that want the pointer on its own layer.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 ToggleRow(label: "Separate WAV stems",
                           on: Binding(get: { model.exportSeparateStems },
                                       set: { model.setSeparateWavStems($0) }))

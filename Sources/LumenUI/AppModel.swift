@@ -1,11 +1,13 @@
 import SwiftUI
 import AppKit
 import AVFoundation
+import UniformTypeIdentifiers
 @preconcurrency import ScreenCaptureKit
 import Carbon.HIToolbox
 import LumenCore
 import LumenProject
 import LumenCapture
+import LumenSpeech
 
 @MainActor @Observable public final class AppModel {
     public enum Phase: Equatable { case idle, preparing, countdown(Int), recording, finishing }
@@ -31,16 +33,21 @@ import LumenCapture
 
     public var recordingStatus: String {
         switch phase {
-        case .idle: "Lumen"
-        case .preparing: "Preparing recording"
-        case .countdown(let seconds): "Recording in \(seconds)"
+        case .idle: return "Lumen"
+        case .preparing: return "Preparing recording"
+        case .countdown(let seconds): return "Recording in \(seconds)"
         case .recording:
-            "Recording " + String(format: "%d:%02d", Int(stats?.elapsed ?? 0) / 60, Int(stats?.elapsed ?? 0) % 60)
-        case .finishing: "Saving recording"
+            let t = String(format: "%d:%02d", Int(stats?.elapsed ?? 0) / 60, Int(stats?.elapsed ?? 0) % 60)
+            return (paused ? "Paused " : "Recording ") + t
+        case .finishing: return "Saving recording"
         }
     }
 
     public var phase = Phase.idle
+    /// Mirrors `RecordingSession.isPaused` for the HUD.
+    public var paused = false
+    /// Bundles that crashed mid-recording and can be rebuilt from their journal.
+    var recoverable: [ProjectBundle] = []
     var kind = SourceKind(rawValue: UserDefaults.standard.string(forKey: "LumenDefaultSource") ?? "") ?? .display {
         didSet { UserDefaults.standard.set(kind.rawValue, forKey: "LumenDefaultSource") }
     }
@@ -68,7 +75,7 @@ import LumenCapture
     var system = false
     var webcam = false
     var livePreview = false
-    private var live: LivePreviewController?
+    private var livePreviewController: LivePreviewController?
     var displays: [(id: CGDirectDisplayID, name: String)] = []
     var windows: [(id: CGWindowID, name: String)] = []
     var error: String?
@@ -80,6 +87,10 @@ import LumenCapture
     private var hud: HUDController?
     private var hotKey: HotKey?
     private var poll: Task<Void, Never>?
+    let live = LiveCaptionModel()
+    var liveNote: String?
+    private var liveTranscriber: LiveTranscriber?
+    private var liveHUD: LiveCaptionPanel?
 
     public init() {
         library = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
@@ -107,6 +118,7 @@ import LumenCapture
                               dropped: meta?.droppedFrames ?? 0,
                               unreadable: meta == nil || !FileManager.default.fileExists(atPath: u.appendingPathComponent("screen.mov").path))
         }.sorted { $0.date > $1.date }
+        recoverable = RecoveryScanner.scan(library: library)
         Task {
             let c = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
             windows = (c?.windows ?? []).filter { $0.isOnScreen && ($0.title?.isEmpty == false) && $0.owningApplication?.bundleIdentifier != Bundle.main.bundleIdentifier }
@@ -192,8 +204,79 @@ import LumenCapture
     }
 
 
+    private func prepareLive(for cfg: RecordingConfig) async {
+        liveNote = nil
+        let on = UserDefaults.standard.object(forKey: CaptionKeys.enabled) as? Bool ?? true
+        guard cfg.mic, on, ProcessInfo.processInfo.environment["LUMEN_NO_LIVE_CAPTIONS"] == nil else { await session.setMicTap(nil); return }
+        let size = MoonshineSize.current
+        guard MoonshineRuntime.isAvailable, ModelStore.isInstalled(size) else {
+            liveNote = "Live captions are off: the Moonshine \(size.title) model isn't installed."
+            await session.setMicTap(nil); return
+        }
+        let t = LiveTranscriber(size: size)
+        liveTranscriber = t; live.attach(t)
+        let p = LiveCaptionPanel(live, app: self); liveHUD = p; p.show()      // before prepare(): the capture filter excludes our own windows
+        await session.setMicTap { ptr, n, rate, host in t.push(ptr, n, rate: rate, hostSeconds: host) }
+        t.start()                                                              // model loads during the countdown
+    }
+
+    private func finishLive(_ t: LiveTranscriber, bundle b: ProjectBundle) async {
+        let res = await t.finish()
+        live.detach(); liveHUD?.close(); liveHUD = nil; liveTranscriber = nil
+        guard !res.transcript.words.isEmpty || res.complete else { return }
+        try? b.saveTranscript(TranscriptFile(engine: res.engine, complete: res.complete, transcript: res.transcript))
+    }
+
     public func toggle() {
         switch phase { case .idle: Task { await start() }; case .recording: Task { await stop() }; default: break }
+    }
+
+    func togglePause() {
+        guard phase == .recording else { return }
+        Task {
+            await session.togglePause()
+            paused = await session.isPaused
+        }
+    }
+
+    /// Rebuilds a crashed recording from its journal and opens it.
+    func recover(_ bundle: ProjectBundle) {
+        do {
+            guard try bundle.recoverFromJournal() != nil else {
+                error = "This recording has no usable frames yet."; return
+            }
+            refresh()
+            onFinished?(bundle.url)
+        } catch { self.error = "Couldn’t recover this recording. \(error.localizedDescription)" }
+    }
+
+    func discardRecovery(_ bundle: ProjectBundle) {
+        bundle.clearJournal(); refresh()
+    }
+
+    func importSharedProject() {
+        let picker = NSOpenPanel()
+        picker.allowedContentTypes = [UTType(filenameExtension: "lumenshare") ?? .archive]
+        picker.allowsMultipleSelection = false
+        picker.prompt = "Import shared project"
+        guard picker.runModal() == .OK, let url = picker.url else { return }
+        do {
+            let bundle = try ProjectBundle.installSharePackage(url, into: library)
+            refresh()
+            onFinished?(bundle.url)
+        } catch { self.error = "Couldn’t import this shared project. \(error.localizedDescription)" }
+    }
+
+    /// `lumen://open?path=…` links copied from the editor.
+    public func openURL(_ url: URL) {
+        guard url.scheme == "lumen",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let path = components.queryItems?.first(where: { $0.name == "path" })?.value else { return }
+        let bundle = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: bundle.path) else {
+            error = "That project link points at a missing file."; return
+        }
+        onFinished?(bundle)
     }
 
     func start() async {
@@ -234,10 +317,11 @@ import LumenCapture
         } ?? NSScreen.main
         hud = HUDController(self, screen: recordingScreen)
         hud?.show()
-        if livePreview { live = LivePreviewController(); live?.show() }
+        await prepareLive(for: cfg)
+        if livePreview { livePreviewController = LivePreviewController(); livePreviewController?.show() }
         do {
             try await session.prepare(cfg, library: library)
-            if let hub = live?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }) }
+            if let hub = livePreviewController?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }) }
             for n in [3, 2, 1] { phase = .countdown(n); try await Task.sleep(for: .seconds(1)) }
             try await session.start(); phase = .recording
             hud?.show()
@@ -249,11 +333,18 @@ import LumenCapture
         phase = .finishing; poll?.cancel()
         do {
             let b = try await session.stop()
-            hud?.close(); hud = nil; live?.close(); live = nil; phase = .idle; refresh(); onFinished?(b.url)
+            paused = false
+            if let t = liveTranscriber { await finishLive(t, bundle: b) }
+            hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil; phase = .idle; refresh(); onFinished?(b.url)
         } catch { fail(error) }
     }
 
-    private func fail(_ e: Error) { poll?.cancel(); hud?.close(); hud = nil; live?.close(); live = nil; phase = .idle; error = "Recording failed. \(e)" }
+    private func fail(_ e: Error) {
+        poll?.cancel(); paused = false
+        liveTranscriber?.cancel(); liveTranscriber = nil; live.detach(); liveHUD?.close(); liveHUD = nil
+        hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
+        phase = .idle; error = "Recording failed. \(e)"
+    }
 }
 
 /// 12-hour by default, 24-hour from Settings. One format for every meta line.
@@ -354,11 +445,15 @@ struct HUDView: View {
                 Text("Recording starts…").font(AppType.body).foregroundStyle(Tok.text2); Spacer()
             case .recording:
                 PixelStop(cell: 2)
-                Text("Recording").font(AppType.label).foregroundStyle(Tok.text)
+                Text(app.paused ? "Paused" : "Recording").font(AppType.label)
+                    .foregroundStyle(app.paused ? Tok.activity : Tok.text)
                 Text(time(app.stats?.elapsed ?? 0)).font(AppType.label.monospacedDigit()).foregroundStyle(Tok.text)
                 PixelMeter(level: app.stats?.micLevel ?? 0)
                 if (app.stats?.dropped ?? 0) > 0 { PixelBadge(kind: .caution, text: "\(app.stats?.dropped ?? 0) dropped") }
-                Spacer(); LButton(title: "Stop", icon: "stop.fill", kind: .primary) { app.toggle() }
+                Spacer()
+                LButton(title: app.paused ? "Resume" : "Pause",
+                        icon: app.paused ? "play.fill" : "pause.fill", kind: .secondary) { app.togglePause() }
+                LButton(title: "Stop", icon: "stop.fill", kind: .primary) { app.toggle() }
             default:
                 PixelWait(); Text(app.phase == .finishing ? "Saving…" : "Preparing…").font(AppType.body).foregroundStyle(Tok.text2); Spacer()
             }

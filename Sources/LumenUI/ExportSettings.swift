@@ -6,7 +6,7 @@ enum ExportContainer: String, Codable, CaseIterable { case mp4 = "MP4", mov = "M
     var ext: String { rawValue.lowercased() }
 }
 enum ExportResolution: String, Codable, CaseIterable {
-    case source = "Source", ultraHD = "4K", p1440 = "1440p", p1080 = "1080p", p720 = "720p", custom = "Custom"
+    case source = "Source", ultraHD8K = "8K", ultraHD = "4K", p1440 = "1440p", p1080 = "1080p", p720 = "720p", custom = "Custom"
 }
 enum ExportRate: String, Codable, CaseIterable {
     case source = "Source", f24 = "24", f30 = "30", f60 = "60", f120 = "120", f144 = "144", f240 = "240"
@@ -38,6 +38,10 @@ struct ExportSettings: Codable, Equatable {
     var frameRate: ExportRate = .source
     var includeAudio = true
     var audioBitrate = 256_000
+    /// Premultiplied alpha channel. Forces ProRes 4444 in a .mov.
+    var alpha = false
+    /// A second, cursor-only movie with an alpha channel beside the main file.
+    var cursorLayer = false
     /// One click renders 16:9, 1:1 and 9:16. Each aspect is re-aimed by the Director.
     var batchAspects = false
     var folder: String = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)
@@ -45,10 +49,29 @@ struct ExportSettings: Codable, Equatable {
     var filename = "Lumen export"
 
     /// ProRes cannot be written into an MP4, so the container follows the codec.
-    var resolvedContainer: ExportContainer { codec == .prores ? .mov : container }
+    var resolvedContainer: ExportContainer { codec.isProRes || alpha ? .mov : container }
     var fileExtension: String { kind == .gif ? "gif" : resolvedContainer.ext }
 
     private static let key = "lumen.export.settings.v2"
+
+    enum CodingKeys: String, CodingKey {
+        case kind, container, codec, quality, resolution, customWidth, customHeight, frameRate, includeAudio,
+             audioBitrate, alpha, cursorLayer, batchAspects, folder, filename
+    }
+    init() {}
+    /// Older settings files predate alpha/cursor-layer delivery; missing keys
+    /// fall back to defaults instead of discarding the user's whole setup.
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        func opt<T: Decodable>(_ k: CodingKeys, _ v: T) -> T { (try? c.decodeIfPresent(T.self, forKey: k)) ?? v }
+        kind = opt(.kind, kind); container = opt(.container, container); codec = opt(.codec, codec)
+        quality = opt(.quality, quality); resolution = opt(.resolution, resolution)
+        customWidth = opt(.customWidth, customWidth); customHeight = opt(.customHeight, customHeight)
+        frameRate = opt(.frameRate, frameRate); includeAudio = opt(.includeAudio, includeAudio)
+        audioBitrate = opt(.audioBitrate, audioBitrate); alpha = opt(.alpha, alpha)
+        cursorLayer = opt(.cursorLayer, cursorLayer); batchAspects = opt(.batchAspects, batchAspects)
+        folder = opt(.folder, folder); filename = opt(.filename, filename)
+    }
 
     static func load(defaultName: String) -> ExportSettings {
         if let data = UserDefaults.standard.data(forKey: key),
@@ -65,6 +88,7 @@ struct ExportSettings: Codable, Equatable {
     func dimensions(source: SourceInfo, aspect: Double) -> (Int, Int) {
         let height: Int = switch resolution {
         case .source: source.height
+        case .ultraHD8K: 4320
         case .ultraHD: 2160
         case .p1440: 1440
         case .p1080: 1080
@@ -80,8 +104,10 @@ struct ExportSettings: Codable, Equatable {
     func preset(source: SourceInfo, aspect: Double) -> ExportPreset {
         let (w, h) = dimensions(source: source, aspect: aspect)
         let fps = frameRate.fps(source: source.fps)
-        return ExportPreset(name: "\(w)x\(h)@\(fps)-\(codec.rawValue)",
-                            codec: codec, height: h, fps: fps, bpp: quality.bpp, customWidth: w)
+        let resolvedCodec: VideoCodec = alpha ? .prores4444 : codec
+        return ExportPreset(name: "\(w)x\(h)@\(fps)-\(resolvedCodec.rawValue)",
+                            codec: resolvedCodec, height: h, fps: fps, bpp: quality.bpp, customWidth: w,
+                            alpha: alpha && resolvedCodec.supportsAlpha)
     }
 
     func destinationURL() -> URL? {

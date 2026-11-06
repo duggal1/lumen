@@ -58,10 +58,7 @@ struct PreviewView: NSViewRepresentable {
         loop = Task.detached(priority: .userInitiated) {
             for await tick in stream {
                 if Task.isCancelled { break }
-                let sourceTime = tick.timeline.timeMap.source(atOutput: tick.t)
-                guard let screen = try? await session.screen.frame(atSource: sourceTime) else { continue }
-                let webcam = tick.timeline.webcam != nil
-                    ? try? await session.webcam?.frame(atSource: sourceTime) : nil
+                guard let (screen, webcam) = try? await session.frames(atOutput: tick.t, timeline: tick.timeline) else { continue }
                 let request = RenderRequest(timeline: tick.timeline, t: tick.t, screen: screen, webcam: webcam,
                                             canvas: tick.size, fps: tick.fps, backingScale: tick.backingScale,
                                             quality: .preview, uiTime: tick.uiTime, pointer: tick.pointer,

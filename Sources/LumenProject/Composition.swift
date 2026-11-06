@@ -131,3 +131,82 @@ public enum RecoveryScanner {
         return urls.filter { $0.pathExtension == "lumen" }.map(ProjectBundle.init(url:)).filter(\.isUnfinished)
     }
 }
+
+public extension ProjectBundle {
+    /// Writes a self-contained `.lumenshare` package. Caches, analysis, and
+    /// journals are left out; imported clips are copied inside and their paths
+    /// become bundle-relative so the package works on another Mac.
+    @discardableResult
+    func exportSharePackage(to destination: URL) throws -> URL {
+        let fm = FileManager.default
+        let staging = fm.temporaryDirectory.appendingPathComponent("lumen-share-\(UUID().uuidString).lumen")
+        defer { try? fm.removeItem(at: staging) }
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        let keep = ["project.json", "screen.mov", "mic.caf", "system.caf", "webcam.mov",
+                    "cursors.json", "events.bin", "ax.json", "frames.meta"]
+        for name in keep {
+            let source = url.appendingPathComponent(name)
+            guard fm.fileExists(atPath: source.path) else { continue }
+            try fm.copyItem(at: source, to: staging.appendingPathComponent(name))
+        }
+        var file = try load()
+        if !file.timeline.clips.isEmpty {
+            let clips = staging.appendingPathComponent("clips", isDirectory: true)
+            try fm.createDirectory(at: clips, withIntermediateDirectories: true)
+            for i in file.timeline.clips.indices {
+                let source = file.timeline.clips[i].url
+                guard fm.fileExists(atPath: source.path) else { continue }
+                let name = "\(file.timeline.clips[i].id.uuidString).\(source.pathExtension)"
+                try fm.copyItem(at: source, to: clips.appendingPathComponent(name))
+                file.timeline.clips[i].path = "clips/" + name
+            }
+        }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(file).write(to: staging.appendingPathComponent("project.json"), options: .atomic)
+
+        let zip = destination
+        try? fm.removeItem(at: zip)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-c", "-k", "--sequesterRsrc", "--keepParent", staging.path, zip.path]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw CocoaError(.fileWriteUnknown) }
+        return zip
+    }
+
+    /// Expands a `.lumenshare` package into the library and returns the local
+    /// bundle. Names are uniqued so importing twice never overwrites work.
+    static func installSharePackage(_ package: URL, into library: URL) throws -> ProjectBundle {
+        let fm = FileManager.default
+        let temp = fm.temporaryDirectory.appendingPathComponent("lumen-unpack-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: temp) }
+        try fm.createDirectory(at: temp, withIntermediateDirectories: true)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-x", "-k", package.path, temp.path]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw CocoaError(.fileReadCorruptFile) }
+        let unpacked = (try fm.contentsOfDirectory(at: temp, includingPropertiesForKeys: nil))
+            .first { $0.pathExtension == "lumen" }
+            ?? temp.appendingPathComponent(package.deletingPathExtension().lastPathComponent)
+        var name = unpacked.deletingPathExtension().lastPathComponent
+        var destination = library.appendingPathComponent(name).appendingPathExtension("lumen")
+        var n = 2
+        while fm.fileExists(atPath: destination.path) {
+            destination = library.appendingPathComponent("\(name) \(n)").appendingPathExtension("lumen")
+            n += 1
+        }
+        try fm.copyItem(at: unpacked, to: destination)
+        return ProjectBundle(url: destination)
+    }
+
+    /// A link other Lumen installs on this Mac can open directly.
+    var shareLink: String {
+        var components = URLComponents()
+        components.scheme = "lumen"; components.host = "open"
+        components.queryItems = [URLQueryItem(name: "path", value: url.path)]
+        return components.string ?? url.absoluteString
+    }
+}

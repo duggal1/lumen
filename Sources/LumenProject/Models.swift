@@ -564,7 +564,13 @@ public struct ProjectBundle: Sendable, Hashable {
         try e.encode(file).write(to: projectURL, options: .atomic)
     }
     public func load() throws -> ProjectFile {
-        try JSONDecoder().decode(ProjectFile.self, from: Data(contentsOf: projectURL))
+        var file = try JSONDecoder().decode(ProjectFile.self, from: Data(contentsOf: projectURL))
+        // Shared packages store imported clips relative to the bundle. Resolve
+        // them here so every consumer keeps seeing one absolute path.
+        for i in file.timeline.clips.indices where !file.timeline.clips[i].path.hasPrefix("/") {
+            file.timeline.clips[i].path = url.appendingPathComponent(file.timeline.clips[i].path).path
+        }
+        return file
     }
     /// events.bin stores absolute host seconds (crash-safe, append-only). Rebased here.
     public func events(origin: Double) throws -> [InputEvent] {

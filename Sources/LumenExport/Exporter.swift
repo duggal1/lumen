@@ -44,17 +44,16 @@ public enum FrameImage {
                           bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
         return c?.makeImage()
     }
-    /// One frame, fully rendered (CLI `frame`, GIF).
+    /// One frame, fully rendered (CLI `frame`, GIF, cursor sidecar).
     public static func render(renderer: Renderer, session: ProjectSession, timeline tl: Timeline, t: Double, canvas: SIMD2<Int>,
-                              fps: Double = 60) async throws -> CVPixelBuffer {
-        let s = tl.timeMap.source(atOutput: t)
-        let sf = try await session.screen.frame(atSource: s)
-        let wf = tl.webcam != nil ? try? await session.webcam?.frame(atSource: s) : nil
+                              fps: Double = 60, transparent: Bool = false, cursorOnly: Bool = false) async throws -> CVPixelBuffer {
+        let (sf, wf) = try await session.frames(atOutput: t, timeline: tl)
         guard let pb = makeBuffer(canvas.x, canvas.y) else { throw ExportError.render }
         let latch = Latch()
         let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: canvas, fps: fps,
                                 backingScale: session.meta.source.backingScale,
-                                personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true))
+                                personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true),
+                                transparent: transparent, cursorOnly: cursorOnly)
         guard renderer.render(req, into: pb, completion: { latch.fire() }) else { throw ExportError.render }
         await latch.wait(); return pb
     }
@@ -80,8 +79,12 @@ public enum Exporter {
     /// Offline export: GPU renders frame i+1 while the encoder consumes frame i (depth-2 pipeline).
     public static func run(session: ProjectSession, timeline tl: Timeline, preset p: ExportPreset, to url: URL,
                            includeAudio: Bool = true, audioBitrate: Int = 256_000, exportStems: Bool = false,
+                           exportCursorLayer: Bool = false,
                            progress: @escaping @Sendable (ExportProgress) -> Void) async throws {
         guard let d = tl.derived else { throw ExportError.noTimeline }
+        if p.alpha && !p.codec.supportsAlpha {
+            throw ExportError.writer("Transparent delivery needs ProRes 4444.")
+        }
         let benchmark = ProcessInfo.processInfo.environment["LUMEN_BENCHMARK"] == "1"
         let startedAt = HostClock.now()
         let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
@@ -97,7 +100,8 @@ public enum Exporter {
         }
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
         let h = preset.height, w = preset.width(aspect: aspect), fps = preset.fps
-        let total = max(Int(ceil(d.outputDuration * Double(fps) - 1e-8)), 1)
+        let compositionDuration = tl.compositionDuration
+        let total = max(Int(ceil(compositionDuration * Double(fps) - 1e-8)), 1)
 
         let mixed = includeAudio ? await Task.detached(priority: .userInitiated) { session.mixer.mix(tl) }.value : nil
         let caf = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".caf")
@@ -108,7 +112,8 @@ public enum Exporter {
         // Cancellation or an encoder error must not erase the previous export.
         let stagedURL = url.deletingLastPathComponent().appendingPathComponent(".lumen-export-\(UUID().uuidString).\(url.pathExtension)")
         defer { try? FileManager.default.removeItem(at: stagedURL) }
-        let writer = try AVAssetWriter(outputURL: stagedURL, fileType: preset.codec == .prores || url.pathExtension == "mov" ? .mov : .mp4)
+        let writer = try AVAssetWriter(outputURL: stagedURL,
+                                       fileType: preset.codec.isProRes || preset.alpha || url.pathExtension == "mov" ? .mov : .mp4)
         defer { if writer.status != .completed { writer.cancelWriting() } }
         let bitrate = Int(Double(w * h * fps) * (preset.bpp > 0 ? preset.bpp : 0.06))
         var comp: [String: Any] = [AVVideoExpectedSourceFrameRateKey: fps, AVVideoMaxKeyFrameIntervalDurationKey: 2]
@@ -118,13 +123,19 @@ public enum Exporter {
         case .hevc: codec = .hevc; comp[AVVideoAverageBitRateKey] = bitrate
         case .hevc10: codec = .hevc; comp[AVVideoAverageBitRateKey] = bitrate; comp[AVVideoProfileLevelKey] = kVTProfileLevel_HEVC_Main10_AutoLevel as String
         case .prores: codec = .proRes422HQ
+        case .prores4444: codec = .proRes4444
         }
-        let vi = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: codec, AVVideoWidthKey: w, AVVideoHeightKey: h,
-            AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: AVVideoColorPrimaries_P3_D65,
-                                        AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-                                        AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2],
-            AVVideoCompressionPropertiesKey: comp])
+        // Alpha is RGB data. Asking for a YCbCr matrix on a transparent render
+        // makes AVFoundation flatten the alpha channel, so leave colour keys
+        // off when the delivery is transparent.
+        var settings: [String: Any] = [AVVideoCodecKey: codec, AVVideoWidthKey: w, AVVideoHeightKey: h,
+                                       AVVideoCompressionPropertiesKey: comp]
+        if !preset.alpha {
+            settings[AVVideoColorPropertiesKey] = [AVVideoColorPrimariesKey: AVVideoColorPrimaries_P3_D65,
+                                                   AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                                                   AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2]
+        }
+        let vi = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         vi.expectsMediaDataInRealTime = false
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: vi, sourcePixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: preset.codec.pixelFormat, kCVPixelBufferWidthKey as String: w, kCVPixelBufferHeightKey as String: h,
@@ -171,10 +182,9 @@ public enum Exporter {
         }
         for i in 0..<total {
             try Task.checkCancellation()
-            let t = Double(i) / Double(fps), s = tl.timeMap.source(atOutput: t)
+            let t = Double(i) / Double(fps)
             let readStart = HostClock.now()
-            let sf = try await session.screen.frame(atSource: s)
-            let wf = tl.webcam != nil ? try? await session.webcam?.frame(atSource: s) : nil
+            let (sf, wf) = try await session.frames(atOutput: t, timeline: tl)
             decodeSeconds += HostClock.now() - readStart
             var pbo: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pbo)
@@ -182,7 +192,8 @@ public enum Exporter {
             let latch = Latch()
             let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: SIMD2(w, h), fps: Double(fps),
                                     backingScale: session.meta.source.backingScale,
-                                    personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true))
+                                    personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true),
+                                    transparent: preset.alpha)
             let compositeStart = HostClock.now()
             guard renderer.render(req, into: pb, completion: { latch.fire() }) else { throw ExportError.render }
             compositeSeconds += HostClock.now() - compositeStart
@@ -237,22 +248,88 @@ public enum Exporter {
                 try FileManager.default.moveItem(at: stem.temporary, to: stem.final)
             }
         }
+        if exportCursorLayer {
+            try Task.checkCancellation()
+            let sidecar = url.deletingPathExtension().appendingPathExtension("cursor.mov")
+            try await cursorLayer(session: session, timeline: tl, preset: preset, to: sidecar, progress: progress)
+        }
         if benchmark {
             let elapsed = HostClock.now() - startedAt
             let message = String(format: "Lumen export benchmark: %d frames in %.3fs (%.1f fps, %.2fx realtime) decode %.3fs GPU submit %.3fs GPU/encoder wait %.3fs other %.3fs\\n",
-                                 total, elapsed, Double(total) / max(elapsed, 0.001), d.outputDuration / max(elapsed, 0.001),
+                                 total, elapsed, Double(total) / max(elapsed, 0.001), compositionDuration / max(elapsed, 0.001),
                                  decodeSeconds, compositeSeconds, encodeWaitSeconds,
                                  max(0, elapsed - decodeSeconds - compositeSeconds - encodeWaitSeconds))
             FileHandle.standardError.write(Data(message.utf8))
         }
     }
 
+    /// Cursor-only movie with an alpha channel, for editors that want the
+    /// pointer on its own layer. Always ProRes 4444: HEVC alpha in MOV is not
+    /// reliably readable outside Apple's own apps.
+    public static func cursorLayer(session: ProjectSession, timeline tl: Timeline, preset p: ExportPreset, to url: URL,
+                                   progress: @escaping @Sendable (ExportProgress) -> Void) async throws {
+        let fps = p.fps, w = p.width(aspect: tl.style.aspectRatio), h = p.height
+        let total = max(Int(ceil(tl.compositionDuration * Double(fps) - 1e-8)), 1)
+        let staged = url.deletingLastPathComponent().appendingPathComponent(".lumen-cursor-\(UUID().uuidString).mov")
+        defer { try? FileManager.default.removeItem(at: staged) }
+        let writer = try AVAssetWriter(outputURL: staged, fileType: .mov)
+        let vi = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.proRes4444, AVVideoWidthKey: w, AVVideoHeightKey: h,
+            AVVideoCompressionPropertiesKey: [AVVideoExpectedSourceFrameRateKey: fps]])
+        vi.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: vi, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: w, kCVPixelBufferHeightKey as String: h,
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()])
+        guard writer.canAdd(vi) else { throw ExportError.writer("cannot add cursor layer input") }
+        writer.add(vi)
+        guard writer.startWriting() else { throw ExportError.writer(writer.error?.localizedDescription ?? "cursor layer startWriting failed") }
+        writer.startSession(atSourceTime: .zero)
+        guard let pool = adaptor.pixelBufferPool else { throw ExportError.writer("no cursor layer buffer pool") }
+        let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
+        for i in 0..<total {
+            try Task.checkCancellation()
+            let t = Double(i) / Double(fps)
+            let (sf, _) = try await session.frames(atOutput: t, timeline: tl)
+            var pbo: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pbo)
+            guard let pb = pbo else { throw ExportError.render }
+            let latch = Latch()
+            let req = RenderRequest(timeline: tl, t: t, screen: sf, canvas: SIMD2(w, h), fps: Double(fps),
+                                    backingScale: session.meta.source.backingScale,
+                                    personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true),
+                                    transparent: true, cursorOnly: true)
+            guard renderer.render(req, into: pb, completion: { latch.fire() }) else { throw ExportError.render }
+            await latch.wait()
+            while !vi.isReadyForMoreMediaData {
+                try Task.checkCancellation()
+                guard writer.status == .writing else { throw ExportError.writer(writer.error?.localizedDescription ?? "cursor layer stopped") }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            if !adaptor.append(pb, withPresentationTime: CMTime(value: Int64(i), timescale: Int32(fps))) {
+                throw ExportError.writer(writer.error?.localizedDescription ?? "cursor layer append failed")
+            }
+            if i == total - 1 || i % max(fps / 2, 1) == 0 {
+                progress(ExportProgress(frame: i + 1, total: total, notice: "Cursor layer"))
+            }
+        }
+        vi.markAsFinished()
+        await writer.finishWriting()
+        if writer.status != .completed { throw ExportError.writer(writer.error?.localizedDescription ?? "cursor layer export failed") }
+        if FileManager.default.fileExists(atPath: url.path) {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: staged)
+        } else {
+            try FileManager.default.moveItem(at: staged, to: url)
+        }
+    }
+
     /// GIF via ImageIO (its own palette quantization). Capped at 800 px wide and 15 fps.
     public static func gif(session: ProjectSession, timeline tl: Timeline, to url: URL,
                            progress: @escaping @Sendable (ExportProgress) -> Void) async throws {
-        guard let d = tl.derived else { throw ExportError.noTimeline }
+        guard tl.derived != nil else { throw ExportError.noTimeline }
         let w = 800, h = (Int((Double(w) / tl.style.aspectRatio).rounded()) + 1) & ~1, fps = 15
-        let total = max(Int(ceil(d.outputDuration * Double(fps) - 1e-8)), 1)
+        let total = max(Int(ceil(tl.compositionDuration * Double(fps) - 1e-8)), 1)
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
         guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, total, nil) else { throw ExportError.writer("gif") }
         CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)

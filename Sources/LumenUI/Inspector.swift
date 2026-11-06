@@ -7,7 +7,7 @@ import LumenAudio
 
 struct Inspector: View {
     let model: EditorModel
-    enum Tab: String, CaseIterable { case look = "Look", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", privacy = "Privacy", audio = "Audio", export = "Export" }
+    enum Tab: String, CaseIterable { case look = "Look", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export", transcript = "Transcript" }
     @State private var tab = Tab.look
     @State private var presets = EditorModel.loadPresets()
     @State private var newName = ""
@@ -16,28 +16,40 @@ struct Inspector: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 LDropdown(sel: $tab, options: Tab.allCases.filter { $0 != .webcam || model.timeline.webcam != nil }.map { ($0, $0.rawValue, icon($0)) })
-                switch tab {
-                case .look: look
-                case .cursor: cursor
-                case .camera: camera
-                case .layout: layout
-                case .audio: audio
-                case .webcam: webcam
-                case .captions: captions
-                case .privacy: privacy
-                case .export: export
-                }
+                tabBody
             }.padding(20)
         }.frame(width: Metrics.inspector).frame(maxHeight: .infinity).background(Tok.bg)
         .onChange(of: model.exportPanelRequest) { _, _ in tab = .export }
         .onChange(of: tab) { _, selected in model.exportPanelActive = selected == .export }
     }
 
+    @ViewBuilder private var tabBody: some View {
+        if tab == .transcript {
+            transcriptTab
+        } else {
+            switch tab {
+            case .look: look
+            case .cursor: cursor
+            case .camera: camera
+            case .layout: layout
+            case .audio: audio
+            case .webcam: webcam
+            case .captions: captions
+            case .timeline: timelineTab
+            case .privacy: privacy
+            case .export: export
+            default: EmptyView()
+            }
+        }
+    }
+
+    private var transcriptTab: some View { TranscriptTab(model: model) }
+
     private func icon(_ t: Tab) -> String {
         switch t {
         case .look: "paintpalette"; case .cursor: "cursorarrow"; case .camera: "video"
         case .layout: "rectangle.3.group"; case .audio: "waveform"; case .webcam: "person.crop.circle"
-        case .captions: "captions.bubble"; case .privacy: "lock"; case .export: "square.and.arrow.up"
+        case .captions: "captions.bubble"; case .timeline: "timeline.selection"; case .privacy: "lock"; case .export: "square.and.arrow.up"; case .transcript: "text.alignleft"
         }
     }
 
@@ -50,6 +62,87 @@ struct Inspector: View {
                         timeline.style.paddingInsets = insets
                     }
                 })
+    }
+
+    private func radiusCorner(_ key: WritableKeyPath<CornerRadii, Double>) -> Binding<Double> {
+        Binding(get: { model.timeline.style.radii[keyPath: key] },
+                set: { value in
+                    model.edit(coalesce: true) { timeline in
+                        var radii = timeline.style.radii
+                        radii[keyPath: key] = value
+                        timeline.style.cornerRadii = radii
+                    }
+                })
+    }
+
+    private func loupeBinding(_ loupe: Loupe, _ key: WritableKeyPath<Loupe, Double>) -> Binding<Double> {
+        Binding(get: { (model.timeline.overlays.loupes.first { $0.id == loupe.id } ?? loupe)[keyPath: key] },
+                set: { value in
+                    guard var l = model.timeline.overlays.loupes.first(where: { $0.id == loupe.id }) else { return }
+                    l[keyPath: key] = value
+                    model.updateLoupe(l)
+                })
+    }
+
+    /// Cuts, imported clips and manual taps share one tab because they are the
+    /// three things that change the shape of the deliverable itself.
+    private var timelineTab: some View {
+        let m = model
+        return VStack(spacing: 24) {
+            VStack(spacing: 0) {
+                Row(label: "Cuts") {
+                    LButton(title: "Cut 1s at playhead", icon: "scissors", kind: .quiet) { m.cutAtPlayhead() }
+                }
+                if m.timeline.timeMap.cuts.isEmpty {
+                    Text("No cuts. Use the Cut button in the transport to remove a second.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                ForEach(m.timeline.timeMap.cuts) { cut in
+                    Row(label: String(format: "%.1f – %.1f s", cut.start, cut.end)) {
+                        HStack(spacing: Space.s2) {
+                            Text(cut.origin.rawValue).font(AppType.caption).foregroundStyle(Tok.text2)
+                            LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.deleteCut(cut.id)) }
+                        }
+                    }
+                }
+            }.card()
+            VStack(spacing: 0) {
+                Row(label: "Video clips") {
+                    LButton(title: "Import…", icon: "film", kind: .quiet) { m.importClips() }
+                }
+                if m.timeline.clips.isEmpty {
+                    Text("Imported movies are appended after the recording on the same timeline.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                ForEach(m.timeline.clips) { clip in
+                    Row(label: clip.name.isEmpty ? URL(fileURLWithPath: clip.path).lastPathComponent : clip.name) {
+                        HStack(spacing: Space.s2) {
+                            Text(String(format: "%.1f s", clip.duration))
+                                .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                            LButton(title: "Jump", kind: .quiet) { m.seek(clip.start) }
+                            LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.deleteClip(clip.id)) }
+                        }
+                    }
+                }
+            }.card()
+            VStack(spacing: 0) {
+                Row(label: "Manual taps") {
+                    LButton(title: "Tap at playhead", icon: "cursorarrow.click", kind: .quiet) { m.addTapAtPlayhead() }
+                }
+                if m.timeline.overlays.taps.isEmpty {
+                    Text("Device recordings have no pointer events; taps add a click at the playhead position.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                ForEach(m.timeline.overlays.taps) { tap in
+                    Row(label: String(format: "%.1f s", tap.t)) {
+                        LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.deleteTap(tap.id)) }
+                    }
+                }
+            }.card()
+        }
     }
 
     private var look: some View {
@@ -123,6 +216,18 @@ struct Inspector: View {
             }.card()
             VStack(spacing: 0) {
                 SliderRow(label: "Radius", v: m.bind(\.style.cornerRadius), range: 0...40, fmt: { "\(Int($0))" })
+                ToggleRow(label: "Independent corners",
+                          on: Binding(get: { m.timeline.style.cornerRadii != nil },
+                                      set: { enabled in
+                                          m.edit { $0.style.cornerRadii = enabled
+                                              ? CornerRadii(all: $0.style.cornerRadius) : nil }
+                                      }))
+                if m.timeline.style.cornerRadii != nil {
+                    SliderRow(label: "Top left", v: radiusCorner(\.tl), range: 0...40, fmt: { "\(Int($0))" })
+                    SliderRow(label: "Top right", v: radiusCorner(\.tr), range: 0...40, fmt: { "\(Int($0))" })
+                    SliderRow(label: "Bottom right", v: radiusCorner(\.br), range: 0...40, fmt: { "\(Int($0))" })
+                    SliderRow(label: "Bottom left", v: radiusCorner(\.bl), range: 0...40, fmt: { "\(Int($0))" })
+                }
                 SliderRow(label: "Shadow", v: m.bind(\.style.shadow), range: 0...1)
                 ToggleRow(label: "Inner border", on: m.bind(\.style.innerBorder))
             }.card()
@@ -199,10 +304,12 @@ struct Inspector: View {
                 Row(label: "Preset") { LDropdown(sel: Binding(get: { m.timeline.camera.preset }, set: { v in m.edit { $0.camera.apply(preset: v) } }), options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "plus.magnifyingglass") }).frame(width: 130) }
                 Row(label: "Tilt") { LDropdown(sel: m.bind(\.camera.tilt), options: TiltMode.allCases.map { ($0, $0.rawValue.capitalized, "move.3d") }).frame(width: 130) }
                 SliderRow(label: "Max zoom", v: m.bind(\.camera.maxScale), range: 1.2...4, fmt: { String(format: "%.1f×", $0) })
+                SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.05...2.5, fmt: { String(format: "%.2f×", $0) })
                 SliderRow(label: "Smoothness", v: smooth, range: 0...1)
             }.card()
             VStack(spacing: 0) {
                 SliderRow(label: "Dead zone", v: m.bind(\.camera.deadZone), range: 0.1...0.45)
+                SliderRow(label: "Click weight", v: m.bind(\.camera.clickWeight), range: 1...8, fmt: { String(format: "%.1f×", $0) })
                 SliderRow(label: "Motion blur", v: m.bind(\.camera.shutter), range: 0...1)
                 SliderRow(label: "Hover sensitivity", v: m.bind(\.camera.sensitivity), range: 0...1,
                           fmt: { "\(Int($0 * 100))%" })
@@ -324,6 +431,63 @@ struct Inspector: View {
                         }).frame(width: 120)
                         LButton(title: "Remove", icon: "trash", kind: .quiet) {
                             m.dispatch(.deleteHighlight(highlight.id))
+                        }
+                    }
+                }
+            }.card()
+            VStack(spacing: 0) {
+                Row(label: "Magnifier") {
+                    LButton(title: "Add loupe", icon: "plus.magnifyingglass", kind: .quiet) { m.addLoupe() }
+                }
+                ForEach(m.timeline.overlays.loupes) { loupe in
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text(String(format: "%.1fs", loupe.start)).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                            Spacer()
+                            LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.deleteLoupe(loupe.id)) }
+                        }
+                        SliderRow(label: "Zoom", v: loupeBinding(loupe, \.magnification), range: 1.2...6,
+                                  fmt: { String(format: "%.1f×", $0) })
+                        SliderRow(label: "Glass size", v: loupeBinding(loupe, \.radius), range: 0.04...0.3,
+                                  fmt: { "\(Int($0 * 100))%" })
+                        SliderRow(label: "Border", v: loupeBinding(loupe, \.border), range: 0.001...0.02,
+                                  fmt: { String(format: "%.0f‰", $0 * 1000) })
+                        SliderRow(label: "X", v: loupeBinding(loupe, \.cx), range: 0.05...0.95)
+                        SliderRow(label: "Y", v: loupeBinding(loupe, \.cy), range: 0.05...0.95)
+                        ToggleRow(label: "Follow cursor", on: Binding(
+                            get: { m.timeline.overlays.loupes.first(where: { $0.id == loupe.id })?.follow ?? loupe.follow },
+                            set: { value in
+                                var l = m.timeline.overlays.loupes.first(where: { $0.id == loupe.id }) ?? loupe
+                                l.follow = value; m.updateLoupe(l)
+                            }))
+                    }
+                }
+            }.card()
+            VStack(alignment: .leading, spacing: Space.s2) {
+                HStack(spacing: Space.s2) {
+                    Text("Transcript").font(AppType.title).foregroundStyle(Tok.text)
+                    Spacer(minLength: Space.s2)
+                    LButton(title: "Remove fillers", icon: "text.badge.xmark", kind: .quiet) { m.removeFillerWords() }
+                }
+                if m.transcriptWords.isEmpty {
+                    Text("Transcript appears after speech analysis finishes.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                } else {
+                    Text("Edit a word to fix a caption; delete removes it from captions and the cut map.")
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                    ForEach(Array(m.transcriptWords.prefix(200).enumerated()), id: \.offset) { index, word in
+                        let deleted = m.timeline.captions.deletedWords.contains(index)
+                        HStack(spacing: Space.s2) {
+                            Text(String(format: "%.1f", word.start))
+                                .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2).frame(width: 42, alignment: .trailing)
+                            TextField("Word", text: Binding(
+                                get: { m.timeline.captions.textEdits[String(index)] ?? word.text },
+                                set: { m.editTranscriptWord(index, $0) }))
+                                .textFieldStyle(.plain).font(AppType.body)
+                                .strikethrough(deleted).foregroundStyle(deleted ? Tok.text2 : Tok.text)
+                            LButton(title: deleted ? "Restore" : "Delete", kind: .quiet) {
+                                m.setTranscriptWord(index, deleted: !deleted)
+                            }
                         }
                     }
                 }

@@ -237,8 +237,8 @@ public final class AudioMixer: @unchecked Sendable {
     /// Separate WAV stems in the same OUTPUT timeline as the encoded movie.
     /// This is intentionally opt-in, since it requires extra offline processing.
     public func stems(_ tl: Timeline) -> [AudioStem] {
-        guard let d = tl.derived else { return [] }
-        let fs = AudioIO.fs, n = Int(d.outputDuration * fs) + 1
+        guard tl.derived != nil else { return [] }
+        let fs = AudioIO.fs, n = Int(tl.compositionDuration * fs) + 1
         guard n > 0 else { return [] }
         let a = tl.audio, tm = tl.timeMap
         var result: [AudioStem] = []
@@ -286,12 +286,26 @@ public final class AudioMixer: @unchecked Sendable {
             }
             result.append(AudioStem(name: "voiceover-\(voiceIndex)", left: left, right: right))
         }
-        return result
+        return result.map { stem in
+            var left = stem.left, right = stem.right
+            Self.silenceClips(tl, &left, &right, fs: fs)
+            return AudioStem(name: stem.name, left: left, right: right)
+        }
+    }
+
+    /// Imported clips have picture but no mixable audio yet. Zeroing their
+    /// spans stops the recording's last sample from droning under them.
+    static func silenceClips(_ tl: Timeline, _ L: inout [Float], _ R: inout [Float], fs: Double) {
+        for clip in tl.clips {
+            let a = max(Int(clip.start * fs), 0), b = min(Int(clip.end * fs) + 1, L.count)
+            guard b > a else { continue }
+            for i in a..<b { L[i] = 0; R[i] = 0 }
+        }
     }
 
     public func mix(_ tl: Timeline) -> MixedAudio? {
         guard let d = tl.derived else { return nil }
-        let fs = AudioIO.fs, n = Int(d.outputDuration * fs) + 1, a = tl.audio, tm = tl.timeMap
+        let fs = AudioIO.fs, n = Int(tl.compositionDuration * fs) + 1, a = tl.audio, tm = tl.timeMap
         var L = [Float](repeating: 0, count: n), R = L
         var hasProgram = false                                   // voice / system / music (not just SFX)
 
@@ -357,6 +371,7 @@ public final class AudioMixer: @unchecked Sendable {
             }
         }
 
+        Self.silenceClips(tl, &L, &R, fs: fs)
         var ch = [L, R]
         var lufs = Loudness.integrated(ch)
         let offsetDb: Double

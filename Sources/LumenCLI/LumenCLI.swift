@@ -8,11 +8,13 @@ import LumenRender
 import LumenAudio
 import LumenExport
 import LumenAnalysis
+import AVFoundation
+import LumenSpeech
 
 @main
 struct LumenCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "lumen-cli", abstract: "Headless Lumen",
-        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self])
+        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self])
 }
 
 func openProject(_ path: String) async throws -> (ProjectSession, Timeline) {
@@ -210,5 +212,28 @@ struct Smoothness: AsyncParsableCommand {
         _ = s
         if boundsOK != n { failed = true }
         if failed { throw ExitCode(1) }
+    }
+}
+
+
+struct Transcribe: AsyncParsableCommand {
+    @Argument var project: String
+    @Option var size = "tiny"
+    @Flag var save = false
+    func run() async throws {
+        guard let s = MoonshineSize(rawValue: size) else { throw ValidationError("size must be tiny, small or medium") }
+        guard MoonshineRuntime.isAvailable, ModelStore.isInstalled(s) else { throw ValidationError("Moonshine \(s.rawValue) is not installed.") }
+        let b = ProjectBundle(url: URL(fileURLWithPath: project))
+        let f = try AVAudioFile(forReading: b.micURL), audioSec = Double(f.length) / f.processingFormat.sampleRate
+        let t0 = HostClock.now()
+        let r = await FileTranscriber.run(url: b.micURL, size: s) { p in FileHandle.standardError.write(Data("\r\(Int(p * 100))%".utf8)) }
+        let wall = HostClock.now() - t0
+        switch r {
+        case .failure(let e): throw ValidationError(e.description)
+        case .success(let tr):
+            if save { try b.saveTranscript(TranscriptFile(engine: "moonshine-streaming-\(s.rawValue)", complete: true, transcript: tr)) }
+            try jsonOut(["engine": "moonshine-streaming-\(s.rawValue)", "audioSeconds": audioSec, "wallSeconds": wall, "realtimeFactor": audioSec / max(wall, 1e-6),
+                         "words": tr.words.count, "text": tr.words.map(\.text).joined(separator: " ")] as [String: Any], to: nil)
+        }
     }
 }

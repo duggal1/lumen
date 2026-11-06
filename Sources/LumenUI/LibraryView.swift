@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import AVFoundation
 import LumenCapture
+import LumenProject
 
 public struct LibraryRoot: View {
     let app: AppModel
@@ -41,6 +42,7 @@ struct LibrarySurface: View {
                     subtitle
                     if let problem = permissionNotice { notice(problem.text, action: problem.action) }
                     if let error = app.error { failure(error) }
+                    ForEach(app.recoverable, id: \.url) { bundle in recovery(bundle) }
                     LedgerCard(app: app)
                     ActivityCard(app: app)
                     RecentRecordings(app: app, open: open, reveal: reveal, delete: delete)
@@ -71,6 +73,9 @@ struct LibrarySurface: View {
         HStack(alignment: .bottom, spacing: Space.s4) {
             PageTitle(text: "Library")
             Spacer(minLength: Space.s4)
+            if app.phase == .idle {
+                LButton(title: "Import", icon: "square.and.arrow.down", kind: .quiet) { app.importSharedProject() }
+            }
             primaryAction
         }
         .padding(.horizontal, Metrics.pagePad)
@@ -127,6 +132,25 @@ struct LibrarySurface: View {
         }
         .padding(.horizontal, Space.s3)
         .frame(height: 40)
+        .background(RoundedRectangle(cornerRadius: Radius.nested).fill(Tok.control))
+    }
+
+    /// A recording that crashed before the project was written. The journal has
+    /// the frames on disk; recovery rebuilds the timeline around them.
+    private func recovery(_ bundle: ProjectBundle) -> some View {
+        HStack(spacing: Space.s3) {
+            Image(systemName: "clock.arrow.circlepath").font(.system(size: 14)).foregroundStyle(Tok.activity)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Unfinished recording").font(AppType.label).foregroundStyle(Tok.text)
+                Text(bundle.url.deletingPathExtension().lastPathComponent)
+                    .font(AppType.caption).foregroundStyle(Tok.text2).lineLimit(1)
+            }
+            Spacer(minLength: Space.s4)
+            LButton(title: "Discard", kind: .quiet, height: 24) { app.discardRecovery(bundle) }
+            LButton(title: "Recover", icon: "arrow.clockwise", kind: .primary, height: 24) { app.recover(bundle) }
+        }
+        .padding(.horizontal, Space.s3)
+        .frame(minHeight: 44)
         .background(RoundedRectangle(cornerRadius: Radius.nested).fill(Tok.control))
     }
 
@@ -196,6 +220,7 @@ struct LibrarySurface: View {
             }
             compactToggle("System audio", Bindable(app).system)
             compactToggle("Webcam", Bindable(app).webcam)
+            LiveCaptionRows(note: app.liveNote)
             Text(preview).font(AppType.caption).foregroundStyle(Tok.text2)
                 .contentTransition(.opacity)
         }
@@ -276,6 +301,10 @@ public struct MenuBarContent: View {
         if app.phase != .idle {
             Text(app.recordingStatus)
             Button("Show recording controls") { app.showRecordingControls() }
+        }
+        if app.phase == .recording {
+            Button(app.paused ? "Resume recording" : "Pause recording") { app.togglePause() }
+                .keyboardShortcut("p", modifiers: [.option, .command])
         }
         Button(app.phase == .recording ? "Stop recording" : "Start recording") { app.toggle() }
             .keyboardShortcut("r", modifiers: [.option, .command])

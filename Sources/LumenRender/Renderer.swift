@@ -44,11 +44,16 @@ public struct Geometry: Sendable {
     public var canvas: SIMD2<Double>, src: SIMD2<Double>
     public var content: SIMD4<Double>        // x y w h in canvas px
     public var radius: Double, ui: Double
+    /// Per-corner radii in canvas px, ordered top-left, top-right, bottom-right,
+    /// bottom-left. Equal values mean the uniform squircle path.
+    public var radii: SIMD4<Double>
     public init(canvas c: SIMD2<Int>, src: SIMD2<Double>, style: Style) {
         let transform = ZoomTransform(canvas: c, source: src, style: style)
         canvas = transform.canvas; self.src = src
         content = transform.videoRect
         ui = canvas.x / 1440; radius = style.cornerRadius * ui
+        let r = style.radii
+        radii = SIMD4(r.tl, r.tr, r.br, r.bl) * ui
     }
     /// Source px -> canvas px for a given camera.
     public func toCanvas(_ p: SIMD2<Double>, cam: SIMD2<Double>, scale: Double) -> SIMD2<Double> {
@@ -62,7 +67,7 @@ private struct QuadU { var rect: SIMD4<Float>; var canvas: SIMD2<Float> }
 private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; var angle: Float; var count: Int32; var kind: Int32
                            var radius: Float; var shadow: Float; var scale: Float; var cell: Float; var density: Float; var hasWall: Int32
                            var time: Float; var pointer: SIMD4<Float> }
-private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float; var tilt: SIMD2<Float> }
+private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float; var tilt: SIMD2<Float>; var radii: SIMD4<Float> }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float }
 private struct PrivacyU {
@@ -490,15 +495,19 @@ public final class Renderer: @unchecked Sendable {
         func draw() { e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
 
         // content
-        e.setRenderPipelineState(pContent); quad(e, content, canvasF)
-        frag(e, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam), scale: Float(sc),
-                         radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0))
-        e.setFragmentTexture(src, index: 0); draw()
+        let drawingContent = !r.cursorOnly
+        if drawingContent {
+            e.setRenderPipelineState(pContent); quad(e, content, canvasF)
+            frag(e, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam), scale: Float(sc),
+                             radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0,
+                             tilt: st.cameraTilt, radii: SIMD4<Float>(g.radii)))
+            e.setFragmentTexture(src, index: 0); draw()
+        }
 
         // Every privacy mask is anchored to SOURCE pixels and transformed by
         // the exact same zoom camera as content. Mask before drawing cursor
         // and webcam, never by stamping a static canvas rectangle afterward.
-        if !st.emphasis.masks.isEmpty {
+        if drawingContent, !st.emphasis.masks.isEmpty {
             e.setRenderPipelineState(pPrivacy)
             let sourceSize = SIMD2<Float>(Float(g.src.x), Float(g.src.y))
             for mask in st.emphasis.masks {
@@ -526,7 +535,7 @@ public final class Renderer: @unchecked Sendable {
 
         // Highlight geometry follows the exact source-pixel camera transform.
         // Dimmer is drawn AFTER privacy redaction and never resamples raw pixels.
-        if !st.emphasis.highlights.isEmpty {
+        if drawingContent, !st.emphasis.highlights.isEmpty {
             e.setRenderPipelineState(pHighlight)
             for mark in st.emphasis.highlights where mark.opacity > 0.001 {
                 let start = g.toCanvas(SIMD2(Double(mark.rect.x), Double(mark.rect.y)), cam: cam, scale: sc)
@@ -542,6 +551,25 @@ public final class Renderer: @unchecked Sendable {
                 quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
                 frag(e, HighlightU(rect: bounds, content: content, opacity: mark.opacity,
                                     strength: mark.dim, mode: mode))
+                draw()
+            }
+        }
+
+        // Glass loupes: a magnified window over the source. Drawn before the
+        // cursor so the pointer stays visible above the glass.
+        if drawingContent, !st.emphasis.loupes.isEmpty {
+            e.setRenderPipelineState(pLoupe)
+            let sourceSize = SIMD2<Float>(Float(g.src.x), Float(g.src.y))
+            for glass in st.emphasis.loupes where glass.opacity > 0.001 {
+                let R = Float(max(glass.radius, 0.02)) * canvasF.x
+                let center = SIMD2<Float>(glass.glass.x * canvasF.x, glass.glass.y * canvasF.y)
+                quad(e, SIMD4<Float>(center.x - R * 1.35, center.y - R * 1.35, R * 2.7, R * 2.7), canvasF)
+                frag(e, LoupeU(glass: SIMD4<Float>(center.x, center.y, R, R * glass.border * 2),
+                               source: SIMD4<Float>(glass.target.x, glass.target.y, sourceSize.x, sourceSize.y),
+                               zoom: SIMD2<Float>(Float(sc), Float(max(glass.magnification, 1))),
+                               opacity: glass.opacity, round: glass.round ? 1 : 0,
+                               radius: R * 0.32))
+                e.setFragmentTexture(src, index: 0)
                 draw()
             }
         }
@@ -572,7 +600,7 @@ public final class Renderer: @unchecked Sendable {
 
         // Webcam placement is solved by the Director at output time. Never
         // replace its animated position with a hard-coded corner.
-        if let wl = tl.webcam, let web {
+        if drawingContent, let wl = tl.webcam, let web {
             let settings = tl.layoutSettings[st.layoutKind]
             let rect = st.layout.cameraRect
             let opacity = tl.derived == nil ? 1 : max(0, min(st.layout.cameraOpacity, 1))
@@ -625,14 +653,16 @@ public final class Renderer: @unchecked Sendable {
         // Both are source-time anchored; rasterization is cached by actual text/style,
         // with a different cache entry only when the highlighted word changes.
         var sprites: [TextOverlaySprite] = []
-        if let caption = st.caption, tl.captions.enabled,
+        if drawingContent, let caption = st.caption, tl.captions.enabled,
            let sprite = textCache.caption(caption, style: tl.captions.style,
                                           time: r.t, canvas: r.canvas, device: device) {
             sprites.append(sprite)
         }
-        for manual in st.emphasis.texts {
-            if let sprite = textCache.manual(manual, canvas: r.canvas, device: device) {
-                sprites.append(sprite)
+        if drawingContent {
+            for manual in st.emphasis.texts {
+                if let sprite = textCache.manual(manual, canvas: r.canvas, device: device) {
+                    sprites.append(sprite)
+                }
             }
         }
         if !sprites.isEmpty {

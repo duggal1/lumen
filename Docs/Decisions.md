@@ -16,3 +16,13 @@
 - Transcription reads the raw microphone track; VAD remains in LumenAudio.
 - Set LUMEN_NO_OCR=1 to disable sensitive-text OCR analysis.
 - Person segmentation is cached as a compact grayscale .lmask sequence; renderer integration is deferred to Part 5.
+
+- Transcription is Moonshine streaming through its C API behind `#if canImport(CMoonshine)`. Apple Speech is not used.
+- Captions need only the mic, so system audio is not transcribed.
+- The model is imported from a folder. There is no in-app download, because plan rule 9 forbids networking in the core app.
+- Word times come from the line span plus energy-dip snapping, because I couldn't confirm the runtime exposes per-word times.
+- The live worker polls at an adaptive 0.12–0.5 s interval with a 20% duty target, and skips polls during silence.
+- The stream restarts after 30 final lines plus 1 s of quiet, to bound per-poll cost and library memory.
+- Live results are marked incomplete if the 8 s ring overflows. The editor then re-transcribes from the file.
+- `transcript.json` stores mic-file time. `ProjectSession.micOffset` shifts it to source time.
+- The editor caption monitor is preview-only until the Part 5 caption render pass lands.

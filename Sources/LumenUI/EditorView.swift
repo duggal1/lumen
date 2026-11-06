@@ -36,6 +36,7 @@ struct EditorView: View {
                 HStack(spacing: 8) {
                     LIconButton(icon: "arrow.uturn.backward", label: "Undo") { model.undo() }.disabled(!model.canUndo)
                     LIconButton(icon: "arrow.uturn.forward", label: "Redo") { model.redo() }.disabled(!model.canRedo)
+                    LIconButton(icon: "person.2.badge.plus", label: "Share project") { model.shareProject() }
                     LButton(title: "Export", icon: "square.and.arrow.up",
                             kind: model.exportPanelActive ? .secondary : .primary) { model.openExportPanel() }
                 }
@@ -47,6 +48,7 @@ struct EditorView: View {
                         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                         .overlay { if model.focusEditing { FocusOverlay(model: model) } }
                         .overlay { if model.maskEditing { ManualMaskOverlay(model: model) } }
+                        .overlay(alignment: .bottom) { CaptionMonitor(model: model).padding(.bottom, 16).padding(.horizontal, 16).allowsHitTesting(false) }
                         .overlay { if model.zoomDebug { ZoomDebugOverlay(model: model) } }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     transport
@@ -72,7 +74,11 @@ struct EditorView: View {
                 .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
 #endif
             Spacer()
+            LButton(title: "Cut", icon: "scissors", kind: .quiet) { model.cutAtPlayhead() }
             LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
+            LButton(title: "Loupe", icon: "magnifyingglass.circle", kind: .quiet) { model.addLoupe() }
+            LButton(title: "Tap", icon: "cursorarrow.click", kind: .quiet) { model.addTapAtPlayhead() }
+            LButton(title: "Import clip", icon: "film", kind: .quiet) { model.importClips() }
             LButton(title: "Frame it", icon: "viewfinder", kind: .quiet) { if model.selection != nil { model.focusEditing.toggle() } }
             LButton(title: "Title", icon: "textformat", kind: .quiet) { model.addManualTitle() }
             LButton(title: "Highlight", icon: "highlighter", kind: .quiet) { model.addManualHighlight() }

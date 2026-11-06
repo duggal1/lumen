@@ -4,7 +4,11 @@ import PackageDescription
 func lib(_ n: String, _ deps: [String] = [], resources: [Resource]? = nil) -> Target {
     .target(name: n, dependencies: deps.map { .byName(name: $0) }, resources: resources)
 }
-let all = ["LumenCore", "LumenProject", "LumenDirector", "LumenCapture", "LumenRender", "LumenAudio", "LumenAnalysis", "LumenExport"]
+import Foundation
+let moonshineDir = Context.packageDirectory + "/Vendor/moonshine"
+let hasMoonshine = FileManager.default.fileExists(atPath: Context.packageDirectory + "/Sources/CMoonshine/include/moonshine-c-api.h")
+    && FileManager.default.fileExists(atPath: moonshineDir + "/lib/libmoonshine.dylib")
+let all = ["LumenCore", "LumenProject", "LumenDirector", "LumenCapture", "LumenRender", "LumenAudio", "LumenAnalysis", "LumenExport", "LumenSpeech"]
 
 let package = Package(
     name: "Lumen",
@@ -23,11 +27,17 @@ let package = Package(
         lib("LumenCapture", ["LumenCore", "LumenProject"]),
         lib("LumenRender", ["LumenCore", "LumenProject", "LumenDirector"], resources: [.process("Shaders")]),
         lib("LumenAudio", ["LumenCore", "LumenProject", "LumenDirector"]),
+        .target(name: "CMoonshine", path: "Sources/CMoonshine", publicHeadersPath: "include",
+                linkerSettings: [.unsafeFlags(["-L\(moonshineDir)/lib",
+                                               "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
+                                               "-Xlinker", "-rpath", "-Xlinker", "\(moonshineDir)/lib"]),
+                                 .linkedLibrary("moonshine")]),
+        lib("LumenSpeech", ["LumenCore", "LumenProject", "LumenAudio", "CMoonshine"]),
         lib("LumenExport", ["LumenCore", "LumenProject", "LumenDirector", "LumenAnalysis", "LumenRender", "LumenAudio"]),
         lib("LumenUI", all),
         .executableTarget(name: "LumenApp", dependencies: ["LumenUI"]),
         .executableTarget(name: "LumenCLI", dependencies: [
-            "LumenProject", "LumenDirector", "LumenRender", "LumenAudio", "LumenExport",
+            "LumenProject", "LumenDirector", "LumenRender", "LumenAudio", "LumenExport", "LumenSpeech",
             .product(name: "ArgumentParser", package: "swift-argument-parser")]),
     ]
 )

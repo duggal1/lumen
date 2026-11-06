@@ -156,11 +156,10 @@ public final class CursorAtlas {
     static let handD = "M224,104v50.93c0,46.2-36.85,84.55-83,85.06A83.71,83.71,0,0,1,80.6,215.4C58.79,192.33,34.15,136,34.15,136a16,16,0,0,1,6.53-22.23c7.66-4,17.1-.84,21.4,6.62l21,36.44a6.09,6.09,0,0,0,6,3.09l.12,0A8.19,8.19,0,0,0,96,151.74V32a16,16,0,0,1,16.77-16c8.61.4,15.23,7.82,15.23,16.43V104a8,8,0,0,0,8.53,8,8.17,8.17,0,0,0,7.47-8.25V88a16,16,0,0,1,16.77-16c8.61.4,15.23,7.82,15.23,16.43V112a8,8,0,0,0,8.53,8,8.17,8.17,0,0,0,7.47-8.25v-7.28c0-8.61,6.62-16,15.23-16.43A16,16,0,0,1,224,104Z"
 
     public init?(device: MTLDevice, queue: MTLCommandQueue, pack: CursorPack, customs: [CustomCursor]) {
-        _ = customs                                             // captured system bitmaps are intentionally not rendered
         let ids = StockCursor.allCases.map(\.rawValue)
         let d = MTLTextureDescriptor()
         d.textureType = .type2DArray; d.pixelFormat = .rgba8Unorm
-        d.width = Self.px; d.height = Self.px; d.arrayLength = ids.count; d.mipmapLevelCount = 9
+        d.width = Self.px; d.height = Self.px; d.arrayLength = ids.count + customs.count; d.mipmapLevelCount = 9
         d.usage = [.shaderRead, .renderTarget]
         guard let t = device.makeTexture(descriptor: d) else { return nil }
         texture = t
@@ -173,9 +172,46 @@ public final class CursorAtlas {
                       bytesPerRow: Self.px * 4, bytesPerImage: Self.px * Self.px * 4)
             map[id] = Entry(layer: i, hot: hot / Self.pts)
         }
+        // Captured system cursors that have no stock equivalent keep their real
+        // artwork instead of silently falling back to the Lumen arrow.
+        for (j, custom) in customs.enumerated() {
+            guard let (bytes, hot) = Self.customRaster(custom) else { continue }
+            let layer = ids.count + j
+            t.replace(region: MTLRegionMake2D(0, 0, Self.px, Self.px), mipmapLevel: 0, slice: layer, withBytes: bytes,
+                      bytesPerRow: Self.px * 4, bytesPerImage: Self.px * Self.px * 4)
+            map[custom.id] = Entry(layer: layer, hot: hot)
+        }
         if let cb = queue.makeCommandBuffer(), let b = cb.makeBlitCommandEncoder() {
             b.generateMipmaps(for: t); b.endEncoding(); cb.commit(); cb.waitUntilCompleted()
         }
+    }
+
+    /// Rasterizes one captured cursor PNG into the same 32 pt box as the stock
+    /// art. The hotspot is remapped through the fit rect so the click point
+    /// stays exact even when the bitmap is scaled.
+    private static func customRaster(_ cursor: CustomCursor) -> ([UInt8], SIMD2<Double>)? {
+        guard let image = NSImage(data: cursor.png) else { return nil }
+        var rect = CGRect(origin: .zero, size: image.size)
+        guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
+        let iw = CGFloat(cg.width), ih = CGFloat(cg.height)
+        guard iw > 0, ih > 0 else { return nil }
+        let s = min(pts / iw, pts / ih)
+        let w = iw * s, h = ih * s
+        let x0 = (pts - w) / 2, y0 = (pts - h) / 2
+        var buf = [UInt8](repeating: 0, count: px * px * 4)
+        buf.withUnsafeMutableBytes { p in
+            guard let c = CGContext(data: p.baseAddress, width: px, height: px, bitsPerComponent: 8, bytesPerRow: px * 4,
+                                    space: CGColorSpace(name: CGColorSpace.displayP3)!,
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            let k = CGFloat(px) / CGFloat(pts)
+            c.translateBy(x: 0, y: CGFloat(px)); c.scaleBy(x: k, y: -k)
+            c.interpolationQuality = .high
+            c.draw(cg, in: CGRect(x: x0, y: y0, width: w, height: h))
+        }
+        let iwPt = max(image.size.width, 1), ihPt = max(image.size.height, 1)
+        let hx = (Double(cursor.hot.x) / Double(iwPt) * Double(w) + Double(x0)) / pts
+        let hy = (Double(cursor.hot.y) / Double(ihPt) * Double(h) + Double(y0)) / pts
+        return (buf, SIMD2(min(max(hx, 0), 1), min(max(hy, 0), 1)))
     }
 
     public func entry(_ shape: UInt16) -> Entry? { map[shape] ?? map[StockCursor.arrow.rawValue] }

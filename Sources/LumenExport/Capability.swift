@@ -5,18 +5,25 @@ import CoreMedia
 import os
 
 public enum VideoCodec: String, Codable, CaseIterable, Sendable {
-    case h264, hevc, hevc10, prores
+    case h264, hevc, hevc10, prores, prores4444
     var cm: CMVideoCodecType {
         switch self {
         case .h264: kCMVideoCodecType_H264
         case .hevc, .hevc10: kCMVideoCodecType_HEVC
         case .prores: kCMVideoCodecType_AppleProRes422HQ
+        case .prores4444: kCMVideoCodecType_AppleProRes4444
         }
     }
     /// 10-bit HEVC needs 10-bit input or the extra bits are wasted. (Verify with the probe on your hardware: spike 5.)
     public var pixelFormat: OSType { self == .hevc10 ? kCVPixelFormatType_ARGB2101010LEPacked : kCVPixelFormatType_32BGRA }
+    /// Only ProRes 4444 can carry a real alpha channel.
+    public var supportsAlpha: Bool { self == .prores4444 }
+    public var isProRes: Bool { self == .prores || self == .prores4444 }
     public var title: String {
-        switch self { case .h264: "H.264"; case .hevc: "8-bit HEVC"; case .hevc10: "10-bit HEVC"; case .prores: "ProRes" }
+        switch self {
+        case .h264: "H.264"; case .hevc: "8-bit HEVC"; case .hevc10: "10-bit HEVC"
+        case .prores: "ProRes 422 HQ"; case .prores4444: "ProRes 4444"
+        }
     }
 }
 
@@ -29,35 +36,39 @@ public struct ExportPreset: Codable, Hashable, Sendable, Identifiable {
     public var bpp: Double = 0.06
     /// Overrides the aspect-derived width for a user-selected custom resolution.
     public var customWidth: Int?
+    /// Deliver a premultiplied alpha channel. ProRes 4444 only.
+    public var alpha: Bool = false
 
-    public init(name: String, codec: VideoCodec, height: Int, fps: Int, bpp: Double = 0.06, customWidth: Int? = nil) {
+    public init(name: String, codec: VideoCodec, height: Int, fps: Int, bpp: Double = 0.06, customWidth: Int? = nil,
+                alpha: Bool = false) {
         self.name = name; self.codec = codec; self.height = height; self.fps = fps
-        self.bpp = bpp; self.customWidth = customWidth
+        self.bpp = bpp; self.customWidth = customWidth; self.alpha = alpha
     }
 
     public func width(aspect: Double) -> Int { customWidth ?? ((Int((Double(height) * aspect).rounded()) + 1) & ~1) }
 
     static func label(forHeight h: Int) -> String {
-        switch h { case 1080: "1080p"; case 1440: "1440p"; case 1620: "3k"; case 2160: "4k"; default: "\(h)p" }
+        switch h { case 1080: "1080p"; case 1440: "1440p"; case 1620: "3k"; case 2160: "4k"; case 4320: "8k"; default: "\(h)p" }
     }
     static func makeName(height: Int, fps: Int, codec: VideoCodec) -> String { "\(label(forHeight: height))\(fps)-\(codec.rawValue)" }
 
     static func make(height: Int, fps: Int, codec: VideoCodec) -> ExportPreset {
         ExportPreset(name: makeName(height: height, fps: fps, codec: codec), codec: codec, height: height, fps: fps,
-                     bpp: codec == .prores ? 0 : 0.06)
+                     bpp: codec.isProRes ? 0 : 0.06)
     }
 
     /// Same preset with other codec/height/fps; the name follows the parameters.
     func adjusted(codec: VideoCodec, height: Int, fps: Int) -> ExportPreset {
         var q = self
         q.codec = codec; q.height = height; q.fps = fps
+        q.alpha = q.alpha && codec.supportsAlpha
         q.name = Self.makeName(height: height, fps: fps, codec: codec)
         return q
     }
 }
 
 public enum ExportPresets {
-    static let heights = [1080, 1440, 1620, 2160]
+    static let heights = [1080, 1440, 1620, 2160, 4320]
     static let rates = [24, 30, 60, 120, 144, 240]
 
     public static let all: [ExportPreset] = {
@@ -65,7 +76,10 @@ public enum ExportPresets {
         for h in heights {
             for fps in rates {
                 for c in [VideoCodec.h264, .hevc, .hevc10] { out.append(.make(height: h, fps: fps, codec: c)) }
-                if fps <= 60 { out.append(.make(height: h, fps: fps, codec: .prores)) }
+                if fps <= 60 {
+                    out.append(.make(height: h, fps: fps, codec: .prores))
+                    out.append(.make(height: h, fps: fps, codec: .prores4444))
+                }
             }
         }
         return out
@@ -116,7 +130,12 @@ public final class ExportCapabilityMatrix: @unchecked Sendable {
         return v
     }
 
-    public func supports(_ p: ExportPreset, aspect: Double = 16.0 / 9) -> Bool { supports(p.codec, p.width(aspect: aspect), p.height, p.fps) }
+    public func supports(_ p: ExportPreset, aspect: Double = 16.0 / 9) -> Bool {
+        // An alpha delivery that silently lost its alpha channel would be worse
+        // than a refusal, so unsupported codec/alpha pairs never validate.
+        if p.alpha && !p.codec.supportsAlpha { return false }
+        return supports(p.codec, p.width(aspect: aspect), p.height, p.fps)
+    }
     public func valid(_ ps: [ExportPreset]) -> [ExportPreset] { ps.filter { supports($0) } }
 
     /// One step at a time: same resolution first (8-bit HEVC for 10-bit, then lower fps), then drop resolution and retry.
@@ -124,8 +143,10 @@ public final class ExportCapabilityMatrix: @unchecked Sendable {
     public func resolve(_ p: ExportPreset, aspect: Double = 16.0 / 9) -> (ExportPreset, String?) {
         if supports(p, aspect: aspect) { return (p, nil) }
         let fpsSteps = [p.fps] + [240, 144, 120, 60, 30, 24].filter { $0 < p.fps }
-        let heights = [p.height] + [2160, 1620, 1440, 1080].filter { $0 < p.height }
-        let codecs: [VideoCodec] = p.codec == .hevc10 ? [.hevc10, .hevc] : [p.codec]
+        let heights = [p.height] + [4320, 2160, 1620, 1440, 1080].filter { $0 < p.height }
+        // Alpha is a delivery promise: never fall back to a codec that cannot
+        // carry it. Resolution and frame rate may still come down.
+        let codecs: [VideoCodec] = p.alpha ? [.prores4444] : (p.codec == .hevc10 ? [.hevc10, .hevc] : [p.codec])
         for h in heights {
             for fps in fpsSteps {
                 for c in codecs {
@@ -155,7 +176,7 @@ public final class ExportCapabilityMatrix: @unchecked Sendable {
         case .hevc, .hevc10:
             let px = Double(w) * Double(h)
             return px <= 35_651_584 && px * Double(fps) <= 4_278_190_080
-        case .prores:
+        case .prores, .prores4444:
             return true
         }
     }
@@ -163,7 +184,7 @@ public final class ExportCapabilityMatrix: @unchecked Sendable {
     // MARK: Real probe
 
     static func probe(_ c: VideoCodec, _ w: Int, _ h: Int, _ fps: Int) -> Bool {
-        let spec: [CFString: Any] = c == .prores ? [:] : [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true]
+        let spec: [CFString: Any] = c.isProRes ? [:] : [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true]
         var session: VTCompressionSession?
         guard VTCompressionSessionCreate(allocator: nil, width: Int32(w), height: Int32(h), codecType: c.cm,
                                          encoderSpecification: spec as CFDictionary, imageBufferAttributes: nil,

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 import UniformTypeIdentifiers
 import os
 import LumenCore
@@ -8,6 +9,7 @@ import LumenDirector
 import LumenRender
 import LumenAudio
 import LumenExport
+import LumenSpeech
 
 /// Host-clock playback time. Read by the display link on the main thread and by audio start.
 final class PlaybackClock: @unchecked Sendable {
@@ -45,6 +47,11 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     let session: ProjectSession, renderer: Renderer, box: TimelineBox, clock = PlaybackClock()
     private(set) var timeline: Timeline
     var playhead = 0.0
+    enum TranscribeState: Equatable { case idle, running(Double), failed(String), notInstalled }
+    private(set) var transcript: Transcript?
+    private(set) var sentences: [Sentence] = []
+    var transcribeState = TranscribeState.idle
+    private var transcribeTask: Task<Void, Never>?
     /// True while the clock is running. The strip reads it to choose between
     /// display-rate playhead animation and the exact paused position.
     var isPlaying = false
@@ -69,7 +76,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     var maskEditing = false
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
-    var duration: Double { timeline.timeMap.outputDuration }
+    var duration: Double { timeline.compositionDuration }
     private var undoStack: [Timeline] = []
     private var redoStack: [Timeline] = []
     private var lastEdit = Date.distantPast
@@ -90,6 +97,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         self.exportSettings = ExportSettings.load(defaultName: AppModel.displayName(session.meta.name))
         renderer.setCustomCursors(session.cursors)
         remix()
+        setTranscript(session.transcriptFile?.transcript.shifted(by: session.micOffset))
     }
 
     static func open(url: URL) async throws -> EditorModel {
@@ -105,6 +113,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         }
         let model = EditorModel(session: s, renderer: r, timeline: out)
         model.analyzeInBackground(out)
+        model.autoTranscribeIfNeeded()
         return model
     }
 
@@ -170,7 +179,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             let out = await pl.derive(snap, input: s.input, revision: rev)
             guard !Task.isCancelled, let self else { return }
             self.timeline = out; self.box.set(out); s.save(out); self.remix()
-            self.playhead = min(self.playhead, out.timeMap.outputDuration)
+            self.playhead = min(self.playhead, out.compositionDuration)
             self.published = self.playhead
             self.clock.seek(self.playhead)
             if self.privacyAnalysisComplete { self.privacyScanning = false }
@@ -243,6 +252,34 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         if clock.playing, t >= duration - 0.001 { pause() }
     }
 
+    func setTranscript(_ t: Transcript?) { transcript = t; sentences = t.map { Sentences.split($0.words) } ?? [] }
+    func seekSource(_ s: Double) { seek(timeline.timeMap.output(atSource: s)) }
+
+    func transcribe() {
+        guard session.meta.mic != nil else { return }
+        guard MoonshineRuntime.isAvailable, ModelStore.isInstalled(.current) else { transcribeState = .notInstalled; return }
+        let b = session.bundle, off = session.micOffset, size = MoonshineSize.current
+        transcribeState = .running(0); transcribeTask?.cancel()
+        transcribeTask = Task { [weak self] in
+            let res = await FileTranscriber.run(url: b.micURL, size: size) { p in Task { @MainActor in self?.transcribeState = .running(p) } }
+            guard let self, !Task.isCancelled else { return }
+            switch res {
+            case .success(let tr):
+                try? b.saveTranscript(TranscriptFile(engine: "moonshine-streaming-\(size.rawValue)", complete: true, transcript: tr))
+                self.setTranscript(tr.shifted(by: off)); self.transcribeState = .idle
+            case .failure(let e): self.transcribeState = .failed(e.description)
+            }
+        }
+    }
+    func cancelTranscribe() { transcribeTask?.cancel(); transcribeState = .idle }
+
+    /// A live take that dropped audio (or never ran) gets re-transcribed from the file, automatically.
+    func autoTranscribeIfNeeded() {
+        guard session.meta.mic != nil, session.transcriptFile?.complete != true,
+              MoonshineRuntime.isAvailable, ModelStore.isInstalled(.current) else { return }
+        transcribe()
+    }
+
     // MARK: Zoom segments
 
     /// A manual region is stored in SOURCE pixels and SOURCE time.
@@ -301,6 +338,77 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         let z = ZoomSegment(start: tm.source(atOutput: s), end: tm.source(atOutput: e), scale: 2, focus: .follow, origin: .manual)
         edit { $0.zoom.append(z) }; selection = z.id
     }
+
+    /// Blade: removes one second from the playhead. The cut appears in the
+    /// Inspector's cut list, so it stays reversible without an undo hunt.
+    func cutAtPlayhead() {
+        guard playhead < timeline.timeMap.outputDuration - 0.1 else { return }
+        dispatch(.cutAtPlayhead(length: 1))
+    }
+
+    /// Marks a click at the playhead location. Useful for device recordings
+    /// that have no pointer events at all.
+    func addTapAtPlayhead() {
+        let st = timeline.evaluate(at: playhead)
+        dispatch(.addTapAtPlayhead(x: Double(st.cursor.position.x), y: Double(st.cursor.position.y)))
+    }
+
+    /// Glass loupe under the pointer for the next three seconds.
+    func addLoupe() {
+        let start = timeline.timeMap.source(atOutput: playhead)
+        let end = min(start + 3, timeline.timeMap.trimEnd)
+        guard end - start > 0.2 else { return }
+        let loupe = Loupe(start: start, end: end)
+        dispatch(.addLoupe(loupe))
+        selection = loupe.id
+    }
+
+    func updateLoupe(_ loupe: Loupe) { dispatch(.updateLoupe(loupe)) }
+
+    /// Imported movies are appended after the recording and addressed in OUTPUT
+    /// seconds. Their pixel size is probed once so the Director never has to
+    /// guess an aspect ratio at render time.
+    func importClips() {
+        let picker = NSOpenPanel()
+        picker.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        picker.allowsMultipleSelection = true
+        picker.prompt = "Import video"
+        guard picker.runModal() == .OK else { return }
+        let urls = picker.urls
+        Task { [weak self] in
+            for url in urls {
+                let asset = AVURLAsset(url: url)
+                guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+                      let duration = try? await asset.load(.duration).seconds, duration > 0.1 else { continue }
+                let size = (try? await track.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
+                guard let self else { return }
+                let start = self.timeline.compositionDuration
+                let clip = TimelineClip(path: url.path, name: url.deletingPathExtension().lastPathComponent,
+                                        duration: duration, start: start,
+                                        width: Int(size.width.rounded()), height: Int(size.height.rounded()))
+                self.dispatch(.addClip(clip))
+            }
+        }
+    }
+
+    var transcriptWords: [WordToken] { session.input.transcript?.words ?? [] }
+
+    func editTranscriptWord(_ index: Int, _ text: String) { dispatch(.editWord(index: index, text: text)) }
+
+    func setTranscriptWord(_ index: Int, deleted: Bool) {
+        dispatch(deleted ? .deleteWords([index]) : .restoreWords([index]))
+    }
+
+    /// Removes filler words from both captions and the cut map. The word list
+    /// stays intact in the project: deletion is a mask, never data loss.
+    func removeFillerWords() {
+        let fillers: Set<String> = ["um", "uh", "erm", "hmm", "like", "basically", "actually", "you know", "i mean", "sort of", "kind of"]
+        let indices = transcriptWords.enumerated().compactMap { index, word in
+            fillers.contains(word.text.lowercased().trimmingCharacters(in: .punctuationCharacters)) ? index : nil
+        }
+        guard !indices.isEmpty else { return }
+        dispatch(.deleteWords(indices))
+    }
     func dispatch(_ c: Command) {
         let ctx = ReduceContext(playhead: playhead, selection: selection, duration: duration)
         edit { tl in _ = try? reduce(&tl, c, ctx: ctx) }
@@ -310,6 +418,8 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         if timeline.zoom.contains(where: { $0.id == id }) { dispatch(.deleteZoom(id)) }
         else if timeline.overlays.texts.contains(where: { $0.id == id }) { dispatch(.deleteText(id)) }
         else if timeline.overlays.highlights.contains(where: { $0.id == id }) { dispatch(.deleteHighlight(id)) }
+        else if timeline.overlays.loupes.contains(where: { $0.id == id }) { dispatch(.deleteLoupe(id)) }
+        else if timeline.clips.contains(where: { $0.id == id }) { dispatch(.deleteClip(id)) }
         else { return }
         selection = nil
     }
@@ -386,7 +496,9 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
 
     func updateExportSettings(_ update: (inout ExportSettings) -> Void) {
         update(&exportSettings)
-        if exportSettings.codec == .prores { exportSettings.container = .mov }
+        if exportSettings.alpha { exportSettings.codec = .prores4444 }
+        if exportSettings.codec.isProRes || exportSettings.alpha { exportSettings.container = .mov }
+        if !exportSettings.codec.supportsAlpha { exportSettings.alpha = false }
         exportSettings.save()
     }
 
@@ -422,6 +534,30 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     }
 
     func exportVideo() { startExport(settings: exportSettings, clipboard: false) }
+
+    /// A self-contained package plus a `lumen://` link. The package is what
+    /// another Mac opens; the link is what the user pastes into a message.
+    func shareProject() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "lumenshare") ?? .archive]
+        panel.nameFieldStringValue = session.bundle.url.deletingPathExtension().lastPathComponent + ".lumenshare"
+        panel.prompt = "Share"
+        panel.begin { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                do {
+                    self.session.save(self.timeline)
+                    try self.session.bundle.exportSharePackage(to: url)
+                    let link = self.session.bundle.shareLink
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(link, forType: .string)
+                    self.notice = "Shared to \(url.lastPathComponent). Project link copied."
+                } catch {
+                    self.notice = "Couldn’t share this project. \(error.localizedDescription)"
+                }
+            }
+        }
+    }
 
     /// The Clipboard preset: a short 1080p H.264 file placed on the pasteboard as a file URL.
     func exportToClipboard() {
@@ -521,7 +657,9 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                     } else {
                         try await Exporter.run(session: session, timeline: job.timeline, preset: job.preset, to: job.url,
                                                includeAudio: settings.includeAudio, audioBitrate: settings.audioBitrate,
-                                               exportStems: stemExportEnabled, progress: jobReport)
+                                               exportStems: stemExportEnabled,
+                                               exportCursorLayer: settings.cursorLayer && !clipboard,
+                                               progress: jobReport)
                     }
                     lastURL = job.url
                 }

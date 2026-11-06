@@ -78,6 +78,11 @@ for size in [16, 32, 128, 256, 512] {
 }
 SWIFT
 iconutil -c icns "$icon_dir" -o "$app/Contents/Resources/Lumen.icns"
+mkdir -p "$app/Contents/Frameworks"
+cp Vendor/moonshine/lib/*.dylib "$app/Contents/Frameworks/" 2>/dev/null || true
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/MacOS/Lumen" 2>/dev/null || true
+for f in "$app"/Contents/Frameworks/*.dylib; do [ -e "$f" ] && codesign --force --sign "${LUMEN_SIGN_ID:--}" "$f"; done
+
 signing_identity="${CODE_SIGN_IDENTITY:-}"
 if [ -z "$signing_identity" ]; then
     identities="$(security find-identity -v -p codesigning | sed -nE 's/^[[:space:]]*[0-9]+\) ([A-F0-9]{40}) .*/\1/p')"
