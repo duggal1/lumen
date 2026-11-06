@@ -272,7 +272,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         onFinished?(bundle)
     }
 
-    func testMicrophone() {
+    public func testMicrophone() {
         guard !micTesting else { return }
         micTesting = true
         micTestLevel = 0
@@ -285,15 +285,15 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             micTestEngine = nil
             return
         }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable [weak self] buffer, _ in
             guard let ch = buffer.floatChannelData?[0] else { return }
             let n = Int(buffer.frameLength)
             guard n > 0 else { return }
             var sum: Float = 0
             for i in 0..<n { sum += ch[i] * ch[i] }
             let rms = (sum / Float(n)).squareRoot()
-            DispatchQueue.main.async { [self] in
-
+            DispatchQueue.main.async {
+                guard let self else { return }
                 MainActor.assumeIsolated {
                     self.micTestLevel = max(self.micTestLevel * 0.8, rms)
                 }
