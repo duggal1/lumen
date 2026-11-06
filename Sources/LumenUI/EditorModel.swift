@@ -35,8 +35,12 @@ final class TimelineBox: @unchecked Sendable {
 /// the user's latest change.
 actor DerivePipeline {
     private var cache = DeriveCache()
-    func derive(_ tl: Timeline, input: DirectorInput, revision: Int) -> Timeline {
-        Director.derive(tl, input: input, revision: revision, cache: &cache)
+    func derive(_ tl: Timeline, input: DirectorInput, revision: Int) -> Timeline? {
+        // A slider can queue dozens of edits while a previous derive is
+        // running. Discard cancelled requests before doing any CPU work.
+        guard !Task.isCancelled else { return nil }
+        let result = Director.derive(tl, input: input, revision: revision, cache: &cache)
+        return Task.isCancelled ? nil : result
     }
 }
 
@@ -137,7 +141,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             || old.captions != new.captions
             || old.style.aspectRatio != new.style.aspectRatio || old.style.padding != new.style.padding
             || old.style.paddingInsets != new.style.paddingInsets {
-            replan(remixAudio: old.audio != new.audio)
+            replan(remixAudio: old.audio != new.audio, debounce: coalesce)
         } else { session.save(new) }
     }
 
@@ -170,14 +174,15 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     /// No artificial debounce: a yield coalesces a burst of slider events and
     /// the actor pipeline keeps the cursor stage warm. A newer edit cancels the
     /// awaiting task before it can publish a stale timeline.
-    private func replan(remixAudio: Bool = false) {
+    private func replan(remixAudio: Bool = false, debounce: Bool = false) {
         replanTask?.cancel()
         let snap = timeline, s = session, pl = pipeline; revision += 1; let rev = revision
         replanTask = Task { [weak self] in
-            await Task.yield()
+            if debounce { try? await Task.sleep(for: .milliseconds(60)) }
+            else { await Task.yield() }
             guard !Task.isCancelled else { return }
-            let out = await pl.derive(snap, input: s.input, revision: rev)
-            guard !Task.isCancelled, let self else { return }
+            guard let out = await pl.derive(snap, input: s.input, revision: rev),
+                  !Task.isCancelled, let self else { return }
             // Visual-only changes must never restart a full-recording audio mix.
             let audioChanged = remixAudio || snap.audio != out.audio || snap.timeMap != out.timeMap
                 || snap.clips != out.clips || snap.derived?.cues != out.derived?.cues
