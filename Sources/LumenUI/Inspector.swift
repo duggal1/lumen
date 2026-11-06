@@ -60,6 +60,12 @@ struct Inspector: View {
             LButton(title: "Delete selection", icon: "trash") { model.deleteSelected() }
                 .disabled(model.selection == nil)
             LButton(title: "Share project", icon: "person.2.badge.plus") { model.shareProject() }
+#if DEBUG
+            let stats = model.renderer.presentStats.snapshot
+            Text("Preview: \(stats.late) late frames / \(stats.frames), worst \(Int(stats.worstMs)) ms")
+                .font(AppType.caption.monospacedDigit())
+                .foregroundStyle(Tok.text2)
+#endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()
