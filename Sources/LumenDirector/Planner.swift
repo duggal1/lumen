@@ -161,9 +161,16 @@ enum ZoomPlanner {
                     let f = ax[Int(event.axFrameIndex) - 1]
                     if usableAX(f, x: x, y: y, width: width, height: height,
                                 backing: backing) {
-                        point.element = f
-                        point.x = clamp(f.x + f.w * 0.5, 0, width)
-                        point.y = clamp(f.y + f.h * 0.5, 0, height)
+                        // Accessibility bounds may be much larger than the clicked
+                        // control. Only snap to the AX center when it is within
+                        // a few source pixels of the actual mouse-down.
+                        let cx = clamp(f.x + f.w * 0.5, 0, width)
+                        let cy = clamp(f.y + f.h * 0.5, 0, height)
+                        if hypot(cx - x, cy - y) <= 4 * backing {
+                            point.element = f
+                            point.x = cx
+                            point.y = cy
+                        }
                     }
                 }
                 points.append(point)
