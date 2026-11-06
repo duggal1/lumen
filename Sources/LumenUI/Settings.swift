@@ -18,6 +18,11 @@ struct SettingsSurface: View {
     @State private var tab = Tab.general
     @AppStorage("LumenAppearance") private var appearance = "system"
     @AppStorage("Lumen24Hour") private var use24Hour = false
+    @AppStorage("LumenMCPEnabled") private var mcpEnabled = false
+    @AppStorage("LumenEmailEnabled") private var emailEnabled = false
+    @AppStorage("LumenEmailRecipient") private var emailRecipient = ""
+    @AppStorage("LumenEmailOnRecording") private var emailRecording = true
+    @AppStorage("LumenEmailOnExport") private var emailExport = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,6 +61,35 @@ struct SettingsSurface: View {
                            items: [("12", "12-hour"), ("24", "24-hour")],
                            track: Tok.well, thumb: Tok.control)
                     .frame(width: 240)
+            }
+            ToggleRow(label: "MCP server", on: Binding(get: { mcpEnabled }, set: { on in
+                mcpEnabled = on
+                MCPHost.shared.configure(enabled: on, actions: app)
+            }))
+            if mcpEnabled, let port = MCPHost.shared.runningPort {
+                Row(label: "Endpoint") {
+                    Text("127.0.0.1:\(port)").font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                }
+            } else if mcpEnabled {
+                Text("Port 8765 is in use. Change LumenMCPPort in defaults.")
+                    .font(AppType.caption).foregroundStyle(Tok.accentText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            ToggleRow(label: "Email notifications", on: $emailEnabled)
+            if emailEnabled {
+                Row(label: "Send to") {
+                    TextField("you@example.com", text: $emailRecipient)
+                        .textFieldStyle(.plain)
+                        .font(AppType.body)
+                        .padding(.horizontal, 10)
+                        .frame(width: 220, height: 28)
+                        .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well))
+                }
+                ToggleRow(label: "After recording", on: $emailRecording)
+                ToggleRow(label: "After export", on: $emailExport)
+                Text("Opens a prefilled draft in your default mail app. Nothing sends silently.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .card()

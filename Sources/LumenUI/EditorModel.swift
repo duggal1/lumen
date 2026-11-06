@@ -755,6 +755,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                     self.notice = "Copied to clipboard."
                 }
                 self.exportState = .done(lastURL)
+                Task { await EmailNotificationService.shared.exportFinished(file: lastURL) }
             } catch is CancellationError {
                 if self?.activeExportID == exportID { self?.exportState = .idle }
             } catch {
