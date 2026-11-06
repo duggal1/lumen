@@ -26,3 +26,7 @@ import LumenCore
     #expect(ClockCalibration.alignedHostSeconds(eventTimestamp: UInt64.max, clock: clock,
                                                 receivedAt: receivedAt) == receivedAt)
 }
+
+@Test func eventTapUsesAppleDocumentedNanosecondTimestampUnit() {
+    #expect(ClockCalibration.eventUnit() == .nanoseconds)
+}
