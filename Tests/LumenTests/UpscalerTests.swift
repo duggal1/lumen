@@ -9,7 +9,7 @@ import LumenProject
 /// prove is the real output resolution for a given factor — no marketing
 /// number without a measurement.
 @Test func upscalerFactorLadderAndBlend() {
-    #expect(Upscaler.ladder == [2, 3, 4, 6, 8])
+    #expect(Upscaler.ladder == [2, 3, 4, 5, 6, 8, 10])
     #expect(Upscaler.factor(forMagnification: 1.2, maxFactor: 8) == 2)
     #expect(Upscaler.factor(forMagnification: 2.5, maxFactor: 8) == 3)
     #expect(Upscaler.factor(forMagnification: 6.5, maxFactor: 8) == 8)
