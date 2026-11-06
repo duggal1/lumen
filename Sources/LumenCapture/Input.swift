@@ -66,12 +66,9 @@ extension StockCursor {
 }
 
 public enum ClockCalibration {
-    /// Samples CGEvent.timestamp against mach ticks and uptime-ns; picks the closer unit.
-    public static func eventUnit() -> EventTimeUnit {
-        guard let e = CGEvent(source: nil) else { return .machTicks }
-        let ts = Double(e.timestamp), mach = Double(mach_absolute_time()), ns = Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
-        return abs(ts - mach) / mach <= abs(ts - ns) / ns ? .machTicks : .nanoseconds
-    }
+    /// Core Graphics defines CGEventTimestamp as nanoseconds since startup.
+    /// A synthetic calibration event is not an authoritative clock source.
+    public static func eventUnit() -> EventTimeUnit { .nanoseconds }
 
     /// Convert timestamps from REAL event callbacks. A synthetic calibration
     /// event may report a different clock (or zero). Never discard a genuine
