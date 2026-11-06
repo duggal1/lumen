@@ -22,7 +22,7 @@ public struct LibraryRoot: View {
 
 struct LibrarySurface: View {
     let app: AppModel
-    private enum RecordTab: Int, CaseIterable, Hashable { case capture, audio, captions }
+    private enum RecordTab: Int, CaseIterable, Hashable { case capture, audio }
     @Environment(MenuHost.self) private var menu
     @Environment(\.openWindow) private var openWindow
     @State private var showRecord = false
@@ -194,18 +194,13 @@ struct LibrarySurface: View {
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel("Recording sections")
 
-                    // Content region (fixed to tallest tab)
+                    // Only mount the selected tab. Hidden tabs must not impose their height.
                     ScrollView {
-                        ZStack(alignment: .topLeading) {
-                            captureTab.opacity(recordTab == .capture ? 1 : 0)
-                                .accessibilityHidden(recordTab != .capture)
-                            audioTab.opacity(recordTab == .audio ? 1 : 0)
-                                .accessibilityHidden(recordTab != .audio)
-                            captionsTab.opacity(recordTab == .captions ? 1 : 0)
-                                .accessibilityHidden(recordTab != .captions)
+                        Group {
+                            if recordTab == .capture { captureTab }
+                            else { audioTab }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: recordTab)
                     }
                     .frame(maxHeight: .infinity)
 
@@ -218,11 +213,11 @@ struct LibrarySurface: View {
                     }
                     .padding(.top, 16)
                 }
-                .padding(24)
-                .frame(width: 480)
-                .frame(maxHeight: geo.size.height - 48)
-                .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
-                .clipped()
+                .padding(20)
+                .frame(width: min(520, max(320, geo.size.width - 32)))
+                .frame(height: min(recordTab == .audio ? 432 : 350, max(280, geo.size.height - 32)))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
+                .overlay { RoundedRectangle(cornerRadius: Radius.card).strokeBorder(Tok.washStrong, lineWidth: 1) }
             }
         }
         .focusable()
@@ -233,7 +228,6 @@ struct LibrarySurface: View {
             if press.modifiers.contains(.command) {
                 if press.key == "1" { recordTab = .capture; return .handled }
                 if press.key == "2" { recordTab = .audio; return .handled }
-                if press.key == "3" { recordTab = .captions; return .handled }
                 if press.key == .return { if canRecord { showRecord = false; app.toggle() }; return .handled }
             }
             if press.key == .leftArrow { moveRecordTab(-1); return .handled }
@@ -255,7 +249,7 @@ struct LibrarySurface: View {
     }
 
     private func tabTitle(_ t: RecordTab) -> String {
-        switch t { case .capture: "Capture"; case .audio: "Audio"; case .captions: "Captions" }
+        switch t { case .capture: "Capture"; case .audio: "Audio" }
     }
 
     private var captureTab: some View {
@@ -278,7 +272,8 @@ struct LibrarySurface: View {
                 Text("Drag to choose an area after you press Record.").font(AppType.caption).foregroundStyle(Tok.text2)
             }
             HStack(spacing: Space.s4) {
-                Text("Frame rate").font(AppType.label).foregroundStyle(Tok.text)
+                Label("Frame rate", systemImage: "speedometer")
+                    .font(AppType.label).foregroundStyle(Tok.text)
                 Spacer(minLength: Space.s4)
                 LSegmented(sel: Bindable(app).fps, items: [(30, "30"), (60, "60"), (120, "120")],
                            track: Tok.control, thumb: Tok.controlHover)
@@ -293,12 +288,12 @@ struct LibrarySurface: View {
 
     private var audioTab: some View {
         VStack(alignment: .leading, spacing: 16) {
-            compactToggle("Microphone", Bindable(app).mic)
+            compactToggle("Microphone", icon: "mic", Bindable(app).mic)
             if app.mic {
                 ForEach(app.availableAudioInputs, id: \.id) { device in
                     HStack(spacing: Space.s4) {
-                        Text(device.name).font(AppType.label).foregroundStyle(Tok.text)
-                            .lineLimit(1)
+                        Label(device.name, systemImage: "mic.circle")
+                            .font(AppType.label).foregroundStyle(Tok.text).lineLimit(1)
                         Spacer(minLength: Space.s2)
                         LToggle(on: Binding(
                             get: { app.micInputIDs.contains(device.id) },
@@ -312,11 +307,12 @@ struct LibrarySurface: View {
                      : "\(app.micInputIDs.count) input(s), captured independently. First input is the primary voice.")
                     .font(AppType.caption).foregroundStyle(Tok.text2)
             }
-            compactToggle("System audio", Bindable(app).system)
-            compactToggle("Webcam", Bindable(app).webcam)
+            compactToggle("System audio", icon: "speaker.wave.2", Bindable(app).system)
+            compactToggle("Webcam", icon: "video", Bindable(app).webcam)
             if app.webcam {
                 HStack(spacing: Space.s4) {
-                    Text("Webcam quality").font(AppType.label).foregroundStyle(Tok.text)
+                    Label("Webcam quality", systemImage: "camera.aperture")
+                        .font(AppType.label).foregroundStyle(Tok.text)
                     Spacer(minLength: Space.s4)
                     LSegmented(sel: Bindable(app).webcamQuality, items: WebcamQuality.allCases.map { ($0, $0.title) },
                                track: Tok.control, thumb: Tok.controlHover)
@@ -325,32 +321,21 @@ struct LibrarySurface: View {
                 .frame(height: 48)
             }
             HStack(spacing: Space.s4) {
-                Text("Microphone test").font(AppType.label).foregroundStyle(Tok.text)
+                Label("Microphone test", systemImage: "waveform")
+                    .font(AppType.label).foregroundStyle(Tok.text)
                 Spacer(minLength: Space.s4)
                 LButton(title: app.micTesting ? "Testing…" : "Test", kind: .quiet, height: 24) { app.testMicrophone() }
                     .disabled(app.micTesting)
-                ProgressView(value: Double(app.micTestLevel)).frame(width: 80)
+                PixelMeter(level: app.micTestLevel).frame(width: 80)
             }
             .frame(height: 48)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var captionsTab: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            LiveCaptionRows(note: app.liveNote, app: app)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var selectedMicName: String {
-        app.availableAudioInputs.first(where: { app.micInputIDs.contains($0.id) })?.name
-            ?? "System default microphone"
-    }
-
-    private func compactToggle(_ label: String, _ on: Binding<Bool>) -> some View {
+    private func compactToggle(_ label: String, icon: String, _ on: Binding<Bool>) -> some View {
         HStack(spacing: Space.s4) {
-            Text(label).font(AppType.label).foregroundStyle(Tok.text)
+            Label(label, systemImage: icon).font(AppType.label).foregroundStyle(Tok.text)
             Spacer(minLength: Space.s4)
             LToggle(on: on, label: label)
         }

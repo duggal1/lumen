@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import AVFoundation
+@preconcurrency import AVFoundation
 import UniformTypeIdentifiers
 import os
 import LumenCore
@@ -137,7 +137,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             || old.captions != new.captions
             || old.style.aspectRatio != new.style.aspectRatio || old.style.padding != new.style.padding
             || old.style.paddingInsets != new.style.paddingInsets {
-            replan()
+            replan(remixAudio: old.audio != new.audio)
         } else { session.save(new) }
     }
 
@@ -170,7 +170,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     /// No artificial debounce: a yield coalesces a burst of slider events and
     /// the actor pipeline keeps the cursor stage warm. A newer edit cancels the
     /// awaiting task before it can publish a stale timeline.
-    private func replan() {
+    private func replan(remixAudio: Bool = false) {
         replanTask?.cancel()
         let snap = timeline, s = session, pl = pipeline; revision += 1; let rev = revision
         replanTask = Task { [weak self] in
@@ -178,7 +178,12 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             guard !Task.isCancelled else { return }
             let out = await pl.derive(snap, input: s.input, revision: rev)
             guard !Task.isCancelled, let self else { return }
-            self.timeline = out; self.box.set(out); s.save(out); self.remix()
+            // Visual-only changes must never restart a full-recording audio mix.
+            let audioChanged = remixAudio || snap.audio != out.audio || snap.timeMap != out.timeMap
+                || snap.clips != out.clips || snap.derived?.cues != out.derived?.cues
+                || snap.derived?.duck != out.derived?.duck
+            self.timeline = out; self.box.set(out); s.save(out)
+            if audioChanged { self.remix() }
             self.playhead = min(self.playhead, out.compositionDuration)
             self.published = self.playhead
             self.clock.seek(self.playhead)
@@ -266,7 +271,11 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             switch res {
             case .success(let tr):
                 try? b.saveTranscript(TranscriptFile(engine: "moonshine-streaming-\(size.rawValue)", complete: true, transcript: tr))
-                self.setTranscript(tr.shifted(by: off)); self.transcribeState = .idle
+                let aligned = tr.shifted(by: off)
+                self.setTranscript(aligned)
+                self.session.updateTranscript(aligned)
+                self.replan()
+                self.transcribeState = .idle
             case .failure(let e): self.transcribeState = .failed(e.description)
             }
         }

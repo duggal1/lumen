@@ -66,7 +66,9 @@ public actor ReaderFrameSource: FrameSource {
     public func frame(atSource t0: Double) async throws -> SourceFrame {
         let t = max(t0, 0)
         if let e = lru.last(where: { $0.pts <= t && t < $0.end }) { return try make(e) }
-        if reader == nil || cur == nil || t < cur!.pts || t - cur!.pts > 8.0 { try restart(at: max(0, t - 1.0)) }
+        // A held frame can last minutes while a screen is static. Age alone
+        // must not restart decoding; only backwards seeks require a reset.
+        if reader == nil || cur == nil || t < cur!.pts { try restart(at: max(0, t - 1.0)) }
         var back = 1.0
         for _ in 0..<4 {
             advance(to: t)

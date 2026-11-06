@@ -94,10 +94,6 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     private var hud: HUDController?
     private var hotKey: HotKey?
     private var poll: Task<Void, Never>?
-    let live = LiveCaptionModel()
-    var liveNote: String?
-    private var liveTranscriber: LiveTranscriber?
-    private var liveHUD: LiveCaptionPanel?
     var modelDownloadProgress: Double?
     var modelDownloadError: String?
     private var modelDownloadTask: Task<Void, Never>?
@@ -214,29 +210,6 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         catch { self.error = "Couldn’t duplicate this recording. \(error.localizedDescription)" }
     }
 
-
-    private func prepareLive(for cfg: RecordingConfig) async {
-        liveNote = nil
-        let on = UserDefaults.standard.object(forKey: CaptionKeys.enabled) as? Bool ?? true
-        guard cfg.mic, on, ProcessInfo.processInfo.environment["LUMEN_NO_LIVE_CAPTIONS"] == nil else { await session.setMicTap(nil); return }
-        let size = MoonshineSize.current
-        guard MoonshineRuntime.isAvailable, ModelStore.isInstalled(size) else {
-            liveNote = "Live captions are off: the Moonshine \(size.title) model isn't installed."
-            await session.setMicTap(nil); return
-        }
-        let t = LiveTranscriber(size: size)
-        liveTranscriber = t; live.attach(t)
-        let p = LiveCaptionPanel(live, app: self); liveHUD = p; p.show()      // before prepare(): the capture filter excludes our own windows
-        await session.setMicTap { ptr, n, rate, host in t.push(ptr, n, rate: rate, hostSeconds: host) }
-        t.start()                                                              // model loads during the countdown
-    }
-
-    private func finishLive(_ t: LiveTranscriber, bundle b: ProjectBundle) async {
-        let res = await t.finish()
-        live.detach(); liveHUD?.close(); liveHUD = nil; liveTranscriber = nil
-        guard !res.transcript.words.isEmpty || res.complete else { return }
-        try? b.saveTranscript(TranscriptFile(engine: res.engine, complete: res.complete, transcript: res.transcript))
-    }
 
     func ensureTinyModel() {
         guard !ModelStore.isInstalled(.tiny) else { return }
@@ -370,7 +343,6 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         } ?? NSScreen.main
         hud = HUDController(self, screen: recordingScreen)
         hud?.show()
-        await prepareLive(for: cfg)
         if livePreview { livePreviewController = LivePreviewController(); livePreviewController?.show() }
         do {
             try await session.prepare(cfg, library: library)
@@ -387,14 +359,12 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         do {
             let b = try await session.stop()
             paused = false
-            if let t = liveTranscriber { await finishLive(t, bundle: b) }
             hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil; phase = .idle; refresh(); onFinished?(b.url)
         } catch { fail(error) }
     }
 
     private func fail(_ e: Error) {
         poll?.cancel(); paused = false
-        liveTranscriber?.cancel(); liveTranscriber = nil; live.detach(); liveHUD?.close(); liveHUD = nil
         hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
         phase = .idle; error = "Recording failed. \(e)"
     }
@@ -467,7 +437,7 @@ private final class RegionView: NSView {
 @MainActor final class HUDController {
     private var panel: NSPanel?
     init(_ app: AppModel, screen: NSScreen?) {
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 64), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 64), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.contentView = NSHostingView(rootView: HUDView(app: app))
         p.level = .statusBar; p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false
         p.sharingType = .none
@@ -480,7 +450,7 @@ private final class RegionView: NSView {
         p.setAccessibilityLabel("Lumen recording controls")
         if let screen {
             let frame = screen.visibleFrame
-            p.setFrameOrigin(CGPoint(x: frame.midX - 200, y: frame.maxY - 80))
+            p.setFrameOrigin(CGPoint(x: frame.midX - 260, y: frame.maxY - 80))
         }
         panel = p
     }
@@ -499,7 +469,7 @@ struct HUDView: View {
             case .recording:
                 PixelStop(cell: 2)
                 Text(app.paused ? "Paused" : "Recording").font(AppType.label)
-                    .foregroundStyle(app.paused ? Tok.activity : Tok.text)
+                    .foregroundStyle(app.paused ? Tok.activity : Tok.text).fixedSize(horizontal: true, vertical: false)
                 Text(time(app.stats?.elapsed ?? 0)).font(AppType.label.monospacedDigit()).foregroundStyle(Tok.text)
                 PixelMeter(level: app.stats?.micLevel ?? 0)
                 if (app.stats?.dropped ?? 0) > 0 { PixelBadge(kind: .caution, text: "\(app.stats?.dropped ?? 0) dropped") }
@@ -510,7 +480,11 @@ struct HUDView: View {
             default:
                 PixelWait(); Text(app.phase == .finishing ? "Saving…" : "Preparing…").font(AppType.body).foregroundStyle(Tok.text2); Spacer()
             }
-        }.padding(.horizontal, 12).frame(width: 400, height: 64).background(RoundedRectangle(cornerRadius: 16).fill(Tok.surface))
+        }
+        .padding(.horizontal, 16)
+        .frame(width: 520, height: 64)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(Tok.washStrong, lineWidth: 1) }
     }
     private func time(_ t: Double) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
 }

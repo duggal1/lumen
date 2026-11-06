@@ -199,10 +199,7 @@ private struct RecordingRow: View {
         }
         .padding(.horizontal, Space.s3)
         .frame(height: 48)
-        .background(RoundedRectangle(cornerRadius: Radius.field).fill(hover ? Tok.control : .clear))
-        .overlay {
-            if focused { CornerBrackets(cell: 2, arm: 4).padding(-8) }
-        }
+        .background(RoundedRectangle(cornerRadius: Radius.field).fill(hover || focused ? Tok.control : .clear))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)

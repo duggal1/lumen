@@ -141,10 +141,14 @@ enum VoiceStudio {
             eq.append(.highShelf(10500, db: 3.0 * s, fs: fs))                  // air
         }
         y = Cascade.apply(y, eq)
-        y = DeEsser.process(y, fs: fs, amount: s)
-        y = Leveler.process(y, vad: vad, fs: fs, range: 3 + 6 * s)
+        if s > 0.01 {
+            y = DeEsser.process(y, fs: fs, amount: s * 0.5)
+            y = Leveler.process(y, vad: vad, fs: fs, range: 1.5 + 2.5 * s)
+        }
         var comp = Compressor()
-        comp.thresholdDb = -19; comp.ratio = a.micMode == .loud ? 3.2 : 2.4; comp.attack = 0.006; comp.release = 0.2
+        comp.thresholdDb = -17
+        comp.ratio = a.micMode == .loud ? 2.5 : 1.35 + 0.65 * s
+        comp.attack = 0.012; comp.release = 0.25
         return comp.process(y, fs: fs)
     }
 }

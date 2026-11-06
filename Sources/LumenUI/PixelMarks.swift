@@ -164,6 +164,7 @@ struct PageTitle: View {
     var body: some View {
         HStack(alignment: .lastTextBaseline, spacing: 2) {
             Text(text).font(AppType.page).tracking(-1.4).foregroundStyle(Tok.text)
+                .lineLimit(1).minimumScaleFactor(0.75)
             PixelStop().alignmentGuide(.lastTextBaseline) { $0[.bottom] }
         }.accessibilityElement(children: .ignore).accessibilityLabel(text)
     }

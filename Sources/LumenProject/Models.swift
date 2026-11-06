@@ -224,17 +224,17 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
 public enum ClickSound: String, Codable, CaseIterable, Sendable { case mouse, subtle }
 
 public struct AudioPlan: Codable, Equatable, Sendable {
-    public var micClean = true
+    public var micClean = false
     public var micMode: MicMode = .standard
     /// Studio-voice strength, 0...1 (tone, de-ess, leveler). Replaces the old
     /// `voiceProfile` + `studioAmount` pair. Legacy `studioAmount` values decode
     /// into this field; legacy `voiceProfile == .studio` projects keep the default.
-    public var studio = 0.8
+    public var studio = 0.25
     public var micGainDb = 0.0, systemGainDb = -3.0
     public var declick = true, declickDepthDb = -12.0
     /// Room-tail suppression, 0...1. Applied before EQ and compression so the
     /// compressor cannot lift the reverb back up after every phrase.
-    public var dereverb = 0.85
+    public var dereverb = 0.0
     /// Auto loudness. Off makes `outputGainDb` the only master gain.
     public var normalize = true
     public var outputGainDb = 0.0
