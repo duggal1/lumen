@@ -31,7 +31,8 @@ Status key: **WIRED** = implemented + tested. **PARTIAL** = exists but limited/o
 | Pause & resume | WIRED | Pause spans become cuts; audio silence inserted |
 | Countdown & hotkeys | WIRED | 3-2-1 HUD, Cmd+Opt+R global hotkey |
 | iPhone/iPad USB recording | MISSING | No device capture path in codebase |
-| Transcript editing (delete text = cut) | PARTIAL | Word delete/edit + filler removal wired; sentence-delete-to-cut not a single gesture |
+| Transcript editing (delete text = cut) | WIRED | Word delete/edit + filler removal; `TranscriptOps.sentences/sentenceCut` (sentence = one cut); `sentenceDeleteProducesCutForWholeSentence` |
+| Cursor relink for external edit | WIRED | `CursorRelink` sidecar (`<name>.cursor-relink.json`) next to cursor layer; validation + instructions; `cursorRelinkSidecarRoundTripsAndValidatesReplacement` |
 | Filler/pause removal | WIRED | `TranscriptOps` filler + pause cuts, suggestions merged |
 | Timeline trim/speed ramps/multi-clip | WIRED | `TimeMap` trims/cuts/ramps, `TimelineClip` import |
 | Import video | WIRED | `importClips`, appended in output time, share package copies clips |
@@ -39,13 +40,13 @@ Status key: **WIRED** = implemented + tested. **PARTIAL** = exists but limited/o
 | Podcast mode | WIRED | `MicMode.podcast` EQ preset in `VoiceStudio` |
 | Mic modes (standard/loud/off) | WIRED | `MicMode` + LUFS targets |
 | Separate mic/system levels | WIRED | `micGainDb`/`systemGainDb`, stems per source |
-| On-device transcription | WIRED | Moonshine streaming (local model files) + Apple Speech fallback in analysis |
+| On-device transcription | WIRED | Moonshine streaming (local model files/download via `ModelDownloader`); editor falls back to Apple Speech when model missing; `fileTranscriberHandlesRealSilentAudioWithoutCrashing` |
 | Caption styles/positioning | WIRED | `CaptionPlan/Style`, aspect/layout-aware Y |
 | Sensitive masks (blend) | WIRED | OCR hash-only, `MaskTracks`, blend samples outside rect |
 | Highlight tool | WIRED | `Highlight` dim/outline/glow, placement by click |
 | Offline-first | WIRED | No networking in core app; model import is local folder |
-| Export MP4 4K60/GIF/ProRes | WIRED | `ExportPresets`, capability probe, never silently changes preset |
-| Shareable browser links | PARTIAL | `lumen://` deep link + `.lumenshare` package; no hosted web player |
+| Export MP4 4K60/8K120/GIF/ProRes | WIRED | `ExportPresets`, capability probe, never silently changes preset; `eightK120ExportPresetIsRealAndH264StaysGated` |
+| Shareable browser links | PARTIAL | `lumen://` deep link + `.lumenshare` package; share round-trip tested; no hosted web player/comments (explicitly documented) |
 | Project sharing | WIRED | `exportSharePackage`/`installSharePackage` via ditto zip |
 | Clipboard export | WIRED | 1080p H.264 to pasteboard as file URL |
 | Native Apple Silicon / HW encode | WIRED | VideoToolbox hardware-only probe + encode |
