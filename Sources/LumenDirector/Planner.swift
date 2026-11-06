@@ -41,6 +41,7 @@ enum ZoomPlanner {
     struct Pt {
         var t: Double, x: Double, y: Double, w: Double
         var path = false
+        var isClick = false
         var element: AXFrame? = nil
     }
     struct Seg { var s: Double, e: Double, scale: Double, focus: Focus }
@@ -156,7 +157,7 @@ enum ZoomPlanner {
             case .down:
                 guard event.button == 0, event.flags & 0x14 == 0,
                       x >= 0, x <= width, y >= 0, y <= height else { continue }
-                var point = Pt(t: event.t, x: x, y: y, w: max(p.clickWeight, 2))
+                var point = Pt(t: event.t, x: x, y: y, w: max(p.clickWeight, 2), isClick: true)
                 if event.axFrameIndex > 0, Int(event.axFrameIndex) <= ax.count {
                     let f = ax[Int(event.axFrameIndex) - 1]
                     if usableAX(f, x: x, y: y, width: width, height: height,
@@ -275,8 +276,18 @@ enum ZoomPlanner {
                 let cx = anchors.reduce(0) { $0 + $1.x * $1.w } / mass
                 let cy = anchors.reduce(0) { $0 + $1.y * $1.w } / mass
                 let focus: Focus
+                // A recorded click is the ground truth for where the camera
+                // must land. Hover/typing anchors in the same cluster only
+                // widen the fit box; they must never drag the center off the
+                // click (weighted centroids did exactly that).
+                let clickAnchor = anchors.first(where: \.isClick)
                 if group.contains(where: \.path) && !usableFit {
                     focus = .follow
+                } else if let clickAnchor, anchors.count == 1, let element = clickAnchor.element {
+                    focus = .element(x: element.x / width, y: element.y / height,
+                                     w: element.w / width, h: element.h / height)
+                } else if let clickAnchor {
+                    focus = .fixed(x: clickAnchor.x / width, y: clickAnchor.y / height)
                 } else if anchors.count == 1, let element = anchors[0].element {
                     focus = .element(x: element.x / width, y: element.y / height,
                                      w: element.w / width, h: element.h / height)

@@ -124,3 +124,29 @@ private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
     #expect(abs(Double(frame.cameraCenter.x) - x) < 2)
     #expect(abs(Double(frame.cameraCenter.y) - y) < 2)
 }
+
+@Test func clickClusterCenterStaysOnClickNotHoverCentroid() {
+    // Click at (900,440), then a purposeful hover at (1050,550) in the same
+    // cluster. The old weighted centroid moved the camera ~46px off the click.
+    let events: [InputEvent] = [
+        InputEvent(t: 2.0, kind: .down, x: 900, y: 440),
+        InputEvent(t: 2.1, kind: .move, x: 1050, y: 550),
+        InputEvent(t: 2.4, kind: .move, x: 1050, y: 550),
+        InputEvent(t: 3.0, kind: .move, x: 1050, y: 550),
+    ]
+    var timeline = Timeline(duration: 6)
+    timeline.audio.speedRampsAuto = false
+    let out = Director.derive(timeline,
+        input: DirectorInput(events: events, source: precisionSource), revision: 1)
+    #expect(out.zoom.count == 1)
+    guard let zoom = out.zoom.first else { return }
+    if case .fixed(let fx, let fy) = zoom.focus {
+        #expect(abs(fx * 1920 - 900) < 1)
+        #expect(abs(fy * 1080 - 440) < 1)
+    } else {
+        Issue.record("Cluster with a click must focus the click point")
+    }
+    let frame = out.evaluate(at: 2.0)
+    #expect(abs(Double(frame.cameraCenter.x) - 900) < 2)
+    #expect(abs(Double(frame.cameraCenter.y) - 440) < 2)
+}
