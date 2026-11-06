@@ -65,7 +65,20 @@ struct TimelineStrip: View {
                 cx += 6
             }
         }
-        if let d = tl.derived { for k in d.clicks { fill(CGRect(x: x(k.t) - 1, y: 84, width: 2, height: 2), Tok.text2) } }
+        // Clicks are editable events, not barely visible 2 px dots.
+        if let d = tl.derived {
+            var lastBadgeX: CGFloat = -100
+            for click in d.clicks {
+                let center = max(20, min(x(click.t), w - 20))
+                guard center - lastBadgeX >= 42 else { continue }
+                let rect = CGRect(x: center - 20, y: 82, width: 40, height: 16)
+                c.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(Tok.accentSoft))
+                c.draw(Text("Click").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Tok.accentText),
+                       at: CGPoint(x: rect.midX, y: rect.midY))
+                lastBadgeX = center
+            }
+        }
     }
 
     /// Smooth playhead line: it reads the clock at display rate, while the
