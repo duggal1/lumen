@@ -19,7 +19,7 @@ struct Inspector: View {
                 LDropdown(sel: $tab, options: Tab.allCases.filter { $0 != .webcam || model.timeline.webcam != nil }.map { ($0, $0.rawValue, icon($0)) })
                 tabBody
             }.padding(20)
-        }.frame(width: width).frame(maxHeight: .infinity).background(Tok.bg)
+        }.frame(width: width).frame(maxHeight: .infinity).background(.regularMaterial)
         .onChange(of: model.exportPanelRequest) { _, _ in tab = .export }
         .onChange(of: tab) { _, selected in model.exportPanelActive = selected == .export }
     }
@@ -60,6 +60,12 @@ struct Inspector: View {
             LButton(title: "Delete selection", icon: "trash") { model.deleteSelected() }
                 .disabled(model.selection == nil)
             LButton(title: "Share project", icon: "person.2.badge.plus") { model.shareProject() }
+#if DEBUG
+            let stats = model.renderer.presentStats.snapshot
+            Text("Preview: \(stats.late) late frames / \(stats.frames), worst \(Int(stats.worstMs)) ms")
+                .font(AppType.caption.monospacedDigit())
+                .foregroundStyle(Tok.text2)
+#endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()

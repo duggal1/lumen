@@ -46,6 +46,13 @@ struct EditorView: View {
                             kind: model.exportPanelActive ? .secondary : .primary) { model.openExportPanel() }
                 }
             }
+            if model.session.input.events.isEmpty {
+                Label("No input events were recorded. Automatic zoom cannot be generated for this clip.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(AppType.caption).foregroundStyle(Tok.accentText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+            }
             GeometryReader { available in
                 HStack(spacing: 0) {
                     VStack(spacing: 12) {
@@ -56,9 +63,6 @@ struct EditorView: View {
                             PreviewView(model: model)
                                 .overlay { if model.focusEditing { FocusOverlay(model: model) } }
                                 .overlay { if model.maskEditing { ManualMaskOverlay(model: model) } }
-                                .overlay(alignment: .bottom) {
-                                    CaptionMonitor(model: model).padding(.bottom, 16).allowsHitTesting(false)
-                                }
                                 .overlay { if model.zoomDebug { ZoomDebugOverlay(model: model) } }
                                 .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                                 .frame(width: w, height: h)
@@ -90,18 +94,27 @@ struct EditorView: View {
         HStack(spacing: 12) {
             LButton(title: model.clock.playing ? "Pause" : "Play", icon: model.clock.playing ? "pause.fill" : "play.fill", kind: .secondary) { model.togglePlay() }
             Text("\(fmt(model.playhead)) / \(fmt(model.duration))").font(AppType.body.monospacedDigit()).foregroundStyle(Tok.text2)
-#if DEBUG
-            Text({ let s = model.renderer.presentStats.snapshot; return "late \(s.late)/\(s.frames) · worst \(Int(s.worstMs)) ms" }())
-                .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
-#endif
             Spacer()
-            LButton(title: "Cut", icon: "scissors", kind: .quiet) { model.cutAtPlayhead() }
-            LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
-            LButton(title: "Tools", icon: "slider.horizontal.3", kind: .secondary) {
-                showsInspector = true
-                inspectorTab = .tools
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    LButton(title: "Cut", icon: "scissors", kind: .quiet) { model.cutAtPlayhead() }
+                    LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
+                    LButton(title: "Tools", icon: "slider.horizontal.3", kind: .secondary) { openTools() }
+                }
+                HStack(spacing: 4) {
+                    LIconButton(icon: "scissors", label: "Cut at playhead") { model.cutAtPlayhead() }
+                        .help("Cut at playhead")
+                    LIconButton(icon: "plus.magnifyingglass", label: "Add zoom") { model.addZoom() }
+                        .help("Add zoom")
+                    LIconButton(icon: "slider.horizontal.3", label: "More editing tools") { openTools() }
+                        .help("More editing tools")
+                }
             }
         }
+    }
+    private func openTools() {
+        showsInspector = true
+        inspectorTab = .tools
     }
     private func fmt(_ t: Double) -> String { String(format: "%d:%04.1f", Int(t) / 60, t.truncatingRemainder(dividingBy: 60)) }
 }

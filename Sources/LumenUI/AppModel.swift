@@ -7,7 +7,6 @@ import Carbon.HIToolbox
 import LumenCore
 import LumenProject
 import LumenCapture
-import LumenSpeech
 
 public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q1080, q720
     var title: String { switch self { case .auto: "Auto"; case .q4k: "4K"; case .q1080: "1080p"; case .q720: "720p" } }
@@ -94,16 +93,13 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     private var hud: HUDController?
     private var hotKey: HotKey?
     private var poll: Task<Void, Never>?
-    var modelDownloadProgress: Double?
-    var modelDownloadError: String?
-    private var modelDownloadTask: Task<Void, Never>?
+    private var hiddenWindows: [NSWindow] = []
 
     public init() {
         library = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
         try? FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
         refresh()
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.toggle() } }
-        ensureTinyModel()
     }
 
     func refresh() {
@@ -142,6 +138,18 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     }
 
     public func showRecordingControls() { hud?.show() }
+
+    // Keep the selected desktop visible, not the Library floating over it.
+    // The recording controls are an independent, capture-excluded NSPanel.
+    private func hideLibraryForRecording() {
+        hiddenWindows = NSApp.windows.filter { $0.isVisible && $0.title != "Lumen recording controls" }
+        for window in hiddenWindows { window.orderOut(nil) }
+    }
+
+    private func restoreLibraryAfterFailure() {
+        for window in hiddenWindows { window.makeKeyAndOrderFront(nil) }
+        hiddenWindows.removeAll()
+    }
 
     // MARK: Library metrics (real data only: zero is a gap, never a fake number)
 
@@ -210,23 +218,6 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         catch { self.error = "Couldn’t duplicate this recording. \(error.localizedDescription)" }
     }
 
-
-    func ensureTinyModel() {
-        guard !ModelStore.isInstalled(.tiny) else { return }
-        modelDownloadTask?.cancel()
-        modelDownloadTask = Task { @MainActor in
-            modelDownloadProgress = 0
-            do {
-                try await ModelDownloader.download(size: .tiny) { p in
-                    Task { @MainActor in self.modelDownloadProgress = p }
-                }
-                modelDownloadProgress = nil
-            } catch {
-                modelDownloadError = error.localizedDescription
-                modelDownloadProgress = nil
-            }
-        }
-    }
 
     public func toggle() {
         switch phase { case .idle: Task { await start() }; case .recording: Task { await stop() }; default: break }
@@ -342,14 +333,20 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == sourceDisplay
         } ?? NSScreen.main
         hud = HUDController(self, screen: recordingScreen)
+        hideLibraryForRecording()
         hud?.show()
         if livePreview { livePreviewController = LivePreviewController(); livePreviewController?.show() }
         do {
             try await session.prepare(cfg, library: library)
             if let hub = livePreviewController?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }) }
-            for n in [3, 2, 1] { phase = .countdown(n); try await Task.sleep(for: .seconds(1)) }
-            try await session.start(); phase = .recording
-            hud?.show()
+            hud?.showCountdown()
+            for n in [3, 2, 1] {
+                phase = .countdown(n)
+                try await Task.sleep(for: .seconds(1))
+            }
+            try await session.start()
+            phase = .recording
+            hud?.showControls()
             poll = Task { while !Task.isCancelled { stats = await session.stats(); try? await Task.sleep(for: .milliseconds(250)) } }
         } catch { fail(error) }
     }
@@ -359,13 +356,17 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         do {
             let b = try await session.stop()
             paused = false
-            hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil; phase = .idle; refresh(); onFinished?(b.url)
+            hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
+            phase = .idle; refresh()
+            if let onFinished { onFinished(b.url); hiddenWindows.removeAll() }
+            else { restoreLibraryAfterFailure() }
         } catch { fail(error) }
     }
 
     private func fail(_ e: Error) {
         poll?.cancel(); paused = false
         hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
+        restoreLibraryAfterFailure()
         phase = .idle; error = "Recording failed. \(e)"
     }
 }
@@ -436,7 +437,9 @@ private final class RegionView: NSView {
 
 @MainActor final class HUDController {
     private var panel: NSPanel?
+    private let screen: NSScreen?
     init(_ app: AppModel, screen: NSScreen?) {
+        self.screen = screen
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 64), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.contentView = NSHostingView(rootView: HUDView(app: app))
         p.level = .statusBar; p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false
@@ -455,18 +458,44 @@ private final class RegionView: NSView {
         panel = p
     }
     func show() { panel?.orderFrontRegardless() }
+    func showCountdown() {
+        guard let panel else { return }
+        panel.setContentSize(NSSize(width: 192, height: 180))
+        let bounds = (screen ?? NSScreen.main)?.visibleFrame ?? .zero
+        panel.setFrameOrigin(CGPoint(x: bounds.midX - 96, y: bounds.midY - 90))
+        panel.orderFrontRegardless()
+    }
+    func showControls() {
+        guard let panel else { return }
+        panel.setContentSize(NSSize(width: 520, height: 64))
+        if let screen {
+            let bounds = screen.visibleFrame
+            panel.setFrameOrigin(CGPoint(x: bounds.midX - 260, y: bounds.maxY - 80))
+        }
+        panel.orderFrontRegardless()
+    }
     func close() { panel?.orderOut(nil); panel = nil }
 }
 
 struct HUDView: View {
     let app: AppModel
     var body: some View {
-        HStack(spacing: 12) {
-            switch app.phase {
-            case .countdown(let n):
-                Text("\(n)").font(AppType.metric).foregroundStyle(Tok.text).frame(width: 40)
-                Text("Recording starts…").font(AppType.body).foregroundStyle(Tok.text2); Spacer()
-            case .recording:
+        Group {
+            if case .countdown(let n) = app.phase {
+                VStack(spacing: 8) {
+                    Text("\(n)")
+                        .font(.system(size: 84, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(Tok.accent)
+                    Text("Starting recording")
+                        .font(AppType.label)
+                        .foregroundStyle(Tok.text2)
+                }
+                .frame(width: 192, height: 180)
+            } else {
+                HStack(spacing: 12) {
+                    switch app.phase {
+                    case .recording:
                 PixelStop(cell: 2)
                 Text(app.paused ? "Paused" : "Recording").font(AppType.label)
                     .foregroundStyle(app.paused ? Tok.activity : Tok.text).fixedSize(horizontal: true, vertical: false)
@@ -477,14 +506,18 @@ struct HUDView: View {
                 LButton(title: app.paused ? "Resume" : "Pause",
                         icon: app.paused ? "play.fill" : "pause.fill", kind: .secondary) { app.togglePause() }
                 LButton(title: "Stop", icon: "stop.fill", kind: .primary) { app.toggle() }
-            default:
-                PixelWait(); Text(app.phase == .finishing ? "Saving…" : "Preparing…").font(AppType.body).foregroundStyle(Tok.text2); Spacer()
+                    default:
+                        PixelWait()
+                        Text(app.phase == .finishing ? "Saving…" : "Preparing…")
+                            .font(AppType.body).foregroundStyle(Tok.text2)
+                        Spacer()
+                    }
+                }
+                .padding(.horizontal, 16)
+                .frame(width: 520, height: 64)
             }
         }
-        .padding(.horizontal, 16)
-        .frame(width: 520, height: 64)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(Tok.washStrong, lineWidth: 1) }
     }
     private func time(_ t: Double) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
 }

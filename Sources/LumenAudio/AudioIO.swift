@@ -95,8 +95,13 @@ public enum AudioIO {
 
     public static func readMono(_ url: URL) throws -> [Float] {
         let (l, r) = try readStereo(url)
-        guard l.count == r.count else { return l }
-        return vDSP.multiply(0.5, vDSP.add(l, r))
+        guard l.count == r.count, !l.isEmpty else { return l }
+        let mono = vDSP.multiply(0.5, vDSP.add(l, r))
+        // Opposed microphone channels can cancel almost completely in an L+R
+        // downmix. Keep the stronger voice channel when cancellation is severe.
+        let lp = vDSP.sumOfSquares(l), rp = vDSP.sumOfSquares(r)
+        if vDSP.sumOfSquares(mono) < 0.2 * max(lp, rp) { return lp >= rp ? l : r }
+        return mono
     }
 
     public static func loadMusic(_ url: URL) -> MusicTrack? {

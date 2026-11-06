@@ -6,6 +6,7 @@ import AppKit
 import os
 import LumenCore
 import LumenProject
+import LumenDirector
 
 public enum Permissions {
     public static var screen: Bool { CGPreflightScreenCaptureAccess() }
@@ -115,8 +116,6 @@ public actor RecordingSession {
     private var journalTask: Task<Void, Never>?
     private var journalStart = Date()
     public private(set) var isPaused = false
-    private var micTap: AudioTap?
-    public func setMicTap(_ t: AudioTap?) { micTap = t }
     public init() {}
 
     public func setLiveHooks(frame: (@Sendable (CVPixelBuffer) -> Void)?, event: (@Sendable (InputEvent) -> Void)?) {
@@ -130,7 +129,6 @@ public actor RecordingSession {
         bundle = b
         let e = CaptureEngine(bundle: b)
         try await e.prepare(config)
-        e.mic?.setTap(micTap)
         engine = e
         unit = ClockCalibration.eventUnit()
         if let info = e.info {
@@ -218,6 +216,7 @@ public actor RecordingSession {
     public func stop() async throws -> ProjectBundle {
         guard let engine, let input, let b = bundle, var info = engine.info else { throw CaptureError.noSource }
         defer { if let a = activity { ProcessInfo.processInfo.endActivity(a) } }
+        let stopHostSeconds = HostClock.now()
         journalTask?.cancel(); journalTask = nil
         // Close an open pause so the recorded span has a clean end before the
         // writer is finalised.
@@ -229,7 +228,9 @@ public actor RecordingSession {
         for recorder in extraMicrophones { await recorder.stop() }
         try await engine.stop()
         let origin = engine.firstPTS ?? 0
-        info.duration = max(engine.lastPTS - origin, 0)
+        // ScreenCaptureKit can emit no video frames while the display stays
+        // unchanged. The last frame is held through the true stop time.
+        info.duration = max(engine.lastPTS - origin, stopHostSeconds - origin, 0)
         var meta = ProjectMeta(name: b.url.deletingPathExtension().lastPathComponent, source: info,
                                clock: RecordingClock(originHostSeconds: origin, eventUnit: unit))
         meta.droppedFrames = engine.droppedFrames
@@ -246,6 +247,18 @@ public actor RecordingSession {
         }
         tl.timeMap.cuts = pauses.sorted { $0.start < $1.start }
         if meta.webcam != nil { tl.webcam = WebcamLayout() }
+        do {
+            let recordedEvents = try b.events(origin: origin)
+            let ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
+            if recordedEvents.isEmpty {
+                NSLog("Lumen: event sidecar is empty; automatic zoom unavailable for this recording")
+            } else {
+                tl.zoom = Director.planRecordingZoom(events: recordedEvents, ax: ax,
+                                                     source: info, timeline: tl)
+            }
+        } catch {
+            NSLog("Lumen: could not read event sidecar; automatic zoom unavailable: %@", "\(error)")
+        }
         try b.save(ProjectFile(meta: meta, timeline: tl))
         b.clearJournal()
         return b

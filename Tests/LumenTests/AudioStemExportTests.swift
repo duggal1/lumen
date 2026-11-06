@@ -63,3 +63,38 @@ import LumenAudio
     #expect(peak > 0.001)
     #expect(stems[0].left.count == Int(timeline.timeMap.outputDuration * fs) + 1)
 }
+
+@Test func stereoSystemCaptureKeepsIndependentLeftAndRightChannels() {
+    let source = SourceInfo(width: 640, height: 360, fps: 60, duration: 1,
+                            backingScale: 1, originX: 0, originY: 0)
+    var timeline = Timeline(duration: 1)
+    timeline.audio.speedRampsAuto = false
+    timeline.audio.clickSounds = false
+    timeline.audio.whooshes = false
+    timeline = Director.derive(timeline,
+                               input: DirectorInput(events: [], source: source), revision: 1)
+    let fs = AudioIO.fs
+    let left = (0..<Int(fs)).map { Float(0.08 * sin(2 * Double.pi * 440 * Double($0) / fs)) }
+    let right = (0..<Int(fs)).map { Float(0.08 * sin(2 * Double.pi * 660 * Double($0) / fs)) }
+    let mixer = AudioMixer(mic: nil, micOffset: 0, system: left,
+                           systemOffset: 0, systemRight: right)
+    let stem = mixer.stems(timeline)
+    #expect(stem.count == 1)
+    #expect(stem[0].name == "system")
+    #expect(stem[0].left != stem[0].right)
+    let mix = mixer.mix(timeline)
+    #expect(mix != nil)
+    #expect(mix?.l != mix?.r)
+}
+
+@Test func opposedStereoMicrophoneChannelsDoNotCancelToSilence() throws {
+    let fs = AudioIO.fs
+    let left = (0..<Int(fs)).map { Float(0.1 * sin(2 * Double.pi * 250 * Double($0) / fs)) }
+    let right = left.map { -$0 }
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".caf")
+    defer { try? FileManager.default.removeItem(at: file) }
+    try AudioIO.writeCAF(left, right, to: file)
+    let mono = try AudioIO.readMono(file)
+    #expect(mono.count == left.count)
+    #expect(mono.reduce(Float(0)) { max($0, abs($1)) } > 0.05)
+}

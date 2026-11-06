@@ -97,8 +97,8 @@ struct LibrarySurface: View {
             }
         case .preparing:
             HStack(spacing: Space.s2) { PixelWait(); Text("Preparing…").font(AppType.body).foregroundStyle(Tok.text2) }
-        case .countdown(let n):
-            Text("Starting in \(n)").font(AppType.label).foregroundStyle(Tok.text)
+        case .countdown:
+            EmptyView()
         case .finishing:
             HStack(spacing: Space.s2) { PixelWait(); Text("Saving…").font(AppType.body).foregroundStyle(Tok.text2) }
         }
@@ -217,7 +217,6 @@ struct LibrarySurface: View {
                 .frame(width: min(520, max(320, geo.size.width - 32)))
                 .frame(height: min(recordTab == .audio ? 432 : 350, max(280, geo.size.height - 32)))
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
-                .overlay { RoundedRectangle(cornerRadius: Radius.card).strokeBorder(Tok.washStrong, lineWidth: 1) }
             }
         }
         .focusable()
@@ -259,12 +258,12 @@ struct LibrarySurface: View {
                        track: Tok.control, thumb: Tok.controlHover)
             switch app.kind {
             case .display:
-                field("Display") {
+                field("Display", icon: "display") {
                     LDropdown(sel: Bindable(app).displayID,
                               options: app.displays.map { ($0.id, $0.name, "display") })
                 }
             case .window:
-                field("Window") {
+                field("Window", icon: "macwindow") {
                     LDropdown(sel: Bindable(app).windowID,
                               options: app.windows.map { ($0.id, $0.name, "macwindow") })
                 }
@@ -288,11 +287,11 @@ struct LibrarySurface: View {
 
     private var audioTab: some View {
         VStack(alignment: .leading, spacing: 16) {
-            compactToggle("Microphone", icon: "mic", Bindable(app).mic)
+            compactToggle("Microphone", icon: "mic.fill", Bindable(app).mic)
             if app.mic {
                 ForEach(app.availableAudioInputs, id: \.id) { device in
                     HStack(spacing: Space.s4) {
-                        Label(device.name, systemImage: "mic.circle")
+                        Label(device.name, systemImage: "waveform")
                             .font(AppType.label).foregroundStyle(Tok.text).lineLimit(1)
                         Spacer(minLength: Space.s2)
                         LToggle(on: Binding(
@@ -304,11 +303,13 @@ struct LibrarySurface: View {
                 }
                 Text(app.micInputIDs.isEmpty
                      ? "Using the system default microphone."
-                     : "\(app.micInputIDs.count) input(s), captured independently. First input is the primary voice.")
+                     : app.micInputIDs.count == 1
+                        ? "1 microphone selected as the primary voice."
+                        : "\(app.micInputIDs.count) microphones captured independently; first is primary.")
                     .font(AppType.caption).foregroundStyle(Tok.text2)
             }
-            compactToggle("System audio", icon: "speaker.wave.2", Bindable(app).system)
-            compactToggle("Webcam", icon: "video", Bindable(app).webcam)
+            compactToggle("System audio", icon: "speaker.wave.2.fill", Bindable(app).system)
+            compactToggle("Webcam", icon: "video.fill", Bindable(app).webcam)
             if app.webcam {
                 HStack(spacing: Space.s4) {
                     Label("Webcam quality", systemImage: "camera.aperture")
@@ -342,9 +343,9 @@ struct LibrarySurface: View {
         .frame(height: 48)
     }
 
-    private func field<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
+    private func field<C: View>(_ label: String, icon: String, @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: Space.s1) {
-            Text(label).font(AppType.caption).foregroundStyle(Tok.text2)
+            Label(label, systemImage: icon).font(AppType.caption).foregroundStyle(Tok.text2)
             content()
         }
     }

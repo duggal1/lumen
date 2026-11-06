@@ -119,12 +119,19 @@ struct LSegmented<T: Hashable>: View {
                 Button { sel = v } label: {
                     Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(sel == v ? Tok.text : Tok.text2)
                         .lineLimit(1).frame(maxWidth: .infinity).frame(height: 24)
-                        .background { if sel == v { Capsule().fill(thumb).matchedGeometryEffect(id: "thumb", in: ns) } }
+                        .background {
+                            if sel == v {
+                                Capsule().fill(.thinMaterial).matchedGeometryEffect(id: "thumb", in: ns)
+                                Capsule().fill(thumb.opacity(0.38))
+                            }
+                        }
                 }.buttonStyle(.plain).pointerStyle(.link)
                 .accessibilityLabel(title)
                 .accessibilityAddTraits(sel == v ? .isSelected : [])
             }
-        }.padding(2).background(Capsule().fill(track)).animation(reduceMotion ? nil : Motion.slide, value: sel)
+        }.padding(2)
+            .background(.regularMaterial, in: Capsule())
+            .animation(reduceMotion ? nil : Motion.slide, value: sel)
     }
 }
 
@@ -334,7 +341,7 @@ struct LDialog<Content: View>: View {
             }
             .padding(24)
             .frame(width: 480)
-            .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
             .scaleEffect(shown ? 1 : 0.97)
             .offset(y: shown ? 0 : 6)
             .opacity(shown ? 1 : 0)

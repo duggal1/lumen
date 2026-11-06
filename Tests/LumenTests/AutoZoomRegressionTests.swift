@@ -67,3 +67,23 @@ import LumenRender
     // The planner anticipates; scale is full at the interaction, not 600 ms later.
     #expect(tl.evaluate(at: 2.05).cameraScale >= Float(1 + (target - 1) * 0.95))
 }
+
+@Test func cachedRecordingZoomMatchesFreshDeterministicDirectorPlan() {
+    let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 8,
+                            backingScale: 1, originX: 0, originY: 0)
+    var timeline = Timeline(duration: 8)
+    timeline.audio.speedRampsAuto = false
+    let events = [
+        InputEvent(t: 2, kind: .down, x: 500, y: 350),
+        InputEvent(t: 5, kind: .down, x: 1400, y: 650),
+    ]
+    let cached = Director.planRecordingZoom(events: events, ax: [],
+                                            source: source, timeline: timeline)
+    #expect(!cached.isEmpty)
+    #expect(cached == Director.planRecordingZoom(events: events, ax: [],
+                                                  source: source, timeline: timeline))
+    timeline.zoom = cached
+    let fresh = Director.derive(timeline,
+                                input: DirectorInput(events: events, source: source), revision: 1)
+    #expect(fresh.zoom == cached)
+}
