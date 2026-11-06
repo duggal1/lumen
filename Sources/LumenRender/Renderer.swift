@@ -185,6 +185,8 @@ public final class Renderer: @unchecked Sendable {
     private var atlasPack: CursorPack?
     private var customs: [CustomCursor] = []
     private let outCache: CVMetalTextureCache
+    public let fxKernels: FXKernels?
+    public let upscaler: Upscaler?
 
     public init() throws {
         guard let d = MTLCreateSystemDefaultDevice(), let q = d.makeCommandQueue() else { throw RenderError.noDevice }
@@ -204,6 +206,9 @@ public final class Renderer: @unchecked Sendable {
         CVMetalTextureCacheCreate(nil, nil, d, nil, &c)
         guard let c else { throw RenderError.noDevice }
         outCache = c
+        let fk = try? FXKernels(device: d)
+        fxKernels = fk
+        upscaler = fk.map(Upscaler.init(kernels:))
     }
 
     /// Prefer the metallib SwiftPM builds. Older Xcode toolchains only copy

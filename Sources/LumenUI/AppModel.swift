@@ -91,12 +91,16 @@ import LumenSpeech
     var liveNote: String?
     private var liveTranscriber: LiveTranscriber?
     private var liveHUD: LiveCaptionPanel?
+    var modelDownloadProgress: Double?
+    var modelDownloadError: String?
+    private var modelDownloadTask: Task<Void, Never>?
 
     public init() {
         library = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
         try? FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
         refresh()
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.toggle() } }
+        ensureTinyModel()
     }
 
     func refresh() {
@@ -225,6 +229,23 @@ import LumenSpeech
         live.detach(); liveHUD?.close(); liveHUD = nil; liveTranscriber = nil
         guard !res.transcript.words.isEmpty || res.complete else { return }
         try? b.saveTranscript(TranscriptFile(engine: res.engine, complete: res.complete, transcript: res.transcript))
+    }
+
+    func ensureTinyModel() {
+        guard !ModelStore.isInstalled(.tiny) else { return }
+        modelDownloadTask?.cancel()
+        modelDownloadTask = Task { @MainActor in
+            modelDownloadProgress = 0
+            do {
+                try await ModelDownloader.download(size: .tiny) { p in
+                    Task { @MainActor in self.modelDownloadProgress = p }
+                }
+                modelDownloadProgress = nil
+            } catch {
+                modelDownloadError = error.localizedDescription
+                modelDownloadProgress = nil
+            }
+        }
     }
 
     public func toggle() {

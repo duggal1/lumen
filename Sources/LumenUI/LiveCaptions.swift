@@ -271,17 +271,28 @@ struct CaptionMonitor: View {
 
 struct LiveCaptionRows: View {
     let note: String?
+    let app: AppModel
     @AppStorage(CaptionKeys.enabled) private var live = true
     @AppStorage(CaptionKeys.theme) private var theme: CaptionTheme = .glass
     @AppStorage(MoonshineSize.defaultsKey) private var size: MoonshineSize = .tiny
     @State private var installed = false
     @State private var error: String?
+    @State private var downloadProgress: Double?
     var body: some View {
         Row(label: "Live captions", icon: "captions.bubble") { LToggle(on: $live, label: "Live captions") }
         if live {
             Row(label: "Caption style", icon: "paintbrush") { LSegmented(sel: $theme, items: [(.glass, "Glass"), (.lumen, "Lumen")]).frame(width: 130) }
-            if !installed {
-                Row(label: "Speech model", icon: "arrow.down.circle") { LButton(title: "Import…", icon: "folder", height: 24) { importModel() } }
+            if installed {
+                Row(label: "Speech model", icon: "checkmark.circle") { Text("Installed").font(AppType.caption).foregroundStyle(Tok.text2) }
+            } else if let p = (size == .tiny ? app.modelDownloadProgress : nil) ?? downloadProgress {
+                Row(label: "Speech model", icon: "arrow.down.circle") { ProgressView(value: p).frame(width: 120) }
+            } else {
+                Row(label: "Speech model", icon: "arrow.down.circle") {
+                    HStack(spacing: 8) {
+                        LButton(title: "Download", icon: "arrow.down.circle", height: 24) { download() }
+                        LButton(title: "Import…", icon: "folder", height: 24) { importModel() }
+                    }
+                }
             }
         }
         if let m = error ?? note { Text(m).font(AppType.caption).foregroundStyle(Tok.statusBad).frame(maxWidth: .infinity, alignment: .leading) }
@@ -290,6 +301,15 @@ struct LiveCaptionRows: View {
     private func importModel() {
         guard let u = ModelPicker.pick() else { return }
         do { try ModelStore.importFolder(u, as: size); installed = true; error = nil } catch { self.error = "\(error)" }
+    }
+    private func download() {
+        error = nil; downloadProgress = 0
+        Task {
+            do {
+                try await ModelDownloader.download(size: size) { p in Task { @MainActor in downloadProgress = p } }
+                downloadProgress = nil; installed = ModelStore.isInstalled(size)
+            } catch { self.error = "\(error)"; downloadProgress = nil }
+        }
     }
 }
 
@@ -309,6 +329,7 @@ struct TranscriptTab: View {
     @AppStorage(MoonshineSize.defaultsKey) private var size: MoonshineSize = .tiny
     @State private var installed = Set<MoonshineSize>()
     @State private var error: String?
+    @State private var downloadProgress: Double?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -319,7 +340,18 @@ struct TranscriptTab: View {
                 Row(label: "Live captions") { LToggle(on: $live, label: "Live captions") }
                 Row(label: "Caption style") { LSegmented(sel: $theme, items: [(.glass, "Glass"), (.lumen, "Lumen")]).frame(width: 130) }
                 Row(label: "Caption monitor") { LToggle(on: $monitor, label: "Caption monitor") }
-                Row(label: "Model files") { LButton(title: "Import…", icon: "folder") { importModel() } }
+                Row(label: "Model files") {
+                    HStack(spacing: 8) {
+                        if ModelStore.isInstalled(size) {
+                            Text("Installed").font(AppType.caption).foregroundStyle(Tok.text2)
+                        } else if let p = downloadProgress {
+                            ProgressView(value: p).frame(width: 120)
+                        } else {
+                            LButton(title: "Download", icon: "arrow.down.circle") { download() }
+                        }
+                        LButton(title: "Import…", icon: "folder") { importModel() }
+                    }
+                }
             }.card()
             VStack(alignment: .leading, spacing: 12) {
                 Text(size.detail).font(AppType.caption).foregroundStyle(Tok.text2)
@@ -351,6 +383,15 @@ struct TranscriptTab: View {
         guard let u = ModelPicker.pick() else { return }
         do { try ModelStore.importFolder(u, as: size); error = nil } catch { self.error = "\(error)" }
         refresh()
+    }
+    private func download() {
+        error = nil; downloadProgress = 0
+        Task {
+            do {
+                try await ModelDownloader.download(size: size) { p in Task { @MainActor in downloadProgress = p } }
+                downloadProgress = nil; refresh()
+            } catch { self.error = "\(error)"; downloadProgress = nil }
+        }
     }
 }
 

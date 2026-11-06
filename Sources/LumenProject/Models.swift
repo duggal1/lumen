@@ -123,18 +123,22 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     public var glide: Double = 0.35
     public var idleHide: Double? = 2.0
     public var pressScale: Double = 0.86
+    public var clickEffect: ClickEffect = .ripple
+    public var clickDuration: Double = 0.45
+    public var clickColor: RGBA = RGBA(0xF97316)
     public var clickRing: Double? = 0.45
     public var zoomCompensation: Double = 0.5
     public var constantSize = false                     // true = cursor keeps its on-screen size during zoom
     public var loop: Double?                            // seconds of tail that glides back to the first frame; nil = off
     public var effectiveCompensation: Double { constantSize ? 1 : zoomCompensation }
-    enum CodingKeys: String, CodingKey { case pack, size, smoothingSigma, glide, idleHide, pressScale, clickRing, zoomCompensation, constantSize, loop }
+    enum CodingKeys: String, CodingKey { case pack, size, smoothingSigma, glide, idleHide, pressScale, clickRing, zoomCompensation, constantSize, loop, clickEffect, clickDuration, clickColor }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         pack = c.opt(.pack, pack); size = c.opt(.size, size); smoothingSigma = c.opt(.smoothingSigma, smoothingSigma); glide = c.opt(.glide, glide)
         idleHide = c.contains(.idleHide) ? ((try? c.decodeIfPresent(Double.self, forKey: .idleHide)) ?? nil) : idleHide
         pressScale = c.opt(.pressScale, pressScale)
+        clickEffect = c.opt(.clickEffect, clickEffect); clickDuration = c.opt(.clickDuration, clickDuration); clickColor = c.opt(.clickColor, clickColor)
         clickRing = c.contains(.clickRing) ? ((try? c.decodeIfPresent(Double.self, forKey: .clickRing)) ?? nil) : clickRing
         zoomCompensation = c.opt(.zoomCompensation, zoomCompensation); constantSize = c.opt(.constantSize, constantSize)
         loop = try? c.decodeIfPresent(Double.self, forKey: .loop)

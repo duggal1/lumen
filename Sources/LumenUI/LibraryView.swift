@@ -220,7 +220,7 @@ struct LibrarySurface: View {
             }
             compactToggle("System audio", Bindable(app).system)
             compactToggle("Webcam", Bindable(app).webcam)
-            LiveCaptionRows(note: app.liveNote)
+            LiveCaptionRows(note: app.liveNote, app: app)
             Text(preview).font(AppType.caption).foregroundStyle(Tok.text2)
                 .contentTransition(.opacity)
         }
