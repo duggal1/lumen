@@ -328,7 +328,7 @@ private func syncTimeline(cut: ClosedRange<Double>? = nil) -> (Timeline, [InputE
                                                                                   duration: 10, backingScale: 1, originX: 0, originY: 0)),
                                   revision: 1)
     let report = SyncHarness.measure(derived, events: events, fps: 60)
-    #expect(report.passes, report.summary)
+    #expect(report.passes, "\(report.summary)")
     #expect(report.clicks.count == 3, "the click inside the cut has no output frame")
     #expect(report.maxDriftMs < 1)
     #expect(report.maxCueDriftMs < 1)
