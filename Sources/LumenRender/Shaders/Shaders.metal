@@ -168,7 +168,10 @@ static float3 sampleMip(texture2d<float> t, float2 uv, float minif) {
 }
 
 // ---- Content (camera-transformed source inside the rounded mask)
-struct ContentU { float4 content; float2 src; float2 cam; float scale; float radius; float border; float p; };
+// `tilt` is (yaw, pitch) in degrees. A small perspective divide is enough to
+// sell depth without ever sampling outside the source: the warp is clamped so
+// the visible rectangle can never exceed the original frame.
+struct ContentU { float4 content; float2 src; float2 cam; float scale; float radius; float border; float p; float2 tilt; };
 
 fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]], texture2d<float> src [[texture(0)]]) {
     float2 h = u.content.zw * 0.5;
@@ -177,10 +180,50 @@ fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]]
     float a = clamp(0.5 - d / w, 0.0, 1.0);
     if (a <= 0.0) return float4(0.0);
     float2 view = u.src / u.scale;
-    float2 sp = u.cam + ((in.px - u.content.xy) / u.content.zw - 0.5) * view;
+    float2 n = (in.px - u.content.xy) / u.content.zw - 0.5;
+    if (abs(u.tilt.x) + abs(u.tilt.y) > 0.001) {
+        float ky = tan(radians(clamp(u.tilt.x, -18.0, 18.0)));
+        float kx = tan(radians(clamp(u.tilt.y, -18.0, 18.0)));
+        n = clamp(float2(n.x * (1.0 + ky * n.y * 2.0), n.y * (1.0 + kx * n.x * 2.0)),
+                  float2(-0.5), float2(0.5));
+    }
+    float2 sp = u.cam + n * view;
     float3 rgb = sampleMip(src, sp / u.src, view.x / u.content.z);
     if (u.border > 0.5) rgb = mix(rgb, float3(1.0), 0.08 * clamp(0.5 + (d + 1.0) / w, 0.0, 1.0));
     return float4(rgb * a, a);
+}
+
+// ---- Glass loupe: a circular window that re-samples the source at a higher
+// magnification than the camera. Coverage is the same source pixels the user
+// sees, so a loupe can never reveal content that the camera pass hides.
+struct LoupeU {
+    float4 glass;    // centre x,y (canvas px), radius, border width
+    float4 source;   // target source x,y, source width,height
+    float2 zoom;     // camera scale, loupe magnification
+    float opacity;
+    float round;     // 1 = circle, 0 = rounded rect
+    float radius;    // corner radius for the rect case
+};
+fragment float4 loupeFS(VO in [[stage_in]], constant LoupeU &u [[buffer(0)]], texture2d<float> src [[texture(0)]]) {
+    float2 p = in.px, c = u.glass.xy;
+    float R = max(u.glass.z, 1.0);
+    float d = u.round > 0.5 ? length(p - c) - R
+                            : sdSquircle(p - c, float2(R), u.radius);
+    float aa = max(fwidth(d), 1e-3);
+    float inside = clamp(0.5 - d / aa, 0.0, 1.0);
+    // Soft drop shadow just outside the rim.
+    float shadowA = exp(-pow(max(d, 0.0) / (R * 0.25 + 1.0), 1.5)) * 0.4 * u.opacity;
+    if (inside <= 0.001 && shadowA < 0.004) return float4(0.0);
+    float2 n = (p - c) / (2.0 * R);
+    float2 view = u.source.zw / max(u.zoom.x * u.zoom.y, 0.01);
+    float2 sp = u.source.xy + clamp(n, float2(-0.5), float2(0.5)) * view;
+    float3 rgb = src.sample(linClamp, clamp(sp / u.source.zw, 0.0, 1.0)).rgb;
+    // Rim: a crisp light edge reads as glass against any background.
+    float ringW = max(u.glass.w, 1.0);
+    float rim = smoothstep(R - ringW * 1.6, R - ringW * 0.4, length(p - c));
+    float3 edge = mix(rgb, float3(1.0), rim * 0.6);
+    float alpha = inside * u.opacity;
+    return float4(edge * alpha, alpha + shadowA * (1.0 - inside));
 }
 
 // ---- Privacy masks: source-space rectangles composited after screen content.
@@ -311,13 +354,16 @@ fragment float4 accumFS(VO in [[stage_in]], constant AccU &u [[buffer(0)]], text
 // ---- Resolve: scene over cached backdrop, triangular dither, convert to output format
 static uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
 static float rnd(uint2 p, uint seed) { return float(pcg(p.x + pcg(p.y + pcg(seed)))) * (1.0 / 4294967295.0); }
-struct ResU { float levels; uint seed; float blur; };
+struct ResU { float levels; uint seed; float blur; float alpha; };
 fragment float4 resolveFS(VO in [[stage_in]], constant ResU &u [[buffer(0)]],
                           texture2d<float, access::read> scene [[texture(0)]],
                           texture2d<float> back [[texture(1)]]) {
     uint2 g = uint2(in.pos.xy);
     float4 s = scene.read(g);
     float2 uv = (float2(g) + 0.5) / float2(back.get_width(), back.get_height());
+    // Transparent delivery keeps the premultiplied scene untouched: no
+    // backdrop, no dither, no forced opaque alpha.
+    if (u.alpha < 0.5) return s;
     // Only the backdrop has mipmaps. Text, cursor, and webcam are drawn into
     // the sharp scene layer, sampled without any blur.
     float3 background = back.sample(linMip, uv, level(u.blur)).rgb;

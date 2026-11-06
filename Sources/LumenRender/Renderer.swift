@@ -23,12 +23,19 @@ public struct RenderRequest: @unchecked Sendable {
     /// Preview-only animation phase for the pixel-dither backdrop. Always 0 for export, so output stays deterministic.
     public var uiTime: Double
     public var pointer: SIMD4<Float>
+    /// Keep the scene premultiplied and leave the canvas transparent. Used by
+    /// ProRes 4444 deliveries that need an alpha channel.
+    public var transparent: Bool
+    /// Draw only rings and the cursor, over a transparent canvas. Used to
+    /// export the cursor as its own video layer.
+    public var cursorOnly: Bool
     public init(timeline: Timeline, t: Double, screen: SourceFrame, webcam: SourceFrame? = nil, canvas: SIMD2<Int>,
                 fps: Double = 60, backingScale: Double = 2, quality: RenderQuality = .export, uiTime: Double = 0,
-                pointer: SIMD4<Float> = .zero, personMaskDirectory: URL? = nil) {
+                pointer: SIMD4<Float> = .zero, personMaskDirectory: URL? = nil,
+                transparent: Bool = false, cursorOnly: Bool = false) {
         self.timeline = timeline; self.t = t; self.screen = screen; self.webcam = webcam
         self.canvas = canvas; self.fps = fps; self.backingScale = backingScale; self.quality = quality; self.uiTime = uiTime; self.pointer = pointer
-        self.personMaskDirectory = personMaskDirectory
+        self.personMaskDirectory = personMaskDirectory; self.transparent = transparent; self.cursorOnly = cursorOnly
     }
 }
 
@@ -55,7 +62,7 @@ private struct QuadU { var rect: SIMD4<Float>; var canvas: SIMD2<Float> }
 private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; var angle: Float; var count: Int32; var kind: Int32
                            var radius: Float; var shadow: Float; var scale: Float; var cell: Float; var density: Float; var hasWall: Int32
                            var time: Float; var pointer: SIMD4<Float> }
-private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float }
+private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float; var tilt: SIMD2<Float> }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float }
 private struct PrivacyU {
@@ -76,8 +83,16 @@ private struct WebU {
     var canvasColor: SIMD4<Float>
 }
 private struct AccU { var weight: Float }
-private struct ResU { var levels: Float; var seed: UInt32; var blur: Float }
+private struct ResU { var levels: Float; var seed: UInt32; var blur: Float; var alpha: Float }
 private struct TextSpriteU { var opacity: Float }
+private struct LoupeU {
+    var glass: SIMD4<Float>    // centre x,y, radius, border
+    var source: SIMD4<Float>   // target x,y, width,height
+    var zoom: SIMD2<Float>     // camera scale, magnification
+    var opacity: Float
+    var round: Float
+    var radius: Float
+}
 private struct HighlightU {
     var rect: SIMD4<Float>
     var content: SIMD4<Float>
@@ -143,6 +158,7 @@ public final class Renderer: @unchecked Sendable {
     private let pBackdrop, pContent, pCursor, pRing, pWeb, pPrivacy, pAccum: MTLRenderPipelineState
     private let pTextSprite: MTLRenderPipelineState
     private let pHighlight: MTLRenderPipelineState
+    private let pLoupe: MTLRenderPipelineState
     private let textCache = TextOverlayCache()
     private var pResolve: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     private var personMatte: PersonMatteSequence?
@@ -178,6 +194,7 @@ public final class Renderer: @unchecked Sendable {
         pAccum = try Self.pipe(d, l, "accumFS", f, 2)
         pTextSprite = try Self.pipe(d, l, "textSpriteFS", f, 1)
         pHighlight = try Self.pipe(d, l, "highlightFS", f, 1)
+        pLoupe = try Self.pipe(d, l, "loupeFS", f, 1)
         var c: CVMetalTextureCache?
         CVMetalTextureCacheCreate(nil, nil, d, nil, &c)
         guard let c else { throw RenderError.noDevice }
@@ -350,7 +367,8 @@ public final class Renderer: @unchecked Sendable {
         let pointer = tl.style.background == .wave && r.quality == .preview ? r.pointer : .zero
         let key = BackdropKey(style: tl.style, size: cs, wall: tl.style.background == .wallpaper ? wallID : "",
                               phase: backgroundTime, pointer: pointer)
-        if backdropKey != key {
+        let needsBackdrop = !r.transparent && !r.cursorOnly
+        if needsBackdrop && backdropKey != key {
             backdropKey = key
             let pd = MTLRenderPassDescriptor()
             pd.colorAttachments[0].texture = bd; pd.colorAttachments[0].loadAction = .dontCare; pd.colorAttachments[0].storeAction = .store
@@ -421,7 +439,8 @@ public final class Renderer: @unchecked Sendable {
             frag(e, ResU(levels: fmt == .bgr10a2Unorm ? 1023 : 255,
                          seed: UInt32(truncatingIfNeeded: Int(r.t * 1000)),
                          blur: BackdropBlur.mipLevel(enabled: tl.style.zoomBackgroundBlur,
-                                                     cameraScale: zoom)))
+                                                     cameraScale: zoom),
+                         alpha: r.transparent || r.cursorOnly ? 0 : 1))
             e.setFragmentTexture(K > 1 ? accum[s] : work[s], index: 0); e.setFragmentTexture(bd, index: 1)
             e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); e.endEncoding()
         }
