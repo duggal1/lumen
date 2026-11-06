@@ -52,7 +52,7 @@ Status key: **WIRED** = implemented + tested. **PARTIAL** = exists but limited/o
 | Caption styles/positioning | WIRED | `CaptionPlan/Style`, aspect/layout-aware Y |
 | Sensitive masks (blend) | WIRED | OCR hash-only, `MaskTracks`, blend samples outside rect |
 | Highlight tool | WIRED | `Highlight` dim/outline/glow, placement by click |
-| Offline-first | WIRED | No networking in core app; model import is local folder |
+| Offline-first | PARTIAL | Capture/edit/export and transcription models stay local; the only network path is opt-in Unsplash photo download (`LUMEN_UNSPLASH_ACCESS_KEY`), and the only listener is the opt-in MCP server on `127.0.0.1` |
 | Export MP4 4K60/8K120/GIF/ProRes | WIRED | `ExportPresets`, capability probe, never silently changes preset; `eightK120ExportPresetIsRealAndH264StaysGated` |
 | Shareable browser links | PARTIAL | `lumen://` deep link + `.lumenshare` package; share round-trip tested; no hosted web player/comments (explicitly documented) |
 | Project sharing | WIRED | `exportSharePackage`/`installSharePackage` via ditto zip |
