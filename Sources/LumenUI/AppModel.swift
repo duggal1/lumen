@@ -292,7 +292,12 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             var sum: Float = 0
             for i in 0..<n { sum += ch[i] * ch[i] }
             let rms = (sum / Float(n)).squareRoot()
-            Task { @MainActor in self.micTestLevel = max(self.micTestLevel * 0.8, rms) }
+            DispatchQueue.main.async { [self] in
+
+                MainActor.assumeIsolated {
+                    self.micTestLevel = max(self.micTestLevel * 0.8, rms)
+                }
+            }
         }
         do { try engine.start() } catch { micTesting = false; micTestEngine = nil; return }
         Task { @MainActor in

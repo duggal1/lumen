@@ -287,12 +287,12 @@ struct LibrarySurface: View {
 
     private var audioTab: some View {
         VStack(alignment: .leading, spacing: 16) {
-            compactToggle("Microphone", Bindable(app).mic)
+            compactToggle("Microphone", icon: "mic", Bindable(app).mic)
             if app.mic {
                 ForEach(app.availableAudioInputs, id: \.id) { device in
                     HStack(spacing: Space.s4) {
-                        Text(device.name).font(AppType.label).foregroundStyle(Tok.text)
-                            .lineLimit(1)
+                        Label(device.name, systemImage: "mic.circle")
+                            .font(AppType.label).foregroundStyle(Tok.text).lineLimit(1)
                         Spacer(minLength: Space.s2)
                         LToggle(on: Binding(
                             get: { app.micInputIDs.contains(device.id) },
@@ -308,11 +308,12 @@ struct LibrarySurface: View {
                         : "\(app.micInputIDs.count) microphones captured independently; first is primary.")
                     .font(AppType.caption).foregroundStyle(Tok.text2)
             }
-            compactToggle("System audio", Bindable(app).system)
-            compactToggle("Webcam", Bindable(app).webcam)
+            compactToggle("System audio", icon: "speaker.wave.2", Bindable(app).system)
+            compactToggle("Webcam", icon: "video", Bindable(app).webcam)
             if app.webcam {
                 HStack(spacing: Space.s4) {
-                    Text("Webcam quality").font(AppType.label).foregroundStyle(Tok.text)
+                    Label("Webcam quality", systemImage: "camera.aperture")
+                        .font(AppType.label).foregroundStyle(Tok.text)
                     Spacer(minLength: Space.s4)
                     LSegmented(sel: Bindable(app).webcamQuality, items: WebcamQuality.allCases.map { ($0, $0.title) },
                                track: Tok.control, thumb: Tok.controlHover)
@@ -333,9 +334,9 @@ struct LibrarySurface: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func compactToggle(_ label: String, _ on: Binding<Bool>) -> some View {
+    private func compactToggle(_ label: String, icon: String, _ on: Binding<Bool>) -> some View {
         HStack(spacing: Space.s4) {
-            Text(label).font(AppType.label).foregroundStyle(Tok.text)
+            Label(label, systemImage: icon).font(AppType.label).foregroundStyle(Tok.text)
             Spacer(minLength: Space.s4)
             LToggle(on: on, label: label)
         }
