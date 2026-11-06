@@ -178,6 +178,8 @@ public final class Renderer: @unchecked Sendable {
     private var size = SIMD2<Int>(0, 0)
     private var wallTex: MTLTexture?
     private var wallID = ""
+    private var styleImage: MTLTexture?
+    private var styleImageID = ""
     private var cameraBackground: MTLTexture?
     private var cameraBackgroundID = ""
     private let screenMip = MipCache(), webMip = MipCache()
@@ -251,6 +253,20 @@ public final class Renderer: @unchecked Sendable {
         guard id != cameraBackgroundID else { return }
         cameraBackgroundID = id
         cameraBackground = try? MTKTextureLoader(device: device)
+            .newTexture(URL: url, options: [.SRGB: false])
+    }
+
+    /// A user photo or Unsplash download used as the canvas backdrop. Decoded
+    /// only when the path or file modification date changes.
+    private func loadStyleImageIfNeeded(_ path: String?) {
+        guard let path, !path.isEmpty else { styleImageID = ""; styleImage = nil; return }
+        let url = URL(fileURLWithPath: path)
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+        let version = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let id = "\(url.path)#\(version)"
+        guard id != styleImageID else { return }
+        styleImageID = id
+        styleImage = try? MTKTextureLoader(device: device)
             .newTexture(URL: url, options: [.SRGB: false])
     }
 
@@ -370,12 +386,14 @@ public final class Renderer: @unchecked Sendable {
 
         // 1. backdrop cache (style or size change only)
         if tl.style.background == .wallpaper || tl.webcam?.backdrop == .wallpaper { loadWallpaperIfNeeded() }
+        if tl.style.background == .image { loadStyleImageIfNeeded(tl.style.backgroundImagePath) }
         if tl.webcam?.backdrop == .image { loadCameraBackgroundIfNeeded(tl.webcam?.backdropImagePath) }
         let patterned = tl.style.background == .wave || tl.style.background == .field
         let backgroundTime = patterned ? (r.quality == .export ? r.t : r.uiTime)
             : (tl.style.background == .dither && r.quality == .preview ? r.uiTime : 0)
         let pointer = tl.style.background == .wave && r.quality == .preview ? r.pointer : .zero
-        let key = BackdropKey(style: tl.style, size: cs, wall: tl.style.background == .wallpaper ? wallID : "",
+        let key = BackdropKey(style: tl.style, size: cs,
+                              wall: tl.style.background == .wallpaper ? wallID : (tl.style.background == .image ? styleImageID : ""),
                               phase: backgroundTime, pointer: pointer)
         let needsBackdrop = !r.transparent && !r.cursorOnly
         if needsBackdrop && backdropKey != key {
@@ -397,13 +415,16 @@ public final class Renderer: @unchecked Sendable {
                 case .solid: 2
                 case .wave: 6
                 case .field: 7
+                case .image: 8
                 }
+                let hasStyleImage = st.background == .image && styleImage != nil
                 if st.background == .wallpaper, let wallTex { e.setFragmentTexture(wallTex, index: 0) }
+                if hasStyleImage, let styleImage { e.setFragmentTexture(styleImage, index: 0) }
                 frag(e, BackdropU(content: SIMD4<Float>(g.content), canvas: canvasF, angle: Float(st.gradientAngle * .pi / 180),
                                   count: Int32(max(st.colors.count, 1)), kind: kind,
                                   radius: Float(g.radius), shadow: Float(st.shadow), scale: Float(g.ui * 1.33),
                                   cell: Float(max(2, st.ditherCell * g.ui)), density: Float(st.ditherDensity),
-                                  hasWall: st.background == .wallpaper && wallTex != nil ? 1 : 0,
+                                  hasWall: (st.background == .wallpaper && wallTex != nil) || hasStyleImage ? 1 : 0,
                                   time: Float(backgroundTime), pointer: pointer))
                 cols.withUnsafeBytes { e.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)

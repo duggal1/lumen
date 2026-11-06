@@ -108,6 +108,12 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
         float s = max(u.canvas.x / ts.x, u.canvas.y / ts.y);
         float2 off = (u.canvas - ts * s) * 0.5;
         c = wall.sample(linClamp, (in.px - off) / (ts * s)).rgb;
+    } else if (u.kind == 8 && u.hasWall == 1) {
+        // User photo / Unsplash backdrop, filled like cover (no letterboxing).
+        float2 ts = float2(wall.get_width(), wall.get_height());
+        float s = max(u.canvas.x / ts.x, u.canvas.y / ts.y);
+        float2 off = (u.canvas - ts * s) * 0.5;
+        c = wall.sample(linClamp, (in.px - off) / (ts * s)).rgb;
     } else if (u.kind == 0 && u.count > 1) {
         float2 d = float2(cos(u.angle), sin(u.angle));
         float t = dot(uv - 0.5, d) / (abs(d.x) + abs(d.y)) + 0.5;

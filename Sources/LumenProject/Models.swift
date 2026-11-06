@@ -39,7 +39,9 @@ public enum DitherPalettes {
 /// Legacy gradients are kept for decoding old projects; the picker offers dither, canvas, wallpaper and solid.
 public enum BackgroundKind: String, Codable, CaseIterable, Sendable {
     case dither, canvas, wallpaper, solid, gradient, mesh, wave, field
-    public static let offered: [BackgroundKind] = [.solid, .wave, .field, .canvas, .wallpaper]
+    /// A local image, either chosen from disk or fetched through Unsplash.
+    case image
+    public static let offered: [BackgroundKind] = [.solid, .wave, .field, .canvas, .wallpaper, .image]
 }
 
 public enum GradientPresets {
@@ -95,11 +97,14 @@ public struct Style: Codable, Equatable, Sendable {
     public var cornerRadii: CornerRadii?                // nil = uniform `cornerRadius`
     public var customAspect: Double?                    // nil = `canvas`
     public var zoomBackgroundBlur = false
+    /// Local photo for `.image`. Absolute path; the renderer loads it once per
+    /// modification date, never per frame.
+    public var backgroundImagePath: String?
     public var aspectRatio: Double { customAspect ?? canvas.ratio }
     public var insets: EdgeInsetsN { paddingInsets ?? EdgeInsetsN(all: padding) }
     public var radii: CornerRadii { cornerRadii ?? CornerRadii(all: cornerRadius) }
     enum CodingKeys: String, CodingKey {
-        case background, colors, gradientAngle, ditherCell, ditherDensity, contentScale, padding, cornerRadius, shadow, innerBorder, canvas, paddingInsets, cornerRadii, customAspect, zoomBackgroundBlur
+        case background, colors, gradientAngle, ditherCell, ditherDensity, contentScale, padding, cornerRadius, shadow, innerBorder, canvas, paddingInsets, cornerRadii, customAspect, zoomBackgroundBlur, backgroundImagePath
     }
     public init() {}
     public init(from d: Decoder) throws {
@@ -112,6 +117,18 @@ public struct Style: Codable, Equatable, Sendable {
         cornerRadii = try? c.decodeIfPresent(CornerRadii.self, forKey: .cornerRadii)
         customAspect = try? c.decodeIfPresent(Double.self, forKey: .customAspect)
         zoomBackgroundBlur = c.opt(.zoomBackgroundBlur, zoomBackgroundBlur)
+        backgroundImagePath = try? c.decodeIfPresent(String.self, forKey: .backgroundImagePath)
+    }
+
+    /// Makes a downloaded or user-selected photo the canvas background.
+    public mutating func setPhotoBackground(_ path: String) {
+        background = .image
+        backgroundImagePath = path
+    }
+    /// Drops the photo reference when switching back to a generated backdrop.
+    public mutating func clearPhotoBackground() {
+        if background == .image { background = .solid }
+        backgroundImagePath = nil
     }
 }
 
