@@ -252,6 +252,11 @@ public enum Exporter {
             try Task.checkCancellation()
             let sidecar = url.deletingPathExtension().appendingPathExtension("cursor.mov")
             try await cursorLayer(session: session, timeline: tl, preset: preset, to: sidecar, progress: progress)
+            // Best-effort relink sidecar: the movie is the deliverable, the
+            // sidecar only documents how to swap the screen under the cursor.
+            try? CursorRelink.writeSidecar(mainExport: url, cursorFile: sidecar,
+                                         duration: tl.compositionDuration, fps: preset.fps,
+                                         width: preset.width(aspect: aspect), height: preset.height)
         }
         if benchmark {
             let elapsed = HostClock.now() - startedAt

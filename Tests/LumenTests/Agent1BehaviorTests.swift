@@ -117,3 +117,22 @@ private let a1Source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 
     }
     #expect(centerX(offset: 0.1) < centerX(offset: 0) - 1)
 }
+
+@Test func webcamBehindFaceHideAndFade() {
+    func placement(mode: BehindFace) -> PlacementTrack {
+        var tl = Timeline(duration: 4)
+        tl.webcam = WebcamLayout()
+        tl.layoutSettings.cameraOverlay.behindFace = mode
+        tl.layoutSettings.cameraOverlay.avoidCursor = false
+        var cam = CameraTrack(count: 10)
+        var cursor = CursorTrack(count: 10)
+        for i in cursor.x.indices { cursor.x[i] = 1700; cursor.y[i] = 950 }  // inside bottom-right bubble
+        _ = cam
+        return WebcamPlacement.solve(tl, tm: tl.timeMap, cam: cam, cursor: cursor,
+                                     src: SIMD2(1920, 1080), vad: [0...4], outDur: 4)
+    }
+    #expect(placement(mode: .hide).visibility(at: 2.0) < 0.1, "hide must drop visibility")
+    let fade = placement(mode: .fade).visibility(at: 2.0)
+    #expect(fade > 0.05 && fade < 0.45, "fade must dim to ~0.2, got \(fade)")
+    #expect(placement(mode: .move).visibility(at: 2.0) > 0.9, "move keeps camera visible")
+}

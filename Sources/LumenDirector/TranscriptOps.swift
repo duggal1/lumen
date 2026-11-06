@@ -2,6 +2,14 @@ import Foundation
 import LumenCore
 import LumenProject
 
+/// One sentence of transcript, addressed by sorted word index and SOURCE seconds.
+struct WordSentence: Sendable, Equatable {
+    var index: Int
+    var wordRange: Range<Int>
+    var start: Double, end: Double
+    var text: String
+}
+
 enum TranscriptOps {
     private static let fillers: [String: Set<String>] = [
         "en": ["um", "uh", "er", "erm", "hmm"],
@@ -38,6 +46,40 @@ enum TranscriptOps {
             cuts.append(CutRange(start: start + edge, end: end - edge, origin: .transcript))
         }
         return merge(cuts)
+    }
+
+    /// Sentence segmentation over the sorted word stream. A sentence ends on
+    /// terminal punctuation (`.`, `!`, `?`) or at the last word. This is the
+    /// unit the transcript editor deletes: delete a sentence, get one cut.
+    static func sentences(_ transcript: Transcript) -> [WordSentence] {
+        let words = transcript.words.sorted { $0.start < $1.start }
+        guard !words.isEmpty else { return [] }
+        var out: [WordSentence] = []
+        var from = 0
+        func isEnd(_ w: WordToken) -> Bool {
+            let t = w.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.hasSuffix(".") || t.hasSuffix("!") || t.hasSuffix("?")
+        }
+        for i in words.indices {
+            let last = i == words.index(before: words.endIndex)
+            if isEnd(words[i]) || last {
+                let slice = Array(words[from...i])
+                out.append(WordSentence(index: out.count, wordRange: from..<(i + 1),
+                                        start: slice.first!.start, end: slice.last!.end,
+                                        text: slice.map(\.text).joined(separator: " ")))
+                from = i + 1
+            }
+        }
+        return out
+    }
+
+    /// Cut covering the whole sentence at `index` (SOURCE seconds, transcript
+    /// origin). Nil when the index does not exist.
+    static func sentenceCut(_ transcript: Transcript, index: Int, padding: Double = 0.04) -> CutRange? {
+        let list = sentences(transcript)
+        guard index >= 0, index < list.count else { return nil }
+        let s = list[index]
+        return CutRange(start: max(s.start - padding, 0), end: s.end + padding, origin: .transcript)
     }
 
     static func suggestions(_ transcript: Transcript, events: [InputEvent], ambiguous: Set<String> = [],
