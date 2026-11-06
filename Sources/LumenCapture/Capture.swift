@@ -61,6 +61,27 @@ public final class CAFWriter: @unchecked Sendable {
         }
     }
     func close() { q.sync { file = nil } }
+
+    /// Writes digital silence for a paused span so the audio track stays on the
+    /// same wall clock as the video track after resume.
+    func appendSilence(seconds: Double) {
+        guard seconds > 0.01 else { return }
+        q.async { [self] in
+            guard let f = file else { return }
+            let fmt = f.processingFormat
+            var remaining = AVAudioFrameCount((seconds * fmt.sampleRate).rounded())
+            while remaining > 0 {
+                let n = min(remaining, 8192)
+                guard let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: n) else { return }
+                buf.frameLength = n
+                if let data = buf.floatChannelData {
+                    for ch in 0..<Int(fmt.channelCount) { memset(data[ch], 0, Int(n) * MemoryLayout<Float>.size) }
+                }
+                try? f.write(from: buf)
+                remaining -= n
+            }
+        }
+    }
 }
 
 /// frames.meta: 32-byte records (pts, status, contentRect). Written from the video queue only.
@@ -96,6 +117,10 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private var meta: FrameMetaWriter?
     private let dropped = OSAllocatedUnfairLock(initialState: 0)
     private let ptsRange = OSAllocatedUnfairLock(initialState: PTSRange())
+    private let paused = OSAllocatedUnfairLock(initialState: false)
+    private let pauseMark = OSAllocatedUnfairLock<Double?>(initialState: nil)
+    private let pauseLog = OSAllocatedUnfairLock<[PauseInterval]>(initialState: [])
+    private let pausedTime = OSAllocatedUnfairLock<Double>(initialState: 0)
     public private(set) var mic: CAFWriter?
     public private(set) var system: CAFWriter?
     public private(set) var info: SourceInfo?
@@ -103,8 +128,34 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     public init(bundle: ProjectBundle) { self.bundle = bundle }
     public var droppedFrames: Int { dropped.withLock { $0 } }
     public var firstPTS: Double? { ptsRange.withLock { $0.first } }
-    public var elapsed: Double { ptsRange.withLock { $0.first.map { $0 > 0 ? HostClock.now() - $0 : 0 } ?? 0 } }
+    /// Spans that were deliberately not recorded, in engine seconds.
+    public var pauseIntervals: [PauseInterval] { pauseLog.withLock { $0 } }
+    public var elapsed: Double {
+        ptsRange.withLock { $0.first.map { $0 > 0 ? max(HostClock.now() - $0 - pausedTime.withLock { $0 }, 0) : 0 } ?? 0 }
+    }
     public var lastPTS: Double { ptsRange.withLock { $0.last } }
+
+    /// Stops accepting frames and audio. The gap is cut out on stop, so a paused
+    /// span never reaches the timeline — important when the user pauses to hide
+    /// something that should not be recorded at all.
+    public func pause() {
+        guard !paused.withLock({ $0 }) else { return }
+        pauseMark.withLock { $0 = HostClock.now() }
+        paused.withLock { $0 = true }
+    }
+
+    public func resume() {
+        guard paused.withLock({ $0 }) else { return }
+        let now = HostClock.now()
+        let start = pauseMark.withLock { s -> Double? in let value = s; s = nil; return value }
+        paused.withLock { $0 = false }
+        guard let start else { return }
+        let span = max(now - start, 0)
+        pauseLog.withLock { $0.append(PauseInterval(start: start, end: now)) }
+        pausedTime.withLock { $0 += span }
+        mic?.appendSilence(seconds: span)
+        system?.appendSilence(seconds: span)
+    }
 
     public func prepare(_ cfg: RecordingConfig) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -200,7 +251,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     }
 
     public func stream(_ s: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard sb.isValid else { return }
+        guard sb.isValid, !paused.withLock({ $0 }) else { return }
         switch type {
         case .screen: video(sb)
         case .audio: system?.append(sb)

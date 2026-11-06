@@ -418,7 +418,7 @@ public struct TimeMap: Codable, Equatable, Sendable {
 }
 
 public struct Timeline: Sendable, Codable, Equatable {
-    public var schemaVersion = 2
+    public var schemaVersion = 3
     public var timeMap: TimeMap
     public var zoom: [ZoomSegment] = []
     public var style = Style()
@@ -430,22 +430,38 @@ public struct Timeline: Sendable, Codable, Equatable {
     public var layouts: [LayoutSegment] = []
     public var layoutSettings = LayoutSet()
     public var captions = CaptionPlan()
+    /// Imported video appended after the recording, in OUTPUT seconds.
+    public var clips: [TimelineClip] = []
     public var derived: DerivedTracks?
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, timeMap, zoom, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions
+        case schemaVersion, timeMap, zoom, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips
     }
     public init(duration: Double) { timeMap = TimeMap(sourceDuration: duration) }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         timeMap = try c.decode(TimeMap.self, forKey: .timeMap)
         let version = c.opt(.schemaVersion, 1)
-        schemaVersion = 2
+        schemaVersion = 3
         zoom = c.opt(.zoom, zoom)
         if version < 2 { for i in zoom.indices { zoom[i].start = timeMap.source(atOutput: zoom[i].start); zoom[i].end = timeMap.source(atOutput: zoom[i].end) } }
          style = c.opt(.style, style); cursor = c.opt(.cursor, cursor); camera = c.opt(.camera, camera)
         audio = c.opt(.audio, audio); webcam = try? c.decodeIfPresent(WebcamLayout.self, forKey: .webcam)
         overlays = c.opt(.overlays, overlays); layouts = c.opt(.layouts, layouts); layoutSettings = c.opt(.layoutSettings, layoutSettings)
         captions = c.opt(.captions, captions)
+        clips = c.opt(.clips, clips)
+    }
+
+    /// Total length of the deliverable: the edited recording plus any imported clips.
+    public var compositionDuration: Double {
+        max(timeMap.outputDuration, clips.map(\.end).max() ?? 0)
+    }
+    public func clip(atOutput t: Double) -> TimelineClip? {
+        clips.first { $0.contains(output: t) }
+    }
+    /// Output time -> seconds inside the imported file, or nil on the recording.
+    public func clipSource(atOutput t: Double) -> (clip: TimelineClip, time: Double)? {
+        guard let c = clip(atOutput: t) else { return nil }
+        return (c, c.sourceTime(atOutput: t))
     }
 }
 

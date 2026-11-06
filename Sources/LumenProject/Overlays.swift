@@ -43,6 +43,9 @@ public struct Highlight: Codable, Equatable, Sendable, Identifiable {
         self.id = id; self.start = start; self.end = end; self.x = x; self.y = y; self.w = w; self.h = h; self.style = style; self.dim = dim
     }
 }
+/// Magnified glass over the canvas. `x/y` are the SOURCE pixel that the glass
+/// looks at (ignored when `follow`), `cx/cy` are the canvas-normalized centre
+/// where the glass itself sits. Both are persisted so a loupe can be dragged.
 public struct Loupe: Codable, Equatable, Sendable, Identifiable {
     public var id: UUID
     public var start: Double, end: Double
@@ -51,10 +54,30 @@ public struct Loupe: Codable, Equatable, Sendable, Identifiable {
     public var radius: Double                                      // fraction of canvas width
     public var magnification: Double
     public var round: Bool
+    public var cx: Double, cy: Double                              // canvas-normalized glass centre
+    public var border: Double                                      // fraction of canvas width
+    public var shadow: Double
     public init(id: UUID = UUID(), start: Double, end: Double, x: Double = 0, y: Double = 0, follow: Bool = true, radius: Double = 0.12,
-                magnification: Double = 2, round: Bool = true) {
+                magnification: Double = 2, round: Bool = true, cx: Double = 0.22, cy: Double = 0.74,
+                border: Double = 0.006, shadow: Double = 0.45) {
         self.id = id; self.start = start; self.end = end; self.x = x; self.y = y; self.follow = follow
         self.radius = radius; self.magnification = magnification; self.round = round
+        self.cx = cx; self.cy = cy; self.border = border; self.shadow = shadow
+    }
+    enum CodingKeys: String, CodingKey { case id, start, end, x, y, follow, radius, magnification, round, cx, cy, border, shadow }
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        start = try c.decode(Double.self, forKey: .start); end = try c.decode(Double.self, forKey: .end)
+        x = (try? c.decode(Double.self, forKey: .x)) ?? 0; y = (try? c.decode(Double.self, forKey: .y)) ?? 0
+        follow = (try? c.decode(Bool.self, forKey: .follow)) ?? true
+        radius = (try? c.decode(Double.self, forKey: .radius)) ?? 0.12
+        magnification = (try? c.decode(Double.self, forKey: .magnification)) ?? 2
+        round = (try? c.decode(Bool.self, forKey: .round)) ?? true
+        cx = (try? c.decode(Double.self, forKey: .cx)) ?? 0.22
+        cy = (try? c.decode(Double.self, forKey: .cy)) ?? 0.74
+        border = (try? c.decode(Double.self, forKey: .border)) ?? 0.006
+        shadow = (try? c.decode(Double.self, forKey: .shadow)) ?? 0.45
     }
 }
 public struct TapIndicator: Codable, Equatable, Sendable, Identifiable {

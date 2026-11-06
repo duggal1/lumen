@@ -193,6 +193,18 @@ private func cf(_ v: Float, _ lo: Float, _ hi: Float) -> Float { min(max(v, lo),
 extension Timeline {
     /// Pure function of (self, t). Microseconds. Safe to call from any thread.
     public func evaluate(at t0: Double) -> FrameState {
+        // Imported clips are composed on the same output clock but carry no
+        // recording metadata: no camera move, no cursor, no masks. Returning a
+        // synthetic state here keeps one evaluation entry point for preview and
+        // export, so a clip can never inherit a stale zoom from the recording.
+        if let (clip, time) = clipSource(atOutput: t0) {
+            let d = SIMD2(Double(clip.width), Double(clip.height))
+            return FrameState(cameraCenter: SIMD2(Float(d.x / 2), Float(d.y / 2)), cameraScale: 1,
+                              cursor: CursorSample(position: .zero, velocity: .zero, opacity: 0, press: 1, shape: 0),
+                              clickFX: [], webcamCrop: [0, 0, 1, 1], sourceTime: time,
+                              layout: .full, layoutKind: .screenOnly, webcamCorner: nil, webcamOpacity: 0,
+                              caption: nil, emphasis: EmphasisFrame())
+        }
         guard let d = derived else {
             return FrameState(cameraCenter: .zero, cameraScale: 1, cameraTilt: .zero,
                               cursor: CursorSample(position: .zero, velocity: .zero, opacity: 0, press: 1, shape: 0),

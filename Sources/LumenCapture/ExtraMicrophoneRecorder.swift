@@ -1,6 +1,8 @@
 import Foundation
 import AVFoundation
 import CoreMedia
+import os
+import LumenCore
 import LumenProject
 
 /// Independent capture session for each additional audio device. A physical
@@ -17,6 +19,8 @@ final class ExtraMicrophoneRecorder: NSObject, AVCaptureAudioDataOutputSampleBuf
 
     private let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "lumen.capture.additional-microphone", qos: .userInitiated)
+    private let paused = OSAllocatedUnfairLock(initialState: false)
+    private let pauseMark = OSAllocatedUnfairLock<Double?>(initialState: nil)
 
     init(deviceID: String, file: String, in bundle: ProjectBundle) throws {
         guard let device = AVCaptureDevice(uniqueID: deviceID), device.hasMediaType(.audio) else {
@@ -57,6 +61,20 @@ final class ExtraMicrophoneRecorder: NSObject, AVCaptureAudioDataOutputSampleBuf
 
     func start() { session.startRunning() }
 
+    func pause() {
+        guard !paused.withLock({ $0 }) else { return }
+        pauseMark.withLock { $0 = HostClock.now() }
+        paused.withLock { $0 = true }
+    }
+
+    func resume() {
+        guard paused.withLock({ $0 }) else { return }
+        let now = HostClock.now()
+        paused.withLock { $0 = false }
+        let start = pauseMark.withLock { s -> Double? in let value = s; s = nil; return value }
+        if let start { writer.appendSilence(seconds: max(now - start, 0)) }
+    }
+
     func stop() async {
         session.stopRunning()
         // Drain the callback queue before closing the CAF. No callback writes
@@ -69,7 +87,7 @@ final class ExtraMicrophoneRecorder: NSObject, AVCaptureAudioDataOutputSampleBuf
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
-        guard sampleBuffer.isValid else { return }
+        guard sampleBuffer.isValid, !paused.withLock({ $0 }) else { return }
         let timestamp: Double
         if let clock = session.synchronizationClock {
             timestamp = CMSyncConvertTime(sampleBuffer.presentationTimeStamp,

@@ -31,6 +31,7 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     private let writer: AVAssetWriter
     private var input: AVAssetWriterInput?
     private var started = false
+    private let paused = OSAllocatedUnfairLock(initialState: false)
     let first = OSAllocatedUnfairLock<Double?>(initialState: nil)
 
     init(url: URL, deviceID: String?) throws {
@@ -55,6 +56,8 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         session.commitConfiguration()
     }
     func start() { session.startRunning() }
+    func pause() { paused.withLock { $0 = true } }
+    func resume() { paused.withLock { $0 = false } }
     func stop() async {
         session.stopRunning()
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in q.async { c.resume() } }
@@ -62,6 +65,7 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         input?.markAsFinished(); await writer.finishWriting()
     }
     func captureOutput(_ o: AVCaptureOutput, didOutput sb: CMSampleBuffer, from c: AVCaptureConnection) {
+        guard !paused.withLock({ $0 }) else { return }
         if input == nil {
             guard let pixels = CMSampleBufferGetImageBuffer(sb) else { return }
             let width = CVPixelBufferGetWidth(pixels), height = CVPixelBufferGetHeight(pixels)
@@ -91,7 +95,7 @@ public struct CaptureStats: Sendable {
     public var dropped: Int, thermal: Int
 }
 
-/// Orchestrates prepare/start/stop. Never touches frames. (Pause/resume intentionally not implemented: needs PTS re-basing.)
+/// Orchestrates prepare/start/stop and pause/resume. Never touches frames.
 public actor RecordingSession {
     private var engine: CaptureEngine?
     private var input: InputRecorder?
@@ -101,6 +105,9 @@ public actor RecordingSession {
     private var cfg: RecordingConfig?
     private var unit = EventTimeUnit.machTicks
     private var activity: NSObjectProtocol?
+    private var journalTask: Task<Void, Never>?
+    private var journalStart = Date()
+    public private(set) var isPaused = false
     public init() {}
 
     public func setLiveHooks(frame: (@Sendable (CVPixelBuffer) -> Void)?, event: (@Sendable (InputEvent) -> Void)?) {
@@ -147,6 +154,50 @@ public actor RecordingSession {
             await input.stop()
             throw error
         }
+        journalStart = Date()
+        startJournal()
+    }
+
+    /// Pause keeps the capture graph alive but stops appending frames and audio.
+    /// Everything recorded during the pause is cut out on stop.
+    public func pause() {
+        guard !isPaused else { return }
+        engine?.pause(); webcam?.pause(); extraMicrophones.forEach { $0.pause() }
+        isPaused = true
+    }
+
+    public func resume() {
+        guard isPaused else { return }
+        engine?.resume(); webcam?.resume(); extraMicrophones.forEach { $0.resume() }
+        isPaused = false
+    }
+
+    public func togglePause() { isPaused ? resume() : pause() }
+
+    /// A tiny journal is rewritten once a second. If the process dies, the next
+    /// launch can rebuild the project from it instead of losing the recording.
+    private func startJournal() {
+        journalTask?.cancel()
+        journalTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                await self?.writeJournal()
+            }
+        }
+    }
+
+    private func writeJournal() {
+        guard let b = bundle, let e = engine, let info = e.info else { return }
+        let j = RecordingJournal(started: journalStart, updated: Date(), source: info,
+                                 fps: Double(cfg?.fps ?? 60),
+                                 mic: cfg?.mic ?? false, system: cfg?.systemAudio ?? false,
+                                 webcam: cfg?.webcamDeviceID != nil,
+                                 pauseIntervals: e.pauseIntervals,
+                                 lastFramePTS: e.lastPTS,
+                                 firstFramePTS: e.firstPTS,
+                                 droppedFrames: e.droppedFrames)
+        b.writeJournal(j)
     }
 
     public func stats() -> CaptureStats {
@@ -157,6 +208,11 @@ public actor RecordingSession {
     public func stop() async throws -> ProjectBundle {
         guard let engine, let input, let b = bundle, var info = engine.info else { throw CaptureError.noSource }
         defer { if let a = activity { ProcessInfo.processInfo.endActivity(a) } }
+        journalTask?.cancel(); journalTask = nil
+        // Close an open pause so the recorded span has a clean end before the
+        // writer is finalised.
+        if isPaused { resume() }
+        isPaused = false
         await input.stop()
         await webcam?.stop()
         // Always close device files, even if screen encoding fails.
@@ -172,8 +228,16 @@ public actor RecordingSession {
         if let t = webcam?.first.withLock({ $0 }) { meta.webcam = TrackMeta(file: "webcam.mov", startHostSeconds: t) }
         meta.additionalMicrophones = extraMicrophones.compactMap(\.track)
         var tl = Timeline(duration: info.duration)
+        // A pause captured nothing. Replaying it as a cut is exactly the same
+        // result as if the user had stopped, saved, and started a new take.
+        let pauses = engine.pauseIntervals.compactMap { p -> CutRange? in
+            let a = max(p.start - origin, 0), e = min(p.end - origin, info.duration)
+            return e - a > 0.05 ? CutRange(start: a, end: e, origin: .manual) : nil
+        }
+        tl.timeMap.cuts = pauses.sorted { $0.start < $1.start }
         if meta.webcam != nil { tl.webcam = WebcamLayout() }
         try b.save(ProjectFile(meta: meta, timeline: tl))
+        b.clearJournal()
         return b
     }
 }

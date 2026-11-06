@@ -41,8 +41,10 @@ public enum Command: Codable, Sendable {
     case addMask(Mask), addMaskAtPlayhead(x: Double, y: Double, w: Double, h: Double, mode: MaskMode)
     case approveMasks([UUID]), rejectMasks([UUID]), deleteMask(UUID)
     case addHighlight(Highlight), setHighlightStyle(UUID, HighlightStyle), deleteHighlight(UUID), addLoupe(Loupe), deleteLoupe(UUID)
+    case updateLoupe(Loupe)
     case addTapAtPlayhead(x: Double, y: Double), deleteTap(UUID)
     case addText(TextBlock), editText(UUID, String), deleteText(UUID)
+    case addClip(TimelineClip), deleteClip(UUID), moveClip(UUID, start: Double), trimClip(UUID, inPoint: Double, duration: Double)
     case applyAutoTidy([CutRange]), clearAutoTidy
 }
 
@@ -136,6 +138,19 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
     case .deleteHighlight(let id): t.overlays.highlights.removeAll { $0.id == id }; return .masks
     case .addLoupe(let l): t.overlays.loupes.append(l); return .masks
     case .deleteLoupe(let id): t.overlays.loupes.removeAll { $0.id == id }; return .masks
+    case .updateLoupe(let l):
+        guard let i = t.overlays.loupes.firstIndex(where: { $0.id == l.id }) else { throw CommandError.notFound(l.id) }
+        t.overlays.loupes[i] = l; return .masks
+    case .addClip(let clip):
+        guard !clip.path.isEmpty, clip.duration > 0 else { throw CommandError.invalid("empty clip") }
+        t.clips.append(clip); t.clips.sort { $0.start < $1.start }; return []
+    case .deleteClip(let id): t.clips.removeAll { $0.id == id }; return []
+    case .moveClip(let id, let start):
+        guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        t.clips[i].start = max(start, 0); t.clips.sort { $0.start < $1.start }; return []
+    case .trimClip(let id, let inPoint, let duration):
+        guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        t.clips[i].inPoint = max(inPoint, 0); t.clips[i].duration = max(duration, 0.05); return []
     case .addTapAtPlayhead(let x, let y): t.overlays.taps.append(TapIndicator(t: playSrc, x: x, y: y)); return [.cursor, .audio]
     case .deleteTap(let id): t.overlays.taps.removeAll { $0.id == id }; return [.cursor, .audio]
     case .addText(let b): t.overlays.texts.append(b); return .captions
