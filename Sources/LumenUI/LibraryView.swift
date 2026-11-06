@@ -217,7 +217,6 @@ struct LibrarySurface: View {
                 .frame(width: min(520, max(320, geo.size.width - 32)))
                 .frame(height: min(recordTab == .audio ? 432 : 350, max(280, geo.size.height - 32)))
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
-                .overlay { RoundedRectangle(cornerRadius: Radius.card).strokeBorder(Tok.washStrong, lineWidth: 1) }
             }
         }
         .focusable()
