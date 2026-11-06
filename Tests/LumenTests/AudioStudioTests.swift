@@ -201,3 +201,35 @@ private func pinkNoise(fs: Double, n: Int, levelDb: Double) -> [Float] {
     #expect(a.clicks == b.clicks)
     #expect(a.cues == b.cues)
 }
+@Test func residualSuppressorPreservesLengthAndQuietsTail() {
+    let fs = 48_000
+    // Speech-like burst + decaying tail (fake room tail).
+    var x = [Float](repeating: 0, count: fs * 2)
+    for i in 0..<fs/2 { x[i] = Float(0.3 * sin(2 * .pi * 220 * Double(i) / Double(fs))) }
+    for i in fs/2..<x.count { x[i] = Float(0.15 * exp(-Double(i - fs/2) / Double(fs/3)) * sin(2 * .pi * 220 * Double(i) / Double(fs))) }
+    var late = x
+    let out = ResidualSuppressor().process(x: x, late: late)
+    #expect(out.count == x.count)
+    #expect(out.allSatisfy { $0.isFinite })
+    let inTail = x[fs...].reduce(Float(0)) { $0 + abs($1) } / Float(fs)
+    let outTail = out[fs...].reduce(Float(0)) { $0 + abs($1) } / Float(fs)
+    #expect(outTail < inTail)
+}
+
+@Test func dereverbChainWithSuppressorStaysBounded() throws {
+    let src = SourceInfo(width: 640, height: 360, fps: 60, duration: 2, backingScale: 1, originX: 0, originY: 0)
+    var tl = Timeline(duration: 2)
+    tl.audio.speedRampsAuto = false
+    tl.audio.dereverb = 0.85
+    tl.audio.micClean = false
+    tl.audio.clickSounds = false; tl.audio.whooshes = false
+    tl = Director.derive(tl, input: DirectorInput(events: [], source: src), revision: 1)
+    let fs = AudioIO.fs
+    var samples = [Float](repeating: 0, count: Int(fs * 2))
+    for i in 0..<Int(fs/2) { samples[i] = Float(0.3 * sin(2 * .pi * 220 * Double(i) / fs)) }
+    for i in Int(fs/2)..<samples.count { samples[i] = Float(0.15 * exp(-Double(i - Int(fs/2)) / Double(fs/4)) * sin(2 * .pi * 220 * Double(i) / fs)) }
+    let mix = try #require(AudioMixer(mic: samples, micOffset: 0, system: nil, systemOffset: 0).mix(tl))
+    #expect(mix.l.count == samples.count)
+    #expect(mix.l.allSatisfy { $0.isFinite })
+    #expect(mix.truePeakDb <= -1.0 + 0.01)
+}

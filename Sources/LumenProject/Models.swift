@@ -226,7 +226,9 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
 public enum ClickSound: String, Codable, CaseIterable, Sendable { case mouse, subtle }
 
 public struct AudioPlan: Codable, Equatable, Sendable {
-    public var micClean = false
+    /// Noise reduction is ON by default: a raw mic passthrough was the
+    /// "not noticeably cleaner" complaint. Users can still turn it off.
+    public var micClean = true
     public var micMode: MicMode = .standard
     /// Studio-voice strength, 0...1 (tone, de-ess, leveler). Replaces the old
     /// `voiceProfile` + `studioAmount` pair. Legacy `studioAmount` values decode

@@ -130,6 +130,18 @@ public final class AudioMixer: @unchecked Sendable {
         if useWPE, let dereverbed = st.wpe, dereverbed.count == x.count {
             let wet = Float(min(max(plan.dereverb, 0), 1) * 0.30)
             for i in x.indices { x[i] = x[i] * (1 - wet) + dereverbed[i] * wet }
+            // ResidualSuppressor was dead code (defined, never called).
+            // `late` = what WPE removed is the best reverb-tail estimate;
+            // suppressing against it is what makes the tail actually quieter
+            // instead of just spectrally reshaped.
+            let late = zip(st.hp, dereverbed).map { $0 - $1 }
+            let suppressed = ResidualSuppressor(noise: 0.9,
+                                                reverb: min(max(plan.dereverb, 0), 1),
+                                                rt60: RoomEstimate.rt60(st.hp, vad: regions))
+                .process(x: x, late: late)
+            if suppressed.count == x.count {
+                for i in x.indices { x[i] = x[i] * 0.5 + suppressed[i] * 0.5 }
+            }
         }
         if plan.micClean {
             let cleaned = denoiser.process(x)

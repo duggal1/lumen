@@ -6,7 +6,7 @@ import LumenDirector
 
 @Test func studioPlanDecodesWithNaturalDefaults() throws {
     let p = try JSONDecoder().decode(AudioPlan.self, from: Data("{}".utf8))
-    #expect(!p.micClean)
+    #expect(p.micClean)
     #expect(p.studio == 0.25)
     #expect(p.dereverb == 0)
     var new = p
