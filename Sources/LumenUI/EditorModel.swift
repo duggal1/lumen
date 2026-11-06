@@ -105,13 +105,16 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     }
 
     static func open(url: URL) async throws -> EditorModel {
-        let (r, s, derived) = try await Task.detached(priority: .userInitiated) {
+        let (r, s, initial) = try await Task.detached(priority: .userInitiated) {
             let renderer = try Renderer()
             let (session, timeline) = try await ProjectSession.open(ProjectBundle(url: url), device: renderer.device)
-            return (renderer, session, session.derive(timeline, revision: 0))
+            return (renderer, session, timeline)
         }.value
-        let model = EditorModel(session: s, renderer: r, timeline: derived)
-        model.analyzeInBackground(derived)
+        // Open the editor from persisted intent immediately. Cursor/camera
+        // derivation is CPU-heavy and must not block the Studio window.
+        let model = EditorModel(session: s, renderer: r, timeline: initial)
+        model.replan(remixAudio: true)
+        model.analyzeInBackground(initial)
         model.autoTranscribeIfNeeded()
         return model
     }
