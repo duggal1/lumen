@@ -216,6 +216,10 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         sc.colorSpaceName = CGColorSpace.displayP3
         sc.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
         sc.queueDepth = 8
+        // Explicitly match the offline audio mixer and export rate.
+        // Device-native microphone samples remain raw until the offline mix.
+        sc.sampleRate = 48_000
+        sc.channelCount = 2
         sc.showsCursor = false
         sc.scalesToFit = false
         sc.captureResolution = .best
