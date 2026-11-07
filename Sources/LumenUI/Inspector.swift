@@ -40,25 +40,24 @@ struct Inspector: View {
     }
 
     var body: some View {
+        content
+            .onChange(of: model.exportPanelRequest) { _, _ in tab = .export }
+            .onChange(of: tab) { _, selected in
+                model.exportPanelActive = selected == .export
+                UserDefaults.standard.set(selected.rawValue, forKey: "lumen.inspector.tab")
+            }
+            .onAppear {
+                if let saved = UserDefaults.standard.string(forKey: "lumen.inspector.tab"), let t = Inspector.Tab(rawValue: saved) { tab = t }
+            }
+    }
+
+    private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.s6) {
                 tabSelector
                 tabBody
             }.padding(Space.s4)
         }.frame(width: width).frame(maxHeight: .infinity).background(Tok.bg)
-        .onChange(of: model.exportPanelRequest) { _, _ in tab = .export }
-        .onChange(of: tab) { _, selected in
-            model.exportPanelActive = selected == .export
-            UserDefaults.standard.set(selected.rawValue, forKey: "lumen.inspector.tab")
-        }
-        .onAppear {
-            if let saved = UserDefaults.standard.string(forKey: "lumen.inspector.tab"), let t = Inspector.Tab(rawValue: saved) { tab = t }
-        }
-        .onKeyPress(.init("1"), modifiers: .command) { tab = .look; return .handled }
-        .onKeyPress(.init("2"), modifiers: .command) { tab = .camera; return .handled }
-        .onKeyPress(.init("3"), modifiers: .command) { tab = .cursor; return .handled }
-        .onKeyPress(.init("4"), modifiers: .command) { tab = .captions; return .handled }
-        .onKeyPress(.init("5"), modifiers: .command) { tab = .audio; return .handled }
     }
 
     /// One full-width section dropdown at the top of the inspector.
