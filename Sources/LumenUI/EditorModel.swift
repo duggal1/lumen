@@ -275,17 +275,23 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         }
     }
     func play() {
+        // Idempotent while playing: the clock already runs from the true
+        // host position, so re-anchoring from the 12 Hz playhead would
+        // jump video backwards by up to ~83 ms on a second click.
+        if clock.playing { return }
         wantsPlayback = true
         playbackTask?.cancel()
         let t = playhead >= duration - 0.02 ? 0 : playhead
-        // Video starts on this line. Audio only joins; it never gates motion.
+        // Clock starts first (a lock write). Engine start and buffer
+        // scheduling must never delay video motion, so audio is scheduled
+        // against the host instant the clock already uses.
         if player.isLoaded {
             let audible = HostClock.now() + max(0.05, player.outputLatency + 0.03)
-            let start = player.play(from: t, atHostSeconds: audible)
-            clock.start(from: t, at: start, dur: duration)
+            clock.start(from: t, at: audible, dur: duration)
+            _ = player.play(from: t, atHostSeconds: audible)
         } else {
-            player.warm()
             clock.start(from: t, at: HostClock.now() + 0.08, dur: duration)
+            player.warm()
             if !hasMixed, !isMixing { remix() }
         }
         isPlaying = true
