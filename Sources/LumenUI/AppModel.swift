@@ -157,17 +157,14 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     }
 
     static func probeMaxFPS(displayID: CGDirectDisplayID) -> Int {
-        // Real display probe via KVC (macOS 14+ exposes maximumFrameRate on
-        // NSScreen); fall back to 60Hz so we never offer 120 on a 60Hz panel.
-        if let rates = NSScreen.screens.first(where: {
+        // Real display probe; fall back to 60Hz so we never offer 120 on a 60Hz panel.
+        if let screen = NSScreen.screens.first(where: {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == displayID
         }) {
-            if let rate = rates.value(forKey: "maximumFrameRate") as? NSNumber {
-                let r = rate.doubleValue
-                if r >= 119 { return 120 }
-                if r >= 59 { return 60 }
-                if r >= 29 { return 30 }
-            }
+            let r = Double(screen.maximumFramesPerSecond)
+            if r >= 119 { return 120 }
+            if r >= 59 { return 60 }
+            if r >= 29 { return 30 }
         }
         return 60
     }
