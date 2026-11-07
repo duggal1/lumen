@@ -74,7 +74,7 @@ public enum ClockCalibration {
     /// lands within 1 ms of the host clock. Never assumes; derives.
     public static func eventUnit() -> EventTimeUnit {
         let now = HostClock.now()
-        guard let ev = CGEventCreate(nil) else { return .nanoseconds }
+        guard let ev = CGEvent(source: nil) else { return .nanoseconds }
         let ts = ev.timestamp
         let asNsec = Double(ts) / 1e9
         let asMach = HostClock.seconds(machTicks: ts)
