@@ -197,4 +197,85 @@ public enum AudioCheck {
         guard thdn > 0 else { return nil }
         return 10 * log10(thdn)
     }
+
+    /// 4K spectrogram (STFT magnitude, log scale). Clicks show as vertical
+    /// lines, dropouts as gaps, clipping as broadband smear. Width ≥3840 px.
+    public static func renderSpectrogram(channels: [[Float]], sampleRate: Double) -> (width: Int, height: Int, rows: [[UInt8]]) {
+        let width = 3840, height = 1024
+        var rows = [[UInt8]](repeating: [UInt8](repeating: 0, count: width * 4), count: height)
+        guard let ch = channels.first, !ch.isEmpty, sampleRate > 0 else { return (width, height, rows) }
+        // STFT: 2048 window, 512 hop. Map frames to width, bins to height (log freq).
+        let nfft = 2048, hop = 512, bins = nfft / 2
+        let frames = max((ch.count - nfft) / hop, 1)
+        let win: [Float] = (0..<nfft).map { Float(0.5 - 0.5 * cos(2 * Double.pi * Double($0) / Double(nfft - 1))) }
+        var mags = [[Float]](repeating: [Float](repeating: 0, count: bins), count: frames)
+        var re = [Double](repeating: 0, count: nfft), im = [Double](repeating: 0, count: nfft)
+        for f in 0..<frames {
+            let off = f * hop
+            for i in 0..<nfft {
+                let s = off + i < ch.count ? ch[off + i] : 0
+                re[i] = Double(s) * Double(win[i]); im[i] = 0
+            }
+            fft(&re, &im, nfft)
+            for k in 0..<bins {
+                let m = sqrt(re[k] * re[k] + im[k] * im[k])
+                mags[f][k] = Float(m)
+            }
+        }
+        // Normalize per-bin dB to 0..1 (floor -100 dB).
+        var maxDb = 0.0
+        var dbs = [[Float]](repeating: [Float](repeating: 0, count: bins), count: frames)
+        for f in 0..<frames {
+            for k in 0..<bins {
+                let db = 20 * log10(max(Double(mags[f][k]), 1e-9))
+                dbs[f][k] = Float(db)
+                maxDb = max(maxDb, db)
+            }
+        }
+        for f in 0..<frames {
+            let x = Int(Double(f) / Double(max(frames - 1, 1)) * Double(width - 1))
+            for y in 0..<height {
+                // Log freq: y=0 is Nyquist (top), y=height-1 is DC (bottom).
+                let t = Double(y) / Double(height - 1)
+                let freqT = pow(1 - t, 3.5) // emphasize lows
+                let k = min(Int(freqT * Double(bins - 1)), bins - 1)
+                let db = Double(dbs[f][k])
+                let norm = clamp((db + 100) / 100, 0, 1)
+                let c = inferno(norm)
+                let px = x * 4
+                rows[y][px] = c.0; rows[y][px + 1] = c.1; rows[y][px + 2] = c.2; rows[y][px + 3] = 255
+            }
+        }
+        return (width, height, rows)
+    }
+
+    private static func inferno(_ v: Double) -> (UInt8, UInt8, UInt8) {
+        // Compact inferno approximation (black→purple→orange→yellow).
+        let r = clamp(1.5 * v - 0.1, 0, 1), g = clamp(2.5 * v - 1.0, 0, 1), b = clamp(1.2 * (1 - v) - 0.1, 0, 1)
+        return (UInt8(r * 255), UInt8(g * 255), UInt8(b * 255))
+    }
+
+    private static func fft(_ re: inout [Double], _ im: inout [Double], _ n: Int) {
+        var j = 0
+        for i in 1..<n {
+            var bit = n >> 1
+            while j & bit != 0 { j ^= bit; bit >>= 1 }
+            j ^= bit
+            if i < j { re.swapAt(i, j); im.swapAt(i, j) }
+        }
+        var len = 2
+        while len <= n {
+            let ang = -2 * Double.pi / Double(len)
+            for s in stride(from: 0, to: n, by: len) {
+                for k in 0..<(len / 2) {
+                    let wr = cos(ang * Double(k)), wi = sin(ang * Double(k))
+                    let a = s + k, b = a + len / 2
+                    let tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr
+                    re[b] = re[a] - tr; im[b] = im[a] - ti
+                    re[a] += tr; im[a] += ti
+                }
+            }
+            len <<= 1
+        }
+    }
 }
