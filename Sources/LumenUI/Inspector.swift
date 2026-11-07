@@ -8,6 +8,16 @@ import LumenAudio
 struct Inspector: View {
     let model: EditorModel
     enum Tab: String, CaseIterable { case look = "Look", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export", transcript = "Transcript" }
+    static func visibleFor(model: EditorModel) -> [Tab] {
+        Tab.allCases.filter { $0 != .webcam || model.timeline.webcam != nil }
+    }
+    static func moreTabs(for model: EditorModel) -> [Tab] {
+        visibleFor(model: model).filter { !primaryTabs.contains($0) }
+    }
+    static var primaryTabs: [Tab] { [.look, .camera, .cursor, .captions, .audio] }
+    static func moreTabs(for model: EditorModel) -> [Tab] {
+        visibleFor(model: model).filter { !primaryTabs.contains($0) }
+    }
     @Binding var tab: Tab
     var width: CGFloat = Metrics.inspector
     @State private var presets = EditorModel.loadPresets()
@@ -36,12 +46,25 @@ struct Inspector: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                LDropdown(sel: $tab, options: Tab.allCases.filter { $0 != .webcam || model.timeline.webcam != nil }.map { ($0, $0.rawValue, icon($0)) })
+                tabSelector
                 tabBody
             }.padding(20)
         }.frame(width: width).frame(maxHeight: .infinity).background(Tok.bg)
         .onChange(of: model.exportPanelRequest) { _, _ in tab = .export }
         .onChange(of: tab) { _, selected in model.exportPanelActive = selected == .export }
+    }
+
+    /// Eight visible tabs max; rarer tabs live behind "More" so hierarchy is
+    /// visible and the menu stays inside the 8-item rule.
+    private var tabSelector: some View {
+        HStack(spacing: 8) {
+            LSegmented(sel: $tab, items: Self.primaryTabs.map { ($0, $0.rawValue) })
+                .frame(width: 232)
+            LDropdown(sel: $tab, options: Tab.moreTabs(for: model).map { ($0, $0.rawValue, icon($0)) })
+                .frame(width: 88)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Inspector sections")
     }
 
     @ViewBuilder private var tabBody: some View {
