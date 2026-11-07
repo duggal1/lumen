@@ -59,7 +59,7 @@ final class ExtraMicrophoneRecorder: NSObject, AVCaptureAudioDataOutputSampleBuf
         session.commitConfiguration()
     }
 
-    func start() { session.startRunning() }
+    func start() { DispatchQueue.global(qos: .userInitiated).async { [session] in session.startRunning() } }
 
     func pause() {
         guard !paused.withLock({ $0 }) else { return }
@@ -76,7 +76,13 @@ final class ExtraMicrophoneRecorder: NSObject, AVCaptureAudioDataOutputSampleBuf
     }
 
     func stop() async {
-        session.stopRunning()
+        // AVCaptureSession.stopRunning can block; run it off the caller thread.
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async { [session] in
+                session.stopRunning()
+                c.resume()
+            }
+        }
         // Drain the callback queue before closing the CAF. No callback writes
         // after stop returns, including the final buffer.
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
