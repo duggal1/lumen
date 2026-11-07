@@ -367,6 +367,8 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         if cfg.mic { sc.captureMicrophone = true; if let id = cfg.micDeviceID { sc.microphoneCaptureDeviceID = id } }
 
         let w = try AVAssetWriter(outputURL: bundle.screenURL, fileType: .mov)
+        // Fragmented so a crash/force-quit still leaves a playable file.
+        w.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
         let bitrate = min(Double(pw * ph) * Double(fps) * 0.12, 250_000_000)
         let settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.hevc, AVVideoWidthKey: pw, AVVideoHeightKey: ph,
@@ -397,7 +399,14 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
 
     public func start() async throws { try await stream?.startCapture() }
 
+    /// Correct shutdown order: stop capture, drain the SCK sample queue,
+    /// mark the video input finished, then await finishWriting off main.
+    /// Signposted so a stop hang is visible in Instruments/Console.
     public func stop() async throws {
+        let sp = OSSignposter(logger: Logger(subsystem: "com.lumen.studio", category: "capture"))
+        let id = sp.makeSignpostID()
+        sp.beginInterval(id, "engine.stop")
+        defer { sp.endInterval(id, "engine.stop") }
         try await stream?.stopCapture()
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             videoQ.async { if self.started { self.vin?.markAsFinished() }; c.resume() }
