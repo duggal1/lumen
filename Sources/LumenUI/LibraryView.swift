@@ -179,7 +179,7 @@ struct LibrarySurface: View {
                 VStack(alignment: .leading, spacing: 0) {
                     // Header
                     HStack(alignment: .top, spacing: 12) {
-                        PixelLens(cell: 2).padding(.top, 2)
+                        Image(systemName: "record.circle").font(.system(size: 18)).foregroundStyle(Tok.accent).padding(.top, 2)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("New recording").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
                             Text("Choose what to capture.").font(AppType.caption).foregroundStyle(Tok.text2)
@@ -203,6 +203,7 @@ struct LibrarySurface: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .scrollIndicators(.hidden)
                     .frame(maxHeight: .infinity)
 
                     // Footer pinned
@@ -216,7 +217,7 @@ struct LibrarySurface: View {
                 }
                 .padding(20)
                 .frame(width: min(480, max(320, geo.size.width - 48)))
-                .frame(height: min(recordTab == .audio ? 480 : 400, max(280, geo.size.height - 32)))
+                .frame(height: min(480, max(280, geo.size.height - 32)))
                 .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
             }
         }
@@ -249,14 +250,14 @@ struct LibrarySurface: View {
     }
 
     private func tabTitle(_ t: RecordTab) -> String {
-        switch t { case .capture: "Capture"; case .audio: "Audio" }
+        switch t { case .capture: "Capture"; case .audio: "Inputs" }
     }
 
     private var captureTab: some View {
         VStack(alignment: .leading, spacing: 16) {
             LSegmented(sel: Bindable(app).kind,
                        items: AppModel.SourceKind.allCases.map { ($0, label($0)) },
-                       track: Tok.control, thumb: Tok.controlHover)
+                       track: Tok.control, thumb: Tok.controlPressed)
             switch app.kind {
             case .display:
                 field("Display", icon: "display") {
@@ -275,8 +276,8 @@ struct LibrarySurface: View {
                 Label("Frame rate", systemImage: "speedometer")
                     .font(AppType.label).foregroundStyle(Tok.text)
                 Spacer(minLength: Space.s4)
-                LSegmented(sel: Bindable(app).fps, items: [(30, "30"), (60, "60"), (120, "120")],
-                           track: Tok.control, thumb: Tok.controlHover)
+                LSegmented(sel: Bindable(app).fps, items: app.supportedFPS.map { ($0, "\($0)") },
+                           track: Tok.control, thumb: Tok.controlPressed)
                     .frame(width: 180)
             }
             .frame(height: 48)
@@ -325,7 +326,7 @@ struct LibrarySurface: View {
             }
             VStack(alignment: .leading, spacing: Space.s2) {
                 HStack(spacing: Space.s4) {
-                    PixelMic(cell: 2)
+                    Image(systemName: "mic.fill").font(.system(size: 14)).foregroundStyle(Tok.text2)
                     Text("Microphone test").font(AppType.label).foregroundStyle(Tok.text)
                     Spacer(minLength: Space.s4)
                     LButton(title: app.micTesting ? "Stop" : "Test", kind: app.micTesting ? .primary : .secondary, height: 24) { app.testMicrophone() }
