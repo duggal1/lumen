@@ -281,6 +281,37 @@ struct LibrarySurface: View {
                     .frame(width: 180)
             }
             .frame(height: 48)
+            HStack(spacing: Space.s4) {
+                Label("Resolution", systemImage: "rectangle.fill")
+                    .font(AppType.label).foregroundStyle(Tok.text)
+                Spacer(minLength: Space.s4)
+                LDropdown(sel: Bindable(app).captureResolution,
+                          options: RecordingConfig.Resolution.allCases.map { ($0, $0 == .native ? "Native" : $0.rawValue, "rectangle.fill") })
+                    .frame(width: 180)
+            }
+            .frame(height: 48)
+            if app.captureResolution != .native {
+                Text("Below native — zoomed text will be softer.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+            }
+            HStack(spacing: Space.s4) {
+                Label("Quality", systemImage: "signal.3")
+                    .font(AppType.label).foregroundStyle(Tok.text)
+                Spacer(minLength: Space.s4)
+                LDropdown(sel: Bindable(app).captureQuality,
+                          options: RecordingConfig.Quality.allCases.map { ($0, $0.rawValue.capitalized, "signal.3") })
+                    .frame(width: 180)
+            }
+            .frame(height: 48)
+            if app.captureQuality == .custom {
+                HStack(spacing: Space.s2) {
+                    TextField("Mbps", value: Bindable(app).captureMbps, format: .number)
+                        .textFieldStyle(.plain).font(AppType.body).frame(width: 88)
+                        .padding(.horizontal, 12).frame(height: 32)
+                        .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well))
+                    Text("Mbps").font(AppType.caption).foregroundStyle(Tok.text2)
+                }
+            }
             Text(preview).font(AppType.caption).foregroundStyle(Tok.text2)
                 .contentTransition(.opacity)
         }
