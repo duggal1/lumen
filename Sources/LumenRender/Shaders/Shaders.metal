@@ -76,15 +76,14 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
         c = v > bayer8(grid) ? cols[1].rgb : cols[0].rgb;
     } else if (u.kind == 7) {
         float pitch = max(3.0, u.cell);
-        float2 grid = floor(in.px / pitch), local = fract(in.px / pitch);
+        float2 grid = floor(in.px / pitch);
         float step = pitch / u.canvas.y;
-        float nx = grid.x * step * 1.4 - u.time * 0.09, ny = grid.y * step * 2.6;
-        float warp = fieldNoise(float3(nx * 0.6 + 11.0, ny * 0.6, u.time * 0.05));
-        float value = 0.65 * fieldNoise(float3(nx + warp * 1.2, ny, u.time * 0.12))
-                    + 0.35 * fieldNoise(float3(nx * 2.3 + 7.0, ny * 2.3, u.time * 0.2 + 3.0));
-        bool dash = local.x >= 0.14 && local.x < 0.86 && local.y >= 0.30 && local.y < 0.70;
-        bool hatch = int(grid.x - grid.y) % 3 != 0;
-        c = dash && hatch && value >= 0.5 ? cols[1].rgb : cols[0].rgb;
+        float nx = grid.x * step * 1.4, ny = grid.y * step * 2.6;
+        // Coherent field: Bayer-ordered density with a slow diagonal wave.
+        // One continuous pattern, no hash gaps or clipped dashes.
+        float wave = 0.5 + 0.5 * sin(dot(float2(nx, ny), normalize(float2(0.55, 1.0))) * 6.0 - u.time * 0.05);
+        float density = clamp(wave * u.density * 1.6, 0.0, 1.0);
+        c = density > bayer8(grid) ? cols[1].rgb : cols[0].rgb;
     } else if (u.kind == 3) {
         // Two flat tones ordered-dithered under a slow diagonal wave. Display-rate phase; export always sends 0.
         float cell = max(2.0, u.cell);
