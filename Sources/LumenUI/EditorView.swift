@@ -6,17 +6,38 @@ public struct EditorRoot: View {
     let url: URL
     @State private var model: EditorModel?
     @State private var failure: String?
+    @State private var detail: String?
     @State private var attempt = 0
     public init(url: URL) { self.url = url }
     public var body: some View {
         MenuRoot {
             Group {
                 if let model { EditorView(model: model) }
-                else if let failure {
-                    VStack(spacing: 12) {
-                        Text(failure).font(AppType.body).foregroundStyle(Tok.statusBad).textSelection(.enabled)
-                        LButton(title: "Retry", kind: .primary) { self.failure = nil; attempt += 1 }
-                    }.padding(32)
+                else if failure != nil {
+                    VStack(spacing: Space.s4) {
+                        Image(systemName: "exclamationmark.circle")
+                            .font(.system(size: 32)).foregroundStyle(Tok.text2)
+                        Text("This recording can’t be opened")
+                            .font(AppType.title).foregroundStyle(Tok.text)
+                        Text("The video file wasn’t finished writing, so it can’t be played.")
+                            .font(AppType.body).foregroundStyle(Tok.text2)
+                            .multilineTextAlignment(.center)
+                        HStack(spacing: 8) {
+                            LButton(title: "Back to Library", kind: .secondary, height: 32) { dismiss() }
+                            LButton(title: "Reveal in Finder", kind: .secondary, height: 32) {
+                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                            }
+                            LButton(title: "Remove recording", kind: .quiet, height: 32) {
+                                try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                                dismiss()
+                            }
+                        }
+                        DisclosureGroup("Show details") {
+                            detailView
+                        }
+                    }
+                    .frame(maxWidth: 480)
+                    .padding(32)
                 } else { PixelWait() }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -24,7 +45,31 @@ public struct EditorRoot: View {
             .background(WindowChrome())
         }
         .frame(minWidth: Metrics.minW, minHeight: Metrics.minH)
-        .task(id: attempt) { do { model = try await EditorModel.open(url: url) } catch { failure = "Couldn't open this project. \(error)" } }
+        .task(id: attempt) { do { model = try await EditorModel.open(url: url) } catch { failure = friendlyError(error, url: url); detail = "\(error)" } }
+    }
+
+    private var detailView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(detail ?? "").font(AppType.mono).foregroundStyle(Tok.text2)
+                .textSelection(.enabled)
+            LButton(title: "Copy", kind: .quiet, height: 24) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(detail ?? "", forType: .string)
+            }
+        }
+    }
+
+    private func dismiss() {
+        NSApp.keyWindow?.close()
+    }
+
+    /// Plain-language copy without the raw NSError dump or the local path.
+    private func friendlyError(_ error: Error, url: URL) -> String {
+        let lower = error.localizedDescription.lowercased()
+        if lower.contains("damaged") || lower.contains("cannot open") || lower.contains("-11829") || lower.contains("-12848") {
+            return "The video file wasn’t finished writing, so it can’t be played."
+        }
+        return "This recording can’t be opened right now."
     }
 }
 

@@ -563,14 +563,12 @@ private final class RegionView: NSView {
     func show() { panel?.orderFrontRegardless() }
     func showCountdown() {
         guard let panel else { return }
-        panel.setContentSize(NSSize(width: 192, height: 180))
         let bounds = (screen ?? NSScreen.main)?.visibleFrame ?? .zero
         panel.setFrameOrigin(CGPoint(x: bounds.midX - 96, y: bounds.midY - 90))
         panel.orderFrontRegardless()
     }
     func showControls() {
         guard let panel else { return }
-        panel.setContentSize(NSSize(width: 520, height: 64))
         if let screen {
             let bounds = screen.visibleFrame
             panel.setFrameOrigin(CGPoint(x: bounds.midX - 260, y: bounds.maxY - 80))
@@ -597,7 +595,7 @@ struct HUDView: View {
                         .font(AppType.label)
                         .foregroundStyle(Tok.text2)
                 }
-                .frame(width: 192, height: 180)
+                .frame(minWidth: 192)
             } else {
                 HStack(spacing: 12) {
                     switch app.phase {
@@ -606,12 +604,12 @@ struct HUDView: View {
                 Text(app.paused ? "Paused" : "Recording").font(AppType.label)
                     .foregroundStyle(app.paused ? Tok.activity : Tok.text).fixedSize(horizontal: true, vertical: false)
                 Text(time(app.stats?.elapsed ?? 0)).font(AppType.label.monospacedDigit()).foregroundStyle(Tok.text)
+                    .frame(minWidth: 78, alignment: .trailing)
                 LiveWaveform(level: app.stats?.micLevel ?? 0)
                 if (app.stats?.dropped ?? 0) > 0 { PixelBadge(kind: .caution, text: "\(app.stats?.dropped ?? 0) dropped") }
                 Spacer()
                 LButton(title: app.paused ? "Resume" : "Pause",
                         icon: app.paused ? "play.fill" : "pause.fill", kind: .secondary) { app.togglePause() }
-                LButton(title: "Discard", icon: "trash", kind: .quiet) { app.discard() }
                 LButton(title: "Stop", icon: "stop.fill", kind: .primary) { app.toggle() }
                     default:
                         PixelWait()
@@ -620,8 +618,7 @@ struct HUDView: View {
                         Spacer()
                     }
                 }
-                .padding(.horizontal, 16)
-                .frame(width: 520, height: 64)
+                .padding(16)
             }
         }
         .background {
