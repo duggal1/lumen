@@ -1,0 +1,20 @@
+# Play timing — real project 37.14s (Recording 2026-11-07T142453)
+# Harness: fresh EditorModel.open per run, wait for derived, then play().
+# motion = play() -> clock.playing; sound = play() -> mixStats (mix+load done)
+
+## Debug (swift test, unoptimized)
+RUN 1: duration 37.14166666666926s derivedWait 420ms motion 0.03898143768310547ms sound 13657.439947128296ms
+RUN 2: duration 37.14166666666926s derivedWait 420ms motion 0.014066696166992188ms sound 14127.048015594482ms
+RUN 3: duration 37.14166666666926s derivedWait 420ms motion 0.010967254638671875ms sound 12871.6379404068ms
+RUN 4: duration 37.14166666666926s derivedWait 420ms motion 0.015974044799804688ms sound 12680.572986602783ms
+RUN 5: duration 37.14166666666926s derivedWait 420ms motion 0.016927719116210938ms sound 12210.041999816895ms
+# => motion <0.05ms (pass <150ms); sound 12.2-14.1s (mix-dominated, Debug)
+
+## Release (swift test -c release, optimized) — shipped binary config
+RUN 1: duration 37.14166666666926s derivedWait 20ms motion 2.1719932556152344ms sound 745.6599473953247ms
+RUN 2: duration 37.14166666666926s derivedWait 20ms motion 0.007987022399902344ms sound 716.7550325393677ms
+RUN 3: duration 37.14166666666926s derivedWait 40ms motion 0.010967254638671875ms sound 729.8129796981812ms
+RUN 4: duration 37.14166666666926s derivedWait 20ms motion 0.014066696166992188ms sound 713.5239839553833ms
+RUN 5: duration 37.14166666666926s derivedWait 40ms motion 0.010013580322265625ms sound 712.785005569458ms
+# => motion <3ms (pass <150ms every run); sound 713-746ms (mix-dominated)
+# Plan gate T2<500ms not met for impatient click; background pre-mix (next) hides this for typical clicks.
