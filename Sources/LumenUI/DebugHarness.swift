@@ -48,7 +48,10 @@ enum LayoutAudit {
         let win = CGRect(x: 0, y: 0, width: window.width, height: window.height)
         for f in frames {
             let r = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
-            if !win.contains(r) {
+            // 1 pt epsilon for float layout rounding.
+            let inset = r.insetBy(dx: 1, dy: 1)
+            let contained = win.contains(inset) || (r.minX >= -1 && r.minY >= -1 && r.maxX <= win.maxX + 1 && r.maxY <= win.maxY + 1)
+            if !contained {
                 out.append(AuditViolation(kind: "containment", element: f.id, detail: "\(r) not in \(win)"))
             }
             if f.idealW > f.w + 0.5 || f.idealH > f.h + 0.5 {

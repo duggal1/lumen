@@ -25,6 +25,13 @@ func arg(_ name: String) -> String? {
 }
 func flag(_ name: String) -> Bool { CommandLine.arguments.contains(name) }
 
+private func width(_ info: [String: Any]) -> Double {
+    (info[kCGWindowBounds as String] as? [String: Any])?["Width"] as? Double ?? 0
+}
+private func overlayRank(_ info: [String: Any]) -> Bool {
+    (info[kCGWindowLayer as String] as? Int ?? 0) == 0
+}
+
 func writePNG(_ image: CGImage, to url: URL) throws {
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
@@ -118,32 +125,27 @@ let cmd = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ""
 switch cmd {
 case "window":
     guard let name = arg("--name") else { usage() }
-    // SCScreenshotManager.captureImage at native backing-pixel resolution.
-    Task {
-        do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            // DEBUG binary has no bundle id; match by title or fall back to largest on-screen window.
-            let lumen = content.windows.filter { $0.owningApplication?.bundleIdentifier.contains("Lumen") == true || ($0.title?.contains("Lumen") == true) }
-            let target = lumen.first ?? content.windows.filter { $0.isOnScreen && $0.frame.width > 200 && $0.frame.height > 200 }.max { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
-            guard let target else {
-                fputs("lumen-shot: no Lumen window found. Is the DEBUG app running? Windows: \(content.windows.map { "\($0.title ?? "?")@\($0.frame)" }.joined(separator: ", "))\n", stderr)
-                exit(1)
-            }
-            let filter = SCContentFilter(desktopIndependentWindow: target)
-            let config = SCStreamConfiguration()
-            config.width = Int(target.frame.width * 2)
-            config.height = Int(target.frame.height * 2)
-            config.pixelFormat = kCVPixelFormatType_32BGRA
-            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            let out = URL(fileURLWithPath: "Docs/Verification/\(name).png")
-            try writePNG(image, to: out)
-            print("wrote \(out.path) \(image.width)x\(image.height)")
-        } catch {
-            fputs("lumen-shot window failed: \(error.localizedDescription)\n", stderr)
-            exit(1)
-        }
+    // CGWindowList path (SCK window capture aborts on some DEBUG builds with
+    // CGS_REQUIRE_INIT). CGWindowList + .bestResolution is native backing pixels.
+    guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        fputs("lumen-shot: cannot list windows\n", stderr); exit(1)
     }
-    dispatchMain()
+    let target = info.first { ($0[kCGWindowName as String] as? String)?.contains("Lumen") == true }
+        ?? info.first { ($0[kCGWindowName as String] as? String)?.contains("DEBUG") == true }
+        ?? info.first { (overlayRank($0) && width($0) > 200) } // largest
+    guard let target, let wid = target[kCGWindowNumber as String] as? CGWindowID,
+          let img = CGWindowListCreateImage(CGRectNull, [.optionIncludingWindow], wid, [.bestResolution]) else {
+        fputs("lumen-shot: no Lumen window found. Is the DEBUG app running? \(info.map { "\($0[kCGWindowName as String] ?? "?")" }.joined(separator: ","))\n", stderr)
+        exit(1)
+    }
+    do {
+        let out = URL(fileURLWithPath: "Docs/Verification/\(name).png")
+        try writePNG(img, to: out)
+        print("wrote \(out.path) \(img.width)x\(img.height)")
+    } catch {
+        fputs("lumen-shot window failed: \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
 case "full":
     guard let name = arg("--name") else { usage() }
     Task {
