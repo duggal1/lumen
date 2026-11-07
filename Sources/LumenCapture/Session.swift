@@ -146,6 +146,9 @@ public actor RecordingSession {
     private var unit = EventTimeUnit.machTicks
     private var activity: NSObjectProtocol?
     private var journalTask: Task<Void, Never>?
+    private var watchdogTask: Task<Void, Never>?
+    private var sleepObserver: NSObjectProtocol?
+    private var terminateObserver: NSObjectProtocol?
     private var journalStart = Date()
     public private(set) var isPaused = false
     public private(set) var stage: RecordingStage = .idle
@@ -249,6 +252,7 @@ public actor RecordingSession {
             }
             journalStart = Date()
             startJournal()
+            startWatchdog()
             transition(to: .recording)
         } catch {
             RecordingGate.recordingStopped()
@@ -301,6 +305,52 @@ public actor RecordingSession {
         b.writeJournal(j)
     }
 
+    /// Free-space watchdog + sleep/terminate finalize. Thresholds are
+    /// parameters (50 MB hard stop). Power loss leaves at most the last
+    /// journal interval (~1 s) plus fragment (~2 s) unflushed; process
+    /// death is fully covered by the atomic journal rename.
+    private func startWatchdog() {
+        watchdogTask?.cancel()
+        sleepObserver = NotificationCenter.default.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
+            Task { await self?.finalizeCleanly(reason: "sleep") }
+        }
+        terminateObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
+            Task { await self?.finalizeCleanly(reason: "terminate") }
+        }
+        watchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                guard let self else { return }
+                let bundleURL = await self.currentBundleURL()
+                guard let url = bundleURL else { return }
+                if let vals = try? FileManager.default.attributesOfFileSystem(forPath: url),
+                   let free = vals[.systemFreeSize] as? NSNumber, free.int64Value < 50_000_000 {
+                    await self.finalizeCleanly(reason: "disk-full")
+                    return
+                }
+            }
+        }
+    }
+
+    private func currentBundleURL() -> String? {
+        bundle?.url.deletingLastPathComponent().path
+    }
+
+    private func stopWatchdog() {
+        watchdogTask?.cancel(); watchdogTask = nil
+        if let s = sleepObserver { NotificationCenter.default.removeObserver(s) }
+        if let s = terminateObserver { NotificationCenter.default.removeObserver(s) }
+        sleepObserver = nil; terminateObserver = nil
+    }
+
+    private func finalizeCleanly(reason: String) async {
+        guard stage == .recording || stage == .paused else { return }
+        logger.info("finalizing on \(reason, privacy: .public)")
+        try? await stopCapture()
+        try? await finalize()
+    }
+
     public func stats() -> CaptureStats {
         CaptureStats(elapsed: engine?.elapsed ?? 0, micLevel: engine?.mic?.level.withLock { $0 } ?? 0,
                      dropped: engine?.droppedFrames ?? 0, thermal: ProcessInfo.processInfo.thermalState.rawValue)
@@ -318,6 +368,7 @@ public actor RecordingSession {
         do {
             guard let engine, let input else { throw CaptureError.noSource }
             journalTask?.cancel(); journalTask = nil
+            stopWatchdog()
             if isPaused { resume() }
             isPaused = false
             await input.stop()
