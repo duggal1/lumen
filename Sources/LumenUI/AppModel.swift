@@ -29,8 +29,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         /// Capture pixels, named the way a person would name the output.
         var output: String {
             guard width > 0 else { return "—" }
-            let tier = width >= 3840 ? "4K" : width >= 2560 ? "1440p" : width >= 1920 ? "1080p" : "\(width)×\(height)"
-            return "\(tier) \(Int(fps.rounded()))"
+            return "\(width)×\(height) \(Int(fps.rounded()))"
         }
     }
 
