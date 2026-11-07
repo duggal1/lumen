@@ -21,14 +21,12 @@ struct LumenApp: App {
         .defaultSize(width: Metrics.windowW, height: Metrics.windowH)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
-        .windowAutosaveName("LumenLibrary")
         WindowGroup("Editor", id: "editor", for: URL.self) { $url in
             if let url { EditorRoot(url: url) }
         }
         .defaultSize(width: 1280, height: 820)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
-        .windowAutosaveName("LumenEditor")
         MenuBarExtra {
             MenuBarContent(app)
         } label: {
