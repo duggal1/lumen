@@ -216,6 +216,14 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
                 self.analyzeInBackground(out)
             }
             if audioChanged, self.hasMixed { self.remix() }
+            // Warm the preview buffer after derive publishes so a typical
+            // Play (seconds after open) has sound instantly. The mix runs
+            // off-main and never blocks open; an eager Play already owns
+            // its mix, so this only fires when transport is idle.
+            if self.needsInitialMix {
+                self.needsInitialMix = false
+                if !self.hasMixed, !self.isMixing, !self.wantsPlayback { self.remix() }
+            }
             self.playhead = min(self.playhead, out.compositionDuration)
             self.published = self.playhead
             self.clock.seek(self.playhead)
