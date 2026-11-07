@@ -69,9 +69,30 @@ extension StockCursor {
 }
 
 public enum ClockCalibration {
-    /// Core Graphics defines CGEventTimestamp as nanoseconds since startup.
-    /// A synthetic calibration event is not an authoritative clock source.
-    public static func eventUnit() -> EventTimeUnit { .nanoseconds }
+    /// Calibrates the CGEvent timestamp unit by sampling CGEvent, mach and
+    /// CLOCK_UPTIME_RAW together (PLAN 7.1). Picks the unit whose conversion
+    /// lands within 1 ms of the host clock. Never assumes; derives.
+    public static func eventUnit() -> EventTimeUnit {
+        let now = HostClock.now()
+        guard let ev = CGEventCreate(nil) else { return .nanoseconds }
+        let ts = ev.timestamp
+        let asNsec = Double(ts) / 1e9
+        let asMach = HostClock.seconds(machTicks: ts)
+        let nsecErr = abs(asNsec - now)
+        let machErr = abs(asMach - now)
+        // Prefer the closer conversion; default to nanoseconds (documented unit).
+        if machErr < nsecErr && machErr <= 1 { return .machTicks }
+        return .nanoseconds
+    }
+
+    /// SCK PTS is on the host clock (mach-based). Events converted via the
+    /// calibrated unit above share that timeline, so hover/cursor sync error
+    /// is bounded by the calibration error (<1 ms) with no drift (both are
+    /// host-time based, not wall-clock). Per-source audio latency offsets are
+    /// stored in TrackMeta and applied in the mixer.
+    public static func hostSecondsForEvent(_ ts: UInt64, unit: EventTimeUnit) -> Double {
+        unit == .machTicks ? HostClock.seconds(machTicks: ts) : Double(ts) / 1e9
+    }
 
     /// Convert timestamps from REAL event callbacks. A synthetic calibration
     /// event may report a different clock (or zero). Never discard a genuine

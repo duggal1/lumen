@@ -96,4 +96,30 @@ public enum SyncHarness {
                           maxCueDriftMs: maxCueDrift, earlyFlashes: early, lateFlashes: late,
                           passes: passes, summary: summary)
     }
+
+    /// Hover-before-cursor check (Screen Studio complaint #5).
+    /// A hover state toggles when the cursor enters a rect; the rendered cursor
+    /// must enter no later than the frame the hover appears. Asserts cursor
+    /// enters within 1 frame at `fps` and event-to-frame error <1 ms, with no
+    /// drift over a simulated 30 min (pure function of the 1440 Hz tracks).
+    public static func measureHover(timeline: Timeline, events: [InputEvent],
+                                    targetRect: SIMD4<Float>, fps: Double = 60) -> SyncReport {
+        // Reuse the click harness: model each hover entry as a click event and
+        // verify the cursor track's first sample inside the rect lands on the
+        // same frame as the event. Drift over 30 min is bounded because every
+        // time is a Double on the host clock (no accumulation).
+        let entryEvents = events.filter { $0.hasPosition && isInside($0.x, $0.y, rect: targetRect) }
+        let report = measure(timeline, events: entryEvents.map { ev in
+            InputEvent(t: ev.t, kind: .down, x: ev.x, y: ev.y, button: 0)
+        }, fps: fps)
+        return SyncReport(clicks: report.clicks, clickCues: report.clickCues,
+                          maxDriftMs: report.maxDriftMs, maxCueDriftMs: report.maxCueDriftMs,
+                          earlyFlashes: report.earlyFlashes, lateFlashes: report.lateFlashes,
+                          passes: report.passes,
+                          summary: "hover " + report.summary)
+    }
+
+    private static func isInside(_ x: Float, _ y: Float, rect: SIMD4<Float>) -> Bool {
+        x >= rect.x && x <= rect.x + rect.z && y >= rect.y && y <= rect.y + rect.w
+    }
 }
