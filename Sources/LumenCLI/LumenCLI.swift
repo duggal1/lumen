@@ -14,7 +14,7 @@ import LumenSpeech
 @main
 struct LumenCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "lumen-cli", abstract: "Headless Lumen",
-        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self, Bench.self, Golden.self])
+        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self, Bench.self, Golden.self, AudioCheckCmd.self])
 }
 
 func openProject(_ path: String) async throws -> (ProjectSession, Timeline) {
@@ -235,5 +235,47 @@ struct Transcribe: AsyncParsableCommand {
             try jsonOut(["engine": "moonshine-streaming-\(s.rawValue)", "audioSeconds": audioSec, "wallSeconds": wall, "realtimeFactor": audioSec / max(wall, 1e-6),
                          "words": tr.words.count, "text": tr.words.map(\.text).joined(separator: " ")] as [String: Any], to: nil)
         }
+    }
+}
+
+struct AudioCheckCmd: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "audio-check", abstract: "Measure cracks, clips, loudness")
+    @Argument var target: String
+    @Option var report: String?
+    func run() async throws {
+        let url = URL(fileURLWithPath: target)
+        var fileURLs: [URL] = []
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            let b = ProjectBundle(url: url)
+            for u in [b.micURL, b.systemURL] where FileManager.default.fileExists(atPath: u.path) { fileURLs.append(u) }
+            if fileURLs.isEmpty { fileURLs = [url.appendingPathComponent("mic.caf"), url.appendingPathComponent("system.caf")].filter { FileManager.default.fileExists(atPath: $0.path) } }
+            if fileURLs.isEmpty { throw ValidationError("no audio tracks in \(target)") }
+        } else {
+            fileURLs = [url]
+        }
+        var reports: [String: Any] = [:]
+        for fileURL in fileURLs {
+            let f = try AVAudioFile(forReading: fileURL)
+            let fmt = f.processingFormat
+            let total = Int(f.length)
+            guard total > 0 else { reports[fileURL.lastPathComponent] = ["error": "empty"]; continue }
+            let cap: AVAudioFrameCount = 1 << 16
+            guard let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: cap) else { throw ValidationError("buffer") }
+            var chans = [[Float]](repeating: [], count: Int(fmt.channelCount))
+            while f.framePosition < f.length {
+                try f.read(into: buf, frameCount: cap)
+                let n = Int(buf.frameLength)
+                if n == 0 { break }
+                guard let d = buf.floatChannelData else { throw ValidationError("not float PCM: \(fileURL.path)") }
+                for c in 0..<Int(fmt.channelCount) { chans[c].append(contentsOf: UnsafeBufferPointer(start: d[c], count: n)) }
+            }
+            let rep = AudioCheck.analyze(channels: chans, sampleRate: fmt.sampleRate,
+                                         format: "pcmF32_\(Int(fmt.sampleRate))Hz_\((fmt.isInterleaved ? "interleaved" : "nonInterleaved"))_ch\(fmt.channelCount)")
+            let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let dict = try JSONSerialization.jsonObject(with: enc.encode(rep)) as! [String: Any]
+            reports[fileURL.lastPathComponent] = dict
+        }
+        try jsonOut(reports, to: report)
     }
 }
