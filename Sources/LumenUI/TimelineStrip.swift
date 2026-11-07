@@ -25,14 +25,24 @@ struct TimelineStrip: View {
         let tl = model.timeline, tm = tl.timeMap, dur = max(tm.outputDuration, 0.001), w = size.width
         func x(_ t: Double) -> CGFloat { CGFloat(t / dur) * w }
         func fill(_ r: CGRect, _ col: Color) { c.fill(Path(r), with: .color(col), style: FillStyle(antialiased: false)) }
-        // ruler
-        let stepS = dur > 120 ? 30.0 : dur > 40 ? 10.0 : dur > 12 ? 5.0 : 1.0
+        // Ruler ticks adapt to clip length (sub-second for short clips).
+        // Labels stay inside the strip: the last tick anchors trailing.
+        let stepS = dur > 120 ? 30.0 : dur > 40 ? 10.0 : dur > 12 ? 5.0 : dur > 3 ? 0.5 : 0.25
         var t = 0.0
         while t <= dur {
-            fill(CGRect(x: x(t).rounded(), y: 14, width: 1, height: 5), Tok.text2)
-            c.draw(Text(String(format: "%d:%02d", Int(t) / 60, Int(t) % 60)).font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2),
-                   at: CGPoint(x: x(t) + 4, y: 8), anchor: .leading)
+            let tx = x(t).rounded()
+            fill(CGRect(x: tx, y: 14, width: 1, height: 5), Tok.text2)
+            let label = stepS < 1 ? String(format: "%.2f", t) : String(format: "%d:%02d", Int(t) / 60, Int(t) % 60)
+            let isLast = t + stepS > dur
+            c.draw(Text(label).font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2),
+                   at: CGPoint(x: isLast ? tx - 4 : tx + 4, y: 8), anchor: isLast ? .trailing : .leading)
             t += stepS
+        }
+        // Zoom lane empty state.
+        if tl.zoom.isEmpty {
+            c.draw(Text("No zoom segments — Add zoom to focus a moment.")
+                .font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2),
+                   at: CGPoint(x: 6, y: zoomLane.upperBound - 8), anchor: .leading)
         }
         // zoom segments (stored in SOURCE time, drawn in OUTPUT time): auto = soft, manual = accent; selected = text-colored cap
         for z in tl.zoom {
@@ -41,11 +51,13 @@ struct TimelineStrip: View {
             let r = CGRect(x: x(zs), y: zoomLane.lowerBound, width: max(x(ze) - x(zs), 4), height: zoomLane.upperBound - zoomLane.lowerBound)
             // Auto zooms are violet (Screen Studio), manual zooms stay orange.
             fill(r, z.origin == .manual ? Tok.accent : Tok.zoomSoft)
-            fill(CGRect(x: r.minX, y: r.minY, width: 2, height: r.height), z.origin == .manual ? Tok.accentPressed : Tok.zoom)
-            fill(CGRect(x: r.maxX - 2, y: r.minY, width: 2, height: r.height), z.origin == .manual ? Tok.accentPressed : Tok.zoom)
+            // Visible drag handles: 6 pt opaque grips (not 2 pt caps).
+            let handleCol = z.origin == .manual ? Tok.accentPressed : Tok.zoom
+            fill(CGRect(x: r.minX, y: r.minY, width: 6, height: r.height), handleCol)
+            fill(CGRect(x: r.maxX - 6, y: r.minY, width: 6, height: r.height), handleCol)
             if z.id == model.selection { fill(CGRect(x: r.minX, y: r.maxY - 3, width: r.width, height: 3), Tok.text) }
             c.draw(Text(String(format: "%.1f×", z.scale)).font(.system(size: 10, weight: .medium).monospacedDigit())
-                .foregroundStyle(z.origin == .manual ? Tok.onAccent : Tok.zoomText), at: CGPoint(x: r.minX + 6, y: r.midY), anchor: .leading)
+                .foregroundStyle(z.origin == .manual ? Tok.onAccent : Tok.zoomText), at: CGPoint(x: r.minX + 10, y: r.midY), anchor: .leading)
         }
         // speed ramps (source -> output)
         for r in tm.ramps {
@@ -69,33 +81,53 @@ struct TimelineStrip: View {
         // Clicks are editable events, not barely visible 2 px dots.
         // Recorded clicks are orange; manual taps (Tools > Add tap) are
         // fuchsia so the two are never confused on the timeline.
+        // Unified dedupe: a Click and a Tap at the same output time share
+        // one chip (Tap wins) or a ×N cluster; never two overprints.
         func badge(at center: CGFloat, label: String, soft: Color, ink: Color) {
-            let rect = CGRect(x: center - 20, y: 82, width: 40, height: 16)
+            let w: CGFloat = label.contains("×") ? 44 : 40
+            let rect = CGRect(x: center - w / 2, y: 82, width: w, height: 18)
             c.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(soft))
             c.draw(Text(label).font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(ink),
                    at: CGPoint(x: rect.midX, y: rect.midY))
         }
         if let d = tl.derived {
+            var events: [(t: Double, label: String, soft: Color, ink: Color)] = d.clicks.map { (t: $0.t, label: "Click", soft: Tok.accentSoft, ink: Tok.accentText) }
+            events += tl.overlays.taps.map { (t: tm.output(atSource: $0.t), label: "Tap", soft: Tok.tapSoft, ink: Tok.tapText) }
+            events.sort { $0.t < $1.t }
             var lastBadgeX: CGFloat = -100
-            for click in d.clicks {
-                let center = max(20, min(x(click.t), w - 20))
-                guard center - lastBadgeX >= 42 else { continue }
-                badge(at: center, label: "Click", soft: Tok.accentSoft, ink: Tok.accentText)
-                lastBadgeX = center
+            var pending: [(t: Double, label: String, soft: Color, ink: Color)] = []
+            var pendingCenter: CGFloat = 0
+            func flushPending() {
+                if pending.isEmpty { return }
+                let label = pending.count > 1 ? "×\(pending.count)" : pending[0].label
+                // Tap wins colour when a cluster mixes Click + Tap.
+                let tap = pending.first { $0.label == "Tap" }
+                let soft = tap?.soft ?? pending[0].soft
+                let ink = tap?.ink ?? pending[0].ink
+                badge(at: pendingCenter, label: label, soft: soft, ink: ink)
+                lastBadgeX = pendingCenter
+                pending.removeAll()
             }
-        }
-        var lastTapX: CGFloat = -100
-        for tap in tl.overlays.taps {
-            let center = max(20, min(x(tm.output(atSource: tap.t)), w - 20))
-            guard center - lastTapX >= 42 else { continue }
-            badge(at: center, label: "Tap", soft: Tok.tapSoft, ink: Tok.tapText)
-            lastTapX = center
+            for ev in events {
+                let center = max(20, min(x(ev.t), w - 20))
+                if !pending.isEmpty, center - lastBadgeX < 44, center - pendingCenter < 44 {
+                    // Same chip width: merge into a cluster (Tap wins colour).
+                    pending.append(ev)
+                    continue
+                }
+                flushPending()
+                // Chip must clear the previous chip by a full chip width.
+                if center - lastBadgeX < 44 { continue }
+                pending = [ev]; pendingCenter = center
+            }
+            flushPending()
         }
     }
 
     /// Smooth playhead line: it reads the clock at display rate, while the
     /// heavy strip canvas (waveform + segments) redraws only at ~12 Hz.
+    /// Inset so the 2 pt line never clips at the strip edge.
     private struct PlayheadLine: View {
         let model: EditorModel
         var body: some View {
@@ -103,7 +135,7 @@ struct TimelineStrip: View {
             TimelineView(.animation(paused: !model.isPlaying)) { _ in
                 Canvas { context, size in
                     let t = model.isPlaying ? model.clock.time(at: HostClock.now()) : paused
-                    let x = (CGFloat(t / max(model.duration, 0.001)) * size.width).rounded()
+                    let x = min(max((CGFloat(t / max(model.duration, 0.001)) * size.width).rounded(), 2), size.width - 2)
                     context.fill(Path(CGRect(x: x - 1, y: 4, width: 2, height: size.height - 8)),
                                  with: .color(Tok.text), style: FillStyle(antialiased: false))
                 }
