@@ -185,20 +185,8 @@ private struct SidebarToggle: View {
     }
 }
 
-private struct SidebarMaterial: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let v = NSVisualEffectView()
-        v.material = .sidebar
-        v.blendingMode = .behindWindow
-        v.state = .active
-        v.isEmphasized = false
-        return v
-    }
-    func updateNSView(_ v: NSVisualEffectView, context: Context) {
-        v.material = .sidebar
-        v.blendingMode = .behindWindow
-        v.state = .active
-    }
+private struct SidebarMaterial: View {
+    var body: some View { Tok.surface }
 }
 
 // MARK: Route surfaces that need an open project
