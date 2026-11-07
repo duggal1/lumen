@@ -103,7 +103,9 @@ public enum Exporter {
         let compositionDuration = tl.compositionDuration
         let total = max(Int(ceil(compositionDuration * Double(fps) - 1e-8)), 1)
 
-        let mixed = includeAudio ? await Task.detached(priority: .userInitiated) { session.mixer.mix(tl) }.value : nil
+        // Export audio runs at .utility so recording stays smooth on the same Mac
+        // (complaint #1: "my MacBook is unusable while a file renders").
+        let mixed = includeAudio ? await Task.detached(priority: .utility) { session.mixer.mix(tl) }.value : nil
         let caf = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".caf")
         if let m = mixed { try AudioIO.writeCAF(m.l, m.r, to: caf) }
         defer { try? FileManager.default.removeItem(at: caf) }
@@ -217,7 +219,7 @@ public enum Exporter {
             for entry in stagedStems { try? FileManager.default.removeItem(at: entry.temporary) }
         }
         if exportStems {
-            let sourceTracks = await Task.detached(priority: .userInitiated) {
+            let sourceTracks = await Task.detached(priority: .utility) {
                 session.mixer.stems(tl)
             }.value
             guard !sourceTracks.isEmpty else {

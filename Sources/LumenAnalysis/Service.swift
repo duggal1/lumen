@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import LumenCore
 import LumenProject
 
 final class ReaderHandle: @unchecked Sendable {
@@ -78,16 +79,22 @@ public actor AnalysisService {
     public init() {}
 
     public func run(_ request: AnalysisRequest) async -> AnalysisResult {
+        // At most 2 concurrent analyzers at .utility; pause while a recording
+        // is active so capture never shares the CPU with analysis.
+        while RecordingGate.isRecordingActive {
+            try? await Task.sleep(for: .milliseconds(250))
+            if Task.isCancelled { return AnalysisResult(errors: ["cancelled": "analysis paused during recording"]) }
+        }
+        // Two waves of ≤2 so the cap holds without starving any analyzer.
         async let faceResult = face(request)
         async let activityResult = activity(request)
-        async let ocrResult = ocr(request)
-        async let transcriptResult = transcript(request)
-        async let personMaskResult = personMask(request)
         let (faces, faceError) = await faceResult
         let (activities, activityError) = await activityResult
+        async let ocrResult = ocr(request)
+        async let transcriptResult = transcript(request)
         let (detections, ocrError) = await ocrResult
         let (words, transcriptError) = await transcriptResult
-        let (mask, maskError) = await personMaskResult
+        let (mask, maskError) = await personMask(request)
         var errors: [String: String] = [:]
         if let faceError { errors["face"] = faceError }
         if let activityError { errors["activity"] = activityError }

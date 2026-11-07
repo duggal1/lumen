@@ -225,6 +225,7 @@ public actor RecordingSession {
         guard let engine, let input else { transition(to: .failed("No capture source.")); throw CaptureError.noSource }
         let timeoutTask = armStageTimeout(.recording, seconds: 10)
         defer { timeoutTask.cancel() }
+        RecordingGate.recordingStarted()
         do {
             activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled, .idleSystemSleepDisabled],
                                                              reason: "Lumen recording")
@@ -243,6 +244,7 @@ public actor RecordingSession {
             startJournal()
             transition(to: .recording)
         } catch {
+            RecordingGate.recordingStopped()
             transition(to: .failed("Starting stalled. \(error)"))
             throw error
         }
@@ -369,11 +371,13 @@ public actor RecordingSession {
                 b.clearJournal()
             }.value
         } catch {
+            RecordingGate.recordingStopped()
             transition(to: .failed("Finalizing stalled. \(error)"))
             throw error
         }
         if let a = activityToken { ProcessInfo.processInfo.endActivity(a) }
         activity = nil
+        RecordingGate.recordingStopped()
         return b
     }
 
