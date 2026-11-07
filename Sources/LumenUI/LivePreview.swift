@@ -71,7 +71,7 @@ final class LiveHub: @unchecked Sendable {
         wantsLayer = true; layer = metal
         metal.device = renderer.device; metal.pixelFormat = .bgra8Unorm; metal.framebufferOnly = true
         metal.colorspace = CGColorSpace(name: CGColorSpace.displayP3); metal.displaySyncEnabled = true; metal.maximumDrawableCount = 3
-        metal.isOpaque = false; metal.cornerRadius = 12; metal.masksToBounds = true
+        metal.isOpaque = false; metal.cornerRadius = 16; metal.masksToBounds = true
     }
     required init?(coder: NSCoder) { fatalError() }
     override func viewDidMoveToWindow() {

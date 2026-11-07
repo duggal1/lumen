@@ -571,8 +571,11 @@ struct HUDView: View {
         Group {
             if case .countdown(let n) = app.phase {
                 VStack(spacing: 8) {
+                    // Spec countdown: serif display numeral (AppType.onboarding 40
+                    // scaled up for the card) — tabular, weight at most Medium,
+                    // never the previous bold rounded 84 pt.
                     Text("\(n)")
-                        .font(.system(size: 84, weight: .bold, design: .rounded))
+                        .font(AppType.onboarding)
                         .monospacedDigit()
                         .foregroundStyle(Tok.accent)
                     Text("Starting recording")

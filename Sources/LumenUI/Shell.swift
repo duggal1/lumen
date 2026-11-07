@@ -6,6 +6,9 @@ import LumenCapture
 
 enum Route: String, CaseIterable, Identifiable {
     case library, studio, backgrounds, cursors, audio, export, settings
+    /// Routes that open only on a project; on the landing shell they would
+    /// otherwise render the same placeholder five times.
+    static var needsProject: [Route] { [.studio, .backgrounds, .cursors, .audio, .export] }
     var id: String { rawValue }
 
     var title: String {
@@ -82,7 +85,6 @@ public struct LumenShell: View {
         .overlay(alignment: .topLeading) {
             SidebarToggle(shows: shell.sidebarShown) { shell.sidebarShown.toggle() }
                 .padding(.leading, 82)
-                .offset(y: -26)
         }
     }
 
@@ -113,7 +115,7 @@ private struct ShellSidebar: View {
         ZStack(alignment: .topLeading) {
             SidebarMaterial().ignoresSafeArea()
             VStack(alignment: .leading, spacing: 2) {
-                ForEach(Route.allCases) { r in
+                ForEach(Route.allCases.filter { !Route.needsProject.contains($0) }) { r in
                     row(r)
                 }
                 Spacer(minLength: Space.s4)
