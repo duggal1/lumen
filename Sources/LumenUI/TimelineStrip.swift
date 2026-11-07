@@ -164,6 +164,10 @@ struct TimelineStrip: View {
             }
             // Cause threads: faint segment from lane bottom up to each triggering block.
             let spans = autoZoomSpansOut()
+            for cut in tm.cuts {
+                let cx = x(tm.output(atSource: cut.start), dur, w)
+                fill(CGRect(x: cx - 1, y: 2, width: 2, height: hZoom - 4), Tok.statusBad)
+            }
             for m in outEvents() where !m.isTap {
                 if TimelineGeometry.triggerZoom(t: m.t, zooms: spans) != nil {
                     let mx = x(m.t, dur, w)
@@ -244,7 +248,7 @@ struct TimelineStrip: View {
                 let isTap = members.contains(where: { $0.isTap })
                 let triggered = !isTap && TimelineGeometry.triggerZoom(t: rep.t, zooms: spans) != nil
                 let alpha: Double = rep.isTap ? 1 : (triggered ? 1 : 0.45)
-                let dim = Tok.text2.opacity(alpha)
+                let dim = Tok.tap.opacity(alpha)
                 let isHover = hoveredMarker != nil && abs(x(hoveredMarker!.t, dur, w) - cx) < 6
                 let headR: CGFloat = isHover ? 4 : 3
                 c.stroke(Path(CGRect(x: cx, y: 10, width: 1, height: 16)), with: .color(dim), lineWidth: 1)
@@ -301,7 +305,7 @@ struct TimelineStrip: View {
                 let col: Color
                 if inRamp { col = Tok.controlPressed.opacity(0.7) }
                 else if peak < 0.05 { col = Tok.controlPressed }
-                else { col = cx < ph ? Tok.text : Tok.text2 }
+                else { col = cx < ph ? Tok.accent : Tok.accent.opacity(0.55) }
                 for k in -rows...rows {
                     let r = CGRect(x: snap(cx), y: snap(mid + CGFloat(k) * (cellH + dotGap) - cellH / 2), width: cellW, height: cellH)
                     c.fill(Path(r), with: .color(col), style: FillStyle(antialiased: false))
