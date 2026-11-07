@@ -39,6 +39,7 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 
     init(url: URL, deviceID: String?, quality: String = "auto") throws {
         writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        writer.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
         self.quality = quality
         super.init()
         guard let dev = deviceID.flatMap({ AVCaptureDevice(uniqueID: $0) }) ?? AVCaptureDevice.default(for: .video) else { throw CaptureError.noSource }
@@ -223,6 +224,12 @@ public actor RecordingSession {
 
     public func start() async throws {
         guard let engine, let input else { transition(to: .failed("No capture source.")); throw CaptureError.noSource }
+        // Input Monitoring is checked here (at Start), not after the fact.
+        if !Permissions.input {
+            Permissions.requestInput()
+            transition(to: .failed("Input Monitoring is off. Grant it, then relaunch Lumen."))
+            throw CaptureError.writer("Input Monitoring is off. Grant it, then relaunch Lumen.")
+        }
         let timeoutTask = armStageTimeout(.recording, seconds: 10)
         defer { timeoutTask.cancel() }
         RecordingGate.recordingStarted()
