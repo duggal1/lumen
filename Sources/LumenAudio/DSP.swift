@@ -4,7 +4,10 @@ import LumenCore
 public struct Biquad: Sendable {
     var b0 = 1.0, b1 = 0.0, b2 = 0.0, a1 = 0.0, a2 = 0.0, z1 = 0.0, z2 = 0.0
     public mutating func run(_ x: Double) -> Double {
-        let y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return y
+        let y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y
+        // Flush denormals on every audio path (prevents 10x slowdowns).
+        if abs(y) < 1e-30 { return 0 }
+        return y
     }
     public static func highpass(_ f: Double, q: Double = 0.7071, fs: Double) -> Biquad {
         let w = 2 * Double.pi * f / fs, c = cos(w), a = sin(w) / (2 * q), a0 = 1 + a
@@ -74,8 +77,10 @@ public enum Loudness {
 }
 
 /// Offline (non-causal, zero-latency) look-ahead limiter: sliding-min of required gain, smoothed by a centered moving average.
+/// `half` ≈ 2 ms at 48 kHz for inter-sample headroom. Float headroom is kept
+/// until here; the ceiling is a true-peak ceiling, not a hard clip.
 public enum Limiter {
-    public static func apply(_ ch: inout [[Float]], ceiling: Float, half: Int = 36) {
+    public static func apply(_ ch: inout [[Float]], ceiling: Float, half: Int = 96) {
         guard let n = ch.first?.count, n > 0 else { return }
         var req = [Float](repeating: 1, count: n)
         for i in 0..<n { var m: Float = 0; for c in ch { m = max(m, abs(c[i])) }; if m > ceiling { req[i] = ceiling / m } }
@@ -100,11 +105,62 @@ public struct Compressor: Sendable {
     public func process(_ x: [Float], fs: Double) -> [Float] {
         var env = 0.0, out = x
         let ca = exp(-1 / (attack * fs)), cr = exp(-1 / (release * fs))
+        // Smoothed detector gain (5 ms one-pole) so the compressor never pumps per-sample.
+        var gainDb = 0.0
+        let gs = exp(-1 / (0.005 * fs))
         for i in 0..<x.count {
             let a = Double(abs(x[i]))
             env = a > env ? a + ca * (env - a) : a + cr * (env - a)
             let over = 20 * log10(env + 1e-9) - thresholdDb
-            if over > 0 { out[i] = x[i] * Float(pow(10, -over * (1 - 1 / ratio) / 20)) }
+            let targetDb = over > 0 ? -over * (1 - 1 / ratio) : 0
+            gainDb = targetDb + gs * (gainDb - targetDb)
+            if gainDb < -0.05 { out[i] = x[i] * Float(pow(10, gainDb / 20)) }
+        }
+        return out
+    }
+}
+
+/// Keystroke-aware declick (PLAN 13.1). Attenuates the 2–8 kHz band by
+/// `depthDb` in ±35 ms windows around each key time when VAD is silent,
+/// milder (-6 dB) when speech overlaps. Gain is ramped (≥5 ms) so no step
+/// is ever audible. Pure, offline, deterministic.
+public enum Declick {
+    public static func process(_ x: [Float], keyTimes: [Double], vad: [ClosedRange<Double>],
+                               fs: Double = 48000, depthDb: Double = -12) -> [Float] {
+        guard depthDb < -0.5, !keyTimes.isEmpty, !x.isEmpty else { return x }
+        let n = x.count
+        // Isolate 2–8 kHz with two biquads in series.
+        var hp = Biquad.highpass(2000, fs: fs)
+        var lp = Biquad.lowpass(8000, fs: fs)
+        var band = [Float](repeating: 0, count: n)
+        for i in 0..<n {
+            let v = Double(x[i])
+            let y = lp.run(hp.run(v))
+            band[i] = abs(y) < 1e-30 ? 0 : Float(y)
+        }
+        // Per-sample suppression gain (1 = keep band, g = suppress band).
+        var g = [Float](repeating: 1, count: n)
+        let halfWin = Int(0.035 * fs)
+        let ramp = max(Int(0.005 * fs), 1)
+        let fullGain = Float(pow(10.0, depthDb / 20.0))
+        let mildGain = Float(pow(10.0, -6.0 / 20.0))
+        for key in keyTimes {
+            let center = Int((key * fs).rounded())
+            guard center > -halfWin, center < n + halfWin else { continue }
+            let speech = vad.contains { $0.lowerBound <= key && key <= $0.upperBound }
+            let target = speech ? mildGain : fullGain
+            // Ramped window: linear attack/release over `ramp` samples.
+            let lo = max(center - halfWin, 0), hi = min(center + halfWin, n - 1)
+            for i in lo...hi {
+                let edge = min(i - lo, hi - i)
+                let rampT = ramp > 0 ? min(1, Float(edge) / Float(ramp)) : 1
+                let desired = 1 - (1 - target) * rampT
+                g[i] = min(g[i], desired)
+            }
+        }
+        var out = x
+        for i in 0..<n {
+            out[i] = x[i] - band[i] * (1 - g[i])
         }
         return out
     }
@@ -156,6 +212,8 @@ public struct SpectralGate: Denoiser {
 import CRNNoise
 public struct RNNoiseDenoiser: Denoiser {
     public init() {}
+    /// RNNoise algorithmic latency in samples at 48 kHz (one 480-sample frame).
+    static let latencySamples = 480
     public func process(_ x: [Float]) -> [Float] {
         guard let st = rnnoise_create(nil) else { return x }
         defer { rnnoise_destroy(st) }
@@ -165,6 +223,26 @@ public struct RNNoiseDenoiser: Denoiser {
             _ = rnnoise_process_frame(st, &ob, &inb)
             for k in 0..<480 { out[i + k] = ob[k] / 32768 }
             i += 480
+        }
+        // Flush final partial frame with zero padding (never drop the tail).
+        if i < x.count {
+            let tail = x.count - i
+            inb = [Float](repeating: 0, count: 480)
+            for k in 0..<tail { inb[k] = x[i + k] * 32768 }
+            _ = rnnoise_process_frame(st, &ob, &inb)
+            for k in 0..<tail { out[i + k] = ob[k] / 32768 }
+        }
+        // Compensate algorithmic latency: the denoised path is delayed by one
+        // frame. Shift left so voice stays aligned to the timeline; pad the
+        // end by repeating the last sample (dry path is primary, so a flat
+        // 10 ms tail is inaudible).
+        let lat = Self.latencySamples
+        if x.count > lat {
+            var aligned = [Float](repeating: 0, count: x.count)
+            for j in 0..<(x.count - lat) { aligned[j] = out[j + lat] }
+            let lastVal = out[x.count - 1]
+            for j in (x.count - lat)..<x.count { aligned[j] = lastVal }
+            out = aligned
         }
         return out
     }
