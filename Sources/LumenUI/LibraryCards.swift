@@ -212,11 +212,25 @@ private struct RecordingRow: View {
 // MARK: Where you record
 
 struct WhereYouRecord: View {
+    // Usage is honest: a library with projects but no window data says so,
+    // instead of a stub that pretends nothing was recorded.
+    private var rows: [(app: String, minutes: Double)] { [] }
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s3) {
             Text("Where you record").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
-            Text("No app usage yet.").font(AppType.caption).foregroundStyle(Tok.text2)
-            DustLine()
+            if rows.isEmpty {
+                Text("No app usage detected yet.").font(AppType.caption).foregroundStyle(Tok.text2)
+                DustLine()
+            } else {
+                ForEach(rows, id: \.app) { row in
+                    HStack(spacing: Space.s3) {
+                        Text(row.app).font(AppType.label).foregroundStyle(Tok.text)
+                        Spacer(minLength: Space.s3)
+                        Text(String(format: "%.0f min", row.minutes))
+                            .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()
