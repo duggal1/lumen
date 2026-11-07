@@ -30,3 +30,6 @@
 - Recording stop is split: `stopCapture()` (fast) then `finalize()` at `.utility`; HUD dismisses before finalize so Stop never spins.
 - Declick applies to the primary mic only this pass (extra-mic key times need per-mic rebase; spectral path covers them).
 - `MainThreadWatchdog` hashes stall stage names, not stack bytes, so `hangs.json` stays stable across builds.
+- Activity uses absolute minute buckets (1 video light, 5+ brightest) and dot cells, not squares or quantiles.
+- Activity dots use Ramp.heat mixed tokens with neutral controlPressed for zero.
+- Activity empty days are neutral dust dots, never white or BG.
