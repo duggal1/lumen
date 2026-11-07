@@ -84,7 +84,8 @@ public struct LumenShell: View {
         .onAppear { shell.sidebarShown = false }
         .overlay(alignment: .topLeading) {
             SidebarToggle(shows: shell.sidebarShown) { shell.sidebarShown.toggle() }
-                .padding(.leading, 82)
+                .padding(.leading, 72)
+                .padding(.top, Space.s3)
         }
     }
 

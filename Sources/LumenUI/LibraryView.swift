@@ -50,8 +50,8 @@ struct LibrarySurface: View {
                     WhereYouRecord()
                 }
                 .padding(Metrics.pagePad)
-                .frame(maxWidth: Metrics.wide, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: Metrics.wide)
+                .frame(maxWidth: .infinity)
             }
             .scrollIndicators(.hidden)
         }
