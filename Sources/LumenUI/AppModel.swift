@@ -401,26 +401,41 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         hud?.show()
         if livePreview { livePreviewController = LivePreviewController(); livePreviewController?.show() }
         do {
-            try await session.prepare(cfg, library: library)
-            if let hub = livePreviewController?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }) }
+            // Preparation runs CONCURRENTLY during the countdown (spec §3.2).
+            // HUD/countdown visible within 100 ms of the click; SCShareableContent
+            // and writers warm up in parallel instead of blocking the countdown.
             hud?.showCountdown()
+            phase = .countdown(3)
+            let prepareTask = Task { try await session.prepare(cfg, library: library) }
+            // Countdown ticks while prepare runs; if prepare finishes early we
+            // hold in countdown(1), if it overruns we wait below (no dead spinner).
+            var firstTick = true
             for n in [3, 2, 1] {
                 phase = .countdown(n)
-                try await Task.sleep(for: .seconds(1))
+                if firstTick { try? await Task.sleep(for: .milliseconds(800)) } else { try? await Task.sleep(for: .seconds(1)) }
+                firstTick = false
             }
+            try await prepareTask.value
+            await session.markCountdown()
+            if let hub = livePreviewController?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }) }
             try await session.start()
             phase = .recording
             hud?.showControls()
-            poll = Task { while !Task.isCancelled { stats = await session.stats(); try? await Task.sleep(for: .milliseconds(50)) } }
+            // UI publishing decimated to 15 Hz (66 ms). The HUD never observes
+            // per-frame capture state.
+            poll = Task { while !Task.isCancelled { stats = await session.stats(); try? await Task.sleep(for: .milliseconds(66)) } }
         } catch { fail(error) }
     }
 
     func stop() async {
         phase = .finishing; poll?.cancel()
+        // HUD dismisses within 200 ms of the click (spec §3.2): close it now,
+        // finalize in the background with "Finishing…" progress in Library.
+        hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
         do {
-            let b = try await session.stop()
+            try await session.stopCapture()
+            let b = try await session.finalize()
             paused = false
-            hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
             phase = .idle; refresh()
             let finished = b.url
             let duration = (try? ProjectBundle(url: finished).load().meta.source.duration) ?? 0
