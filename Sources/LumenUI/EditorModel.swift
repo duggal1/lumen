@@ -97,6 +97,8 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     private var activeExportID = UUID()
     private var mixTask: Task<Void, Never>?
     private var hasMixed = false
+    private var isMixing = false
+    private var mixGeneration = 0
     private var playbackTask: Task<Void, Never>?
     private var wantsPlayback = false
     private let player = PreviewAudioPlayer()
