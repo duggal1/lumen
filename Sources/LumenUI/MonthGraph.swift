@@ -11,20 +11,18 @@ public struct ActivityDay: Equatable, Sendable {
 }
 
 public enum ActivityLevel {
+    /// Absolute minutes buckets (predictable, ultra-clean):
+    /// 0 = neutral, 1 = light orange (one short video),
+    /// 2 = medium, 3 = bright, 4 = brightest (heavy day).
+    /// Decision: absolute thresholds override the old quantile rule so
+    /// a lone 2-minute day stays light instead of saturating to level 4.
     public static func assign(_ values: [Double]) -> [Int] {
-        let nz = values.filter { $0 > 0 }.sorted()
-        guard !nz.isEmpty else { return values.map { _ in 0 } }
-        let maxV = nz.last ?? 0
-        if nz.count <= 3 {
-            return values.map { $0 == 0 ? 0 : ($0 >= maxV ? 4 : ($0 >= maxV * 0.5 ? 2 : 1)) }
-        }
-        func q(_ p: Double) -> Double { nz[min(nz.count - 1, Int(Double(nz.count) * p))] }
-        let t1 = q(0.25), t2 = q(0.5), t3 = q(0.75)
-        return values.map { v in
-            if v == 0 { return 0 }
-            if v >= maxV { return 4 }
-            let cuts = [t1, t2, t3].filter { v > $0 }.count
-            return min(max(1 + cuts, 1), 3)
+        values.map { v in
+            if v <= 0 { return 0 }
+            if v < 5 { return 1 }
+            if v < 15 { return 2 }
+            if v < 45 { return 3 }
+            return 4
         }
     }
 }
@@ -135,14 +133,13 @@ struct MonthGraph: View {
     private var blocks: [ActivityBlock] { ActivityBlock.make(days, calendar: calendar) }
 
     private func ramp(_ level: Int) -> Color {
-        // Orange ramp by mixing the accent with the card surface (never
-        // stacking opacity, which reads differently on light/dark).
-        // L4 = exact accent, L3 close, L2/L1 step down, L0 = controlPressed.
+        // Dot intensity ramp (Ramp.heat tokens, mixed — never opacity stacks).
+        // 0 = neutral dust, 1 = light orange, 4 = brightest signal orange.
         switch level {
-        case 4: return Tok.accent
-        case 3: return Ramp.orange[3]
-        case 2: return Ramp.orange[2]
-        case 1: return Ramp.orange[1]
+        case 1: return Ramp.heat[0]
+        case 2: return Ramp.heat[1]
+        case 3: return Ramp.heat[2]
+        case 4: return Ramp.heat[3]
         default: return Tok.controlPressed
         }
     }
@@ -203,9 +200,9 @@ struct MonthGraph: View {
     private var legend: some View {
         HStack(spacing: 8) {
             Text("Less").font(AppType.caption).foregroundStyle(Tok.text2)
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 ForEach(0..<5, id: \.self) { i in
-                    RoundedRectangle(cornerRadius: 2, style: .continuous).fill(ramp(i)).frame(width: 8, height: 8)
+                    Circle().fill(ramp(i)).frame(width: 6, height: 6)
                 }
             }
             Text("More").font(AppType.caption).foregroundStyle(Tok.text2)
@@ -218,14 +215,16 @@ struct MonthGraph: View {
     private func draw(_ ctx: inout GraphicsContext, _ m: Layout) {
         for (bi, b) in m.blocks.enumerated() {
             for c in b.cells {
-                let x = m.originX[bi] + CGFloat(c.col) * m.pitch
-                let y = CGFloat(c.row) * m.pitch
-                let rect = CGRect(x: snap(x), y: snap(y), width: snap(m.cell), height: snap(m.cell))
-                let path = Path(roundedRect: rect, cornerRadius: 2, style: .continuous)
+                let cx = m.originX[bi] + CGFloat(c.col) * m.pitch + m.cell / 2
+                let cy = CGFloat(c.row) * m.pitch + m.cell / 2
+                // Sharp dot: diameter snaps to even device pixels, centered in cell.
+                let d = max(snap(m.cell * 0.5), 4)
+                let rect = CGRect(x: snap(cx - d / 2), y: snap(cy - d / 2), width: d, height: d)
+                let dot = Path(ellipseIn: rect)
                 let isHover = hovered.map { calendar.isDate($0, inSameDayAs: c.day.date) } ?? false
-                ctx.fill(path, with: .color(ramp(max(0, min(c.day.level, 4)))))
+                ctx.fill(dot, with: .color(ramp(max(0, min(c.day.level, 4)))))
                 if isHover {
-                    ctx.stroke(path, with: .color(Tok.text.opacity(0.6)), lineWidth: 1)
+                    ctx.stroke(dot, with: .color(Tok.text2), lineWidth: 1)
                 }
             }
         }
