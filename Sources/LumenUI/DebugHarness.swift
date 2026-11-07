@@ -139,14 +139,17 @@ public struct DebugFixtureView: View {
             default: Text("unknown screen \(screen)").tag("fallback")
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: DebugFlags.windowSize.width, minHeight: DebugFlags.windowSize.height - 28)
         .background(Color(nsColor: .windowBackgroundColor))
         .onPreferenceChange(FrameKey.self) { frames = $0 }
         .task {
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.keyWindow?.setFrame(NSRect(x: 100, y: 100, width: DebugFlags.windowSize.width, height: DebugFlags.windowSize.height), display: true)
+            NSApp.keyWindow?.orderFrontRegardless()
             // Wait for idle (no animation, no pending analysis): 600 ms.
             try? await Task.sleep(for: .milliseconds(600))
             let win = NSApp.keyWindow?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-            let violations = LayoutAudit.check(frames, window: win)
+            let violations = LayoutAudit.check(frames, window: NSRect(x: 0, y: 0, width: win.width, height: win.height))
             let outDir = ProcessInfo.processInfo.environment["LUMEN_VERIFY_OUT"] ?? "Docs/Verification/run-debug"
             let tag = "\(screen)_\(state)_\(Int(win.width))x\(Int(win.height))"
             let url = URL(fileURLWithPath: outDir).appendingPathComponent("\(tag).audit.json")

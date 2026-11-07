@@ -125,27 +125,46 @@ let cmd = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ""
 switch cmd {
 case "window":
     guard let name = arg("--name") else { usage() }
-    // CGWindowList path (SCK window capture aborts on some DEBUG builds with
-    // CGS_REQUIRE_INIT). CGWindowList + .bestResolution is native backing pixels.
-    guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
-        fputs("lumen-shot: cannot list windows\n", stderr); exit(1)
+    // SCK desktop-window capture aborts with CGS_REQUIRE_INIT in a CLI tool
+    // (display capture via XPC works). Capture the display natively and crop
+    // to the window's native-pixel frame — still lossless, Display P3, never
+    // downscaled. Deviation from SCK window compositor is documented here.
+    Task {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let target = content.windows.first { ($0.title ?? "") == "Lumen" }
+                ?? content.windows.max { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
+            guard let target, let display = content.displays.first else {
+                fputs("lumen-shot: no Lumen window/display found. Windows: \(content.windows.map { "\($0.title ?? "?"):\($0.frame)" }.joined(separator: " | "))\n", stderr)
+                exit(1)
+            }
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let config = SCStreamConfiguration()
+            // Native pixels: use the display mode's pixel size (not default 1920).
+            if let mode = CGDisplayCopyDisplayMode(display.displayID) {
+                config.width = Int(mode.pixelWidth); config.height = Int(mode.pixelHeight)
+            }
+            config.pixelFormat = kCVPixelFormatType_32BGRA
+            let full = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            // Crop to window: SCK frame is in points (top-left), image is pixels.
+            let scale = Double(full.width) / Double(display.frame.width)
+            let s = scale > 0 ? scale : 2.0
+            let cropRect = CGRect(x: target.frame.origin.x * s, y: target.frame.origin.y * s,
+                                  width: target.frame.width * s, height: target.frame.height * s)
+            guard let cropped = full.cropping(to: cropRect) else {
+                fputs("lumen-shot: crop failed \(cropRect) in \(full.width)x\(full.height)\n", stderr)
+                exit(1)
+            }
+            let out = URL(fileURLWithPath: "Docs/Verification/\(name).png")
+            try writePNG(cropped, to: out)
+            print("wrote \(out.path) \(cropped.width)x\(cropped.height) (cropped from display at \(s)x)")
+            exit(0)
+        } catch {
+            fputs("lumen-shot window failed: \(error.localizedDescription)\n", stderr)
+            exit(1)
+        }
     }
-    let target = info.first { ($0[kCGWindowName as String] as? String)?.contains("Lumen") == true }
-        ?? info.first { ($0[kCGWindowName as String] as? String)?.contains("DEBUG") == true }
-        ?? info.first { (overlayRank($0) && width($0) > 200) } // largest
-    guard let target, let wid = target[kCGWindowNumber as String] as? CGWindowID,
-          let img = CGWindowListCreateImage(CGRectNull, [.optionIncludingWindow], wid, [.bestResolution]) else {
-        fputs("lumen-shot: no Lumen window found. Is the DEBUG app running? \(info.map { "\($0[kCGWindowName as String] ?? "?")" }.joined(separator: ","))\n", stderr)
-        exit(1)
-    }
-    do {
-        let out = URL(fileURLWithPath: "Docs/Verification/\(name).png")
-        try writePNG(img, to: out)
-        print("wrote \(out.path) \(img.width)x\(img.height)")
-    } catch {
-        fputs("lumen-shot window failed: \(error.localizedDescription)\n", stderr)
-        exit(1)
-    }
+    dispatchMain()
 case "full":
     guard let name = arg("--name") else { usage() }
     Task {
@@ -159,6 +178,7 @@ case "full":
             let out = URL(fileURLWithPath: "Docs/Verification/\(name).png")
             try writePNG(img, to: out)
             print("wrote \(out.path)")
+            exit(0)
         } catch {
             fputs("lumen-shot full failed: \(error.localizedDescription)\n", stderr)
             exit(1)
