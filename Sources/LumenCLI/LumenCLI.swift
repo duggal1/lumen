@@ -1,6 +1,8 @@
 import Foundation
 import ArgumentParser
 import Metal
+import CoreGraphics
+import ImageIO
 import LumenCore
 import LumenProject
 import LumenDirector
@@ -242,6 +244,7 @@ struct AudioCheckCmd: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "audio-check", abstract: "Measure cracks, clips, loudness")
     @Argument var target: String
     @Option var report: String?
+    @Option var spectrogram: String?
     func run() async throws {
         let url = URL(fileURLWithPath: target)
         var fileURLs: [URL] = []
@@ -275,6 +278,26 @@ struct AudioCheckCmd: AsyncParsableCommand {
             let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
             let dict = try JSONSerialization.jsonObject(with: enc.encode(rep)) as! [String: Any]
             reports[fileURL.lastPathComponent] = dict
+            if let spec = spectrogram {
+                let (w, h, rows) = AudioCheck.renderSpectrogram(channels: chans, sampleRate: fmt.sampleRate)
+                var pixels = [UInt8](repeating: 0, count: w * h * 4)
+                for y in 0..<h {
+                    for x in 0..<w {
+                        pixels[(y * w + x) * 4] = rows[y][x * 4]
+                        pixels[(y * w + x) * 4 + 1] = rows[y][x * 4 + 1]
+                        pixels[(y * w + x) * 4 + 2] = rows[y][x * 4 + 2]
+                        pixels[(y * w + x) * 4 + 3] = 255
+                    }
+                }
+                guard let ctx = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                          space: CGColorSpace(name: CGColorSpace.displayP3)!,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+                      let img = ctx.makeImage(),
+                      let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: spec) as CFURL,
+                                                                 "public.png" as CFString, 1, nil) else { continue }
+                CGImageDestinationAddImage(dest, img, nil)
+                CGImageDestinationFinalize(dest)
+            }
         }
         try jsonOut(reports, to: report)
     }
