@@ -98,6 +98,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     private var mixTask: Task<Void, Never>?
     private var hasMixed = false
     private var isMixing = false
+    private var needsInitialMix = true
     private var mixGeneration = 0
     private var playbackTask: Task<Void, Never>?
     private var wantsPlayback = false
