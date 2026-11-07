@@ -61,6 +61,15 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var fps = UserDefaults.standard.object(forKey: "LumenDefaultFPS") as? Int ?? 60 {
         didSet { UserDefaults.standard.set(fps, forKey: "LumenDefaultFPS") }
     }
+    var captureResolution = RecordingConfig.Resolution(rawValue: UserDefaults.standard.string(forKey: "LumenCaptureRes") ?? "") ?? .native {
+        didSet { UserDefaults.standard.set(captureResolution.rawValue, forKey: "LumenCaptureRes") }
+    }
+    var captureQuality = RecordingConfig.Quality(rawValue: UserDefaults.standard.string(forKey: "LumenCaptureQ") ?? "") ?? .high {
+        didSet { UserDefaults.standard.set(captureQuality.rawValue, forKey: "LumenCaptureQ") }
+    }
+    var captureMbps: Double = UserDefaults.standard.object(forKey: "LumenCaptureMbps") as? Double ?? 20 {
+        didSet { UserDefaults.standard.set(captureMbps, forKey: "LumenCaptureMbps") }
+    }
     var mic = true
     /// Empty means use the macOS default input. When nonempty, the first
     /// input uses ScreenCaptureKit and remaining inputs are independent CAFs.
@@ -396,6 +405,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             cfg = RecordingConfig(source: .region(r.display, r.rect))
         }
         cfg.fps = fps; cfg.mic = mic && Permissions.mic; cfg.systemAudio = system
+        cfg.resolution = captureResolution; cfg.quality = captureQuality; cfg.customMbps = captureMbps
         if cfg.mic && !micInputIDs.isEmpty {
             let available = Set(availableAudioInputs.map(\.id))
             guard micInputIDs.allSatisfy({ available.contains($0) }) else {
