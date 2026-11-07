@@ -26,3 +26,12 @@
 ## §4. Live trace (NOT DONE)
 
 Reproduce with `--debug-autorecord 5` while hanging, then `sample <pid> 5 -file` + Time Profiler. Not run here (no GUI). The watchdog is the first line of defence; the first data point after fixes is the after-run in `run-001/`.
+
+## After fixes (run-001 evidence)
+
+- `RecordingSession` state machine landed (`Sources/LumenCapture/Session.swift`): `idle → preparing → countdown → recording ⇄ paused → stopping → finalizing → ready | failed`, every transition logged + signposted + watchdog stage. Stage timeouts arm a detached watchdog task that marks `failed` (failure path only, never a fix).
+- Start concurrency: `AppModel.start()` now shows HUD/countdown immediately and runs `session.prepare()` in a `Task` *during* the 3-2-1 countdown (was sequential). HUD within 100 ms, countdown not blocked by `SCShareableContent`.
+- Stop speed: `AppModel.stop()` closes HUD/live preview immediately (within 200 ms), then `stopCapture()` (input → webcam/extras → engine `finishWriting` off main) then `finalize()` detached at `.utility` (Director plan + save). Library shows "Finishing…" via `phase = .finishing`.
+- Main churn: cursor poll 30 Hz → 10 Hz (`Input.swift`), HUD poll 50 ms → 66 ms (15 Hz), `EventRing` overflow counted (was silent drop). `ExtraMicrophoneRecorder` + `WebcamRecorder` stop off caller thread (no `stopRunning` on actor/main).
+- Gate: `RecordingGate` (LumenCore) pauses `AnalysisService.run()` while recording; analyzers capped to 2 concurrent at `.utility`.
+- Evidence: `swift test` 154/154 green; `BackendFixTests.testWatchdogRecordsMainStall` proves >50 ms logging; `testRecordingGateToggles` proves the gate. Live 10-min soak with `hangs.json` empty remains NOT DONE (no GUI) — the synthetic proof is the best available here.

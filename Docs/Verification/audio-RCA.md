@@ -44,6 +44,16 @@ Baseline (pre-fix): `Docs/Verification/baseline/audio-speech.json` (fixture: 0 c
 5. Look-ahead true-peak limiter at -1 dBTP with smoothed detector; loudness gain ramped.
 6. `AudioCheck` acceptance: synthetic 1 kHz × every mic mode, injected faults (20 ms gap, rate change, 1.0003 drift, ring overflow), `afplay` system-audio tone, acoustic mic test (labelled acoustic).
 
+## After evidence (run-001, 2026-11-07)
+
+- CAF: ASBD read per buffer, non-Float32 converted via one carried `AVAudioConverter` (Mastering), format changes counted, PTS gaps filled with exact-length silence, overlaps trimmed, counts to `<name>.json`. Low-rate (≤24 kHz) logged as error.
+- RNNoise: 480-sample FIFO across boundaries, final partial flushed with padding, 480-sample latency compensated (shift-left, pad-end).
+- Declick: `Declick.process` (2–8 kHz, ±35 ms, full -12 dB silent / -6 dB speech-overlap, ≥5 ms ramps) wired into `AudioMixer.voiceChain` for the primary mic (keyTimes rebased by micOff in `ProjectSession.open`). Extra mics documented as spectral-only on this pass.
+- Cuts: `mapped()` 40 ms equal-power crossfade with advancing pre/post positions (was abrupt jump). `BackendFixTests.testCutCrossfadeHasNoDiscontinuity` proves join ≤2 clicks.
+- DSP: `Biquad` denormal flush, `Compressor` smoothed 5 ms detector, `Limiter` half 36→96 (≈2 ms) at -1 dBTP second pass.
+- Numbers: 1 kHz synthetic 0/0/0 (unchanged), real 45 s project 6 clicks / 0 clipped / 0 dropouts, suite 154/154. `AudioCheck.thdPlusNoise` fixed to 8192-sample Hann + ±5-bin fundamental (was 2M-sample FFT with leakage).
+- Preview==export decision: preview plays the offline mixed buffer (`PreviewAudioPlayer.load`) so they match by construction. Recorded in `Docs/Decisions.md` with PLAN §13.6 amendment.
+
 ## NOT DONE (honest)
 
 - `--spectrogram out.png` 4K render not yet wired in the CLI (JSON only). Before/after spectrogram pairs pending.

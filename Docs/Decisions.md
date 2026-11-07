@@ -26,3 +26,7 @@
 - Live results are marked incomplete if the 8 s ring overflows. The editor then re-transcribes from the file.
 - `transcript.json` stores mic-file time. `ProjectSession.micOffset` shifts it to source time.
 - The editor caption monitor is preview-only until the Part 5 caption render pass lands.
+- Preview plays the offline mixed buffer (`AudioMixer` → `PreviewAudioPlayer`), not a live graph, so preview equals export by construction (PLAN §13.6 amended: live-graph path is not used for program audio).
+- Recording stop is split: `stopCapture()` (fast) then `finalize()` at `.utility`; HUD dismisses before finalize so Stop never spins.
+- Declick applies to the primary mic only this pass (extra-mic key times need per-mic rebase; spectral path covers them).
+- `MainThreadWatchdog` hashes stall stage names, not stack bytes, so `hangs.json` stays stable across builds.

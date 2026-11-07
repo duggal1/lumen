@@ -1,0 +1,17 @@
+{
+  "mic.caf" : {
+    "channels" : 1,
+    "clickEvents" : 6,
+    "clippedSamples" : 0,
+    "dcOffset" : -5.5655756990063957e-08,
+    "duration" : 45.503999999999998,
+    "format" : "pcmF32_48000Hz_nonInterleaved_ch1",
+    "frames" : 2184192,
+    "lufs" : -30.317144429988236,
+    "noiseFloorDb" : -53.48103827652794,
+    "peakDb" : -10.150337708339192,
+    "sampleRate" : 48000,
+    "truePeakDb" : -10.135246586409659,
+    "zeroRunDropouts" : 0
+  }
+}
