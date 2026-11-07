@@ -80,7 +80,7 @@ struct EditorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageBar(title: AppModel.displayName(model.session.meta.name)) {
+            PageBar(title: "Lumen Studio") {
                 HStack(spacing: 8) {
                     LIconButton(icon: "arrow.uturn.backward", label: "Undo") { model.undo() }.disabled(!model.canUndo)
                     LIconButton(icon: "arrow.uturn.forward", label: "Redo") { model.redo() }.disabled(!model.canRedo)
