@@ -1,0 +1,17 @@
+{
+  "tone1k.wav" : {
+    "channels" : 1,
+    "clickEvents" : 0,
+    "clippedSamples" : 0,
+    "dcOffset" : 7.9472859700520838e-10,
+    "duration" : 60,
+    "format" : "pcmF32_48000Hz_nonInterleaved_ch1",
+    "frames" : 2880000,
+    "lufs" : -15.005142421261237,
+    "noiseFloorDb" : -15.011847018216621,
+    "peakDb" : -12.001001994948961,
+    "sampleRate" : 48000,
+    "truePeakDb" : -12.001001994948961,
+    "zeroRunDropouts" : 0
+  }
+}
