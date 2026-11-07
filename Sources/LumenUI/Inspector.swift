@@ -11,7 +11,11 @@ struct Inspector: View {
     static func visibleFor(model: EditorModel) -> [Tab] {
         Tab.allCases.filter { $0 != .webcam || model.timeline.webcam != nil }
     }
+    var isPrimary: Bool { Tab.primaryTabs.contains(self) }
     static var primaryTabs: [Tab] { [.look, .camera, .cursor, .captions, .audio] }
+    static func moreTabs(for model: EditorModel) -> [Tab] {
+        visibleFor(model: model).filter { !primaryTabs.contains($0) }
+    }
     @Binding var tab: Tab
     var width: CGFloat = Metrics.inspector
     @State private var presets = EditorModel.loadPresets()
@@ -52,9 +56,9 @@ struct Inspector: View {
     /// visible and the menu stays inside the 8-item rule.
     private var tabSelector: some View {
         HStack(spacing: 8) {
-            LSegmented(sel: $tab, items: Self.primaryTabs.map { ($0, $0.rawValue) })
+            LSegmented(sel: $tab, items: Tab.primaryTabs.map { ($0, $0.rawValue) })
                 .frame(width: 232)
-            LDropdown(sel: $tab, options: Tab.moreTabs(for: model).map { ($0, $0.rawValue, icon($0)) })
+            LDropdown(sel: $tab, options: Tab.allCases.filter { !$0.isPrimary && ($0 != .webcam || model.timeline.webcam != nil) }.map { ($0, $0.rawValue, icon($0)) })
                 .frame(width: 88)
         }
         .accessibilityElement(children: .contain)
