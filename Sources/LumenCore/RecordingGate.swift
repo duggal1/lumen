@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Global gate: analysis and export pause while any recording is active.
 /// Owned by RecordingSession; read by AnalysisService at .utility QoS.
