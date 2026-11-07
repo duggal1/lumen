@@ -404,8 +404,8 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     /// Signposted so a stop hang is visible in Instruments/Console.
     public func stop() async throws {
         let sp = OSSignposter(logger: Logger(subsystem: "com.lumen.studio", category: "capture"))
-        sp.beginInterval("engine.stop")
-        defer { sp.endInterval("engine.stop") }
+        let state = sp.beginInterval("engine.stop")
+        defer { sp.endInterval("engine.stop", state) }
         try await stream?.stopCapture()
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             videoQ.async { if self.started { self.vin?.markAsFinished() }; c.resume() }
