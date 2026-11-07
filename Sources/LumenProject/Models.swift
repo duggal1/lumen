@@ -140,8 +140,8 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     public var glide: Double = 0.35
     public var idleHide: Double? = 2.0
     public var pressScale: Double = 0.86
-    public var clickEffect: ClickEffect = .ripple
-    public var clickDuration: Double = 0.45
+    public var clickEffect: ClickEffect = .glass
+    public var clickDuration: Double = 0.50
     public var clickColor: RGBA = RGBA(0xF97316)
     public var clickRing: Double? = 0.45
     public var zoomCompensation: Double = 0.5
@@ -184,8 +184,8 @@ public enum ZoomEasing: String, Codable, CaseIterable, Sendable {
 public struct CameraParams: Codable, Equatable, Sendable {
     public var preset: ZoomPreset = .balanced
     public var autoZoom = true
-    public var maxScale = 2.2
-    public var minScale = 1.5
+    public var maxScale = 3.5
+    public var minScale = 1.15
     public var minTrigger = 1.25
     public var leadIn = 0.45, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
     public var omegaPan = 7.0, omegaZoom = 6.0, lookahead = 0.20, deadZone = 0.28, followDelay = 0.12
@@ -250,6 +250,12 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
 
 public enum ClickSound: String, Codable, CaseIterable, Sendable { case mouse, subtle }
 
+public enum StudioMode: String, Codable, CaseIterable, Sendable {
+    case standard = "Studio Standard"
+    case optimized = "Studio Optimized"
+    public var title: String { rawValue }
+}
+
 public struct AudioPlan: Codable, Equatable, Sendable {
     /// Noise reduction is ON by default: a raw mic passthrough was the
     /// "not noticeably cleaner" complaint. Users can still turn it off.
@@ -267,7 +273,8 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     /// Auto loudness. Off makes `outputGainDb` the only master gain.
     public var normalize = true
     public var outputGainDb = 0.0
-    public var targetLUFS = -16.0
+    public var targetLUFS = -14.0
+    public var studioMode: StudioMode = .standard
     public var clickSounds = true, whooshes = true, keySounds = false
     public var clickTone: ClickSound = .mouse
     public var sfxGainDb = -9.0
@@ -281,7 +288,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     private enum LegacyKeys: String, CodingKey { case studioAmount }
     enum CodingKeys: String, CodingKey {
         case outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFS, clickSounds, whooshes, keySounds, clickTone, sfxGainDb, musicPath
-        case dereverb, normalize
+        case dereverb, normalize, studioMode
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
     public init() {}
@@ -299,6 +306,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         dereverb = c.opt(.dereverb, dereverb); normalize = c.opt(.normalize, normalize)
         systemGainDb = c.opt(.systemGainDb, systemGainDb); declick = c.opt(.declick, declick); declickDepthDb = c.opt(.declickDepthDb, declickDepthDb)
         targetLUFS = c.opt(.targetLUFS, targetLUFS); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = c.opt(.whooshes, whooshes)
+        studioMode = c.opt(.studioMode, studioMode)
         keySounds = c.opt(.keySounds, keySounds); clickTone = c.opt(.clickTone, clickTone); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)
         musicPath = try? c.decodeIfPresent(String.self, forKey: .musicPath)
         musicGainDb = c.opt(.musicGainDb, musicGainDb); duckDepthDb = c.opt(.duckDepthDb, duckDepthDb); duckAttack = c.opt(.duckAttack, duckAttack)
@@ -534,7 +542,10 @@ public struct ProjectMeta: Codable, Sendable {
     /// Older projects have no additional inputs; decoding defaults to empty.
     public var additionalMicrophones: [MicrophoneSourceMeta] = []
     public var droppedFrames = 0
-    enum CodingKeys: String, CodingKey { case name, created, analysisSalt, source, clock, mic, system, webcam, additionalMicrophones, droppedFrames }
+    public var captureResolution: String = "native"
+    public var captureQuality: String = "high"
+    public var captureMbps: Double = 0
+    enum CodingKeys: String, CodingKey { case name, created, analysisSalt, source, clock, mic, system, webcam, additionalMicrophones, droppedFrames, captureResolution, captureQuality, captureMbps }
     public init(name: String, source: SourceInfo, clock: RecordingClock) {
         self.name = name; self.analysisSalt = UInt64.random(in: UInt64.min...UInt64.max); self.source = source; self.clock = clock
     }
@@ -550,6 +561,9 @@ public struct ProjectMeta: Codable, Sendable {
         webcam = try? c.decodeIfPresent(TrackMeta.self, forKey: .webcam)
         additionalMicrophones = (try? c.decode([MicrophoneSourceMeta].self, forKey: .additionalMicrophones)) ?? []
         droppedFrames = (try? c.decode(Int.self, forKey: .droppedFrames)) ?? 0
+        captureResolution = (try? c.decode(String.self, forKey: .captureResolution)) ?? "native"
+        captureQuality = (try? c.decode(String.self, forKey: .captureQuality)) ?? "high"
+        captureMbps = (try? c.decode(Double.self, forKey: .captureMbps)) ?? 0
     }
 }
 public struct ProjectFile: Codable, Sendable {
