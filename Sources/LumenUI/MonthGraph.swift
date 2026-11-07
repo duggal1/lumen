@@ -68,13 +68,15 @@ struct MonthGraph: View {
 
     private var calendar: Calendar { .current }
 
+    private var monthStart: Date {
+        calendar.date(from: calendar.dateComponents([.year, .month], from: .now)) ?? calendar.startOfDay(for: .now)
+    }
+
     var days: [ActivityDay] {
         let cal = calendar
         let today = cal.startOfDay(for: .now)
-        let currentMonthStart = cal.date(from: cal.dateComponents([.year, .month], from: .now)) ?? today
-        let start = cal.date(byAdding: .month, value: -11, to: currentMonthStart) ?? currentMonthStart
         var out: [Date] = []
-        var d = start
+        var d = monthStart
         while d <= today {
             out.append(d)
             guard let n = cal.date(byAdding: .day, value: 1, to: d) else { break }
@@ -147,7 +149,7 @@ struct MonthGraph: View {
     var body: some View {
         let allBlocks = blocks
         VStack(alignment: .leading, spacing: Space.s2) {
-            header(width: width)
+            header(width: width, month: monthStart)
             VStack(alignment: .leading, spacing: Space.s1) {
                 GeometryReader { g in
                     let m = Layout(width: g.size.width, allBlocks: allBlocks, scale: scale)
@@ -160,7 +162,6 @@ struct MonthGraph: View {
                             }
                         }
                         .onAppear { width = g.size.width }
-                    overlayLabels(m)
                 }
                 .frame(height: layoutHeight(width: width, blocks: allBlocks))
             }
@@ -168,17 +169,17 @@ struct MonthGraph: View {
             .opacity(width > 0 ? 1 : 0)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Minutes recorded per day for the last 12 months")
+        .accessibilityLabel("Minutes recorded per day in \(monthStart.formatted(.dateTime.month().year()))")
     }
 
     private func layoutHeight(width: CGFloat, blocks: [ActivityBlock]) -> CGFloat {
         let m = Layout(width: max(width, 1), allBlocks: blocks, scale: scale)
-        return m.height + 16
+        return m.height
     }
 
-    @ViewBuilder private func header(width: CGFloat) -> some View {
+    @ViewBuilder private func header(width: CGFloat, month: Date) -> some View {
         HStack(spacing: Space.s2) {
-            Text("Per-month activity").font(AppType.title).foregroundStyle(Tok.text)
+            Text(month.formatted(.dateTime.month().year())).font(AppType.title).foregroundStyle(Tok.text)
             Spacer(minLength: Space.s4)
             if width >= 420 { legend }
         }
@@ -236,19 +237,5 @@ struct MonthGraph: View {
             }
         }
         return nil
-    }
-
-    private func overlayLabels(_ m: Layout) -> some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(Array(m.blocks.enumerated()), id: \.offset) { i, b in
-                if b.cols >= 3 {
-                    Text(b.month, format: .dateTime.month(.abbreviated))
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .fixedSize()
-                        .offset(x: m.originX[i], y: m.height + 4)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 16, alignment: .topLeading)
     }
 }
