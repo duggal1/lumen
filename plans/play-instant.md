@@ -37,3 +37,18 @@ In Studio, the first Play click starts video-motion within <150 ms on a fresh op
 - `Sources/LumenUI/EditorModel.swift`
 - `Sources/LumenAudio/Mixer.swift` (`isLoaded`/`warm`; mix DSP untouched)
 - `Docs/Verification/play-times.log`, `Docs/Verification/export-baseline.log`
+
+## Completion (one logged deviation)
+- Deviation: added background warm (`needsInitialMix` in `replan`) so the
+  preview buffer is mixed after derive publishes, before a typical Play.
+  Reason: Release silent head for an impatient click is 713–746 ms
+  (mix-dominated), above the 500 ms T2 target. With the warm, a typical
+  Play (user locates the button) already has `isLoaded == true` and sound
+  starts with motion. The impatient-click path (instant video, audio joins
+  at current position) is unchanged. No DSP, no preview/export divergence.
+- Evidence: motion 0.01–3 ms over 5× fresh opens in both Debug and Release
+  (`play-times.log`); oracle `PlayInstant` green 5× in Debug and Release;
+  full suite 148 green. Shipped `.build/Lumen.app` is Release (10 MB).
+- Export: baseline in `export-baseline.log` — 12.48 s for 2229 frames,
+  GPU/encoder wait 9.69 s (78%). Single-stream VideoToolbox bound; no
+  export code changed this pass.
