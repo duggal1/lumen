@@ -62,12 +62,15 @@ enum LayoutAudit {
             }
         }
         // Primary overlap: any two non-allowed elements intersect > 4pt².
+        // Containment (parent card vs child text) is allowed — only flag
+        // partial overlaps where neither rect contains the other.
         for i in 0..<frames.count {
             for j in (i + 1)..<frames.count {
                 let a = frames[i], b = frames[j]
                 if allowedOverlaps.contains(a.id) || allowedOverlaps.contains(b.id) { continue }
                 let ra = CGRect(x: a.x, y: a.y, width: a.w, height: a.h)
                 let rb = CGRect(x: b.x, y: b.y, width: b.w, height: b.h)
+                if ra.contains(rb) || rb.contains(ra) { continue }
                 let inter = ra.intersection(rb)
                 if inter.width > 4 && inter.height > 0 && !inter.isNull {
                     out.append(AuditViolation(kind: "overlap", element: "\(a.id)x\(b.id)", detail: "overlap \(inter)"))

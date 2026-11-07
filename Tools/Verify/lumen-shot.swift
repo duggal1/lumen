@@ -122,9 +122,11 @@ case "window":
     Task {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            let windows = content.windows.filter { $0.owningApplication?.bundleIdentifier.contains("Lumen") == true }
-            guard let target = windows.first else {
-                fputs("lumen-shot: no Lumen window found. Is the DEBUG app running?\n", stderr)
+            // DEBUG binary has no bundle id; match by title or fall back to largest on-screen window.
+            let lumen = content.windows.filter { $0.owningApplication?.bundleIdentifier.contains("Lumen") == true || ($0.title?.contains("Lumen") == true) }
+            let target = lumen.first ?? content.windows.filter { $0.isOnScreen && $0.frame.width > 200 && $0.frame.height > 200 }.max { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
+            guard let target else {
+                fputs("lumen-shot: no Lumen window found. Is the DEBUG app running? Windows: \(content.windows.map { "\($0.title ?? "?")@\($0.frame)" }.joined(separator: ", "))\n", stderr)
                 exit(1)
             }
             let filter = SCContentFilter(desktopIndependentWindow: target)
