@@ -11,8 +11,13 @@ struct LedgerCard: View {
     }
 
     private var metrics: [Metric] {
-        let minutes = Int(app.totalRecorded / 60)
-        let recorded = minutes >= 600 ? String(format: "%.1f h", Double(minutes) / 60) : "\(minutes) min"
+        let seconds = Int(app.totalRecorded)
+        let recorded: String
+        if seconds < 60 { recorded = "\(seconds) s" }
+        else {
+            let minutes = seconds / 60
+            recorded = minutes >= 600 ? String(format: "%.1f h", Double(minutes) / 60) : "\(minutes) min"
+        }
         return [
             Metric(icon: "timer", label: "Recorded", value: recorded, note: "all time"),
             Metric(icon: "film.stack", label: "Projects", value: "\(app.projects.count)", note: "in this library"),
