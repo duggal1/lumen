@@ -1,133 +1,320 @@
 import SwiftUI
+import AppKit
 import LumenCore
 import LumenProject
 import LumenDirector
 
+enum TimelineGeometry {
+    static func cluster(xs: [Double], minGap: Double) -> [(center: Double, count: Int)] {
+        guard !xs.isEmpty else { return [] }
+        let sorted = xs.sorted()
+        var out: [(center: Double, count: Int)] = []
+        var start = 0
+        var sum = sorted[0]
+        for i in 1..<sorted.count {
+            if sorted[i] - sorted[i - 1] < minGap { sum += sorted[i] }
+            else {
+                let c = (i - start)
+                out.append((center: sum / Double(c), count: c))
+                start = i; sum = sorted[i]
+            }
+        }
+        let c = sorted.count - start
+        out.append((center: sum / Double(c), count: c))
+        return out
+    }
+    static func labelFits(width: CGFloat, text: String) -> Bool {
+        let font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        let w = (text as NSString).size(withAttributes: [.font: font]).width + 16
+        return Double(w) <= Double(width)
+    }
+    static func columnPeak(wave: [Float], srcStart: Double, srcEnd: Double) -> Float {
+        guard !wave.isEmpty, srcEnd > srcStart else { return 0 }
+        let i0 = min(max(Int(srcStart * 100), 0), wave.count - 1)
+        let i1 = min(max(Int(srcEnd * 100), i0 + 1), wave.count)
+        var peak: Float = 0
+        for i in i0..<i1 { peak = max(peak, abs(wave[i])) }
+        return peak
+    }
+    static func bursts(times: [Double], gap: Double) -> [(start: Double, end: Double)] {
+        guard !times.isEmpty else { return [] }
+        let sorted = times.sorted()
+        var out: [(start: Double, end: Double)] = []
+        var s = sorted[0], last = sorted[0]
+        for t in sorted.dropFirst() {
+            if t - last > gap { out.append((start: s, end: last)); s = t }
+            last = t
+        }
+        out.append((start: s, end: last))
+        return out
+    }
+    static func triggerZoom(t: Double, zooms: [(start: Double, end: Double)]) -> Int? {
+        zooms.firstIndex { t >= $0.start && t < $0.end }
+    }
+}
+
 struct TimelineStrip: View {
     let model: EditorModel
     @State private var drag: Drag?
+    @State private var hoveredZoom: UUID?
+    @State private var hoveredMarker: Marker?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.displayScale) private var displayScale
     private struct Drag { enum Kind { case seek, move, left, right }; var kind: Kind; var id: UUID?; var orig: ZoomSegment?; var t0: Double }
-    private let zoomLane: ClosedRange<CGFloat> = 26...58, rampLane: ClosedRange<CGFloat> = 62...80
+    private struct Marker { var t: Double; var kind: String; var isTap: Bool }
+    // Fixed lane heights, top to bottom: ruler, clip slot (empty), zoom, events, audio.
+    private let hRuler: CGFloat = 20, hClip: CGFloat = 16, hZoom: CGFloat = 28
+    private let hEvents: CGFloat = 32, hAudio: CGFloat = 32
 
     var body: some View {
         GeometryReader { g in
-            Canvas { ctx, size in draw(&ctx, size) }
-                .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onChanged { change($0, g.size.width) }.onEnded { _ in drag = nil })
+            VStack(spacing: 0) {
+                rulerLane(width: g.size.width)
+                Color.clear.frame(height: hClip)  // clip slot: reserved, empty in this task
+                zoomLane(width: g.size.width)
+                eventsLane(width: g.size.width)
+                audioLane(width: g.size.width)
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { change($0, g.size.width) }.onEnded { _ in drag = nil })
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let p): setHover(at: p, width: g.size.width)
+                case .ended:
+                    hoveredZoom = nil; hoveredMarker = nil
+                    NSCursor.arrow.set()
+                }
+            }
+            .onKeyPress("[") { stepClick(direction: -1); return .handled }
+            .onKeyPress("]") { stepClick(direction: 1); return .handled }
+            .focusable()
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Timeline")
+            .accessibilityHint("Drag to seek. Drag a zoom segment to move or resize it. Bracket keys step between clicks.")
+            .accessibilityValue(eventsSummary())
         }
-        .frame(height: 128)
+        .frame(height: hRuler + hClip + hZoom + hEvents + hAudio)
         .overlay { PlayheadLine(model: model) }
         .background(RoundedRectangle(cornerRadius: 12).fill(Tok.surface))
-        .accessibilityLabel("Timeline").accessibilityHint("Drag to seek. Drag a zoom segment to move or resize it.")
     }
 
-    private func draw(_ c: inout GraphicsContext, _ size: CGSize) {
-        let tl = model.timeline, tm = tl.timeMap, dur = max(tm.outputDuration, 0.001), w = size.width
-        func x(_ t: Double) -> CGFloat { CGFloat(t / dur) * w }
-        func fill(_ r: CGRect, _ col: Color) { c.fill(Path(r), with: .color(col), style: FillStyle(antialiased: false)) }
-        // Ruler ticks adapt to clip length (sub-second for short clips).
-        // Labels stay inside the strip: the last tick anchors trailing.
-        let stepS = dur > 120 ? 30.0 : dur > 40 ? 10.0 : dur > 12 ? 5.0 : dur > 3 ? 0.5 : 0.25
-        var t = 0.0
-        while t <= dur {
-            let tx = x(t).rounded()
-            fill(CGRect(x: tx, y: 14, width: 1, height: 5), Tok.text2)
-            let label = stepS < 1 ? String(format: "%.2f", t) : String(format: "%d:%02d", Int(t) / 60, Int(t) % 60)
-            let isLast = t + stepS > dur
-            c.draw(Text(label).font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2),
-                   at: CGPoint(x: isLast ? tx - 4 : tx + 4, y: 8), anchor: isLast ? .trailing : .leading)
-            t += stepS
+    // MARK: - Shared mapping (fit-to-width through the time map)
+
+    private func x(_ t: Double, _ dur: Double, _ w: CGFloat) -> CGFloat {
+        CGFloat(t / max(dur, 0.001)) * w
+    }
+    private func outEvents() -> [Marker] {
+        let tl = model.timeline, tm = tl.timeMap
+        var markers: [Marker] = []
+        if let d = tl.derived {
+            markers += d.clicks.map { Marker(t: $0.t, kind: "Click", isTap: false) }
         }
-        // Zoom lane empty state.
-        if tl.zoom.isEmpty {
-            c.draw(Text("No zoom segments — Add zoom to focus a moment.")
-                .font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2),
-                   at: CGPoint(x: 6, y: zoomLane.upperBound - 8), anchor: .leading)
+        markers += tl.overlays.taps.map { Marker(t: tm.output(atSource: $0.t), kind: "Tap", isTap: true) }
+        return markers.sorted { $0.t < $1.t }
+    }
+    private func clickCount() -> Int { outEvents().count }
+    private func eventsSummary() -> String { "\(clickCount()) clicks" }
+    private func keyOutputs() -> [Double] {
+        let tm = model.timeline.timeMap
+        return model.session.input.events
+            .filter { $0.kind == .keyDown && !tm.isCut($0.t) }
+            .map { tm.output(atSource: $0.t) }
+            .sorted()
+    }
+    private func autoZoomSpansOut() -> [(start: Double, end: Double)] {
+        let tm = model.timeline.timeMap
+        return model.timeline.zoom.filter { $0.origin == .auto }
+            .map { (start: tm.output(atSource: $0.start), end: tm.output(atSource: $0.end)) }
+    }
+
+    // MARK: - Ruler
+
+    @ViewBuilder private func rulerLane(width: CGFloat) -> some View {
+        let tm = model.timeline.timeMap, dur = max(tm.outputDuration, 0.001)
+        Canvas { c, size in
+            let w = size.width
+            let stepS: Double = dur > 120 ? 30 : dur > 40 ? 10 : dur > 12 ? 5 : dur > 3 ? 0.5 : 0.25
+            func fill(_ r: CGRect, _ col: Color) { c.fill(Path(r), with: .color(col), style: FillStyle(antialiased: false)) }
+            var t = 0.0
+            while t <= dur + 1e-9 {
+                let tx = x(t, dur, w).rounded()
+                fill(CGRect(x: tx, y: 14, width: 1, height: 5), Tok.text2)
+                let label = stepS < 1 ? String(format: "%.2f", t) : String(format: "%d:%02d", Int(t) / 60, Int(t) % 60)
+                let isLast = t + stepS > dur
+                c.draw(Text(label).font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2),
+                       at: CGPoint(x: isLast ? tx - 4 : tx + 4, y: 8), anchor: isLast ? .trailing : .leading)
+                t += stepS
+            }
         }
-        // zoom segments (stored in SOURCE time, drawn in OUTPUT time): auto = soft, manual = accent; selected = text-colored cap
-        for z in tl.zoom {
-            let zs = tm.output(atSource: z.start), ze = tm.output(atSource: z.end)
-            guard ze > zs else { continue }
-            let r = CGRect(x: x(zs), y: zoomLane.lowerBound, width: max(x(ze) - x(zs), 4), height: zoomLane.upperBound - zoomLane.lowerBound)
-            // Auto zooms are violet (Screen Studio), manual zooms stay orange.
-            fill(r, z.origin == .manual ? Tok.accent : Tok.zoomSoft)
-            // Visible drag handles: 6 pt opaque grips (not 2 pt caps).
-            let handleCol = z.origin == .manual ? Tok.accentPressed : Tok.zoom
-            fill(CGRect(x: r.minX, y: r.minY, width: 6, height: r.height), handleCol)
-            fill(CGRect(x: r.maxX - 6, y: r.minY, width: 6, height: r.height), handleCol)
-            if z.id == model.selection { fill(CGRect(x: r.minX, y: r.maxY - 3, width: r.width, height: 3), Tok.text) }
-            c.draw(Text(String(format: "%.1f×", z.scale)).font(.system(size: 10, weight: .medium).monospacedDigit())
-                .foregroundStyle(z.origin == .manual ? Tok.onAccent : Tok.zoomText), at: CGPoint(x: r.minX + 10, y: r.midY), anchor: .leading)
+        .frame(height: hRuler)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: - Zoom
+
+    @ViewBuilder private func zoomLane(width: CGFloat) -> some View {
+        let tl = model.timeline, tm = tl.timeMap, dur = max(tm.outputDuration, 0.001)
+        Canvas { c, size in
+            let w = size.width
+            func fill(_ r: CGRect, _ col: Color) { c.fill(Path(r), with: .color(col), style: FillStyle(antialiased: false)) }
+            if tl.zoom.isEmpty {
+                c.draw(Text("No zoom segments — Add zoom to focus a moment.")
+                    .font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2),
+                       at: CGPoint(x: 6, y: hZoom / 2), anchor: .leading)
+            }
+            // Cause threads: faint segment from lane bottom up to each triggering block.
+            let spans = autoZoomSpansOut()
+            for m in outEvents() where !m.isTap {
+                if TimelineGeometry.triggerZoom(t: m.t, zooms: spans) != nil {
+                    let mx = x(m.t, dur, w)
+                    c.stroke(Path(CGRect(x: mx, y: hZoom - 4, width: 0.5, height: 4)), with: .color(Tok.text2.opacity(0.35)), lineWidth: 1)
+                }
+            }
+            for z in tl.zoom {
+                let zs = tm.output(atSource: z.start), ze = tm.output(atSource: z.end)
+                guard ze > zs else { continue }
+                let rawW = x(ze, dur, w) - x(zs, dur, w)
+                // 1px inset each side guarantees the 2px neighbour gap.
+                let r = CGRect(x: x(zs, dur, w) + 1, y: 4, width: max(rawW - 2, 4), height: 20)
+                let norm = min(max((z.scale - 1.1) / (4.0 - 1.1), 0), 1)
+                let isSelected = z.id == model.selection, isHovered = z.id == hoveredZoom
+                let base = Tok.selection.opacity((z.origin == .manual ? 0.32 : 0.28) + 0.55 * norm)
+                c.fill(Path(roundedRect: r, cornerRadius: 6), with: .color(base))
+                c.stroke(Path(roundedRect: r, cornerRadius: 6), with: .color(isSelected ? Tok.text : Tok.selection.opacity(isHovered ? 0.9 : 0.65)), lineWidth: isSelected ? 2 : 1)
+                if isHovered {
+                    fill(CGRect(x: r.minX, y: r.minY, width: 6, height: r.height), Tok.selection.opacity(0.95))
+                    fill(CGRect(x: r.maxX - 6, y: r.minY, width: 6, height: r.height), Tok.selection.opacity(0.95))
+                }
+                let glyph = z.origin == .auto ? "A" : "M"
+                let label = String(format: "%.1f×", z.scale) + " " + glyph
+                if TimelineGeometry.labelFits(width: r.width, text: label) || isHovered {
+                    c.draw(Text(label).font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(Tok.text), at: CGPoint(x: r.minX + 8, y: r.midY), anchor: .leading)
+                }
+                if isSelected { fill(CGRect(x: r.minX, y: r.maxY - 2, width: r.width, height: 2), Tok.text) }
+            }
         }
-        // speed ramps (source -> output)
-        for r in tm.ramps {
-            let a = x(tm.output(atSource: r.start)), b = x(tm.output(atSource: r.end))
-            fill(CGRect(x: a, y: rampLane.lowerBound, width: max(b - a, 3), height: 14), Tok.controlPressed)
-            c.draw(Text(String(format: "%.0f×", r.speed)).font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2), at: CGPoint(x: a + 4, y: 69), anchor: .leading)
+        .frame(height: hZoom)
+        .accessibilityLabel(zoomAccessibility())
+    }
+
+    private func zoomAccessibility() -> String {
+        let tm = model.timeline.timeMap
+        let items = model.timeline.zoom.map { z -> String in
+            let o = tm.output(atSource: z.start), e = tm.output(atSource: z.end)
+            return String(format: "Zoom %.1f× %.1f to %.1f seconds, %@", z.scale, o, e, z.origin == .auto ? "automatic" : "manual")
         }
-        // cuts: thin accent ticks at the join
-        for cut in tm.cuts { fill(CGRect(x: x(tm.output(atSource: cut.start)) - 1, y: 62, width: 2, height: 18), Tok.statusBad) }
-        // waveform tape: 4 pt cells, 2 pt gap, played = accent body
-        let wave = model.session.waveform, ph = x(model.playhead)
-        if !wave.isEmpty {
+        return items.isEmpty ? "No zoom segments" : items.joined(separator: ". ")
+    }
+
+    // MARK: - Events
+
+    @ViewBuilder private func eventsLane(width: CGFloat) -> some View {
+        let tm = model.timeline.timeMap, dur = max(tm.outputDuration, 0.001)
+        Canvas { c, size in
+            let w = size.width
+            let spans = autoZoomSpansOut()
+            // Faint trigger threads (events-lane half: lane top -> head).
+            for m in outEvents() where !m.isTap {
+                if TimelineGeometry.triggerZoom(t: m.t, zooms: spans) != nil {
+                    let mx = x(m.t, dur, w)
+                    c.stroke(Path(CGRect(x: mx, y: 0, width: 0.5, height: 10)), with: .color(Tok.text2.opacity(0.35)), lineWidth: 1)
+                }
+            }
+            // Typing bursts: short rounded bars.
+            for b in TimelineGeometry.bursts(times: keyOutputs(), gap: 0.5) {
+                let a = x(b.start, dur, w), bw = max(x(b.end, dur, w) - a, 6)
+                let r = CGRect(x: a, y: 23, width: bw, height: 6)
+                c.fill(Path(roundedRect: r, cornerRadius: 3), with: .color(Tok.text2.opacity(0.65)))
+            }
+            // Clusters at 6px: one marker map, no per-marker views.
+            let markers = outEvents()
+            if markers.isEmpty {
+                c.draw(Text("No clicks — Zoom needs a click to trigger.")
+                    .font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2.opacity(0.7)),
+                       at: CGPoint(x: 6, y: 12), anchor: .leading)
+            }
+            let xs = markers.map { Double(x($0.t, dur, w)) }
+            let clusters = TimelineGeometry.cluster(xs: xs, minGap: 6)
+            // Map cluster centres back to representative markers for kind/trigger.
+            for cl in clusters {
+                let cx = CGFloat(cl.center)
+                let members = markers.filter { abs(x($0.t, dur, w) - cx) < 30 }
+                let rep = members.first ?? markers.first ?? Marker(t: dur * cl.center / max(w, 1), kind: "Click", isTap: false)
+                let isTap = members.contains(where: { $0.isTap })
+                let triggered = !isTap && TimelineGeometry.triggerZoom(t: rep.t, zooms: spans) != nil
+                let alpha: Double = rep.isTap ? 1 : (triggered ? 1 : 0.45)
+                let dim = Tok.text2.opacity(alpha)
+                let isHover = hoveredMarker != nil && abs(x(hoveredMarker!.t, dur, w) - cx) < 6
+                let headR: CGFloat = isHover ? 4 : 3
+                c.stroke(Path(CGRect(x: cx, y: 10, width: 1, height: 16)), with: .color(dim), lineWidth: 1)
+                let head = Path(ellipseIn: CGRect(x: cx - headR, y: 7 - headR, width: headR * 2, height: headR * 2))
+                if isTap {
+                    c.stroke(head, with: .color(dim), lineWidth: 1.5)
+                } else {
+                    c.fill(head, with: .color(isHover ? Tok.text : dim))
+                }
+                if cl.count > 1 {
+                    c.draw(Text("×\(cl.count)").font(.system(size: 10).monospacedDigit()).foregroundStyle(dim),
+                           at: CGPoint(x: cx + 6, y: 7), anchor: .leading)
+                }
+                if isHover {
+                    let label = String(format: "%.1f s · %@", rep.t, rep.kind)
+                    c.draw(Text(label).font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text),
+                           at: CGPoint(x: min(cx + 6, w - 80), y: 7), anchor: .leading)
+                }
+            }
+        }
+        .frame(height: hEvents)
+        .accessibilityLabel("\(clickCount()) clicks")
+        .accessibilityHint("Press left or right bracket to step between clicks")
+    }
+
+    // MARK: - Audio
+
+    @ViewBuilder private func audioLane(width: CGFloat) -> some View {
+        let tm = model.timeline.timeMap, dur = max(tm.outputDuration, 0.001)
+        Canvas { c, size in
+            let w = size.width, h = size.height
+            let scale: CGFloat = displayScale > 0 ? displayScale : 2
+            func snap(_ v: CGFloat) -> CGFloat { (v * scale).rounded() / scale }
+            let wave = model.session.waveform, ph = x(model.playhead, dur, w)
+            if wave.isEmpty {
+                c.draw(Text("No audio — Speech will appear here.")
+                    .font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2),
+                       at: CGPoint(x: 6, y: h / 2), anchor: .leading)
+                return
+            }
+            let cellW: CGFloat = max(snap(4), 1), step: CGFloat = cellW + max(snap(2), 1)
+            let cellH: CGFloat = max(snap(3), 1), dotGap: CGFloat = snap(1)
+            let mid = h / 2, maxRows = Int(mid / (cellH + dotGap))
             var cx: CGFloat = 0
             while cx < w {
-                let src = tm.source(atOutput: Double(cx / w) * dur), i = min(max(Int(src * 100), 0), wave.count - 1)
-                let rows = Int(wave[i].squareRoot() * 3.99)
-                for k in -rows...rows { fill(CGRect(x: cx, y: 104 + CGFloat(k) * 4 - 2, width: 4, height: 3), cx < ph ? Ramp.o[3] : Tok.controlPressed) }
-                cx += 6
-            }
-        }
-        // Clicks are editable events, not barely visible 2 px dots.
-        // Recorded clicks are orange; manual taps (Tools > Add tap) are
-        // fuchsia so the two are never confused on the timeline.
-        // Unified dedupe: a Click and a Tap at the same output time share
-        // one chip (Tap wins) or a ×N cluster; never two overprints.
-        func badge(at center: CGFloat, label: String, soft: Color, ink: Color) {
-            let w: CGFloat = label.contains("×") ? 44 : 40
-            let rect = CGRect(x: center - w / 2, y: 82, width: w, height: 18)
-            c.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(soft))
-            c.draw(Text(label).font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(ink),
-                   at: CGPoint(x: rect.midX, y: rect.midY))
-        }
-        if let d = tl.derived {
-            var events: [(t: Double, label: String, soft: Color, ink: Color)] = d.clicks.map { (t: $0.t, label: "Click", soft: Tok.accentSoft, ink: Tok.accentText) }
-            events += tl.overlays.taps.map { (t: tm.output(atSource: $0.t), label: "Tap", soft: Tok.tapSoft, ink: Tok.tapText) }
-            events.sort { $0.t < $1.t }
-            var lastBadgeX: CGFloat = -100
-            var pending: [(t: Double, label: String, soft: Color, ink: Color)] = []
-            var pendingCenter: CGFloat = 0
-            func flushPending() {
-                if pending.isEmpty { return }
-                let label = pending.count > 1 ? "×\(pending.count)" : pending[0].label
-                // Tap wins colour when a cluster mixes Click + Tap.
-                let tap = pending.first { $0.label == "Tap" }
-                let soft = tap?.soft ?? pending[0].soft
-                let ink = tap?.ink ?? pending[0].ink
-                badge(at: pendingCenter, label: label, soft: soft, ink: ink)
-                lastBadgeX = pendingCenter
-                pending.removeAll()
-            }
-            for ev in events {
-                let center = max(20, min(x(ev.t), w - 20))
-                if !pending.isEmpty, center - lastBadgeX < 44, center - pendingCenter < 44 {
-                    // Same chip width: merge into a cluster (Tap wins colour).
-                    pending.append(ev)
-                    continue
+                let t0 = Double(cx / max(w, 1)) * dur, t1 = Double(min(cx + step, w) / max(w, 1)) * dur
+                let src0 = tm.source(atOutput: t0), src1 = tm.source(atOutput: t1)
+                let peak = TimelineGeometry.columnPeak(wave: wave, srcStart: src0, srcEnd: src1)
+                let inRamp = tm.ramps.contains { s in
+                    let a = tm.output(atSource: s.start), b = tm.output(atSource: s.end)
+                    return t0 >= a && t0 <= b
                 }
-                flushPending()
-                // Chip must clear the previous chip by a full chip width.
-                if center - lastBadgeX < 44 { continue }
-                pending = [ev]; pendingCenter = center
+                let rows = min(Int(peak.squareRoot() * Float(maxRows)), maxRows)
+                let col: Color
+                if inRamp { col = Tok.controlPressed.opacity(0.7) }
+                else if peak < 0.05 { col = Tok.controlPressed }
+                else { col = cx < ph ? Tok.text : Tok.text2 }
+                for k in -rows...rows {
+                    let r = CGRect(x: snap(cx), y: snap(mid + CGFloat(k) * (cellH + dotGap) - cellH / 2), width: cellW, height: cellH)
+                    c.fill(Path(r), with: .color(col), style: FillStyle(antialiased: false))
+                }
+                cx += step
             }
-            flushPending()
         }
+        .frame(height: hAudio)
+        .accessibilityHidden(true)
     }
 
-    /// Smooth playhead line: it reads the clock at display rate, while the
-    /// heavy strip canvas (waveform + segments) redraws only at ~12 Hz.
-    /// Inset so the 2 pt line never clips at the strip edge.
+    // MARK: - Playhead (crosses every lane)
+
     private struct PlayheadLine: View {
         let model: EditorModel
         var body: some View {
@@ -135,20 +322,60 @@ struct TimelineStrip: View {
             TimelineView(.animation(paused: !model.isPlaying)) { _ in
                 Canvas { context, size in
                     let t = model.isPlaying ? model.clock.time(at: HostClock.now()) : paused
-                    let x = min(max((CGFloat(t / max(model.duration, 0.001)) * size.width).rounded(), 2), size.width - 2)
-                    context.fill(Path(CGRect(x: x - 1, y: 4, width: 2, height: size.height - 8)),
+                    let xx = min(max((CGFloat(t / max(model.duration, 0.001)) * size.width).rounded(), 2), size.width - 2)
+                    context.fill(Path(CGRect(x: xx - 1, y: 4, width: 2, height: size.height - 8)),
                                  with: .color(Tok.text), style: FillStyle(antialiased: false))
                 }
             }.allowsHitTesting(false)
         }
     }
 
+    // MARK: - Hit, hover, drag (command path preserved)
+
+    private func setHover(at p: CGPoint, width: CGFloat) {
+        let yZoom0 = hRuler + hClip, yEvents0 = yZoom0 + hZoom, yAudio0 = yEvents0 + hEvents
+        let tm = model.timeline.timeMap, dur = max(tm.outputDuration, 0.001)
+        if p.y >= yZoom0 && p.y < yEvents0 {
+            var hitZoom: UUID? = nil
+            for z in model.timeline.zoom.reversed() {
+                let a = x(tm.output(atSource: z.start), dur, width), b = x(tm.output(atSource: z.end), dur, width)
+                if p.x >= a - 7 && p.x <= b + 7 { hitZoom = z.id; break }
+            }
+            if hoveredZoom != hitZoom {
+                if reduceMotion { hoveredZoom = hitZoom }
+                else { withAnimation(Motion.hoverIn) { hoveredZoom = hitZoom } }
+            }
+            var nearEdge = false
+            for z in model.timeline.zoom.reversed() where z.id == hitZoom {
+                let a = x(tm.output(atSource: z.start), dur, width), b = x(tm.output(atSource: z.end), dur, width)
+                nearEdge = abs(p.x - a) < 7 || abs(p.x - b) < 7
+            }
+            if nearEdge { NSCursor.resizeLeftRight.set() } else { NSCursor.arrow.set() }
+            return
+        }
+        hoveredZoom = nil
+        if p.y >= yEvents0 && p.y < yAudio0 {
+            var best: Marker? = nil
+            var bestD: CGFloat = 6
+            for m in outEvents() {
+                let d = abs(x(m.t, dur, width) - p.x)
+                if d < bestD { bestD = d; best = m }
+            }
+            hoveredMarker = best
+            if best != nil { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+            return
+        }
+        hoveredMarker = nil
+        NSCursor.arrow.set()
+    }
+
     private func hit(_ p: CGPoint, _ w: CGFloat) -> Drag {
-        let tl = model.timeline, tm = tl.timeMap, dur = tm.outputDuration
-        func x(_ t: Double) -> CGFloat { CGFloat(t / max(dur, 0.001)) * w }
-        if zoomLane.contains(p.y) {
-            for z in tl.zoom.reversed() {
-                let a = x(tm.output(atSource: z.start)), b = x(tm.output(atSource: z.end))
+        let yZoom0 = hRuler + hClip
+        let tm = model.timeline.timeMap, dur = max(tm.outputDuration, 0.001)
+        func xx(_ t: Double) -> CGFloat { CGFloat(t / max(dur, 0.001)) * w }
+        if p.y >= yZoom0 && p.y < yZoom0 + hZoom {
+            for z in model.timeline.zoom.reversed() {
+                let a = xx(tm.output(atSource: z.start)), b = xx(tm.output(atSource: z.end))
                 if abs(p.x - a) < 7 { return Drag(kind: .left, id: z.id, orig: z, t0: Double(p.x / w) * dur) }
                 if abs(p.x - b) < 7 { return Drag(kind: .right, id: z.id, orig: z, t0: Double(p.x / w) * dur) }
                 if p.x > a, p.x < b { return Drag(kind: .move, id: z.id, orig: z, t0: Double(p.x / w) * dur) }
@@ -157,27 +384,66 @@ struct TimelineStrip: View {
         return Drag(kind: .seek, id: nil, orig: nil, t0: 0)
     }
 
+    private func snapTime(_ t: Double, dur: Double, w: CGFloat) -> Double {
+        let tol = 6 * dur / max(w, 1)
+        var best: Double? = nil, bestD = tol
+        for m in outEvents() {
+            let d = abs(m.t - t)
+            if d < bestD { bestD = d; best = m.t }
+        }
+        return best ?? t
+    }
+
     private func change(_ v: DragGesture.Value, _ w: CGFloat) {
         let dur = model.timeline.timeMap.outputDuration, t = min(max(Double(v.location.x / w) * dur, 0), dur)
-        if drag == nil { drag = hit(v.startLocation, w); model.selection = drag?.id }
+        if drag == nil {
+            drag = hit(v.startLocation, w)
+            model.selection = drag?.id
+            // Clicking a marker seeks to it exactly.
+            if drag?.kind == .seek {
+                let yEvents0 = hRuler + hClip + hZoom
+                if v.startLocation.y >= yEvents0 && v.startLocation.y < yEvents0 + hEvents {
+                    var bestT: Double? = nil, bestD: CGFloat = 6
+                    for m in outEvents() {
+                        let d = abs(x(m.t, dur, w) - v.startLocation.x)
+                        if d < bestD { bestD = d; bestT = m.t }
+                    }
+                    if let bt = bestT { model.seek(bt); return }
+                }
+            }
+        }
         guard let d = drag else { return }
         switch d.kind {
         case .seek: model.seek(t)
         case .move, .left, .right:
             guard let o = d.orig, let id = d.id else { return }
-            model.edit(coalesce: true) { tl in
-                guard let i = tl.zoom.firstIndex(where: { $0.id == id }) else { return }
-                let tm = tl.timeMap, dt = t - d.t0
-                let os = tm.output(atSource: o.start), oe = tm.output(atSource: o.end)
-                switch d.kind {
-                case .move:
-                    let len = oe - os, s = min(max(os + dt, 0), dur - len)
-                    tl.zoom[i].start = tm.source(atOutput: s); tl.zoom[i].end = tm.source(atOutput: s + len)
-                case .left: tl.zoom[i].start = tm.source(atOutput: min(max(os + dt, 0), oe - 0.3))
-                default: tl.zoom[i].end = tm.source(atOutput: max(min(oe + dt, dur), os + 0.3))
-                }
-                tl.zoom[i].origin = .manual
+            let tm = model.timeline.timeMap, dt = t - d.t0
+            let os = tm.output(atSource: o.start), oe = tm.output(atSource: o.end)
+            let newStartOut: Double, newEndOut: Double
+            switch d.kind {
+            case .move:
+                let len = oe - os, s = snapTime(min(max(os + dt, 0), dur - len), dur: dur, w: w)
+                newStartOut = s; newEndOut = s + len
+            case .left:
+                newStartOut = snapTime(min(max(os + dt, 0), oe - 0.3), dur: dur, w: w)
+                newEndOut = oe
+            default:
+                newStartOut = os
+                newEndOut = snapTime(max(min(oe + dt, dur), os + 0.3), dur: dur, w: w)
             }
+            let s = tm.source(atOutput: newStartOut), e = tm.source(atOutput: newEndOut)
+            // Command path: reduce(.moveZoom) preserves origin->manual + effects.
+            let ctx = ReduceContext(playhead: model.playhead, selection: id, duration: dur)
+            model.edit(coalesce: true) { tl in _ = try? reduce(&tl, .moveZoom(id, start: s, end: e), ctx: ctx) }
         }
+    }
+
+    private func stepClick(direction: Int) {
+        let markers = outEvents().map(\.t).sorted()
+        guard !markers.isEmpty else { return }
+        let cur = model.playhead
+        let target: Double?
+        if direction > 0 { target = markers.first { $0 > cur + 0.001 } } else { target = markers.last { $0 < cur - 0.001 } }
+        if let target { model.seek(target) }
     }
 }
