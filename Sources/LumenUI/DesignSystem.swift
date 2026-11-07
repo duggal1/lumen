@@ -25,15 +25,15 @@ extension Color {
 
 /// Lumen design tokens. Surfaces separate by one luminance step; no hex outside this file.
 enum Tok {
-    // surfaces (dark is near-black elite: bg 050505, steps 5-7 pts)
-    static let bg = Color(light: 0xF4F4F4, dark: 0x050505)
-    static let surface = Color(light: 0xFFFFFF, dark: 0x0F0F0F)
-    static let well = Color(light: 0xEDEDED, dark: 0x141414)
-    static let control = Color(light: 0xEBEBEB, dark: 0x1B1B1B)
-    static let controlHover = Color(light: 0xE3E3E3, dark: 0x232323)
-    static let controlPressed = Color(light: 0xDADADA, dark: 0x2C2C2C)
-    static let field = Color(light: 0xEAEAEA, dark: 0x0A0A0A)
-    static let fieldHover = Color(light: 0xE3E3E3, dark: 0x0E0E0E)
+    // surfaces (dark is near-black elite: bg 030303, steps 5-7 pts)
+    static let bg = Color(light: 0xF4F4F4, dark: 0x030303)
+    static let surface = Color(light: 0xFFFFFF, dark: 0x0A0A0A)
+    static let well = Color(light: 0xEDEDED, dark: 0x121212)
+    static let control = Color(light: 0xEBEBEB, dark: 0x171717)
+    static let controlHover = Color(light: 0xE3E3E3, dark: 0x1F1F1F)
+    static let controlPressed = Color(light: 0xDADADA, dark: 0x282828)
+    static let field = Color(light: 0xEAEAEA, dark: 0x060606)
+    static let fieldHover = Color(light: 0xE3E3E3, dark: 0x0C0C0C)
     static let island = Color(hex: 0x000000)
     // text
     static let text = Color(light: 0x0A0A0A, dark: 0xFAFAFA)
