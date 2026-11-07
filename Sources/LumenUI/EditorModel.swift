@@ -255,30 +255,36 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     // MARK: Transport
 
     func seek(_ t: Double) {
-        let wasPlaying = wantsPlayback
         playbackTask?.cancel()
-        let c = min(max(t, 0), duration); playhead = c; published = c; clock.seek(c)
-        if wasPlaying { play() }
+        let c = min(max(t, 0), duration); playhead = c; published = c
+        if wantsPlayback {
+            if player.isLoaded {
+                let audible = HostClock.now() + max(0.05, player.outputLatency + 0.03)
+                let start = player.play(from: c, atHostSeconds: audible)
+                clock.start(from: c, at: start, dur: duration)
+            } else {
+                clock.start(from: c, at: HostClock.now() + 0.08, dur: duration)
+            }
+            isPlaying = true
+        } else {
+            clock.seek(c)
+        }
     }
     func play() {
         wantsPlayback = true
-        if !hasMixed { remix() }
         playbackTask?.cancel()
-        let ready = mixTask
-        playbackTask = Task { [weak self] in
-            await ready?.value
-            guard !Task.isCancelled, let self, self.wantsPlayback else { return }
-            let t = self.playhead >= self.duration - 0.02 ? 0 : self.playhead
-            // Start audio and video on the same host instant. The player
-            // subtracts the output device latency, so a Bluetooth sink does
-            // not make clicks land late.
-            let audible = HostClock.now() + max(0.05, self.player.outputLatency + 0.03)
-            // The player returns the host instant the first sample reaches the
-            // speakers (it clamps when the requested start is already past).
-            let start = self.player.play(from: t, atHostSeconds: audible)
-            self.clock.start(from: t, at: start, dur: self.duration)
-            self.isPlaying = true
+        let t = playhead >= duration - 0.02 ? 0 : playhead
+        // Video starts on this line. Audio only joins; it never gates motion.
+        if player.isLoaded {
+            let audible = HostClock.now() + max(0.05, player.outputLatency + 0.03)
+            let start = player.play(from: t, atHostSeconds: audible)
+            clock.start(from: t, at: start, dur: duration)
+        } else {
+            player.warm()
+            clock.start(from: t, at: HostClock.now() + 0.08, dur: duration)
+            if !hasMixed, !isMixing { remix() }
         }
+        isPlaying = true
     }
     func pause() {
         wantsPlayback = false
