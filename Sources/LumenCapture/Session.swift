@@ -29,6 +29,7 @@ public enum Permissions {
 final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let session = AVCaptureSession()
     private let q = DispatchQueue(label: "lumen.webcam")
+    private let stopQ = DispatchQueue(label: "lumen.webcam.stop", qos: .userInitiated)
     private let writer: AVAssetWriter
     private var input: AVAssetWriterInput?
     private var started = false
@@ -63,11 +64,15 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         session.addOutput(out)
         session.commitConfiguration()
     }
-    func start() { session.startRunning() }
+    func start() { stopQ.async { self.session.startRunning() } }
     func pause() { paused.withLock { $0 = true } }
     func resume() { paused.withLock { $0 = false } }
     func stop() async {
-        session.stopRunning()
+        // AVCaptureSession.stopRunning can block 100 ms+. Run it off the
+        // caller's thread (never main, never the session actor's caller).
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            stopQ.async { self.session.stopRunning(); c.resume() }
+        }
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in q.async { c.resume() } }
         guard started else { writer.cancelWriting(); return }
         input?.markAsFinished(); await writer.finishWriting()
@@ -103,7 +108,33 @@ public struct CaptureStats: Sendable {
     public var dropped: Int, thermal: Int
 }
 
+/// Recording lifecycle states. Every transition is logged + signposted.
+/// `failed` carries a plain-language message and recovery action; a stage
+/// that exceeds its timeout lands here, never spins forever.
+public enum RecordingStage: Sendable, Equatable {
+    case idle, preparing, countdown, recording, paused, stopping, finalizing, ready, failed(String)
+}
+
+private enum StageTimeout: Error { case timedOut(RecordingStage) }
+
+extension RecordingStage {
+    var watchdogName: String {
+        switch self {
+        case .idle: return "idle"
+        case .preparing: return "preparing"
+        case .countdown: return "countdown"
+        case .recording: return "recording"
+        case .paused: return "paused"
+        case .stopping: return "stopping"
+        case .finalizing: return "finalizing"
+        case .ready: return "ready"
+        case .failed: return "failed"
+        }
+    }
+}
+
 /// Orchestrates prepare/start/stop and pause/resume. Never touches frames.
+/// Threading: actor; all engines are started/stopped concurrently off main.
 public actor RecordingSession {
     private var engine: CaptureEngine?
     private var input: InputRecorder?
@@ -116,54 +147,105 @@ public actor RecordingSession {
     private var journalTask: Task<Void, Never>?
     private var journalStart = Date()
     public private(set) var isPaused = false
+    public private(set) var stage: RecordingStage = .idle
+    private let logger = Logger(subsystem: "com.lumen.studio", category: "capture")
     public init() {}
+
+    private func transition(to next: RecordingStage) {
+        let prev = stage
+        stage = next
+        MainThreadWatchdog.shared.setStage(next.watchdogName)
+        logger.info("recording \(String(describing: prev)) -> \(String(describing: next), privacy: .public)")
+        os_log("stage %@ -> %@", log: .default, type: .info, String(describing: prev), String(describing: next))
+    }
+
+    /// Stage timeout is a failure path only (never a fix for a hang).
+    /// Implementation: the watchdog + stage log surface a stall; if the stage
+    /// has not advanced within `seconds`, `timeoutHandler` marks `failed`.
+    /// The stopwatch runs detached so it never blocks the stage itself.
+    private func armStageTimeout(_ stage: RecordingStage, seconds: Double) -> Task<Void, Never> {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard let self else { return }
+            await self.timeoutIfStillIn(stage: stage)
+        }
+    }
+
+    private func timeoutIfStillIn(stage: RecordingStage) {
+        // Called on the actor. Only mark failed if we are still in the timed stage.
+        if self.stage == stage {
+            transition(to: .failed("Stage \(String(describing: stage)) exceeded \(secondsHint) s."))
+        }
+    }
+
+    private var secondsHint: Int { 10 }
 
     public func setLiveHooks(frame: (@Sendable (CVPixelBuffer) -> Void)?, event: (@Sendable (InputEvent) -> Void)?) {
         engine?.setLiveFrameHook(frame); input?.setLiveEventHook(event)
     }
 
     public func prepare(_ config: RecordingConfig, library: URL) async throws {
-        cfg = config
-        let name = "Recording " + Date().formatted(.iso8601.year().month().day().dateSeparator(.dash).time(includingFractionalSeconds: false).timeSeparator(.omitted))
-        let b = try ProjectBundle.create(named: name, in: library)
-        bundle = b
-        let e = CaptureEngine(bundle: b)
-        try await e.prepare(config)
-        engine = e
-        unit = ClockCalibration.eventUnit()
-        if let info = e.info {
-            let clock = RecordingClock(originHostSeconds: 0, eventUnit: unit)
-            let i = await MainActor.run {
-                InputRecorder(url: b.eventsURL, axURL: b.axURL, origin: CGPoint(x: info.originX, y: info.originY), scale: info.backingScale, clock: clock)
-            }
-            input = i
-        }
-        if config.webcamDeviceID != nil { webcam = try WebcamRecorder(url: b.webcamURL, deviceID: config.webcamDeviceID, quality: config.webcamQuality) }
-        // Device IDs are unique and checked before recording starts; never
-        // quietly substitute the system default if a requested device vanished.
-        extraMicrophones = try Array(Set(config.additionalMicDeviceIDs))
-            .sorted().enumerated().map { index, id in
-                try ExtraMicrophoneRecorder(deviceID: id, file: "mic-extra-\(index + 1).caf", in: b)
-            }
-    }
-
-    public func start() async throws {
-        guard let engine, let input else { throw CaptureError.noSource }
-        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled, .idleSystemSleepDisabled],
-                                                         reason: "Lumen recording")
-        try await MainActor.run { try input.start() }
-        for recorder in extraMicrophones { recorder.start() }
-        webcam?.start()
+        transition(to: .preparing)
+        let timeoutTask = armStageTimeout(.preparing, seconds: 15)
+        defer { timeoutTask.cancel() }
         do {
-            try await engine.start()
+            cfg = config
+            let name = "Recording " + Date().formatted(.iso8601.year().month().day().dateSeparator(.dash).time(includingFractionalSeconds: false).timeSeparator(.omitted))
+            let b = try ProjectBundle.create(named: name, in: library)
+            bundle = b
+            let e = CaptureEngine(bundle: b)
+            // Permissions, SCShareableContent, device discovery, writers,
+            // Metal warm-up run concurrently off main (engine.prepare).
+            try await e.prepare(config)
+            engine = e
+            unit = ClockCalibration.eventUnit()
+            if let info = e.info {
+                let clock = RecordingClock(originHostSeconds: 0, eventUnit: unit)
+                let i = await MainActor.run {
+                    InputRecorder(url: b.eventsURL, axURL: b.axURL, origin: CGPoint(x: info.originX, y: info.originY), scale: info.backingScale, clock: clock)
+                }
+                input = i
+            }
+            if config.webcamDeviceID != nil { webcam = try WebcamRecorder(url: b.webcamURL, deviceID: config.webcamDeviceID, quality: config.webcamQuality) }
+            // Device IDs are unique and checked before recording starts; never
+            // quietly substitute the system default if a requested device vanished.
+            extraMicrophones = try Array(Set(config.additionalMicDeviceIDs))
+                .sorted().enumerated().map { index, id in
+                    try ExtraMicrophoneRecorder(deviceID: id, file: "mic-extra-\(index + 1).caf", in: b)
+                }
         } catch {
-            for recorder in extraMicrophones { await recorder.stop() }
-            await webcam?.stop()
-            await input.stop()
+            transition(to: .failed("Preparing stalled. \(error)"))
             throw error
         }
-        journalStart = Date()
-        startJournal()
+    }
+
+    public func markCountdown() { transition(to: .countdown) }
+
+    public func start() async throws {
+        guard let engine, let input else { transition(to: .failed("No capture source.")); throw CaptureError.noSource }
+        let timeoutTask = armStageTimeout(.recording, seconds: 10)
+        defer { timeoutTask.cancel() }
+        do {
+            activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled, .idleSystemSleepDisabled],
+                                                             reason: "Lumen recording")
+            try await MainActor.run { try input.start() }
+            for recorder in extraMicrophones { recorder.start() }
+            webcam?.start()
+            do {
+                try await engine.start()
+            } catch {
+                for recorder in extraMicrophones { await recorder.stop() }
+                await webcam?.stop()
+                await input.stop()
+                throw error
+            }
+            journalStart = Date()
+            startJournal()
+            transition(to: .recording)
+        } catch {
+            transition(to: .failed("Starting stalled. \(error)"))
+            throw error
+        }
     }
 
     /// Pause keeps the capture graph alive but stops appending frames and audio.
@@ -172,12 +254,14 @@ public actor RecordingSession {
         guard !isPaused else { return }
         engine?.pause(); webcam?.pause(); extraMicrophones.forEach { $0.pause() }
         isPaused = true
+        transition(to: .paused)
     }
 
     public func resume() {
         guard isPaused else { return }
         engine?.resume(); webcam?.resume(); extraMicrophones.forEach { $0.resume() }
         isPaused = false
+        transition(to: .recording)
     }
 
     public func togglePause() { isPaused ? resume() : pause() }
@@ -213,23 +297,43 @@ public actor RecordingSession {
                      dropped: engine?.droppedFrames ?? 0, thermal: ProcessInfo.processInfo.thermalState.rawValue)
     }
 
-    public func stop() async throws -> ProjectBundle {
-        guard let engine, let input, let b = bundle, var info = engine.info else { throw CaptureError.noSource }
-        defer { if let a = activity { ProcessInfo.processInfo.endActivity(a) } }
-        let stopHostSeconds = HostClock.now()
-        journalTask?.cancel(); journalTask = nil
-        // Close an open pause so the recorded span has a clean end before the
-        // writer is finalised.
-        if isPaused { resume() }
-        isPaused = false
-        await input.stop()
-        await webcam?.stop()
-        // Always close device files, even if screen encoding fails.
-        for recorder in extraMicrophones { await recorder.stop() }
-        try await engine.stop()
+    /// Fast stop: stops capture, drains, ends session, finishes audio writers.
+    /// Returns within the stop budget; heavy finalization is separate.
+    /// Shutdown order: input stop → webcam/extra mics → engine stop
+    /// (stopCapture, drain sample queue, endSession, mark inputs finished,
+    ///  `await finishWriting` off main).
+    public func stopCapture() async throws {
+        transition(to: .stopping)
+        let timeoutTask = armStageTimeout(.stopping, seconds: 10)
+        defer { timeoutTask.cancel() }
+        do {
+            guard let engine, let input else { throw CaptureError.noSource }
+            journalTask?.cancel(); journalTask = nil
+            if isPaused { resume() }
+            isPaused = false
+            await input.stop()
+            await webcam?.stop()
+            for recorder in extraMicrophones { await recorder.stop() }
+            try await engine.stop()
+        } catch {
+            transition(to: .failed("Stopping stalled. \(error)"))
+            throw error
+        }
+    }
+
+    /// Slow finalization: wrap audio journals, finalize events, publish project.
+    /// Runs at `.utility` QoS off main; UI shows "Finishing…" with real progress.
+    /// Heavy analysis starts only after this returns.
+    public func finalize() async throws -> ProjectBundle {
+        transition(to: .finalizing)
+        // Snapshot actor state first (cheap), then run heavy IO off-actor.
+        guard let engine, let b = bundle, var info = engine.info else {
+            transition(to: .failed("No bundle to finalize."))
+            throw CaptureError.noSource
+        }
+        let activityToken = activity
         let origin = engine.firstPTS ?? 0
-        // ScreenCaptureKit can emit no video frames while the display stays
-        // unchanged. The last frame is held through the true stop time.
+        let stopHostSeconds = HostClock.now()
         info.duration = max(engine.lastPTS - origin, stopHostSeconds - origin, 0)
         var meta = ProjectMeta(name: b.url.deletingPathExtension().lastPathComponent, source: info,
                                clock: RecordingClock(originHostSeconds: origin, eventUnit: unit))
@@ -239,28 +343,44 @@ public actor RecordingSession {
         if let t = webcam?.first.withLock({ $0 }) { meta.webcam = TrackMeta(file: "webcam.mov", startHostSeconds: t) }
         meta.additionalMicrophones = extraMicrophones.compactMap(\.track)
         var tl = Timeline(duration: info.duration)
-        // A pause captured nothing. Replaying it as a cut is exactly the same
-        // result as if the user had stopped, saved, and started a new take.
         let pauses = engine.pauseIntervals.compactMap { p -> CutRange? in
             let a = max(p.start - origin, 0), e = min(p.end - origin, info.duration)
             return e - a > 0.05 ? CutRange(start: a, end: e, origin: .manual) : nil
         }
         tl.timeMap.cuts = pauses.sorted { $0.start < $1.start }
         if meta.webcam != nil { tl.webcam = WebcamLayout() }
+        let infoCopy = info
+        let baseTimeline = tl
+        let finalMeta = meta
         do {
-            let recordedEvents = try b.events(origin: origin)
-            let ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
-            if recordedEvents.isEmpty {
-                NSLog("Lumen: event sidecar is empty; automatic zoom unavailable for this recording")
-            } else {
-                tl.zoom = Director.planRecordingZoom(events: recordedEvents, ax: ax,
-                                                     source: info, timeline: tl)
-            }
+            try await Task.detached(priority: .utility) {
+                var working = baseTimeline
+                do {
+                    let recordedEvents = try b.events(origin: origin)
+                    let ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
+                    if !recordedEvents.isEmpty {
+                        working.zoom = Director.planRecordingZoom(events: recordedEvents, ax: ax,
+                                                                  source: infoCopy, timeline: working)
+                    }
+                } catch {
+                    os_log("finalize: event sidecar unreadable: %@", log: .default, type: .error, String(describing: error))
+                }
+                try b.save(ProjectFile(meta: finalMeta, timeline: working))
+                b.clearJournal()
+            }.value
         } catch {
-            NSLog("Lumen: could not read event sidecar; automatic zoom unavailable: %@", "\(error)")
+            transition(to: .failed("Finalizing stalled. \(error)"))
+            throw error
         }
-        try b.save(ProjectFile(meta: meta, timeline: tl))
-        b.clearJournal()
+        if let a = activityToken { ProcessInfo.processInfo.endActivity(a) }
+        activity = nil
+        return b
+    }
+
+    public func stop() async throws -> ProjectBundle {
+        try await stopCapture()
+        let b = try await finalize()
+        transition(to: .ready)
         return b
     }
 }
