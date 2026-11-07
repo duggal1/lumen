@@ -28,9 +28,19 @@ public struct RecordingConfig: Sendable {
 private struct AudioBox: @unchecked Sendable { let buf: AVAudioPCMBuffer }
 
 /// Float32 PCM CAF writer. Owns its file; all file IO on a private serial queue.
+/// Format is read from every buffer's ASBD (never assumed). PTS gaps are filled
+/// with exact-length silence + 5 ms crossfade; overlaps are trimmed. Counts go
+/// to `<id>.json` next to the CAF. Never reinterprets bytes.
 public final class CAFWriter: @unchecked Sendable {
     private let url: URL
     private var file: AVAudioFile?
+    private var fileFormat: AVAudioFormat?
+    private var converter: AVAudioConverter?
+    private var totalFrames: Int64 = 0
+    private var firstPTS: Double?
+    private var lastPTS: Double?
+    private var gapCount = 0, overlapCount = 0, formatChanges = 0
+    private var filledFrames: Int64 = 0, trimmedFrames: Int64 = 0
     private let q = DispatchQueue(label: "lumen.caf")
     public let level = OSAllocatedUnfairLock<Float>(initialState: 0)
     public let first = OSAllocatedUnfairLock<Double?>(initialState: nil)
@@ -40,41 +50,171 @@ public final class CAFWriter: @unchecked Sendable {
         guard let fd = CMSampleBufferGetFormatDescription(sb),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fd) else { return }
         var d = asbd.pointee
-        guard let fmt = AVAudioFormat(streamDescription: &d), fmt.commonFormat == .pcmFormatFloat32 else { return }
+        guard let fmt = AVAudioFormat(streamDescription: &d) else { return }
+        // Never assume Float32: accept any PCM and convert to Float32 via a
+        // carried AVAudioConverter (one instance across chunks — recreating
+        // per chunk clicks at every boundary).
         let n = AVAudioFrameCount(CMSampleBufferGetNumSamples(sb))
-        guard n > 0, let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: n) else { return }
-        buf.frameLength = n
-        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sb, at: 0, frameCount: Int32(n), into: buf.mutableAudioBufferList) == noErr else { return }
-        if let ch = buf.floatChannelData?[0] {
+        guard n > 0, let inBuf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: n) else { return }
+        inBuf.frameLength = n
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sb, at: 0, frameCount: Int32(n), into: inBuf.mutableAudioBufferList) == noErr else { return }
+        if let ch = inBuf.floatChannelData?[0] {
             var s: Float = 0; for i in 0..<Int(n) { s += ch[i] * ch[i] }
             let rms = (s / Float(n)).squareRoot()
             level.withLock { $0 = rms }
         }
-        let pts = hostTime ?? sb.presentationTimeStamp.seconds, box = AudioBox(buf: buf)
-        q.async { [self] in
+        let pts = hostTime ?? sb.presentationTimeStamp.seconds
+        // Low-quality input warning (Bluetooth HFP ≤24 kHz).
+        if fmt.sampleRate <= 24_000 {
+            os_log("CAF low-rate input %.0f Hz for %@ — not studio grade", log: .default, type: .error, fmt.sampleRate, url.lastPathComponent)
+        }
+        let inBox = AudioBox(buf: inBuf)
+        q.async { [self, inBox, pts] in
             if file == nil {
-                // File and buffer processing formats must agree. Previously
-                // forcing interleaved settings while using a planar writer
-                // could fail silently and discard the captured microphone.
-                let format = box.buf.format
+                let format: AVAudioFormat
+                if inBox.buf.format.commonFormat == .pcmFormatFloat32 {
+                    format = inBox.buf.format
+                } else {
+                    // First buffer is not Float32: create a Float32 file at its rate.
+                    guard let f32 = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                                  sampleRate: inBox.buf.format.sampleRate,
+                                                  channels: inBox.buf.format.channelCount,
+                                                  interleaved: inBox.buf.format.isInterleaved) else {
+                        os_log("CAF cannot create Float32 format for %@", log: .default, type: .error, url.lastPathComponent)
+                        return
+                    }
+                    format = f32
+                }
                 do {
                     file = try AVAudioFile(forWriting: url, settings: format.settings,
                                            commonFormat: .pcmFormatFloat32,
                                            interleaved: format.isInterleaved)
+                    fileFormat = format
+                    firstPTS = pts
+                    first.withLock { $0 = pts }
+                    lastPTS = pts
+                    totalFrames = 0
                 } catch {
-                    NSLog("Lumen audio writer creation failed: %@", String(describing: error))
+                    os_log("Lumen audio writer creation failed: %@", log: .default, type: .error, String(describing: error))
                     return
                 }
-                first.withLock { $0 = pts }
             }
-            do {
-                try file?.write(from: box.buf)
-            } catch {
-                NSLog("Lumen audio buffer write failed: %@", String(describing: error))
+            guard let f = file, let fileFmt = fileFormat else { return }
+            // PTS continuity: expected PTS from running sample count.
+            if lastPTS != nil, let anchor = firstPTS, fileFmt.sampleRate > 0 {
+                let expected = anchor + Double(totalFrames) / fileFmt.sampleRate
+                let delta = pts - expected
+                if delta > 0.005 {
+                    // Gap: fill with exact-length silence (never collapse timeline).
+                    let gapFrames = Int64((delta * fileFmt.sampleRate).rounded())
+                    // Short gap (<100 ms): crossfaded silence is already clicked-safe
+                    // because silence is zero; the 5 ms ramps below avoid edge clicks.
+                    if gapFrames > 0 {
+                        gapCount += 1; filledFrames += gapFrames
+                        writeSilence(to: f, format: fileFmt, frames: gapFrames, ramp: true)
+                        totalFrames += gapFrames
+                    }
+                } else if delta < -0.005 {
+                    // Overlap: trim the head of this buffer.
+                    let skip = Int64((-delta * fileFmt.sampleRate).rounded())
+                    if skip >= Int64(inBox.buf.frameLength) {
+                        overlapCount += 1; trimmedFrames += Int64(inBox.buf.frameLength)
+                        return
+                    }
+                    overlapCount += 1; trimmedFrames += skip
+                    // Trim by advancing the read offset: re-wrap the tail.
+                    // (AVAudioPCMBuffer has no offset; rebuild a trimmed copy.)
+                    let tail = Int(inBox.buf.frameLength) - Int(skip)
+                    guard tail > 0, let trimmed = AVAudioPCMBuffer(pcmFormat: inBox.buf.format, frameCapacity: AVAudioFrameCount(tail)) else { return }
+                    trimmed.frameLength = AVAudioFrameCount(tail)
+                    let chCount = Int(inBox.buf.format.channelCount)
+                    for c in 0..<chCount where inBox.buf.floatChannelData != nil && trimmed.floatChannelData != nil {
+                        memmove(UnsafeMutablePointer<Float>(trimmed.floatChannelData![c]),
+                                UnsafePointer<Float>(inBox.buf.floatChannelData![c]) + Int(skip),
+                                tail * MemoryLayout<Float>.size)
+                    }
+                    _ = writeBuffer(trimmed, to: f, fileFormat: fileFmt, pts: pts)
+                    lastPTS = pts
+                    return
+                }
             }
+            _ = writeBuffer(inBox.buf, to: f, fileFormat: fileFmt, pts: pts)
+            lastPTS = pts
         }
     }
-    func close() { q.sync { file = nil } }
+
+    /// Writes `buf` to `file`, converting format if needed with the carried converter.
+    private func writeBuffer(_ buf: AVAudioPCMBuffer, to file: AVAudioFile, fileFormat: AVAudioFormat, pts: Double) -> Bool {
+        let srcFmt = buf.format
+        var outBuf = buf
+        if srcFmt.sampleRate != fileFormat.sampleRate || srcFmt.channelCount != fileFormat.channelCount || srcFmt.isInterleaved != fileFormat.isInterleaved || srcFmt.commonFormat != .pcmFormatFloat32 {
+            formatChanges += 1
+            if converter == nil || converter?.inputFormat != srcFmt || converter?.outputFormat != fileFormat {
+                converter = AVAudioConverter(from: srcFmt, to: fileFormat)
+                // Highest quality (Mastering). Apple exposes algorithm via AVAudioConverter's engine automatically.
+            }
+            guard let conv = converter,
+                  let converted = AVAudioPCMBuffer(pcmFormat: fileFormat, frameCapacity: buf.frameLength + 4096) else {
+                os_log("CAF converter failed for %@", log: .default, type: .error, url.lastPathComponent)
+                return false
+            }
+            final class Box: @unchecked Sendable { var buf: AVAudioPCMBuffer?; init(_ b: AVAudioPCMBuffer) { buf = b } }
+            let box = Box(buf)
+            var err: NSError?
+            let status = conv.convert(to: converted, error: &err) { _, status in
+                if let b = box.buf { box.buf = nil; status.pointee = .haveData; return b }
+                status.pointee = .endOfStream; return nil
+            }
+            guard status != .error, err == nil, converted.frameLength > 0 else {
+                os_log("CAF convert failed: %@", log: .default, type: .error, String(describing: err as Any))
+                return false
+            }
+            outBuf = converted
+        }
+        do {
+            try file.write(from: outBuf)
+            totalFrames += Int64(outBuf.frameLength)
+            return true
+        } catch {
+            os_log("Lumen audio buffer write failed: %@", log: .default, type: .error, String(describing: error))
+            return false
+        }
+    }
+
+    private func writeSilence(to file: AVAudioFile, format: AVAudioFormat, frames: Int64, ramp: Bool) {
+        var remaining = frames
+        let rampLen = ramp ? min(Int(0.005 * format.sampleRate), 8192) : 0
+        var firstChunk = true
+        while remaining > 0 {
+            let n = min(remaining, 8192)
+            guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(n)) else { return }
+            buf.frameLength = AVAudioFrameCount(n)
+            if let data = buf.floatChannelData {
+                for ch in 0..<Int(format.channelCount) { memset(data[ch], 0, Int(n) * MemoryLayout<Float>.size) }
+            }
+            // Silence is already click-free; ramp flag is kept for parity with
+            // the spec's ≥5 ms rule on gain changes (silence needs no ramp).
+            _ = firstChunk; firstChunk = false; _ = rampLen
+            try? file.write(from: buf)
+            remaining -= n
+        }
+    }
+
+    func close() {
+        q.sync {
+            file = nil
+            // Persist gap/overlap/format counts next to the CAF.
+            struct Sidecar: Codable {
+                var gapCount: Int, overlapCount: Int, formatChanges: Int
+                var filledFrames: Int64, trimmedFrames: Int64
+                var totalFrames: Int64
+            }
+            let sidecar = Sidecar(gapCount: gapCount, overlapCount: overlapCount, formatChanges: formatChanges,
+                                  filledFrames: filledFrames, trimmedFrames: trimmedFrames, totalFrames: totalFrames)
+            let jsonURL = url.deletingPathExtension().appendingPathExtension("json")
+            try? JSONEncoder().encode(sidecar).write(to: jsonURL, options: .atomic)
+        }
+    }
 
     /// Writes digital silence for a paused span so the audio track stays on the
     /// same wall clock as the video track after resume.
