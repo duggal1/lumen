@@ -83,6 +83,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var livePreview = false
     private var livePreviewController: LivePreviewController?
     var displays: [(id: CGDirectDisplayID, name: String)] = []
+    var maxFPS = 60
+    var supportedFPS: [Int] { [24, 30, 60, 120].filter { $0 <= maxFPS } }
     var windows: [(id: CGWindowID, name: String)] = []
     var error: String?
     var stats: CaptureStats?
@@ -112,6 +114,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         displays = NSScreen.screens.compactMap { s in
             (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID).map { ($0, s.localizedName) }
         }
+        maxFPS = Self.probeMaxFPS(displayID: displayID)
+        if fps > maxFPS { fps = maxFPS }
         let urls = (try? FileManager.default.contentsOfDirectory(at: library, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         projects = urls.filter { $0.pathExtension == "lumen" }.compactMap { u in
             let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
@@ -141,6 +145,22 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         let pattern = #"^Recording \d{4}-\d{2}-\d{2}T\d{6}(.*)$"#
         guard raw.range(of: pattern, options: .regularExpression) != nil else { return raw }
         return raw.replacingOccurrences(of: pattern, with: "Screen recording$1", options: .regularExpression)
+    }
+
+    static func probeMaxFPS(displayID: CGDirectDisplayID) -> Int {
+        // Real display probe via KVC (macOS 14+ exposes maximumFrameRate on
+        // NSScreen); fall back to 60Hz so we never offer 120 on a 60Hz panel.
+        if let rates = NSScreen.screens.first(where: {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == displayID
+        }) {
+            if let rate = rates.value(forKey: "maximumFrameRate") as? NSNumber {
+                let r = rate.doubleValue
+                if r >= 119 { return 120 }
+                if r >= 59 { return 60 }
+                if r >= 29 { return 30 }
+            }
+        }
+        return 60
     }
 
     public func showRecordingControls() { hud?.show() }
