@@ -233,6 +233,8 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         let tl = timeline, mixer = session.mixer, player = player
         isMixing = true
         mixTask = Task { [weak self] in
+            // A cancelled latest mix must clear the flag or Play never retries.
+            defer { if let self, self.mixGeneration == gen { self.isMixing = false } }
             await previous?.value
             guard !Task.isCancelled else { return }
             let audio = await Task.detached(priority: .userInitiated) { mixer.mix(tl) }.value
@@ -248,11 +250,15 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             if self.wantsPlayback, self.clock.playing {
                 let now = HostClock.now()
                 let tNow = self.clock.time(at: now)
-                _ = self.player.play(from: tNow, atHostSeconds: now + 0.05)
+                _ = self.player.play(from: tNow, atHostSeconds: now + max(0.05, self.player.outputLatency + 0.03))
             }
-            // An edit that landed while this mix ran makes the buffer stale.
-            // Mix the current timeline once more so the next Play is fresh.
-            if self.timeline != tl { self.remix() }
+            // An audio edit that landed while this mix ran makes the buffer
+            // stale. Visual-only edits must never restart a full mix (same
+            // gate as replan), so compare only audio-relevant fields.
+            let cur = self.timeline
+            let audioStale = tl.audio != cur.audio || tl.timeMap != cur.timeMap || tl.clips != cur.clips
+                || tl.derived?.cues != cur.derived?.cues || tl.derived?.duck != cur.derived?.duck
+            if audioStale { self.remix() }
         }
     }
 
