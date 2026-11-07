@@ -4,6 +4,7 @@ import LumenCore
 import LumenProject
 import LumenExport
 import LumenAudio
+import LumenCapture
 
 struct Inspector: View {
     let model: EditorModel
@@ -40,26 +41,33 @@ struct Inspector: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: Space.s6) {
                 tabSelector
                 tabBody
-            }.padding(20)
+            }.padding(Space.s4)
         }.frame(width: width).frame(maxHeight: .infinity).background(Tok.bg)
         .onChange(of: model.exportPanelRequest) { _, _ in tab = .export }
-        .onChange(of: tab) { _, selected in model.exportPanelActive = selected == .export }
+        .onChange(of: tab) { _, selected in
+            model.exportPanelActive = selected == .export
+            UserDefaults.standard.set(selected.rawValue, forKey: "lumen.inspector.tab")
+        }
+        .onAppear {
+            if let saved = UserDefaults.standard.string(forKey: "lumen.inspector.tab"), let t = Inspector.Tab(rawValue: saved) { tab = t }
+        }
+        .onKeyPress(.init("1"), modifiers: .command) { tab = .look; return .handled }
+        .onKeyPress(.init("2"), modifiers: .command) { tab = .camera; return .handled }
+        .onKeyPress(.init("3"), modifiers: .command) { tab = .cursor; return .handled }
+        .onKeyPress(.init("4"), modifiers: .command) { tab = .captions; return .handled }
+        .onKeyPress(.init("5"), modifiers: .command) { tab = .audio; return .handled }
     }
 
-    /// Eight visible tabs max; rarer tabs live behind "More" so hierarchy is
-    /// visible and the menu stays inside the 8-item rule.
+    /// One full-width section dropdown at the top of the inspector.
+    /// Full names always; nothing truncated. The sixth empty pill is gone:
+    /// secondary sections are labelled rows in this same menu.
     private var tabSelector: some View {
-        HStack(spacing: 8) {
-            LSegmented(sel: $tab, items: [Inspector.Tab.look, .camera, .cursor, .captions, .audio].map { ($0, $0.rawValue) })
-                .frame(width: 232)
-            LDropdown(sel: $tab, options: Inspector.Tab.allCases.filter { !$0.isPrimary && ($0 != .webcam || model.timeline.webcam != nil) }.map { ($0, $0.rawValue, icon($0)) })
-                .frame(width: 88)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Inspector sections")
+        LDropdown(sel: $tab, options: Inspector.Tab.visibleFor(model: model).map { ($0, $0.rawValue, icon($0)) })
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel("Inspector section: \(tab.rawValue)")
     }
 
     @ViewBuilder private var tabBody: some View {
@@ -352,7 +360,22 @@ struct Inspector: View {
 
     private var cursor: some View {
         let m = model
-        return VStack(spacing: 24) {
+        return VStack(alignment: .leading, spacing: 24) {
+            if m.session.input.events.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(Tok.accentText)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("No pointer events saved.").font(AppType.caption).foregroundStyle(Tok.text)
+                        HStack(spacing: 8) {
+                            LButton(title: "Open Input Monitoring", kind: .quiet, height: 24) { LumenCapture.Permissions.requestInput() }
+                            LButton(title: "Add tap manually", kind: .quiet, height: 24) { model.addTapAtPlayhead() }
+                        }
+                    }
+                }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: Radius.nested).fill(Tok.control))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             VStack(spacing: 0) {
                 Row(label: "Pack") { LDropdown(sel: m.bind(\.cursor.pack), options: CursorPack.allCases.map { ($0, $0.rawValue.capitalized, "cursorarrow") }).frame(width: 130) }
                 SliderRow(label: "Size", v: m.bind(\.cursor.size), range: 0.5...2.5)

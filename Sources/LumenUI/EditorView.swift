@@ -44,18 +44,12 @@ struct EditorView: View {
                     }
                     LButton(title: "Export", icon: "square.and.arrow.up",
                             kind: model.exportPanelActive ? .secondary : .primary) { model.openExportPanel() }
+                        .layoutPriority(1)
                 }
-            }
-            if model.session.input.events.isEmpty {
-                Label("No saved pointer events for this clip. Check Input Monitoring for future recordings; use Tools → Add tap to place clicks manually.",
-                      systemImage: "exclamationmark.triangle")
-                    .font(AppType.caption).foregroundStyle(Tok.accentText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16).padding(.vertical, 6)
             }
             GeometryReader { available in
                 HStack(spacing: 0) {
-                    VStack(spacing: 12) {
+                    VStack(spacing: 8) {
                         GeometryReader { area in
                             // Use aspectRatio (customAspect-aware), not canvas.ratio:
                             // custom 1:1 / 9:16 exports were previewed at 16:9.
@@ -73,13 +67,11 @@ struct EditorView: View {
                         transport
                         TimelineStrip(model: model)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
+                    .padding(16)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
                     if showsInspector {
-                        Inspector(model: model, tab: $inspectorTab,
-                                  width: min(320, max(268, available.size.width * 0.29)))
+                        Inspector(model: model, tab: $inspectorTab, width: 320)
                     }
                 }
             }
