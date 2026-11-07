@@ -11,9 +11,6 @@ struct Inspector: View {
     static func visibleFor(model: EditorModel) -> [Tab] {
         Tab.allCases.filter { $0 != .webcam || model.timeline.webcam != nil }
     }
-    static func moreTabs(for model: EditorModel) -> [Tab] {
-        visibleFor(model: model).filter { !primaryTabs.contains($0) }
-    }
     static var primaryTabs: [Tab] { [.look, .camera, .cursor, .captions, .audio] }
     static func moreTabs(for model: EditorModel) -> [Tab] {
         visibleFor(model: model).filter { !primaryTabs.contains($0) }
