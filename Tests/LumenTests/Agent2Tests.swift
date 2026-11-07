@@ -1,8 +1,10 @@
 import Foundation
+import AppKit
 import Testing
 import LumenCore
 import LumenAudio
 import LumenSpeech
+import CRNNoise
 @testable import LumenProject
 @testable import LumenDirector
 @testable import LumenExport
@@ -118,6 +120,56 @@ private func srcInfo(duration: Double = 12) -> SourceInfo {
         #expect(transcript.words.allSatisfy { $0.end >= $0.start && $0.confidence >= 0 && $0.confidence <= 1 })
     case .failure:
         break
+    }
+}
+
+@Test func moonshineTranscribesRealSpeechEndToEnd() async throws {
+    // Real recorded speech fixture (TTS: "Hello world from Lumen. The recorder is ready.")
+    // Skipped on machines without the model; the CLI transcribe path is the
+    // documented manual harness (lumen-cli transcribe <project> --size tiny).
+    guard ModelStore.isInstalled(.tiny) else { return }
+    guard let url = Bundle.module.url(forResource: "speech", withExtension: "wav", subdirectory: "Fixtures") else {
+        Issue.record("speech.wav fixture missing"); return
+    }
+    switch await FileTranscriber.run(url: url, size: .tiny) {
+    case .success(let transcript):
+        let text = transcript.words.map(\.text).joined(separator: " ").lowercased()
+        #expect(transcript.words.count >= 5)
+        #expect(text.contains("hello") && text.contains("lumen"), "expected real words, got: \(text)")
+        #expect(transcript.words.allSatisfy { $0.end >= $0.start && $0.start >= 0 })
+    case .failure(let error):
+        Issue.record("transcription of real speech failed: \(error)")
+    }
+}
+
+@Test func rnnoiseVendoredAndDefaultDenoiserActive() {
+    // The build must actually link RNNoise (CRNNoise target vendored), not the
+    // SpectralGate fallback, and the default path must run. RNNoise frame size
+    // is 480 samples at 16 kHz; shorter inputs pass through untouched.
+    if let st = rnnoise_create(nil) {
+        rnnoise_destroy(st)
+    } else {
+        Issue.record("rnnoise_create returned nil with the vendored model")
+    }
+    let voice = (0..<48_000).map { Float(0.1 * sin(Double($0) * 2 * .pi * 440 / 48_000)) }
+    let out = defaultDenoiser.process(voice)
+    #expect(out.count == voice.count)
+    #expect(!out.allSatisfy { $0 == 0 }, "RNNoise must pass voice through, not mute it")
+    let short = [Float](repeating: 0, count: 100)
+    #expect(defaultDenoiser.process(short) == short, "sub-frame input passes through unchanged")
+}
+
+@Test func clipboardWritesRealFileURLToPasteboard() throws {
+    let dir = try tmpDir(); defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appendingPathComponent("clip.mp4")
+    try Data("fake-video".utf8).write(to: file)
+    let board = NSPasteboard.general
+    board.clearContents()
+    board.writeObjects([file as NSURL])
+    let types = board.types ?? []
+    #expect(types.contains(.fileURL), "pasteboard must carry a file URL: \(types)")
+    if let urls = board.readObjects(forClasses: [NSURL.self], options: [:]) as? [URL], let first = urls.first {
+        #expect(first.path == file.path)
     }
 }
 
