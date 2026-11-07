@@ -6,8 +6,17 @@ struct LumenApp: App {
     @State private var app = AppModel()
     var body: some Scene {
         Window("Lumen", id: "library") {
+            #if DEBUG
+            if DebugFlags.isActive {
+                DebugFixtureView(screen: DebugFlags.screen, state: DebugFlags.state)
+            } else {
+                LibraryRoot(app).background(WindowChrome())
+                    .onOpenURL { app.openURL($0) }
+            }
+            #else
             LibraryRoot(app).background(WindowChrome())
                 .onOpenURL { app.openURL($0) }
+            #endif
         }
         .defaultSize(width: Metrics.windowW, height: Metrics.windowH)
         .windowStyle(.hiddenTitleBar)
