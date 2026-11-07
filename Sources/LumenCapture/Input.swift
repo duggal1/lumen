@@ -8,15 +8,18 @@ import LumenCore
 import LumenProject
 
 /// Single-producer/single-consumer ring. Producer = event tap thread, consumer = writer queue.
+/// Overflow is counted (never silent).
 final class EventRing: @unchecked Sendable {
     private let buf: UnsafeMutablePointer<InputEvent>
     private let cap: Int
     private let head = Atomic<Int>(0), tail = Atomic<Int>(0)
+    private let dropped = Atomic<Int>(0)
     init(capacity: Int) { cap = capacity; buf = .allocate(capacity: capacity); buf.initialize(repeating: InputEvent(), count: capacity) }
     deinit { buf.deallocate() }
+    var overflow: Int { dropped.load(ordering: .relaxed) }
     func push(_ e: InputEvent) {
         let h = head.load(ordering: .relaxed)
-        if h - tail.load(ordering: .acquiring) >= cap { return }
+        if h - tail.load(ordering: .acquiring) >= cap { dropped.store(dropped.load(ordering: .relaxed) + 1, ordering: .relaxed); return }
         buf[h % cap] = e
         head.store(h + 1, ordering: .releasing)
     }
@@ -133,11 +136,11 @@ public final class InputRecorder: @unchecked Sendable {
         }
         th.qualityOfService = .userInteractive; th.start()
         startFlushTimer()
-        Task { @MainActor [weak self] in           // cursor shape poll @ 30 Hz
+        Task { @MainActor [weak self] in           // cursor shape poll @ 10 Hz (was 30 Hz: per-tick main churn)
             while let self, self.running.withLock({ $0 }) {
                 let cursorShape = self.catalog.classify()
                 self.shape.withLock { $0 = cursorShape }
-                try? await Task.sleep(for: .milliseconds(33))
+                try? await Task.sleep(for: .milliseconds(100))
             }
         }
     }
