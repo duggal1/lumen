@@ -146,25 +146,20 @@ public enum AudioCheck {
     }
 
     /// THD+N via FFT on a steady slice (50-90% of buffer). Pure, offline.
+    /// Uses an 8192-sample Hann window so leakage stays low and the FFT is fast.
     public static func thdPlusNoise(_ x: [Float], sampleRate: Double, fundamentalHz: Double) -> Double? {
-        let n = x.count
-        guard n > 4096, n % 2 == 0 else { return nil }
-        let lo = n / 4, hi = (n * 3) / 4
-        let len = hi - lo
-        guard len >= 4096 else { return nil }
-        // Hann window
-        var re = [Double](repeating: 0, count: len)
+        guard x.count >= 8192 else { return nil }
+        let mid = x.count / 2
+        let len = min(8192, x.count)
+        let lo = max(mid - len / 2, 0)
+        var re = [Double](repeating: 0, count: 8192)
         for i in 0..<len {
             let w = 0.5 - 0.5 * cos(2 * Double.pi * Double(i) / Double(max(len - 1, 1)))
             re[i] = Double(x[lo + i]) * w
         }
-        // Simple DFT at fundamental via Goertzel energy ratio: power at f vs total.
-        // Use FFT radix-2 (zero-pad to power of 2).
-        var p2 = 1
-        while p2 < len { p2 <<= 1 }
-        var freqRe = [Double](repeating: 0, count: p2)
+        let p2 = 8192
+        var freqRe = re
         var freqIm = [Double](repeating: 0, count: p2)
-        for i in 0..<len { freqRe[i] = re[i] }
         // Cooley-Tukey (iterative)
         var j = 0
         for i in 1..<p2 {
@@ -193,7 +188,9 @@ public enum AudioCheck {
         for k in 1..<(p2 / 2) {
             let e = freqRe[k] * freqRe[k] + freqIm[k] * freqIm[k]
             total += e
-            if abs(k - fundBin) <= 1 { fund += e }
+            // ±5-bin Hann main lobe so non-coherent leakage is counted as
+            // fundamental, not as distortion.
+            if abs(k - fundBin) <= 5 { fund += e }
         }
         guard total > 1e-12 else { return nil }
         let thdn = (total - fund) / fund

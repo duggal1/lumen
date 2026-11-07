@@ -240,13 +240,15 @@ public final class AudioMixer: @unchecked Sendable {
                 let ss = (prevS + (s - prevS) * u - offset) * fs
                 let gg = prevG + (g - prevG) * u
                 // 40 ms equal-power crossfade centered on each cut.
+                // Pre/post positions advance with i (never fixed samples).
                 var cross: (pre: Float, post: Float, w: Float)?
                 for cutOut in cutOutputs {
                     let cutSample = Int(cutOut * fs)
                     if i >= cutSample - halfXfade && i < cutSample + halfXfade {
                         let w = Float(i - (cutSample - halfXfade)) / Float(halfXfade * 2)
-                        let prePos = (tm.source(atOutput: max(0, cutOut - 0.001)) - offset) * fs
-                        let postPos = (tm.source(atOutput: cutOut + 0.001) - offset) * fs
+                        let advance = Double(i - cutSample) / fs
+                        let prePos = (tm.source(atOutput: max(0, cutOut - 0.001)) + advance - offset) * fs
+                        let postPos = (tm.source(atOutput: cutOut + 0.001) + advance - offset) * fs
                         func sample(at pos: Double) -> Float {
                             guard pos >= 0, pos < Double(x.count - 1) else { return 0 }
                             let i0 = Int(pos), f = Float(pos - Double(i0))
