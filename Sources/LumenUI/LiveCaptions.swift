@@ -59,7 +59,6 @@ struct TranscriptTab: View {
                 Row(label: "Model") {
                     LDropdown(sel: $size, options: MoonshineSize.allCases.map { ($0, $0.title + (installed.contains($0) ? "" : " · not installed"), "waveform") }).frame(width: 170)
                 }
-                ToggleRow(label: "Render captions in final video", on: model.bind(\.captions.enabled))
                 Row(label: "Model files") {
                     HStack(spacing: 8) {
                         if ModelStore.isInstalled(size) {
@@ -136,8 +135,11 @@ private struct TranscriptList: View {
                     ForEach(ss) { s in
                         SentenceRow(words: words[s.range], sentence: s, active: s.id == activeS ? (aw ?? 0) - s.range.lowerBound : nil) { model.seekSource(s.start) }
                             .equatable().id(s.id)
+                            .padding(.horizontal, 8)
                     }
                 }
+                .padding(.top, 8)
+                .padding(.bottom, 8)
             }
             .frame(height: 360)
             .onChange(of: activeS) { _, id in
