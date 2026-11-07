@@ -1,0 +1,11 @@
+# Export baseline — Release, real 37.14s project, 2229 frames @60fps 1080p H264
+# Cmd: LUMEN_BENCHMARK=1 lumen-cli render <project> --preset 1080p60-h264
+Lumen export benchmark: 2229 frames in 12.479s (178.6 fps, 2.98x realtime) decode 0.470s GPU submit 0.687s GPU/encoder wait 9.686s other 1.637s
+Output: 32 MB MP4. Decode 3.8%, GPU submit 5.5%, GPU/encoder wait 77.6%, other 13.1% (mix ~0.7s + CAF/reader/writer).
+Conclusion: hardware-encoder bound. Swift parallelism alone cannot speed a single VideoToolbox stream.
+Legitimate levers (must measure, not guess):
+ 1. Overlap audio mix with frame loop (-~0.7s, ~6%).
+ 2. Ship Release (Debug is ~1.6x slower end-to-end).
+ 3. Offer faster preset explicitly (30fps halves frames; HEVC vs H264 measured).
+ 4. Chunked parallel encode ONLY if parallel sessions beat serial on this Mac (likely no: single media engine).
+No export code changed in this pass — numbers decide the export plan.
