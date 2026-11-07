@@ -347,6 +347,11 @@ public actor RecordingSession {
         var meta = ProjectMeta(name: b.url.deletingPathExtension().lastPathComponent, source: info,
                                clock: RecordingClock(originHostSeconds: origin, eventUnit: unit))
         meta.droppedFrames = engine.droppedFrames
+        if let c = cfg {
+            meta.captureResolution = c.resolution.rawValue
+            meta.captureQuality = c.quality.rawValue
+            meta.captureMbps = c.customMbps
+        }
         if let t = engine.mic?.first.withLock({ $0 }) { meta.mic = TrackMeta(file: "mic.caf", startHostSeconds: t) }
         if let t = engine.system?.first.withLock({ $0 }) { meta.system = TrackMeta(file: "system.caf", startHostSeconds: t) }
         if let t = webcam?.first.withLock({ $0 }) { meta.webcam = TrackMeta(file: "webcam.mov", startHostSeconds: t) }
