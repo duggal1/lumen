@@ -560,20 +560,24 @@ private final class RegionView: NSView {
         }
         panel = p
     }
-    func show() { panel?.orderFrontRegardless() }
-    func showCountdown() {
-        guard let panel else { return }
-        let bounds = (screen ?? NSScreen.main)?.visibleFrame ?? .zero
-        panel.setFrameOrigin(CGPoint(x: bounds.midX - 96, y: bounds.midY - 90))
-        panel.orderFrontRegardless()
-    }
-    func showControls() {
-        guard let panel else { return }
+    func show() { fitToContent(); panel?.orderFrontRegardless() }
+    private func fitToContent() {
+        guard let panel, let host = panel.contentView?.subviews.first as? NSHostingView<HUDView> else { return }
+        let size = host.sizeThatFits(.zero)
+        // Countdown needs ~180, recording row needs 64 — fit to actual content.
+        panel.setContentSize(size)
         if let screen {
             let bounds = screen.visibleFrame
-            panel.setFrameOrigin(CGPoint(x: bounds.midX - 260, y: bounds.maxY - 80))
+            panel.setFrameOrigin(CGPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2))
         }
-        panel.orderFrontRegardless()
+    }
+    func showCountdown() {
+        fitToContent()
+        panel?.orderFrontRegardless()
+    }
+    func showControls() {
+        fitToContent()
+        panel?.orderFrontRegardless()
     }
     func close() { panel?.orderOut(nil); panel = nil }
 }
