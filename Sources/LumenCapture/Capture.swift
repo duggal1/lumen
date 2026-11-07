@@ -12,8 +12,13 @@ public enum CaptureError: Error { case noSource, writer(String) }
 
 public struct RecordingConfig: Sendable {
     public enum Source: Sendable { case display(CGDirectDisplayID), window(CGWindowID), region(CGDirectDisplayID, CGRect) }
+    public enum Resolution: String, Sendable, CaseIterable { case native, ultraHD, twoK, p1080, p720 }
+    public enum Quality: String, Sendable, CaseIterable { case standard, high, max, custom }
     public var source: Source
     public var fps = 60
+    public var resolution: Resolution = .native
+    public var quality: Quality = .high
+    public var customMbps: Double = 20
     public var mic = true
     public var micDeviceID: String?
     /// Extra independent sources, e.g. BlackHole alongside a real microphone.
@@ -351,6 +356,19 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
             ph = Int((w.frame.height * scale).rounded()) & ~1
         }
         let fps = min(cfg.fps, maxFPS)
+        // Capture resolution: cap native pixels, never above native.
+        let maxH: Int = switch cfg.resolution {
+        case .native: Int.max
+        case .ultraHD: 2160
+        case .twoK: 1440
+        case .p1080: 1080
+        case .p720: 720
+        }
+        if ph > maxH {
+            let s = Double(maxH) / Double(ph)
+            pw = max(Int((Double(pw) * s).rounded()) & ~1, 64)
+            ph = maxH & ~1
+        }
         sc.width = pw; sc.height = ph
         sc.pixelFormat = kCVPixelFormatType_32BGRA
         sc.colorSpaceName = CGColorSpace.displayP3
@@ -369,7 +387,12 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         let w = try AVAssetWriter(outputURL: bundle.screenURL, fileType: .mov)
         // Fragmented so a crash/force-quit still leaves a playable file.
         w.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
-        let bitrate = min(Double(pw * ph) * Double(fps) * 0.12, 250_000_000)
+        let bitrate: Double = switch cfg.quality {
+        case .standard: min(Double(pw * ph) * Double(fps) * 0.06, 250_000_000)
+        case .high: min(Double(pw * ph) * Double(fps) * 0.12, 250_000_000)
+        case .max: min(Double(pw * ph) * Double(fps) * 0.20, 250_000_000)
+        case .custom: max(cfg.customMbps * 1_000_000, 1_000_000)
+        }
         let settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.hevc, AVVideoWidthKey: pw, AVVideoHeightKey: ph,
             AVVideoColorPropertiesKey: [AVVideoColorPrimariesKey: AVVideoColorPrimaries_P3_D65,
