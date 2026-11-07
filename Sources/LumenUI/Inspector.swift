@@ -8,7 +8,7 @@ import LumenCapture
 
 struct Inspector: View {
     let model: EditorModel
-    enum Tab: String, CaseIterable { case look = "Look", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export", transcript = "Transcript" }
+    enum Tab: String, CaseIterable { case look = "Look", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
 
 
     static func visibleFor(model: EditorModel) -> [Inspector.Tab] {
@@ -47,7 +47,10 @@ struct Inspector: View {
                 UserDefaults.standard.set(selected.rawValue, forKey: "lumen.inspector.tab")
             }
             .onAppear {
-                if let saved = UserDefaults.standard.string(forKey: "lumen.inspector.tab"), let t = Inspector.Tab(rawValue: saved) { tab = t }
+                if let saved = UserDefaults.standard.string(forKey: "lumen.inspector.tab") {
+                    if saved == "Transcript" { tab = .captions }
+                    else if let t = Inspector.Tab(rawValue: saved) { tab = t }
+                }
             }
     }
 
@@ -72,27 +75,20 @@ struct Inspector: View {
     }
 
     @ViewBuilder private var tabBody: some View {
-        if tab == .transcript {
-            transcriptTab
-        } else {
-            switch tab {
-            case .look: look
-            case .tools: tools
-            case .cursor: cursor
-            case .camera: camera
-            case .layout: layout
-            case .audio: audio
-            case .webcam: webcam
-            case .captions: captions
-            case .timeline: timelineTab
-            case .privacy: privacy
-            case .export: export
-            default: EmptyView()
-            }
+        switch tab {
+        case .look: look
+        case .tools: tools
+        case .cursor: cursor
+        case .camera: camera
+        case .layout: layout
+        case .audio: audio
+        case .webcam: webcam
+        case .captions: captions
+        case .timeline: timelineTab
+        case .privacy: privacy
+        case .export: export
         }
     }
-
-    private var transcriptTab: some View { TranscriptTab(model: model) }
 
     /// Secondary editor actions live in the inspector, not the preview transport.
     private var tools: some View {
@@ -130,7 +126,7 @@ struct Inspector: View {
         switch t {
         case .look: "paintpalette"; case .tools: "slider.horizontal.3"; case .cursor: "cursorarrow"; case .camera: "video"
         case .layout: "rectangle.3.group"; case .audio: "waveform"; case .webcam: "person.crop.circle"
-        case .captions: "captions.bubble"; case .timeline: "timeline.selection"; case .privacy: "lock"; case .export: "square.and.arrow.up"; case .transcript: "text.alignleft"
+        case .captions: "captions.bubble"; case .timeline: "timeline.selection"; case .privacy: "lock"; case .export: "square.and.arrow.up"
         }
     }
 
@@ -601,6 +597,7 @@ struct Inspector: View {
                     }
                 }
             }.card()
+            TranscriptTab(model: model)
         }
     }
 
