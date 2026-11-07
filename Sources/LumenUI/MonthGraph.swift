@@ -135,12 +135,14 @@ struct MonthGraph: View {
     private var blocks: [ActivityBlock] { ActivityBlock.make(days, calendar: calendar) }
 
     private func ramp(_ level: Int) -> Color {
-        // Orange ramp mixing accent with card surface. L4 = exact accent, L3 slightly dimmer.
+        // Orange ramp by mixing the accent with the card surface (never
+        // stacking opacity, which reads differently on light/dark).
+        // L4 = exact accent, L3 close, L2/L1 step down, L0 = controlPressed.
         switch level {
         case 4: return Tok.accent
-        case 3: return Tok.accent.opacity(0.78)
-        case 2: return Tok.accent.opacity(0.45)
-        case 1: return Tok.accent.opacity(0.22)
+        case 3: return Ramp.orange[3]
+        case 2: return Ramp.orange[2]
+        case 1: return Ramp.orange[1]
         default: return Tok.controlPressed
         }
     }
