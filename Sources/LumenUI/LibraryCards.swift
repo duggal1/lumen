@@ -22,15 +22,15 @@ struct LedgerCard: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: Space.s4) {
+        HStack(alignment: .lastTextBaseline, spacing: Space.s4) {
             ForEach(metrics, id: \.label) { m in
-                VStack(alignment: .leading, spacing: Space.s1) {
+                VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: Space.s2) {
                         Image(systemName: m.icon).font(.system(size: 14)).frame(width: 16)
                         Text(m.label).font(AppType.caption).tracking(0)
                     }.foregroundStyle(Tok.text2)
                     Text(m.value).font(AppType.metric).tracking(-0.6).foregroundStyle(Tok.text)
-                        .lineLimit(1).minimumScaleFactor(0.7)
+                        .frame(height: 34, alignment: .top)
                     Text(m.note).font(AppType.caption).foregroundStyle(Tok.text2)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -47,26 +47,9 @@ struct ActivityCard: View {
     let app: AppModel
     @State private var hovered: Date?
 
-    private var subtitle: String {
-        if let d = hovered {
-            if Calendar.current.startOfDay(for: d) > Calendar.current.startOfDay(for: .now) {
-                return "\(d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())): Upcoming"
-            }
-            let minutes = Int((app.minutesByDay[Calendar.current.startOfDay(for: d)] ?? 0).rounded())
-            return "\(d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())): \(minutes) min"
-        }
-        return "Select a day to see recorded time"
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s2) {
-            HStack(spacing: Space.s2) {
-                Text("Activity").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
-                if hovered != nil {
-                    Text(subtitle).font(AppType.caption).foregroundStyle(Tok.text2)
-                        .lineLimit(1)
-                }
-            }
+            Text("Activity").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
             MonthGraph(minutes: app.minutesByDay, hovered: $hovered)
         }
         .card(padding: Space.s4)
@@ -159,6 +142,32 @@ private struct RecordingRow: View {
     }
 
     var body: some View {
+        if row.unreadable {
+            HStack(spacing: Space.s3) {
+                Image(systemName: "exclamationmark.circle").font(.system(size: 14)).foregroundStyle(Tok.statusBad)
+                    .frame(width: 24, height: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.name).font(AppType.label).tracking(-0.1).foregroundStyle(Tok.text)
+                    Text("Recording didn’t finish").font(AppType.caption).foregroundStyle(Tok.text2)
+                }
+                Spacer(minLength: Space.s4)
+                LButton(title: "Reveal in Finder", kind: .quiet, height: 28) { reveal() }
+                LButton(title: "Remove", kind: .quiet, height: 28) { delete() }
+            }
+            .padding(.horizontal, Space.s3)
+            .frame(height: 48)
+            .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.surface))
+            .contentShape(Rectangle())
+            .focusable()
+            .focused($focused)
+            .focusEffectDisabled()
+            .accessibilityElement(children: .contain)
+        } else {
+            normalRow
+        }
+    }
+
+    private var normalRow: some View {
         HStack(spacing: Space.s3) {
             Button(action: open) {
                 HStack(spacing: Space.s3) {
@@ -177,9 +186,7 @@ private struct RecordingRow: View {
             .buttonStyle(.plain)
             .pointerStyle(.link)
 
-            if row.unreadable {
-                PixelBadge(kind: .failed, text: "Failed")
-            } else if row.dropped > 0 {
+            if row.dropped > 0 {
                 PixelBadge(kind: .caution, text: "\(row.dropped) dropped")
             }
             Text(duration).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
