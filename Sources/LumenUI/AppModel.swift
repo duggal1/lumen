@@ -563,7 +563,7 @@ private final class RegionView: NSView {
     func show() { fitToContent(); panel?.orderFrontRegardless() }
     private func fitToContent() {
         guard let panel, let host = panel.contentView?.subviews.first as? NSHostingView<HUDView> else { return }
-        let size = host.sizeThatFits(.zero)
+        let size = host.fittingSize
         // Countdown needs ~180, recording row needs 64 — fit to actual content.
         panel.setContentSize(size)
         if let screen {
