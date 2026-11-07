@@ -34,7 +34,13 @@ import LumenExport
         #expect(adapter.append(buffer, withPresentationTime: CMTime(value: Int64(i), timescale: 30)))
     }
     input.markAsFinished()
-    await writer.finishWriting()
+    // The callback API avoids sending this main actor-owned writer across an
+    // unisolated async boundary under Swift 6 strict concurrency checking.
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        writer.finishWriting {
+            continuation.resume()
+        }
+    }
     #expect(writer.status == .completed)
 
     let source = SourceInfo(width: 320, height: 180, fps: 30, duration: 1, backingScale: 1, originX: 0, originY: 0)
