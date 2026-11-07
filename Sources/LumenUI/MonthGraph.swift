@@ -1,111 +1,257 @@
 import SwiftUI
+import AppKit
 
-/// Month heat map: 1st of this month through the 15th of next month.
-/// Squares ≤20 pt, 4 pt gaps, 12 between months, month labels at each
-/// month's first cell. Empty days are gaps, future days dust, today a
-/// white pixel on a control cell. Hover turns the subtitle into a readout.
+public struct ActivityDay: Equatable, Sendable {
+    public let date: Date
+    public let minutes: Double
+    public let level: Int
+    public init(date: Date, minutes: Double, level: Int) {
+        self.date = date; self.minutes = minutes; self.level = level
+    }
+}
+
+public enum ActivityLevel {
+    public static func assign(_ values: [Double]) -> [Int] {
+        let nz = values.filter { $0 > 0 }.sorted()
+        guard !nz.isEmpty else { return values.map { _ in 0 } }
+        let maxV = nz.last ?? 0
+        if nz.count <= 3 {
+            return values.map { $0 == 0 ? 0 : ($0 >= maxV ? 4 : ($0 >= maxV * 0.5 ? 2 : 1)) }
+        }
+        func q(_ p: Double) -> Double { nz[min(nz.count - 1, Int(Double(nz.count) * p))] }
+        let t1 = q(0.25), t2 = q(0.5), t3 = q(0.75)
+        return values.map { v in
+            if v == 0 { return 0 }
+            if v >= maxV { return 4 }
+            let cuts = [t1, t2, t3].filter { v > $0 }.count
+            return min(max(1 + cuts, 1), 3)
+        }
+    }
+}
+
+public struct ActivityBlock {
+    public struct Cell: Sendable { public let col: Int; public let row: Int; public let day: ActivityDay }
+    public let month: Date
+    public let cols: Int
+    public let cells: [Cell]
+    public init(month: Date, cols: Int, cells: [Cell]) { self.month = month; self.cols = cols; self.cells = cells }
+    public static func make(_ days: [ActivityDay], calendar: Calendar = .current) -> [ActivityBlock] {
+        var byMonth: [Date: [ActivityDay]] = [:]
+        for d in days {
+            let m = calendar.dateInterval(of: .month, for: d.date)?.start ?? d.date
+            byMonth[m, default: []].append(d)
+        }
+        return byMonth.keys.sorted().map { m in
+            let offset = (calendar.component(.weekday, from: m) - calendar.firstWeekday + 7) % 7
+            let raw = byMonth[m, default: []].sorted { $0.date < $1.date }.map { d -> (Int, Int, ActivityDay) in
+                let i = offset + calendar.component(.day, from: d.date) - 1
+                return (i / 7, i % 7, d)
+            }
+            let minCol = raw.map(\.0).min() ?? 0
+            let maxCol = raw.map(\.0).max() ?? 0
+            return ActivityBlock(month: m, cols: maxCol - minCol + 1,
+                                 cells: raw.map { Cell(col: $0.0 - minCol, row: $0.1, day: $0.2) })
+        }
+    }
+}
+
 struct MonthGraph: View {
     let minutes: [Date: Double]
     @Binding var hovered: Date?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var selected: Date?
-    private static let calendar = Calendar.current
+    @Environment(\.displayScale) private var scale
+    @State private var width: CGFloat = 0
+    @State var reveal: CGFloat = 1
 
-    private var days: [Date] {
-        let cal = Self.calendar
-        let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: .now)) ?? cal.startOfDay(for: .now)
-        let nextMonth = cal.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
-        let last = cal.date(byAdding: .day, value: 15, to: nextMonth) ?? nextMonth
+    static let gap: CGFloat = 3
+    static let monthGap: CGFloat = 12
+    static let minCell: CGFloat = 8
+    static let maxCell: CGFloat = 16
+    static let rows = 7
+
+    private var calendar: Calendar { .current }
+
+    var days: [ActivityDay] {
+        let cal = calendar
+        let today = cal.startOfDay(for: .now)
+        let currentMonthStart = cal.date(from: cal.dateComponents([.year, .month], from: .now)) ?? today
+        let start = cal.date(byAdding: .month, value: -11, to: currentMonthStart) ?? currentMonthStart
         var out: [Date] = []
-        var d = monthStart
-        while d <= last {
+        var d = start
+        while d <= today {
             out.append(d)
             guard let n = cal.date(byAdding: .day, value: 1, to: d) else { break }
             d = n
         }
-        return out
+        let raw = out.map { minutes[$0] ?? 0 }
+        let levels = ActivityLevel.assign(raw)
+        return zip(out, zip(raw, levels)).map { ActivityDay(date: $0.0, minutes: $0.1.0, level: $0.1.1) }
+    }
+
+    struct Layout {
+        let cell: CGFloat
+        let pitch: CGFloat
+        let height: CGFloat
+        let originX: [CGFloat]
+        let blocks: [ActivityBlock]
+        let totalWidth: CGFloat
+        init(width: CGFloat, allBlocks: [ActivityBlock], scale: CGFloat) {
+            var blocks = allBlocks
+            let totalCols = blocks.reduce(0) { $0 + $1.cols }
+            let gapCount = max(blocks.count - 1, 0)
+            let fixed = CGFloat(max(totalCols - max(blocks.count, 1), 0)) * MonthGraph.gap + CGFloat(gapCount) * MonthGraph.monthGap
+            var cell = max(floor(((width - fixed) / CGFloat(max(totalCols, 1))) * scale) / scale, 1)
+            cell = max(MonthGraph.minCell, min(MonthGraph.maxCell, cell))
+            while blocks.count > 1 {
+                let cols = blocks.reduce(0) { $0 + $1.cols }
+                let need = CGFloat(cols) * MonthGraph.minCell + CGFloat(max(cols - blocks.count, 0)) * MonthGraph.gap + CGFloat(max(blocks.count - 1, 0)) * MonthGraph.monthGap
+                if need <= width + 1 { break }
+                blocks.removeFirst()
+            }
+            let cols = max(blocks.reduce(0) { $0 + $1.cols }, 1)
+            let fixed2 = CGFloat(max(cols - max(blocks.count, 1), 0)) * MonthGraph.gap + CGFloat(max(blocks.count - 1, 0)) * MonthGraph.monthGap
+            var c2 = max(floor(((width - fixed2) / CGFloat(cols)) * scale) / scale, 1)
+            c2 = max(MonthGraph.minCell, min(MonthGraph.maxCell, c2))
+            // Spread extra into month gaps so grid spans edge to edge.
+            let natural = CGFloat(cols) * c2 + CGFloat(max(cols - max(blocks.count, 1), 0)) * MonthGraph.gap + CGFloat(max(blocks.count - 1, 0)) * MonthGraph.monthGap
+            let extra = max(0, width - natural)
+            let effectiveMonthGap = blocks.count > 1 ? MonthGraph.monthGap + extra / CGFloat(blocks.count - 1) : MonthGraph.monthGap
+            cell = c2
+            self.blocks = blocks
+            self.cell = cell
+            self.pitch = cell + MonthGraph.gap
+            self.height = CGFloat(MonthGraph.rows) * cell + CGFloat(MonthGraph.rows - 1) * MonthGraph.gap
+            var x: CGFloat = 0
+            var xs: [CGFloat] = []
+            for b in blocks {
+                xs.append(x)
+                x += CGFloat(b.cols) * cell + CGFloat(b.cols - 1) * MonthGraph.gap
+                x += effectiveMonthGap
+            }
+            originX = xs
+            totalWidth = blocks.isEmpty ? width : (natural + extra)
+        }
+    }
+
+    private var blocks: [ActivityBlock] { ActivityBlock.make(days, calendar: calendar) }
+
+    private func ramp(_ level: Int) -> Color {
+        // Orange ramp mixing accent with card surface. L4 = exact accent, L3 slightly dimmer.
+        switch level {
+        case 4: return Tok.accent
+        case 3: return Tok.accent.opacity(0.78)
+        case 2: return Tok.accent.opacity(0.45)
+        case 1: return Tok.accent.opacity(0.22)
+        default: return Tok.controlPressed
+        }
     }
 
     var body: some View {
-        GeometryReader { g in
-            let cell = max(6, min(20, floor((g.size.width - 12 * 2) / Double(days.count + 2))))
-            HStack(alignment: .top, spacing: 0) {
-                ForEach(Array(days.enumerated()), id: \.element) { index, day in
-                    dayCell(day: day, cell: cell)
-                        .padding(.trailing, Self.calendar.component(.day, from: day) == 1 && index > 0 ? 12 : 4)
+        let allBlocks = blocks
+        VStack(alignment: .leading, spacing: Space.s2) {
+            header(width: width)
+            VStack(alignment: .leading, spacing: Space.s1) {
+                GeometryReader { g in
+                    let m = Layout(width: g.size.width, allBlocks: allBlocks, scale: scale)
+                    Canvas { ctx, _ in draw(&ctx, m) }
+                        .frame(width: g.size.width, height: m.height)
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let p): hovered = day(at: p, m)
+                            case .ended: hovered = nil
+                            }
+                        }
+                        .onAppear { width = g.size.width }
+                    overlayLabels(m)
+                }
+                .frame(height: layoutHeight(width: width, blocks: allBlocks))
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .opacity(width > 0 ? 1 : 0)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Minutes recorded per day for the last 12 months")
+    }
+
+    private func layoutHeight(width: CGFloat, blocks: [ActivityBlock]) -> CGFloat {
+        let m = Layout(width: max(width, 1), allBlocks: blocks, scale: scale)
+        return m.height + 16
+    }
+
+    @ViewBuilder private func header(width: CGFloat) -> some View {
+        HStack(spacing: Space.s2) {
+            Text("Per-month activity").font(AppType.title).foregroundStyle(Tok.text)
+            Spacer(minLength: Space.s4)
+            if width >= 420 { legend }
+        }
+        VStack(alignment: .leading, spacing: 2) {
+            readout.frame(height: 16, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder private var readout: some View {
+        if let d = hovered {
+            let v = Int((minutes[calendar.startOfDay(for: d)] ?? 0).rounded())
+            Text(v > 0 ? "\(d.formatted(.dateTime.month(.abbreviated).day())) · \(v) min" : "\(d.formatted(.dateTime.month(.abbreviated).day())) · No recording")
+                .font(AppType.caption).foregroundStyle(Tok.text2)
+        } else {
+            Text("Minutes recorded per day").font(AppType.caption).foregroundStyle(Tok.text2)
+        }
+    }
+
+    private var legend: some View {
+        HStack(spacing: 8) {
+            Text("Less").font(AppType.caption).foregroundStyle(Tok.text2)
+            HStack(spacing: 3) {
+                ForEach(0..<5, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 2, style: .continuous).fill(ramp(i)).frame(width: 8, height: 8)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Text("More").font(AppType.caption).foregroundStyle(Tok.text2)
         }
-        .frame(height: 40)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Recording activity by day")
-    }
-
-    private func dayCell(day: Date, cell: CGFloat) -> some View {
-        let cal = Self.calendar
-        let today = cal.startOfDay(for: .now)
-        let future = day > today
-        let value = minutes[day] ?? 0
-        let isToday = day == today
-        let level = heatLevel(value: value)
-        let firstOfMonth = cal.component(.day, from: day) == 1
-        return Button {
-            selected = selected == day ? nil : day
-        } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(firstOfMonth ? day.formatted(.dateTime.month(.abbreviated)) : " ")
-                    .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
-                ZStack {
-                    if future {
-                        ActivityDot(color: Tok.controlPressed, size: Int(cell))
-                    } else if value > 0 {
-                        ActivityDot(color: Ramp.heat[level], size: Int(cell))
-                    } else {
-                        ActivityDot(color: .clear, size: Int(cell))
-                    }
-                    if isToday { ActivityDot(color: Tok.text, size: 4) }
-                }
-                .frame(width: cell, height: cell)
-                .background(RoundedRectangle(cornerRadius: 2).fill(selected == day ? Tok.control : .clear))
-            }
-            .frame(width: cell, height: 34, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(ActivityPressStyle())
-        .pointerStyle(.link)
-        .onHover { inside in if inside { hovered = day } }
-        .animation(reduceMotion ? nil : Motion.hoverIn, value: selected == day)
-        .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).month(.wide).day().year()))
-        .accessibilityValue(future ? "Upcoming" : "\(Int(value.rounded())) minutes recorded")
-        .accessibilityAddTraits(selected == day ? .isSelected : [])
-    }
-
-    private func heatLevel(value: Double) -> Int {
-        let days = minutes.values.sorted()
-        let peak = max(days.last ?? 10, 10)
-        if value <= peak * 0.25 { return 0 }
-        if value <= peak * 0.5 { return 1 }
-        if value <= peak * 0.8 { return 2 }
-        return 3
-    }
-}
-
-/// A clean, fully rounded activity marker.
-private struct ActivityDot: View {
-    let color: Color
-    let size: Int
-    var body: some View {
-        Circle().fill(color).frame(width: CGFloat(size), height: CGFloat(size))
         .accessibilityHidden(true)
     }
-}
 
-private struct ActivityPressStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.65 : 1)
-            .animation(reduceMotion ? nil : Motion.hoverIn, value: configuration.isPressed)
+    private func snap(_ v: CGFloat) -> CGFloat { (v * scale).rounded() / scale }
+
+    private func draw(_ ctx: inout GraphicsContext, _ m: Layout) {
+        for (bi, b) in m.blocks.enumerated() {
+            for c in b.cells {
+                let x = m.originX[bi] + CGFloat(c.col) * m.pitch
+                let y = CGFloat(c.row) * m.pitch
+                let rect = CGRect(x: snap(x), y: snap(y), width: snap(m.cell), height: snap(m.cell))
+                let path = Path(roundedRect: rect, cornerRadius: 2, style: .continuous)
+                let isHover = hovered.map { calendar.isDate($0, inSameDayAs: c.day.date) } ?? false
+                ctx.fill(path, with: .color(ramp(max(0, min(c.day.level, 4)))))
+                if isHover {
+                    ctx.stroke(path, with: .color(Tok.text.opacity(0.6)), lineWidth: 1)
+                }
+            }
+        }
+    }
+
+    private func day(at p: CGPoint, _ m: Layout) -> Date? {
+        for (bi, b) in m.blocks.enumerated() {
+            for c in b.cells {
+                let r = CGRect(x: m.originX[bi] + CGFloat(c.col) * m.pitch - Self.gap / 2,
+                               y: CGFloat(c.row) * m.pitch - Self.gap / 2,
+                               width: m.pitch, height: m.pitch)
+                if r.contains(p) { return c.day.date }
+            }
+        }
+        return nil
+    }
+
+    private func overlayLabels(_ m: Layout) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(Array(m.blocks.enumerated()), id: \.offset) { i, b in
+                if b.cols >= 3 {
+                    Text(b.month, format: .dateTime.month(.abbreviated))
+                        .font(AppType.caption).foregroundStyle(Tok.text2)
+                        .fixedSize()
+                        .offset(x: m.originX[i], y: m.height + 4)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 16, alignment: .topLeading)
     }
 }
