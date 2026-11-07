@@ -130,10 +130,13 @@ public final class ProjectSession: @unchecked Sendable {
         }
         let input = DirectorInput(events: events, source: meta.source, vad: vad, ax: ax, face: [],
                                   webcamAspect: aspect, transcript: tf?.transcript.shifted(by: micOff))
+        // Declick windows are source-time; convert to mic-file time by micOff.
+        let keyTimesInMicFile = events.filter { $0.kind == .keyDown }.map { $0.t - micOff }.filter { $0 >= 0 }
         let s = ProjectSession(bundle: b, meta: meta, screen: screen, webcam: web, input: input,
                                mixer: AudioMixer(mic: mic, micOffset: micOff, system: sys, systemOffset: sysOff,
                                                  systemRight: sysRight,
-                                                 additionalMicrophones: extras, cacheDir: b.cacheURL),
+                                                 additionalMicrophones: extras, cacheDir: b.cacheURL,
+                                                 keyTimes: keyTimesInMicFile),
                                transcriptFile: tf, micOffset: micOff, waveform: wave, cursors: CursorLibrary.load(from: b.cursorsURL), device: sharedDevice)
         return (s, file.timeline)
     }
