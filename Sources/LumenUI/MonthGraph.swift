@@ -28,28 +28,16 @@ public enum ActivityLevel {
 }
 
 public struct ActivityBlock {
-    public struct Cell: Sendable { public let col: Int; public let row: Int; public let day: ActivityDay }
+    public struct Cell: Sendable { public let col: Int; public let day: ActivityDay }
     public let month: Date
     public let cols: Int
     public let cells: [Cell]
     public init(month: Date, cols: Int, cells: [Cell]) { self.month = month; self.cols = cols; self.cells = cells }
+    /// One horizontal row: one dot per day, in date order, spread edge to edge.
     public static func make(_ days: [ActivityDay], calendar: Calendar = .current) -> [ActivityBlock] {
-        var byMonth: [Date: [ActivityDay]] = [:]
-        for d in days {
-            let m = calendar.dateInterval(of: .month, for: d.date)?.start ?? d.date
-            byMonth[m, default: []].append(d)
-        }
-        return byMonth.keys.sorted().map { m in
-            let offset = (calendar.component(.weekday, from: m) - calendar.firstWeekday + 7) % 7
-            let raw = byMonth[m, default: []].sorted { $0.date < $1.date }.map { d -> (Int, Int, ActivityDay) in
-                let i = offset + calendar.component(.day, from: d.date) - 1
-                return (i / 7, i % 7, d)
-            }
-            let minCol = raw.map(\.0).min() ?? 0
-            let maxCol = raw.map(\.0).max() ?? 0
-            return ActivityBlock(month: m, cols: maxCol - minCol + 1,
-                                 cells: raw.map { Cell(col: $0.0 - minCol, row: $0.1, day: $0.2) })
-        }
+        let month = calendar.date(from: calendar.dateComponents([.year, .month], from: days.first?.date ?? Date())) ?? Date()
+        let cells = days.sorted { $0.date < $1.date }.enumerated().map { Cell(col: $0.offset, day: $0.element) }
+        return [ActivityBlock(month: month, cols: cells.count, cells: cells)]
     }
 }
 
@@ -74,10 +62,12 @@ struct MonthGraph: View {
 
     var days: [ActivityDay] {
         let cal = calendar
-        let today = cal.startOfDay(for: .now)
+        // Current month in full (e.g. 30 dots for Nov) + next month 15 days.
+        // Future days are neutral dots — never hidden, never a gap.
         var out: [Date] = []
         var d = monthStart
-        while d <= today {
+        let count = 30 + 15
+        for _ in 0..<count {
             out.append(d)
             guard let n = cal.date(byAdding: .day, value: 1, to: d) else { break }
             d = n
@@ -95,40 +85,16 @@ struct MonthGraph: View {
         let blocks: [ActivityBlock]
         let totalWidth: CGFloat
         init(width: CGFloat, allBlocks: [ActivityBlock], scale: CGFloat) {
-            var blocks = allBlocks
-            let totalCols = blocks.reduce(0) { $0 + $1.cols }
-            let gapCount = max(blocks.count - 1, 0)
-            let fixed = CGFloat(max(totalCols - max(blocks.count, 1), 0)) * MonthGraph.gap + CGFloat(gapCount) * MonthGraph.monthGap
-            var cell = max(floor(((width - fixed) / CGFloat(max(totalCols, 1))) * scale) / scale, 1)
-            cell = max(MonthGraph.minCell, min(MonthGraph.maxCell, cell))
-            while blocks.count > 1 {
-                let cols = blocks.reduce(0) { $0 + $1.cols }
-                let need = CGFloat(cols) * MonthGraph.minCell + CGFloat(max(cols - blocks.count, 0)) * MonthGraph.gap + CGFloat(max(blocks.count - 1, 0)) * MonthGraph.monthGap
-                if need <= width + 1 { break }
-                blocks.removeFirst()
-            }
-            let cols = max(blocks.reduce(0) { $0 + $1.cols }, 1)
-            let fixed2 = CGFloat(max(cols - max(blocks.count, 1), 0)) * MonthGraph.gap + CGFloat(max(blocks.count - 1, 0)) * MonthGraph.monthGap
-            var c2 = max(floor(((width - fixed2) / CGFloat(cols)) * scale) / scale, 1)
-            c2 = max(MonthGraph.minCell, min(MonthGraph.maxCell, c2))
-            // Spread extra into month gaps so grid spans edge to edge.
-            let natural = CGFloat(cols) * c2 + CGFloat(max(cols - max(blocks.count, 1), 0)) * MonthGraph.gap + CGFloat(max(blocks.count - 1, 0)) * MonthGraph.monthGap
-            let extra = max(0, width - natural)
-            let effectiveMonthGap = blocks.count > 1 ? MonthGraph.monthGap + extra / CGFloat(blocks.count - 1) : MonthGraph.monthGap
-            cell = c2
-            self.blocks = blocks
+            // Single row: dots spread edge to edge, no month gaps.
+            let cols = max(allBlocks.first?.cols ?? 0, 1)
+            let pitch = width / CGFloat(cols)
+            let cell: CGFloat = 4
+            self.blocks = allBlocks
             self.cell = cell
-            self.pitch = cell + MonthGraph.gap
-            self.height = CGFloat(MonthGraph.rows) * cell + CGFloat(MonthGraph.rows - 1) * MonthGraph.gap
-            var x: CGFloat = 0
-            var xs: [CGFloat] = []
-            for b in blocks {
-                xs.append(x)
-                x += CGFloat(b.cols) * cell + CGFloat(b.cols - 1) * MonthGraph.gap
-                x += effectiveMonthGap
-            }
-            originX = xs
-            totalWidth = blocks.isEmpty ? width : (natural + extra)
+            self.pitch = pitch
+            self.height = max(cell, 8)
+            self.originX = allBlocks.isEmpty ? [] : [0]
+            self.totalWidth = width
         }
     }
 
@@ -212,8 +178,8 @@ struct MonthGraph: View {
     private func draw(_ ctx: inout GraphicsContext, _ m: Layout) {
         for (bi, b) in m.blocks.enumerated() {
             for c in b.cells {
-                let cx = m.originX[bi] + CGFloat(c.col) * m.pitch + m.cell / 2
-                let cy = CGFloat(c.row) * m.pitch + m.cell / 2
+                let cx = m.originX[bi] + CGFloat(c.col) * m.pitch + m.pitch / 2
+                let cy = m.height / 2
                 // Minimal dot: fixed 4pt even-snapped circle, sharp and light.
                 let d: CGFloat = 4
                 let rect = CGRect(x: snap(cx - d / 2), y: snap(cy - d / 2), width: d, height: d)
@@ -230,9 +196,8 @@ struct MonthGraph: View {
     private func day(at p: CGPoint, _ m: Layout) -> Date? {
         for (bi, b) in m.blocks.enumerated() {
             for c in b.cells {
-                let r = CGRect(x: m.originX[bi] + CGFloat(c.col) * m.pitch - Self.gap / 2,
-                               y: CGFloat(c.row) * m.pitch - Self.gap / 2,
-                               width: m.pitch, height: m.pitch)
+                let r = CGRect(x: m.originX[bi] + CGFloat(c.col) * m.pitch,
+                               y: 0, width: m.pitch, height: m.height)
                 if r.contains(p) { return c.day.date }
             }
         }
