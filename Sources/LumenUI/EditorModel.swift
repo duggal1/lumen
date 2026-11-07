@@ -111,6 +111,10 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         // is seconds of CPU and was competing with derive at open. It is
         // built lazily on first Play (see play()).
         setTranscript(session.transcriptFile?.transcript.shifted(by: session.micOffset))
+        // Pre-start the audio engine off the main thread so the first Play
+        // click never pays engine startup inside the transport gap.
+        let p = player
+        Task.detached(priority: .utility) { p.warm() }
     }
 
     static func open(url: URL) async throws -> EditorModel {
