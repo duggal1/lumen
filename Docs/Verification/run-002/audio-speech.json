@@ -1,0 +1,17 @@
+{
+  "speech.wav" : {
+    "channels" : 1,
+    "clickEvents" : 381,
+    "clippedSamples" : 0,
+    "dcOffset" : -0.0007272191687699739,
+    "duration" : 2.3414965986394556,
+    "format" : "pcmF32_22050Hz_nonInterleaved_ch1",
+    "frames" : 51630,
+    "lufs" : -14.944016080546191,
+    "noiseFloorDb" : -73.113379781759079,
+    "peakDb" : -1.1631719166242207,
+    "sampleRate" : 22050,
+    "truePeakDb" : -1.1592372225726402,
+    "zeroRunDropouts" : 5
+  }
+}

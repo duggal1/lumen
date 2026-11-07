@@ -1,0 +1,7 @@
+clock unit            machTicks
+frames                1799  avg 25.33 ms  max gap 283.3 ms
+first frame           0.0000 s (should be ~0)
+first event           0.0000 s   last 0.00 s vs duration 45.54 s
+mic offset            53.4 ms
+dropped (capture)     0
+note: the < 1 ms flash-and-click check (plan 13.1 SyncTests) needs a test app; this prints offsets only.

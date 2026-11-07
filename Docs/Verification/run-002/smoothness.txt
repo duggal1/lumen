@@ -1,0 +1,6 @@
+camX max|v|    8752.4  max|a|     49966.6  max|j|      514011.8  >8Hz  0.000%  flags 287
+camY max|v|    5470.2  max|a|     31229.2  max|j|      321257.4  >8Hz  0.000%  flags 287
+cursorX max|v|       0.0  max|a|         0.0  max|j|           0.0  >8Hz  0.000%  flags 0
+cursorY max|v|       0.0  max|a|         0.0  max|j|           0.0  >8Hz  0.000%  flags 0
+logZoom max|v|    3694.8  max|a|     16092.9  max|j|      142675.5  >8Hz  0.000%  flags 290
+bounds: 2732/2732 samples inside source (ok)
