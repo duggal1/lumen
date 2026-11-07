@@ -240,7 +240,7 @@ struct LiveWaveform: View {
         .onChange(of: level) { _, v in
             history = Array(history.suffix(47)) + [v]
         }
-        .animation(.smooth(duration: 0.06), value: history)
+        .animation(Motion.hoverIn, value: history)
         .accessibilityHidden(true)
     }
 }

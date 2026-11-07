@@ -142,7 +142,7 @@ private struct TranscriptList: View {
             .frame(height: 360)
             .onChange(of: activeS) { _, id in
                 guard let id else { return }
-                if reduce { proxy.scrollTo(id, anchor: .center) } else { withAnimation(.smooth(duration: 0.25)) { proxy.scrollTo(id, anchor: .center) } }
+                if reduce { proxy.scrollTo(id, anchor: .center) } else { withAnimation(Motion.route) { proxy.scrollTo(id, anchor: .center) } }
             }
         }
     }

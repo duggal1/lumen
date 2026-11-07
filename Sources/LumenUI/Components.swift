@@ -359,7 +359,7 @@ struct LDialog<Content: View>: View {
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
-        .onAppear { focused = true; withAnimation(.easeOut(duration: 0.16)) { shown = true } }
+        .onAppear { focused = true; withAnimation(Motion.route) { shown = true } }
         .onKeyPress(.escape) { cancel(); return .handled }
         .onKeyPress(.return) { if confirmEnabled { confirm() }; return .handled }
         .accessibilityAddTraits(.isModal)
