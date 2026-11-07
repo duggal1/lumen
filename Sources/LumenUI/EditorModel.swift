@@ -264,8 +264,8 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         if wantsPlayback {
             if player.isLoaded {
                 let audible = HostClock.now() + max(0.05, player.outputLatency + 0.03)
-                let start = player.play(from: c, atHostSeconds: audible)
-                clock.start(from: c, at: start, dur: duration)
+                clock.start(from: c, at: audible, dur: duration)
+                _ = player.play(from: c, atHostSeconds: audible)
             } else {
                 clock.start(from: c, at: HostClock.now() + 0.08, dur: duration)
             }
