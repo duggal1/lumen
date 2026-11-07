@@ -44,7 +44,7 @@ Status key: **WIRED** = implemented + tested. **PARTIAL** = exists but limited/o
 | Filler/pause removal | WIRED | `TranscriptOps` filler + pause cuts, suggestions merged |
 | Timeline trim/speed ramps/multi-clip | WIRED | `TimeMap` trims/cuts/ramps, `TimelineClip` import |
 | Import video | WIRED | `importClips`, appended in output time, share package copies clips |
-| On-device noise reduction | PARTIAL | SpectralGate fallback; RNNoise not vendored (`#if canImport(CRNNoise)` never true in this build) |
+| On-device noise reduction | WIRED | RNNoise vendored (`Sources/CRNNoise`, `CRNNoise` target); `defaultDenoiser` is `RNNoiseDenoiser`; `rnnoiseVendoredAndDefaultDenoiserActive` |
 | Podcast mode | WIRED | `MicMode.podcast` EQ preset in `VoiceStudio` |
 | Mic modes (standard/loud/off) | WIRED | `MicMode` + LUFS targets |
 | Separate mic/system levels | WIRED | `micGainDb`/`systemGainDb`, stems per source |
@@ -54,7 +54,7 @@ Status key: **WIRED** = implemented + tested. **PARTIAL** = exists but limited/o
 | Highlight tool | WIRED | `Highlight` dim/outline/glow, placement by click |
 | Offline-first | PARTIAL | Capture/edit/export and transcription models stay local; the only network path is opt-in Unsplash photo download (`LUMEN_UNSPLASH_ACCESS_KEY`), and the only listener is the opt-in MCP server on `127.0.0.1` |
 | Export MP4 4K60/8K120/GIF/ProRes | WIRED | `ExportPresets`, capability probe, never silently changes preset; `eightK120ExportPresetIsRealAndH264StaysGated` |
-| Shareable browser links | PARTIAL | `lumen://` deep link + `.lumenshare` package; share round-trip tested; no hosted web player/comments (explicitly documented) |
+| Shareable browser links | PARTIAL | `lumen://` deep link + `.lumenshare` package; share round-trip tested; no hosted web player/comments (external hosting is out of scope for the on-device build — the package itself is the shareable artifact) |
 | Project sharing | WIRED | `exportSharePackage`/`installSharePackage` via ditto zip |
-| Clipboard export | WIRED | 1080p H.264 to pasteboard as file URL |
+| Clipboard export | WIRED | 1080p H.264 to pasteboard as file URL; real `NSPasteboard` write verified; `clipboardWritesRealFileURLToPasteboard` |
 | Native Apple Silicon / HW encode | WIRED | VideoToolbox hardware-only probe + encode |
