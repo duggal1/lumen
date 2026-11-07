@@ -58,6 +58,8 @@ public final class Upscaler {
                         params p: UpscaleParams, frameID: UInt64) throws -> UpscaleResult {
         if let l = last, l.id == frameID, l.region == region, l.factor == factor { return l.result }
         guard let e = cb.makeComputeCommandEncoder() else { throw FXError.noEncoder }
+        // A failed pipeline/texture allocation must not leak an open encoder.
+        defer { e.endEncoding() }
         e.label = "Upscale x\(factor)"
         var input: MTLTexture = source
         var origin = SIMD2<Int32>(region.x, region.y), size = SIMD2<Int32>(region.z, region.w)
@@ -95,7 +97,6 @@ public final class Upscaler {
             k.dispatch(e, pipeline: sharp, width: Int(size.x), height: Int(size.y))
             swap(&current, &spare)
         }
-        e.endEncoding()
 
         let r = UpscaleResult(texture: current, region: SIMD4(Float(region.x), Float(region.y), Float(region.z), Float(region.w)),
                               factor: Float(factor), texSize: SIMD2(Float(current.width), Float(current.height)))

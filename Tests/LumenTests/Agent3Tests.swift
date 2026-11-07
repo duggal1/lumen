@@ -327,8 +327,11 @@ private final class SpyEmailTransport: EmailTransport, @unchecked Sendable {
                                body: "Line one\nLine two")
     let url = try #require(message.mailtoURL)
     #expect(url.scheme == "mailto")
-    #expect(url.path == "a@example.com")
-    let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+    // mailto: is an opaque URL. Foundation's URL.path is empty on macOS,
+    // while URLComponents.path correctly represents the recipient.
+    let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+    #expect(components.path == "a@example.com")
+    let items = try #require(components.queryItems)
     #expect(items.first { $0.name == "subject" }?.value == message.subject)
     #expect(items.first { $0.name == "body" }?.value == message.body)
 }

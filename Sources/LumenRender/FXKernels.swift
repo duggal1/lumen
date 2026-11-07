@@ -9,6 +9,11 @@ public enum FXError: Error {
 public final class FXKernels {
     public let device: MTLDevice
     private let library: MTLLibrary
+    // SwiftPM copies .metal shader resources instead of compiling them into
+    // default.metallib. Load supplementary kernels when first requested.
+    private let pipelineLock = NSLock()
+    private var extraLibraries: [String: MTLLibrary] = [:]
+    private var pipelines: [String: MTLComputePipelineState] = [:]
 
     public init(device: MTLDevice) throws {
         self.device = device
@@ -23,8 +28,38 @@ public final class FXKernels {
     }
 
     public func pipeline(_ name: String) throws -> MTLComputePipelineState {
-        guard let fn = library.makeFunction(name: name) else { throw FXError.noPipeline(name) }
-        return try device.makeComputePipelineState(function: fn)
+        try pipelineLock.withLock {
+            if let existing = pipelines[name] { return existing }
+
+            var function = library.makeFunction(name: name)
+            if function == nil {
+                // Only compile each Metal source once; cache the pipeline state
+                // as well so the 60fps render loop never recompiles shaders.
+                let sources = name.hasPrefix("up_") ? ["Upscale"] : ["Content", "Upscale"]
+                for source in sources {
+                    let lib: MTLLibrary
+                    if let existing = extraLibraries[source] {
+                        lib = existing
+                    } else {
+                        guard let url = Bundle.module.url(forResource: source, withExtension: "metal"),
+                              let text = try? String(contentsOf: url, encoding: .utf8) else {
+                            throw FXError.library("Missing \(source).metal resource")
+                        }
+                        lib = try device.makeLibrary(source: text, options: nil)
+                        extraLibraries[source] = lib
+                    }
+                    if let found = lib.makeFunction(name: name) {
+                        function = found
+                        break
+                    }
+                }
+            }
+
+            guard let function else { throw FXError.noPipeline(name) }
+            let state = try device.makeComputePipelineState(function: function)
+            pipelines[name] = state
+            return state
+        }
     }
 
     public func dispatch(_ encoder: MTLComputeCommandEncoder, pipeline: MTLComputePipelineState,
