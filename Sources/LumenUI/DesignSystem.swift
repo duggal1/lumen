@@ -39,8 +39,11 @@ enum Tok {
     static let text = Color(light: 0x0A0A0A, dark: 0xFAFAFA)
     static let text2 = Color(light: 0x666666, dark: 0xA3A3A3)
     static let textAction = Color(light: 0x2E2E2E, dark: 0xE5E5E5)
-    // accent: signal orange, the only brand colour
+    // action (orange): filled Record + Export only. accent (violet): selection,
+    // zoom blocks, active transcript row, focus rings, tags. All else neutral.
+    static let action = Color(light: 0xF05A00, dark: 0xFF6A00)
     static let accent = Color(light: 0xF05A00, dark: 0xFF6A00)
+    static let selection = Color(light: 0x7C3AED, dark: 0x8B5CF6)
     static let accentHover = Color(light: 0xE25400, dark: 0xFF8533)
     static let accentPressed = Color(light: 0xD65000, dark: 0xE55C00)
     static let accentText = Color(light: 0xBF3F00, dark: 0xFF8A3D)
