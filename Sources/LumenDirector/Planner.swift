@@ -293,8 +293,10 @@ enum ZoomPlanner {
                 let fit = 0.8 * min(width / (boxWidth + 0.24 * width),
                                     height / (boxHeight + 0.24 * height))
                 let usableFit = fit >= max(p.minScale, p.minTrigger)
-                var scale = clamp(fit, p.minScale, p.maxScale)
-                scale = max((scale * 10).rounded() / 10, 1.1)
+                // Continuous content-driven scale: preserve the fit ratio at
+                // full precision. The previous 0.1 quantization collapsed
+                // 1.15x, 1.5x and 1.9x into the same 1.1-1.2 band.
+                let scale = clamp(fit, p.minScale, p.maxScale)
                 let mass = max(anchors.reduce(0) { $0 + $1.w }, 1)
                 let cx = anchors.reduce(0) { $0 + $1.x * $1.w } / mass
                 let cy = anchors.reduce(0) { $0 + $1.y * $1.w } / mass

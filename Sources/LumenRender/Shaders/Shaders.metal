@@ -298,6 +298,9 @@ fragment float4 cursorFS(VO in [[stage_in]], constant CursorU &u [[buffer(0)]], 
 
 // ---- Click ring
 struct RingU { float4 content; float4 color; float2 center; float radius; float progress; float cr; int mode; };
+// Liquid Glass bloom lives here, not in SwiftUI, so Metal preview and export
+// share the pixels. A translucent refractive disc with a soft specular rim;
+// no hard ring edge.
 fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]]) {
     float p = clamp(u.progress, 0.0, 1.0), e = 1.0 - pow(1.0 - p, 3.0);
     float r = mix(0.25, 1.0, e) * u.radius * 0.9, wd = mix(0.16, 0.025, e) * u.radius;
@@ -312,6 +315,13 @@ fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]]) {
         float rays = pow(abs(cos(atan2(delta.y, delta.x) * 6.0)), 18.0);
         float band = 1.0 - smoothstep(wd * 0.5, wd * 2.0, abs(distance - r));
         ink = max(ring * 0.3, rays * band);
+    } else if (u.mode == 3) { // Glass: translucent bloom + rim
+        float bloom = clamp(1.0 - pow(distance / max(r, 1.0), 2.2), 0.0, 1.0);
+        float rim = ring * 0.5;
+        float glow = exp(-distance * distance / max(r * r * 0.4, 1.0));
+        ink = clamp(bloom * 0.35 + rim * 0.65 + glow * 0.25, 0.0, 1.0);
+        float a = ink * pow(1.0 - p, 1.2) * u.color.a * rectMask(in.px, u.content, u.cr);
+        return float4(mix(float3(1.0), u.color.rgb, 0.25) * a + float3(0.15) * glow * pow(1.0 - p, 2.0) * u.color.a, a);
     }
     float a = ink * pow(1.0 - p, 1.5) * u.color.a * rectMask(in.px, u.content, u.cr);
     return float4(u.color.rgb * a, a);

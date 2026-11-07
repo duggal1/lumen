@@ -387,7 +387,10 @@ struct Inspector: View {
                               options: ClickEffect.allCases.map { ($0, $0.rawValue.capitalized, "cursorarrow.click") })
                         .frame(width: 130)
                 }
-                SliderRow(label: "Click duration", v: m.bind(\.cursor.clickDuration), range: 0.1...1)
+                SliderRow(label: "Click duration", v: m.bind(\.cursor.clickDuration), range: 0.2...0.9, fmt: { String(format: "%.2f s", $0) })
+                Text("Glass bloom is baked into the Metal renderer. SwiftUI Liquid Glass macOS 26 APIs cannot run inside that renderer, so editor UI only uses the material fallback.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 ToggleRow(label: "Constant size", on: m.bind(\.cursor.constantSize))
                 ToggleRow(label: "Loop position", on: Binding(get: { m.timeline.cursor.loop != nil }, set: { v in m.edit { $0.cursor.loop = v ? 1.2 : nil } }))
                 SliderRow(label: "Press scale", v: m.bind(\.cursor.pressScale), range: 0.7...1)
@@ -406,10 +409,10 @@ struct Inspector: View {
                 ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
                 Row(label: "Preset") { LDropdown(sel: Binding(get: { m.timeline.camera.preset }, set: { v in m.edit { $0.camera.apply(preset: v) } }), options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "plus.magnifyingglass") }).frame(width: 130) }
                 Row(label: "Tilt") { LDropdown(sel: m.bind(\.camera.tilt), options: TiltMode.allCases.map { ($0, $0.rawValue.capitalized, "move.3d") }).frame(width: 130) }
-                SliderRow(label: "Max zoom", v: m.bind(\.camera.maxScale), range: 1.2...4, fmt: { String(format: "%.1f×", $0) })
+                SliderRow(label: "Max zoom", v: m.bind(\.camera.maxScale), range: 1.2...6.0, fmt: { String(format: "%.2f×", $0) })
                 Row(label: "Max upscale") { LDropdown(sel: m.bind(\.camera.upscaleMaxFactor), options: [2, 3, 4, 5, 6, 8, 10].map { ($0, "\($0)×", "arrow.up.right.and.arrow.down.right") }).frame(width: 130) }
                 ToggleRow(label: "Real-time upscale", on: m.bind(\.camera.upscaleEnabled))
-                SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.05...2.5, fmt: { String(format: "%.2f×", $0) })
+                SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.0...2.5, fmt: { String(format: "%.2f×", $0) })
                 SliderRow(label: "Smoothness", v: smooth, range: 0...1)
             }.card()
             VStack(spacing: 0) {
@@ -709,6 +712,16 @@ struct Inspector: View {
         let m = model
         return VStack(spacing: 24) {
             VStack(spacing: 0) {
+                Row(label: "Studio mode") {
+                    LDropdown(sel: m.bind(\.audio.studioMode),
+                              options: StudioMode.allCases.map { ($0, $0.title, "waveform") })
+                        .frame(width: 138)
+                }
+                Row(label: "Loudness") {
+                    SliderRow(label: "Target", v: m.bind(\.audio.targetLUFS), range: -18...(-8),
+                              fmt: { String(format: "%.0f LUFS", $0) })
+                    .frame(width: 138)
+                }
                 Row(label: "Microphone") {
                     LDropdown(sel: m.bind(\.audio.micMode),
                               options: MicMode.allCases.map { ($0, $0.rawValue.capitalized, Self.micModeIcon($0)) })
@@ -781,15 +794,10 @@ struct Inspector: View {
                     Row(label: "Remove music") { LButton(title: "Remove", icon: "trash", kind: .quiet) { m.edit { $0.audio.musicPath = nil } } }
                 }
                 ToggleRow(label: "Auto loudness", on: m.bind(\.audio.normalize))
-                if m.timeline.audio.normalize {
-                    SliderRow(label: "Loudness", v: m.bind(\.audio.targetLUFS), range: -23...(-10),
-                              fmt: { String(format: "%.0f LUFS", $0) })
-                    SliderRow(label: "Trim", v: m.bind(\.audio.outputGainDb), range: -12...6,
-                              fmt: { String(format: "%+.0f dB", $0) })
-                } else {
-                    SliderRow(label: "Output level", v: m.bind(\.audio.outputGainDb), range: -24...6,
-                              fmt: { String(format: "%+.0f dB", $0) })
-                }
+                SliderRow(label: "Trim", v: m.bind(\.audio.outputGainDb), range: -12...6,
+                          fmt: { String(format: "%+.0f dB", $0) })
+                Text("Music ducks under voice with 50 ms attack / 400 ms release; click cues stay above music. Idle ramps mute mic, not music.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
                 if let stats = m.mixStats {
                     Row(label: "Master") {
                         Text(String(format: "%.1f LUFS · peak %.1f dBTP", stats.lufs, stats.peak))

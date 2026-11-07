@@ -637,6 +637,7 @@ public final class Renderer: @unchecked Sendable {
                 case .none, .ripple: 0
                 case .pulse: 1
                 case .burst: 2
+                case .glass: 3
                 }
                 frag(e, RingU(content: content, color: tl.cursor.clickColor.simd, center: SIMD2<Float>(c), radius: Float(R),
                               progress: ring.progress, cr: Float(g.radius), mode: mode))

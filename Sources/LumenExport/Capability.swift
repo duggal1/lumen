@@ -31,12 +31,10 @@ public struct ExportPreset: Codable, Hashable, Sendable, Identifiable {
     public var id: String { name }
     public var name: String
     public var codec: VideoCodec
-    public var height: Int                 // output height at 16:9 (4K = 2160)
+    public var height: Int
     public var fps: Int
     public var bpp: Double = 0.06
-    /// Overrides the aspect-derived width for a user-selected custom resolution.
     public var customWidth: Int?
-    /// Deliver a premultiplied alpha channel. ProRes 4444 only.
     public var alpha: Bool = false
 
     public init(name: String, codec: VideoCodec, height: Int, fps: Int, bpp: Double = 0.06, customWidth: Int? = nil,
@@ -45,7 +43,11 @@ public struct ExportPreset: Codable, Hashable, Sendable, Identifiable {
         self.bpp = bpp; self.customWidth = customWidth; self.alpha = alpha
     }
 
-    public func width(aspect: Double) -> Int { customWidth ?? ((Int((Double(height) * aspect).rounded()) + 1) & ~1) }
+    public func width(aspect: Double) -> Int {
+        if let customWidth { return customWidth }
+        if aspect < 1 { return (Int((Double(1920) * aspect).rounded()) + 1) & ~1 }
+        return ((Int((Double(height) * aspect).rounded()) + 1) & ~1)
+    }
 
     static func label(forHeight h: Int) -> String {
         switch h { case 1080: "1080p"; case 1440: "1440p"; case 1620: "3k"; case 2160: "4k"; case 4320: "8k"; default: "\(h)p" }

@@ -1,7 +1,10 @@
 import Foundation
 import LumenCore
 
-public enum ClickEffect: String, Codable, CaseIterable, Sendable { case none, ripple, pulse, burst }
+public enum ClickEffect: String, Codable, CaseIterable, Sendable { case none, ripple, pulse, burst, glass }
+// Glass click is rendered in the Metal ringFS path, not SwiftUI, so preview
+// and export share the same pixels. There is no SwiftUI Liquid Glass toggle
+// on the canvas; the translucent bloom is baked into the shader.
 
 // NOTE: MotionBlurParams/LoopMode used to live here but were dead code
 // (never read). Real motion-blur controls are CameraParams.shutter /

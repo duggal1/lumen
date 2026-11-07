@@ -86,6 +86,11 @@ struct ExportSettings: Codable, Equatable {
     }
 
     func dimensions(source: SourceInfo, aspect: Double) -> (Int, Int) {
+        if aspect < 1 {
+            let w = 1080
+            let h = (Int((Double(w) / aspect).rounded()) + 1) & ~1
+            return (w, h)
+        }
         let height: Int = switch resolution {
         case .source: source.height
         case .ultraHD8K: 4320

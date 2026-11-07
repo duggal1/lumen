@@ -52,7 +52,7 @@ enum CameraSolver {
         }
         let shots: [Shot] = zoom.filter { $0.end - $0.start > 0.1 && $0.scale > 1.001 && $0.start < outDur }
             .sorted { $0.start < $1.start }
-            .map { Shot(start: max($0.start, 0), end: min($0.end, outDur), lz: log(min($0.scale, 8)), focus: $0.focus, ease: $0.easing?.omegaScale ?? 1, automatic: $0.origin == .auto) }
+            .map { Shot(start: max($0.start, 0), end: min($0.end, outDur), lz: log(min($0.scale, 16)), focus: $0.focus, ease: $0.easing?.omegaScale ?? 1, automatic: $0.origin == .auto) }
         func staticCenter(_ s: Shot, _ t: Double) -> SIMD2<Double> {
             switch s.focus {
             case .fixed(let x, let y): return SIMD2(x, y)

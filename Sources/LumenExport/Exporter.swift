@@ -130,10 +130,12 @@ public enum Exporter {
         // Alpha is RGB data. Asking for a YCbCr matrix on a transparent render
         // makes AVFoundation flatten the alpha channel, so leave colour keys
         // off when the delivery is transparent.
+        // Export aspect uses SDR BT.709 color tags. BT.2020 would shift
+        // colors on iPhone/Photos upload; the delivery is SDR, not HDR.
         var settings: [String: Any] = [AVVideoCodecKey: codec, AVVideoWidthKey: w, AVVideoHeightKey: h,
                                        AVVideoCompressionPropertiesKey: comp]
         if !preset.alpha {
-            settings[AVVideoColorPropertiesKey] = [AVVideoColorPrimariesKey: AVVideoColorPrimaries_P3_D65,
+            settings[AVVideoColorPropertiesKey] = [AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
                                                    AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
                                                    AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2]
         }
