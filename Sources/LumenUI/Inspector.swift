@@ -8,15 +8,12 @@ import LumenAudio
 struct Inspector: View {
     let model: EditorModel
     enum Tab: String, CaseIterable { case look = "Look", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export", transcript = "Transcript" }
-    static func visibleFor(model: EditorModel) -> [Tab] {
-        Tab.allCases.filter { $0 != .webcam || model.timeline.webcam != nil }
+
+
+    static func visibleFor(model: EditorModel) -> [Inspector.Tab] {
+        Inspector.Tab.allCases.filter { $0 != Inspector.Tab.webcam || model.timeline.webcam != nil }
     }
-    var isPrimary: Bool { Tab.primaryTabs.contains(self) }
-    static var primaryTabs: [Tab] { [.look, .camera, .cursor, .captions, .audio] }
-    static func moreTabs(for model: EditorModel) -> [Tab] {
-        visibleFor(model: model).filter { !primaryTabs.contains($0) }
-    }
-    @Binding var tab: Tab
+    @Binding var tab: Inspector.Tab
     var width: CGFloat = Metrics.inspector
     @State private var presets = EditorModel.loadPresets()
     @State private var newName = ""
@@ -56,9 +53,9 @@ struct Inspector: View {
     /// visible and the menu stays inside the 8-item rule.
     private var tabSelector: some View {
         HStack(spacing: 8) {
-            LSegmented(sel: $tab, items: Tab.primaryTabs.map { ($0, $0.rawValue) })
+            LSegmented(sel: $tab, items: [Inspector.Tab.look, .camera, .cursor, .captions, .audio].map { ($0, $0.rawValue) })
                 .frame(width: 232)
-            LDropdown(sel: $tab, options: Tab.allCases.filter { !$0.isPrimary && ($0 != .webcam || model.timeline.webcam != nil) }.map { ($0, $0.rawValue, icon($0)) })
+            LDropdown(sel: $tab, options: Inspector.Tab.allCases.filter { !$0.isPrimary && ($0 != .webcam || model.timeline.webcam != nil) }.map { ($0, $0.rawValue, icon($0)) })
                 .frame(width: 88)
         }
         .accessibilityElement(children: .contain)
@@ -120,7 +117,7 @@ struct Inspector: View {
         .card()
     }
 
-    private func icon(_ t: Tab) -> String {
+    private func icon(_ t: Inspector.Tab) -> String {
         switch t {
         case .look: "paintpalette"; case .tools: "slider.horizontal.3"; case .cursor: "cursorarrow"; case .camera: "video"
         case .layout: "rectangle.3.group"; case .audio: "waveform"; case .webcam: "person.crop.circle"
@@ -840,4 +837,21 @@ struct Inspector: View {
     }
 
     private var export: some View { ExportInspector(model: model) }
+}
+
+extension Inspector.Tab {
+    @MainActor
+    static func visibleFor(model: EditorModel) -> [Inspector.Tab] {
+        Inspector.Tab.allCases.filter { $0 != Inspector.Tab.webcam || model.timeline.webcam != nil }
+    }
+
+    static var primaryTabs: [Inspector.Tab] { [Inspector.Tab.look, Inspector.Tab.camera, Inspector.Tab.cursor, Inspector.Tab.captions, Inspector.Tab.audio] }
+
+    var isPrimary: Bool {
+        switch self { case Inspector.Tab.look, Inspector.Tab.camera, Inspector.Tab.cursor, Inspector.Tab.captions, Inspector.Tab.audio: return true; default: return false }
+    }
+
+    @MainActor static func moreTabs(for model: EditorModel) -> [Inspector.Tab] {
+        visibleFor(model: model).filter { !primaryTabs.contains($0) }
+    }
 }
