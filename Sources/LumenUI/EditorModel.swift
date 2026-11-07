@@ -218,15 +218,16 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         }
     }
 
+    // Background offline mix. The transport never waits on this task: video
+    // starts instantly and audio joins at the current clock position once
+    // the buffer is ready. The play path below is decoupled from this.
     private func remix() {
-        hasMixed = true
-        let resume = wantsPlayback
-        if clock.playing { pause() }
-        wantsPlayback = resume
-        playbackTask?.cancel()
+        mixGeneration += 1
+        let gen = mixGeneration
         let previous = mixTask
         previous?.cancel()
         let tl = timeline, mixer = session.mixer, player = player
+        isMixing = true
         mixTask = Task { [weak self] in
             await previous?.value
             guard !Task.isCancelled else { return }
@@ -234,10 +235,20 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
             guard !Task.isCancelled else { return }
             await Task.detached(priority: .userInitiated) { player.load(audio) }.value
             guard !Task.isCancelled else { return }
-            if let self {
-                self.mixStats = audio.map { ($0.lufs, $0.truePeakDb) }
-                if self.wantsPlayback { self.play() }
+            guard let self, self.mixGeneration == gen else { return }
+            self.isMixing = false
+            self.hasMixed = true
+            self.mixStats = audio.map { ($0.lufs, $0.truePeakDb) }
+            // Late join: audio starts at the current video position. Video
+            // is not restarted, so there is no second visible jump.
+            if self.wantsPlayback, self.clock.playing {
+                let now = HostClock.now()
+                let tNow = self.clock.time(at: now)
+                _ = self.player.play(from: tNow, atHostSeconds: now + 0.05)
             }
+            // An edit that landed while this mix ran makes the buffer stale.
+            // Mix the current timeline once more so the next Play is fresh.
+            if self.timeline != tl { self.remix() }
         }
     }
 
