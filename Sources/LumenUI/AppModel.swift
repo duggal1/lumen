@@ -549,6 +549,7 @@ private final class RegionView: NSView {
 @MainActor final class HUDController {
     private var panel: NSPanel?
     private let screen: NSScreen?
+    private var moveObserver: NSObjectProtocol?
     init(_ app: AppModel, screen: NSScreen?) {
         self.screen = screen
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 64), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -583,22 +584,26 @@ private final class RegionView: NSView {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         p.title = "Lumen recording controls"
         p.setAccessibilityLabel("Lumen recording controls")
-        if let screen {
+        if let saved = UserDefaults.standard.object(forKey: "LumenHUDOrigin") as? [String: Double],
+           let sx = saved["x"], let sy = saved["y"] {
+            p.setFrameOrigin(CGPoint(x: sx, y: sy))
+        } else if let screen {
             let frame = screen.visibleFrame
             p.setFrameOrigin(CGPoint(x: frame.midX - 260, y: frame.maxY - 80))
         }
         panel = p
+        moveObserver = NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: p, queue: nil) { [weak self] note in
+            guard let w = note.object as? NSWindow else { return }
+            UserDefaults.standard.set(["x": w.frame.origin.x, "y": w.frame.origin.y], forKey: "LumenHUDOrigin")
+        }
     }
     func show() { fitToContent(); panel?.orderFrontRegardless() }
     private func fitToContent() {
         guard let panel, let host = panel.contentView?.subviews.first as? NSHostingView<HUDView> else { return }
         let size = host.fittingSize
         // Countdown needs ~180, recording row needs 64 — fit to actual content.
+        // Keep the user's dragged position: only resize, never recenter.
         panel.setContentSize(size)
-        if let screen {
-            let bounds = screen.visibleFrame
-            panel.setFrameOrigin(CGPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2))
-        }
     }
     func showCountdown() {
         fitToContent()
@@ -613,6 +618,7 @@ private final class RegionView: NSView {
 
 struct HUDView: View {
     let app: AppModel
+    @State private var collapsed = false
     var body: some View {
         Group {
             if case .countdown(let n) = app.phase {
@@ -629,6 +635,15 @@ struct HUDView: View {
                         .foregroundStyle(Tok.text2)
                 }
                 .frame(minWidth: 192)
+            } else if collapsed {
+                HStack(spacing: 8) {
+                    Circle().fill(Tok.accent).frame(width: 8, height: 8)
+                    Text(time(app.stats?.elapsed ?? 0)).font(AppType.label.monospacedDigit()).foregroundStyle(Tok.text)
+                    LIconButton(icon: app.paused ? "play.fill" : "pause.fill", label: app.paused ? "Resume" : "Pause") { app.togglePause() }
+                    LIconButton(icon: "stop.fill", label: "Stop") { app.toggle() }
+                    LIconButton(icon: "chevron.up", label: "Expand controls") { collapsed = false }
+                }
+                .padding(8)
             } else {
                 HStack(spacing: 12) {
                     switch app.phase {
@@ -644,6 +659,7 @@ struct HUDView: View {
                 LButton(title: app.paused ? "Resume" : "Pause",
                         icon: app.paused ? "play.fill" : "pause.fill", kind: .secondary) { app.togglePause() }
                 LButton(title: "Stop", icon: "stop.fill", kind: .primary) { app.toggle() }
+                LIconButton(icon: "chevron.down", label: "Collapse to pill") { collapsed = true }
                     default:
                         PixelWait()
                         Text(app.phase == .finishing ? "Saving…" : "Preparing…")
