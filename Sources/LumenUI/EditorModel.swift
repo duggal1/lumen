@@ -328,15 +328,18 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         if clock.playing, t >= duration - 0.001 { pause() }
     }
 
-    func setTranscript(_ t: Transcript?) { transcript = t; sentences = t.map { Sentences.split($0.words) } ?? [] }
+    func setTranscript(_ t: Transcript?) {
+        transcript = t; sentences = t.map { Sentences.split($0.words) } ?? []
+        if t != nil, !timeline.captions.enabled {
+            edit { $0.captions.enabled = true }
+        }
+    }
     func seekSource(_ s: Double) { seek(timeline.timeMap.output(atSource: s)) }
 
     func transcribe() {
         guard session.meta.mic != nil else { return }
         guard MoonshineRuntime.isAvailable, ModelStore.isInstalled(.current) else {
-            // No Moonshine runtime/model: fall back to Apple Speech instead of
-            // leaving the timeline untranscribed (model download stays optional).
-            transcribeWithAppleSpeech()
+            transcribeState = .notInstalled
             return
         }
         let b = session.bundle, off = session.micOffset, size = MoonshineSize.current
@@ -357,27 +360,6 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         }
     }
 
-    /// On-device Apple Speech path used when the optional Moonshine model
-    /// is not installed. Same commit path (save + align + replan) as Moonshine.
-    private func transcribeWithAppleSpeech() {
-        let b = session.bundle, off = session.micOffset
-        transcribeState = .running(0); transcribeTask?.cancel()
-        transcribeTask = Task { [weak self] in
-            do {
-                let tr = try await AppleSpeechEngine().transcribe(audio: b.micURL, locale: Locale(identifier: "en-US"), vocabulary: [])
-                guard let self, !Task.isCancelled else { return }
-                try? b.saveTranscript(TranscriptFile(engine: "apple-speech", complete: true, transcript: tr))
-                let aligned = tr.shifted(by: off)
-                self.setTranscript(aligned)
-                self.session.updateTranscript(aligned)
-                self.replan()
-                self.transcribeState = .idle
-            } catch {
-                guard let self, !Task.isCancelled else { return }
-                self.transcribeState = .failed("Apple Speech: \(error)")
-            }
-        }
-    }
     func cancelTranscribe() { transcribeTask?.cancel(); transcribeState = .idle }
 
     /// A live take that dropped audio (or never ran) gets re-transcribed from the file, automatically.
