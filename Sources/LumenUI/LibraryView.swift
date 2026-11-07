@@ -175,7 +175,7 @@ struct LibrarySurface: View {
     private var recordDialog: some View {
         GeometryReader { geo in
             ZStack {
-                Tok.modalScrim.ignoresSafeArea().onTapGesture { }
+                Tok.modalScrim.ignoresSafeArea().onTapGesture { showRecord = false }
                 VStack(alignment: .leading, spacing: 0) {
                     // Header
                     HStack(alignment: .top, spacing: 12) {
@@ -215,7 +215,7 @@ struct LibrarySurface: View {
                     .padding(.top, 16)
                 }
                 .padding(20)
-                .frame(width: min(520, max(320, geo.size.width - 32)))
+                .frame(width: min(480, max(320, geo.size.width - 48)))
                 .frame(height: min(recordTab == .audio ? 480 : 400, max(280, geo.size.height - 32)))
                 .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
             }
@@ -292,13 +292,14 @@ struct LibrarySurface: View {
             if app.mic {
                 ForEach(app.availableAudioInputs, id: \.id) { device in
                     HStack(spacing: Space.s4) {
-                        Label(device.name, systemImage: "mic.circle")
+                        Label(device.name, systemImage: device.name.lowercased().contains("airpods") ? "airpods.chargingcase" : device.name.lowercased().contains("headphone") ? "headphones" : "mic.circle")
                             .font(AppType.label).foregroundStyle(Tok.text).lineLimit(1)
                         Spacer(minLength: Space.s2)
                         LToggle(on: Binding(
                             get: { app.micInputIDs.contains(device.id) },
                             set: { app.selectAudioInput(device.id, enabled: $0) }),
                             label: device.name)
+                        .accessibilityLabel(device.name)
                     }
                     .frame(height: 48)
                 }
