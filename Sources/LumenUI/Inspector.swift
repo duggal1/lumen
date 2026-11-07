@@ -57,7 +57,9 @@ struct Inspector: View {
                 tabSelector
                 tabBody
             }.padding(Space.s4)
-        }.frame(width: width).frame(maxHeight: .infinity).background(Tok.bg)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }.scrollIndicators(.hidden)
+        .frame(width: width).frame(maxHeight: .infinity).background(Tok.bg)
     }
 
     /// One full-width section dropdown at the top of the inspector.
