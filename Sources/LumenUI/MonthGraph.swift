@@ -60,10 +60,10 @@ struct MonthGraph: View {
     @State private var width: CGFloat = 0
     @State var reveal: CGFloat = 1
 
-    static let gap: CGFloat = 3
-    static let monthGap: CGFloat = 12
-    static let minCell: CGFloat = 8
-    static let maxCell: CGFloat = 16
+    static let gap: CGFloat = 2
+    static let monthGap: CGFloat = 8
+    static let minCell: CGFloat = 6
+    static let maxCell: CGFloat = 8
     static let rows = 7
 
     private var calendar: Calendar { .current }
@@ -198,14 +198,10 @@ struct MonthGraph: View {
     }
 
     private var legend: some View {
-        HStack(spacing: 8) {
-            Text("Less").font(AppType.caption).foregroundStyle(Tok.text2)
-            HStack(spacing: 4) {
-                ForEach(0..<5, id: \.self) { i in
-                    Circle().fill(ramp(i)).frame(width: 6, height: 6)
-                }
+        HStack(spacing: 4) {
+            ForEach(0..<5, id: \.self) { i in
+                Circle().fill(ramp(i)).frame(width: 4, height: 4)
             }
-            Text("More").font(AppType.caption).foregroundStyle(Tok.text2)
         }
         .accessibilityHidden(true)
     }
@@ -217,8 +213,8 @@ struct MonthGraph: View {
             for c in b.cells {
                 let cx = m.originX[bi] + CGFloat(c.col) * m.pitch + m.cell / 2
                 let cy = CGFloat(c.row) * m.pitch + m.cell / 2
-                // Sharp dot: diameter snaps to even device pixels, centered in cell.
-                let d = max(snap(m.cell * 0.5), 4)
+                // Minimal dot: fixed 4pt even-snapped circle, sharp and light.
+                let d: CGFloat = 4
                 let rect = CGRect(x: snap(cx - d / 2), y: snap(cy - d / 2), width: d, height: d)
                 let dot = Path(ellipseIn: rect)
                 let isHover = hovered.map { calendar.isDate($0, inSameDayAs: c.day.date) } ?? false
