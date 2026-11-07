@@ -35,6 +35,7 @@ struct ExportInspector: View {
             destination
             action
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var output: some View {
