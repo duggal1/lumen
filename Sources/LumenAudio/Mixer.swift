@@ -420,6 +420,15 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
     /// audio so it is HEARD on the same host instant as the video frame.
     public var outputLatency: Double { engine.isRunning ? engine.outputNode.presentationLatency : 0 }
 
+    /// True once `load` has installed a non-empty mixed buffer. Transport
+    /// reads this to decide whether audio can start locked to video now,
+    /// or video must run silent until the background mix joins.
+    public var isLoaded: Bool { mixed.withLock { $0.audio != nil && !($0.audio!.l.isEmpty) } }
+
+    /// Starts the engine early so a cold first click does not pay engine
+    /// startup latency inside the transport gap. Safe to call repeatedly.
+    public func warm() { if !engine.isRunning { try? engine.start() } }
+
     /// Plays the selected click at the current click level without touching
     /// the timeline playback node, so the preview never desyncs transport.
     public func previewClick(_ plan: AudioPlan) {
