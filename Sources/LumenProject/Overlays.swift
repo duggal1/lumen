@@ -210,7 +210,7 @@ public struct CaptionPlan: Codable, Equatable, Sendable {
 public struct PrivacyPlan: Codable, Equatable, Sendable {
     public var enabled = true
     public var autoDetect = true
-    public var autoApply: [String] = ["apiKey", "jwt", "privateKey", "envSecret", "card", "email", "custom"]
+    public var autoApply: [String] = ["apiKey", "jwt", "privateKey", "envSecret", "card", "email", "phone", "entropy", "password", "custom"]
     public var customPatterns: [String] = []
     public var padding = 6.0
     public var mode: MaskMode = .blend
