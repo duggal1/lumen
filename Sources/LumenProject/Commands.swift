@@ -42,7 +42,7 @@ public enum Command: Codable, Sendable {
     case approveMasks([UUID]), rejectMasks([UUID]), deleteMask(UUID)
     case addHighlight(Highlight), setHighlightStyle(UUID, HighlightStyle), deleteHighlight(UUID), addLoupe(Loupe), deleteLoupe(UUID)
     case updateLoupe(Loupe)
-    case addTapAtPlayhead(x: Double, y: Double), deleteTap(UUID)
+    case addTapAtPlayhead(x: Double, y: Double), deleteTap(UUID), moveTap(tap: UUID, x: Double, y: Double, atSource: Double?)
     case addText(TextBlock), editText(UUID, String), deleteText(UUID)
     case addClip(TimelineClip), deleteClip(UUID), moveClip(UUID, start: Double), trimClip(UUID, inPoint: Double, duration: Double)
     case splitClip(atOutput: Double), rippleDeleteClip(id: UUID), joinClips(ids: [UUID]),
@@ -225,6 +225,19 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         return .replan
     case .addTapAtPlayhead(let x, let y): t.overlays.taps.append(TapIndicator(t: playSrc, x: x, y: y)); return [.cursor, .audio]
     case .deleteTap(let id): t.overlays.taps.removeAll { $0.id == id }; return [.cursor, .audio]
+    case .moveTap(let id, let x, let y, let atSource):
+        guard let i = t.overlays.taps.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        let w = t.derived?.sourceSize.x ?? Double(max(x, 1))
+        let h = t.derived?.sourceSize.y ?? Double(max(y, 1))
+        var nt = atSource ?? t.overlays.taps[i].t
+        nt = min(max(nt, t.timeMap.trimStart), t.timeMap.trimEnd)
+        for cut in t.timeMap.cuts where nt >= cut.start && nt < cut.end {
+            nt = abs(nt - cut.start) < abs(cut.end - nt) ? cut.start : cut.end
+        }
+        t.overlays.taps[i].x = min(max(x, 0), w)
+        t.overlays.taps[i].y = min(max(y, 0), h)
+        t.overlays.taps[i].t = min(max(nt, t.timeMap.trimStart), t.timeMap.trimEnd)
+        return [.cursor, .audio]
     case .addText(let b): t.overlays.texts.append(b); return .captions
     case .editText(let id, let value):
         guard let i = t.overlays.texts.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
