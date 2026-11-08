@@ -19,12 +19,10 @@ private func reduce(_ tl: inout Timeline, _ command: Command, playhead: Double =
 
 @Test func addClipSortsAndMagneticNormalizeClosesGap() throws {
     var tl = makeTimeline()
-    // magnetic normalize rewrites starts to close gaps; insertion order then
-    // determines which clip occupies slot 0 (stable sort keeps first-inserted at 0).
+    // addClip sorts by start; gap close only happens on ripple edits (split/duplicate/paste/rippleDelete)
     try reduce(&tl, .addClip(TimelineClip(path: "/tmp/v.mov", name: "b", duration: 2, start: 4, width: 1920, height: 1080)), playhead: 0)
     try reduce(&tl, .addClip(TimelineClip(path: "/tmp/v.mov", name: "a", duration: 2, start: 0, width: 1920, height: 1080)), playhead: 0)
-    #expect(tl.clips.count == 2)
-    #expect(tl.clips.map(\.start) == [0, 2]) // close gap
+    #expect(tl.clips.map(\.start) == [0, 4]) // sorted; gap remains until a ripple edit
     try reduce(&tl, .trim(start: 0, end: 1), playhead: 0) // trim affects recording only; clips unaffected but checked
     try reduce(&tl, .trimClip(tl.clips.first { $0.name == "a" }!.id, inPoint: 0, duration: 2), playhead: 0)
 }

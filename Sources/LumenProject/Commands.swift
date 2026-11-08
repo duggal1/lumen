@@ -145,14 +145,14 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         t.overlays.loupes[i] = l; return .masks
     case .addClip(let clip):
         guard !clip.path.isEmpty, clip.duration > 0 else { throw CommandError.invalid("empty clip") }
-        t.clips.append(clip); t.clips.magneticNormalize(); return []
-    case .deleteClip(let id): t.clips.removeAll { $0.id == id }; t.clips.magneticNormalize(); return []
+        t.clips.append(clip); t.clips.sort { $0.start < $1.start }; return []
+    case .deleteClip(let id): t.clips.removeAll { $0.id == id }; t.clips.sort { $0.start < $1.start }; return []
     case .moveClip(let id, let start):
         guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
-        t.clips[i].start = t.clips.snappedStart(max(start, 0)); t.clips.magneticNormalize(); return []
+        t.clips[i].start = max(start, 0); t.clips.sort { $0.start < $1.start }; return []
     case .trimClip(let id, let inPoint, let duration):
         guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
-        t.clips[i].inPoint = max(inPoint, 0); t.clips[i].duration = max(duration, 0.05); t.clips.magneticNormalize(); return []
+        t.clips[i].inPoint = max(inPoint, 0); t.clips[i].duration = max(duration, 0.05); t.clips.sort { $0.start < $1.start }; return []
 
     // MARK: Magnetic main-lane
     // Notes: soundtrack lanes are NOT part of the magnetic lane. Ripple edits
