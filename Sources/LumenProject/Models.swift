@@ -204,10 +204,6 @@ public struct CameraParams: Codable, Equatable, Sendable {
     public var leadIn = 0.45, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
     public var omegaPan = 7.0, omegaZoom = 6.0, lookahead = 0.20, deadZone = 0.28, followDelay = 0.12
     public var centerOffsetX = 0.0, centerOffsetY = 0.0         // view-normalized bias of where the cursor sits in the zoomed view
-    /// Fraction of the frame the click target keeps from the viewport edge.
-    /// Edge clicks may overshoot into canvas space so the target still
-    /// frames with margin (see CameraSolver.center).
-    public var viewportMargin = 0.12
     public var sensitivity = 0.5                                // 0 = only clicks, 1 = purposeful hovers count too
     public var clickWeight = 3.0
     public var shutter = 0.5
@@ -222,7 +218,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
     public var tiltSeed: UInt64 = 0xC11C
     enum CodingKeys: String, CodingKey {
         case preset, autoZoom, maxScale, minScale, minTrigger, leadIn, tail, mergeGap, panThroughGap, minHold, omegaPan, omegaZoom, lookahead, deadZone
-        case followDelay, centerOffsetX, centerOffsetY, sensitivity, clickWeight, shutter, maxSamples, upscaleMaxFactor, upscaleEnabled, tilt, maxYaw, maxPitch, floatDeg, omegaTilt, tiltSeed, viewportMargin
+        case followDelay, centerOffsetX, centerOffsetY, sensitivity, clickWeight, shutter, maxSamples, upscaleMaxFactor, upscaleEnabled, tilt, maxYaw, maxPitch, floatDeg, omegaTilt, tiltSeed
     }
     public init() {}
     public init(from d: Decoder) throws {
@@ -233,7 +229,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
         omegaZoom = c.opt(.omegaZoom, omegaZoom); lookahead = c.opt(.lookahead, lookahead); deadZone = c.opt(.deadZone, deadZone)
         followDelay = c.opt(.followDelay, followDelay); centerOffsetX = c.opt(.centerOffsetX, centerOffsetX); centerOffsetY = c.opt(.centerOffsetY, centerOffsetY)
         sensitivity = c.opt(.sensitivity, sensitivity); clickWeight = c.opt(.clickWeight, clickWeight); shutter = c.opt(.shutter, shutter)
-        maxSamples = c.opt(.maxSamples, maxSamples); viewportMargin = c.opt(.viewportMargin, viewportMargin)
+        maxSamples = c.opt(.maxSamples, maxSamples)
         upscaleMaxFactor = min(max(c.opt(.upscaleMaxFactor, upscaleMaxFactor), 2), 10)
         upscaleEnabled = c.opt(.upscaleEnabled, upscaleEnabled)
         tilt = c.opt(.tilt, tilt); maxYaw = c.opt(.maxYaw, maxYaw); maxPitch = c.opt(.maxPitch, maxPitch)
