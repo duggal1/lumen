@@ -321,20 +321,29 @@ struct Inspector: View {
                             .disabled(m.selection == nil)
                     }
                 }
+                Row(label: "Ripple") {
+                    HStack(spacing: 8) {
+                        LButton(title: "Ripple delete", icon: "trash", kind: .quiet) { m.rippleDeleteSelected() }
+                            .disabled(m.selection == nil)
+                        LButton(title: "Split recording", icon: "scissors", kind: .quiet) { m.splitRecordingAtPlayhead() }
+                    }
+                }
                 Row(label: "Clipboard") {
                     HStack(spacing: 8) {
                         LButton(title: "Copy", icon: "doc.on.doc", kind: .quiet) { m.copySelectedClip() }
+                            .disabled(m.selection == nil)
+                        LButton(title: "Cut", icon: "scissors", kind: .quiet) { m.cutSelectedClip() }
                             .disabled(m.selection == nil)
                         LButton(title: "Paste", icon: "doc.on.clipboard", kind: .quiet) { m.pasteClipAtPlayhead() }
                             .disabled(m.copiedClip == nil)
                     }
                 }
                 Row(label: "Snap") {
-                    ToggleRow(label: "Snap to clip edges", on: Binding(
+                    ToggleRow(label: "Snap on", on: Binding(
                         get: { m.snapEnabled },
                         set: { m.snapEnabled = $0 }))
                 }
-                Text("Shortcuts: B blade · ⌘C copy · ⌘V paste · ⌘D duplicate · ⌘J join. Snap targets: playhead, clip edges, cuts, click events.")
+                Text("B split · C cut · Cmd-C/X/V clipboard · N snap · F fit. Snap targets: playhead, clip edges, cuts, clicks.")
                     .font(AppType.caption).foregroundStyle(Tok.text2)
             }.card()
             VStack(spacing: 0) {
