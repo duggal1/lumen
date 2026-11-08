@@ -33,15 +33,11 @@ public struct ZoomTransform: Sendable {
         self.cameraCenter = Self.clamp(cameraCenter ?? source / 2, source: source, scale: self.scale)
     }
 
-    /// The source viewport is contained within the recording, with a margin
-    /// overshoot: an edge click may centre on itself revealing canvas on one
-    /// side, so the target frames with margin instead of clipping.
-    public static func clamp(_ focus: SIMD2<Double>, source: SIMD2<Double>, scale: Double, margin: Double = 0.12) -> SIMD2<Double> {
+    /// The source viewport is always contained within the recording, even at the corners.
+    public static func clamp(_ focus: SIMD2<Double>, source: SIMD2<Double>, scale: Double) -> SIMD2<Double> {
         let half = source / (2 * max(scale, 1))
-        let over = margin * source
-        let ox = min(max(over.x, 0), half.x), oy = min(max(over.y, 0), half.y)
-        return SIMD2(min(max(focus.x, half.x - ox), source.x - half.x + ox),
-                     min(max(focus.y, half.y - oy), source.y - half.y + oy))
+        return SIMD2(min(max(focus.x, half.x), source.x - half.x),
+                     min(max(focus.y, half.y), source.y - half.y))
     }
 
     public var viewport: SIMD4<Double> {
