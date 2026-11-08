@@ -35,7 +35,8 @@ static float rectMask(float2 px, float4 rect, float r) {
 
 // ---- Backdrop (cached): dither / wallpaper / gradient / mesh / solid + two-layer shadow
 struct BackdropU { float4 content; float2 canvas; float angle; int count; int kind;
-                   float radius; float shadow; float scale; float cell; float density; int hasWall; float time; float4 pointer; };
+                   float radius; float shadow; float scale; float cell; float density; int hasWall; float time; float4 pointer;
+                   float imgBlur; float imgAlpha; float imgContrast; float imgBright; };
 
 constant float kBayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
 
@@ -109,10 +110,15 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
         c = wall.sample(linClamp, (in.px - off) / (ts * s)).rgb;
     } else if (u.kind == 8 && u.hasWall == 1) {
         // User photo / Unsplash backdrop, filled like cover (no letterboxing).
+        // imgBlur is mip level (0 sharp .. 4 soft frosted); imgAlpha 0..1,
+        // imgContrast 0..2 around 0.18 grey, imgBright 0..2 additive.
         float2 ts = float2(wall.get_width(), wall.get_height());
         float s = max(u.canvas.x / ts.x, u.canvas.y / ts.y);
         float2 off = (u.canvas - ts * s) * 0.5;
-        c = wall.sample(linClamp, (in.px - off) / (ts * s)).rgb;
+        float lvl = clamp(u.imgBlur, 0.0, 4.0);
+        c = wall.sample(linMip, (in.px - off) / (ts * s), lvl).rgb;
+        c = clamp((c - 0.18) * u.imgContrast + 0.18 + (u.imgBright - 1.0) * 0.25, 0.0, 1.0);
+        c *= u.imgAlpha;
     } else if (u.kind == 0 && u.count > 1) {
         float2 d = float2(cos(u.angle), sin(u.angle));
         float t = dot(uv - 0.5, d) / (abs(d.x) + abs(d.y)) + 0.5;

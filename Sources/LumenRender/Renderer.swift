@@ -66,7 +66,7 @@ public struct Geometry: Sendable {
 private struct QuadU { var rect: SIMD4<Float>; var canvas: SIMD2<Float> }
 private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; var angle: Float; var count: Int32; var kind: Int32
                            var radius: Float; var shadow: Float; var scale: Float; var cell: Float; var density: Float; var hasWall: Int32
-                           var time: Float; var pointer: SIMD4<Float> }
+                           var time: Float; var pointer: SIMD4<Float>; var imgBlur: Float; var imgAlpha: Float; var imgContrast: Float; var imgBright: Float }
 private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float; var tilt: SIMD2<Float>; var radii: SIMD4<Float> }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32 }
@@ -272,7 +272,7 @@ public final class Renderer: @unchecked Sendable {
         guard id != styleImageID else { return }
         styleImageID = id
         styleImage = try? MTKTextureLoader(device: device)
-            .newTexture(URL: url, options: [.SRGB: false])
+            .newTexture(URL: url, options: [.SRGB: false, .generateMipmaps: true])
     }
 
     /// The Mac's own desktop picture, loaded once per wallpaper change. No download, no bundled asset.
@@ -430,7 +430,9 @@ public final class Renderer: @unchecked Sendable {
                                   radius: Float(g.radius), shadow: Float(st.shadow), scale: Float(g.ui * 1.33),
                                   cell: Float(max(2, st.ditherCell * g.ui)), density: Float(st.ditherDensity),
                                   hasWall: (st.background == .wallpaper && wallTex != nil) || hasStyleImage ? 1 : 0,
-                                  time: Float(backgroundTime), pointer: pointer))
+                                  time: Float(backgroundTime), pointer: pointer,
+                                  imgBlur: Float(st.imageBlur), imgAlpha: Float(st.imageOpacity),
+                                  imgContrast: Float(st.imageContrast), imgBright: Float(st.imageBrightness)))
                 cols.withUnsafeBytes { e.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()
