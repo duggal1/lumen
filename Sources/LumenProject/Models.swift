@@ -273,7 +273,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     /// Auto loudness. Off makes `outputGainDb` the only master gain.
     public var normalize = true
     public var outputGainDb = 0.0
-    public var targetLUFS = -16.0
+    public var targetLUFS = -14.0
     public var studioMode: StudioMode = .standard
     public var clickSounds = true, whooshes = true, keySounds = false
     public var clickTone: ClickSound = .mouse
