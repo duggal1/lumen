@@ -3,9 +3,9 @@ import Testing
 import LumenProject
 import LumenRender
 
-@Test func zoomBackdropBlurIsOffByDefaultAndSourceSafe() throws {
+@Test func zoomBackdropBlurIsOnByDefaultAndSourceSafe() throws {
     let style = Style()
-    #expect(style.zoomBackgroundBlur == false)
+    #expect(style.zoomBackgroundBlur == true)
     #expect(BackdropBlur.mipLevel(enabled: false, cameraScale: 4) == 0)
     #expect(BackdropBlur.mipLevel(enabled: true, cameraScale: 1) == 0)
     #expect(BackdropBlur.mipLevel(enabled: true, cameraScale: 1.8) > 0)
