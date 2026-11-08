@@ -201,10 +201,17 @@ public struct CameraParams: Codable, Equatable, Sendable {
     public var preset: ZoomPreset = .balanced
     public var autoZoom = true
     public var maxScale = 3.5
-    public var minScale = 1.15
+    public var minScale = 1.25
     public var minTrigger = 1.25
-    public var leadIn = 0.45, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
+    public var leadIn = 0.6, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
     public var omegaPan = 7.0, omegaZoom = 6.0, lookahead = 0.20, deadZone = 0.28, followDelay = 0.12
+    // Zoom v3: auto range 1.25-2.6 around base 1.8; 3.5 max stays for manual.
+    public var baseScale = 1.8
+    public var autoMaxScale = 2.6
+    public var zoomOutGap = 3.5
+    public var hold = 1.2
+    public var safeZone = 0.62
+    public var cameraModel = 3
     public var centerOffsetX = 0.0, centerOffsetY = 0.0         // view-normalized bias of where the cursor sits in the zoomed view
     public var sensitivity = 0.5                                // 0 = only clicks, 1 = purposeful hovers count too
     public var clickWeight = 3.0
@@ -221,6 +228,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case preset, autoZoom, maxScale, minScale, minTrigger, leadIn, tail, mergeGap, panThroughGap, minHold, omegaPan, omegaZoom, lookahead, deadZone
         case followDelay, centerOffsetX, centerOffsetY, sensitivity, clickWeight, shutter, maxSamples, upscaleMaxFactor, upscaleEnabled, tilt, maxYaw, maxPitch, floatDeg, omegaTilt, tiltSeed
+        case baseScale, autoMaxScale, zoomOutGap, hold, safeZone, cameraModel
     }
     public init() {}
     public init(from d: Decoder) throws {
@@ -232,6 +240,15 @@ public struct CameraParams: Codable, Equatable, Sendable {
         followDelay = c.opt(.followDelay, followDelay); centerOffsetX = c.opt(.centerOffsetX, centerOffsetX); centerOffsetY = c.opt(.centerOffsetY, centerOffsetY)
         sensitivity = c.opt(.sensitivity, sensitivity); clickWeight = c.opt(.clickWeight, clickWeight); shutter = c.opt(.shutter, shutter)
         maxSamples = c.opt(.maxSamples, maxSamples)
+        baseScale = c.opt(.baseScale, baseScale); autoMaxScale = c.opt(.autoMaxScale, autoMaxScale)
+        zoomOutGap = c.opt(.zoomOutGap, zoomOutGap); hold = c.opt(.hold, hold); safeZone = c.opt(.safeZone, safeZone)
+        cameraModel = c.opt(.cameraModel, cameraModel)
+        // Migration: old projects keep manual segments but reset the decision
+        // layer to v3 defaults, then re-derive.
+        if cameraModel < 3 {
+            baseScale = 1.8; autoMaxScale = 2.6; zoomOutGap = 3.5; hold = 1.2; safeZone = 0.62
+            leadIn = 0.6; minScale = 1.25; cameraModel = 3
+        }
         upscaleMaxFactor = min(max(c.opt(.upscaleMaxFactor, upscaleMaxFactor), 2), 10)
         upscaleEnabled = c.opt(.upscaleEnabled, upscaleEnabled)
         tilt = c.opt(.tilt, tilt); maxYaw = c.opt(.maxYaw, maxYaw); maxPitch = c.opt(.maxPitch, maxPitch)
@@ -242,6 +259,14 @@ public struct CameraParams: Codable, Equatable, Sendable {
         preset = p; maxScale = p.maxScale
         leadIn = 0.45; tail = 0.7; omegaPan = 7; omegaZoom = 6; shutter = 0.5; tilt = .off
         if p == .cinematic { leadIn = 0.9; tail = 1.1; omegaPan = 4.5; omegaZoom = 4.0; shutter = 0.6; tilt = .lean }
+        // Zoom v3 presets: base/autoMax/leadIn.
+        switch p {
+        case .subtle: baseScale = 1.4; autoMaxScale = 2.0; leadIn = 0.5
+        case .balanced: baseScale = 1.8; autoMaxScale = 2.6; leadIn = 0.6
+        case .dramatic: baseScale = 2.3; autoMaxScale = 3.2; leadIn = 0.5
+        case .cinematic: baseScale = 2.0; autoMaxScale = 2.8; leadIn = 0.9
+        case .fixed: break
+        }
     }
 }
 
