@@ -252,7 +252,9 @@ fragment float4 loupeFS(VO in [[stage_in]], constant LoupeU &u [[buffer(0)]], te
 
 // ---- Privacy masks: source-space rectangles composited after screen content.
 // Mode 3 (Blend) never samples pixels inside the protected region; mode 2
-// (Solid) never samples the source. Blur/pixelation are visual effects only.
+// (Solid) never samples the source. Modes 4/5 are the mosaic: crisp square
+// cells anchored to the source-space grid (never swims), rendered from the
+// raw source through the same camera transform as content.
 struct PrivacyU {
     float4 content;
     float4 sourceRect;
@@ -262,7 +264,17 @@ struct PrivacyU {
     int mode;
     float block;
     float pad;
+    float cell;
+    float sampledMix;
+    float levels;
 };
+
+static inline float hash12(float2 p) {
+    float3 p3 = fract(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
 fragment float4 privacyFS(VO in [[stage_in]], constant PrivacyU &u [[buffer(0)]],
                           texture2d<float> src [[texture(0)]]) {
     float alpha = rectMask(in.px, u.content, u.radius);
@@ -277,6 +289,28 @@ fragment float4 privacyFS(VO in [[stage_in]], constant PrivacyU &u [[buffer(0)]]
         // Sample only outside the masked source rectangle. The CPU falls back
         // to solid when every neighboring pixel could contain masked data.
         rgb = src.sample(linClamp, u.safeSample / u.sourceSize, level(0.0)).rgb;
+    } else if (u.mode == 4 || u.mode == 5) {
+        // Mosaic: grid anchored to SOURCE space via floor(p/cell) so cells
+        // never swim. Identity (4) samples the region with luminance
+        // quantization; secret (5) samples no region pixels at all — colors
+        // come from the outside background plus per-cell hash.
+        float cell = max(u.cell, 1.0);
+        float2 idx = floor(p / cell);
+        float n = hash12(idx * 1.37 + 91.0);
+        float3 base = src.sample(linClamp, clamp(u.safeSample / u.sourceSize, 0.0, 1.0), level(0.0)).rgb;
+        float3 synth = base * (0.82 + 0.36 * n);
+        float3 sampled = float3(0.0);
+        if (u.sampledMix > 0.0) {
+            float2 o = idx * cell;
+            for (int y = 0; y < 4; ++y) {
+                for (int x = 0; x < 4; ++x) {
+                    sampled += src.sample(linClamp, clamp((o + (float2(x, y) + 0.5) * (cell * 0.25)) / u.sourceSize, 0.0, 1.0), level(0.0)).rgb;
+                }
+            }
+            sampled *= (1.0 / 16.0);
+            if (u.levels > 0.0) sampled = floor(sampled * u.levels + 0.5) / u.levels;
+        }
+        rgb = mix(synth, sampled, u.sampledMix) * 0.9;
     } else if (u.mode == 1) {
         float pitch = max(u.block, 24.0);
         float2 tile = floor(p / pitch) * pitch + 0.5 * pitch;
