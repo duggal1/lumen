@@ -243,10 +243,6 @@ public final class InputRecorder: @unchecked Sendable {
         return UInt32(idx)
     }
 
-    /// Caret/AX frame for the focussed element at capture time. Called on keyDown bursts.
-    /// Same origin/scale conversion as mouse points — no window-edge fallback.
-    func caretFrame() -> AXFrame? { queryCaret() }
-
     private func queryAX(_ p: CGPoint) -> AXFrame? {
         let sys = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(sys, 0.1)
@@ -268,36 +264,6 @@ public final class InputRecorder: @unchecked Sendable {
         return AXFrame(x: (pos.x - origin.x) * scale, y: (pos.y - origin.y) * scale,
                        w: size.width * scale, h: size.height * scale,
                        secure: secure, label: title)
-    }
-
-    /// Caret rect for typing: AXSelectedTextRange -> AXBoundsForRange.
-    /// Chromium exposes AXTree only if accessibility enabled. Try to enable
-    /// AXManualAccessibility / AXEnhancedUserInterface on the focused app.
-    private func queryCaret() -> AXFrame? {
-        guard axTrusted.withLock({ $0 }) else { return nil }
-        let sys = AXUIElementCreateSystemWide()
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(sys, kAXFocusedApplicationAttribute as CFString, &focused) == .success,
-              let app = focused else { return nil }
-        let axApp = app as! AXUIElement
-        // Best-effort enable (Chromium needs this to expose AX tree)
-        AXUIElementSetAttributeValue(axApp, "AXManualAccessibility" as CFString, true as CFTypeRef)
-        AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, true as CFTypeRef)
-        var focusedElRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focusedElRef) == .success,
-              let focusedElRefTyped = focusedElRef else { return nil }
-        let focusedEl = focusedElRefTyped as! AXUIElement
-        var selRange: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(focusedEl, kAXSelectedTextRangeAttribute as CFString, &selRange) == .success,
-              let range = selRange else { return nil }
-        // AXBoundsForRange is not a standard CF attribute; fall back to element bounds
-        var bounds: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(focusedEl, kAXPositionAttribute as CFString, &bounds) == .success,
-              let boundsVal = bounds else { return nil }
-        var rect = NSRect.zero
-        guard AXValueGetValue(boundsVal as! AXValue, .cgRect, &rect) else { return nil }
-        return AXFrame(x: (rect.origin.x - origin.x) * scale, y: (rect.origin.y - origin.y) * scale,
-                       w: rect.width * scale, h: rect.height * scale)
     }
 }
 
