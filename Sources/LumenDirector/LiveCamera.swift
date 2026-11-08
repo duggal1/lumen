@@ -63,7 +63,7 @@ public struct LiveCamera: Sendable {
         var on = 1.0
         if let idle = cursor.idleHide, tt - max(lastMove, lastActivity) >= idle { on = 0 }
         opacity += clamp(on - opacity, -dt / 0.4, dt / 0.15)
-        rings.removeAll { tt - $0.t > 0.8 }
+        rings.removeAll { tt - $0.t > max(cursor.clickDuration, 0.05) }
         if zoomed && !down && tt - lastActivity > hold { zoomed = false }
         let wz = SIMD3<Double>(repeating: omegaZoom)
         zoom1.step(target: SIMD3(zoomed ? 1 : 0, 0, 0), omega: wz, dt: dt)
@@ -92,7 +92,10 @@ public struct LiveCamera: Sendable {
         let cs = CursorSample(position: SIMD2(Float(cur2.x.x), Float(cur2.x.y)), velocity: SIMD2(Float(cur2.v.x), Float(cur2.v.y)),
                               opacity: Float(smoothstep(opacity)), press: Float(press.x.x), shape: shape)
         var fx: [ClickRing] = []
-        if let dur = cursor.clickRing {
+        // Mirror the offline gate: no rings when the effect is off, and the
+        // window follows clickDuration (not a hardcoded 0.8 s).
+        if cursor.clickRing != nil, cursor.clickEffect != .none {
+            let dur = max(cursor.clickDuration, 0.05)
             fx = rings.filter { now >= $0.t && now - $0.t <= dur }
                 .map { ClickRing(position: SIMD2($0.x, $0.y), progress: Float((now - $0.t) / dur)) }
         }
