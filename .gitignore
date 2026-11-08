@@ -5,3 +5,5 @@
 App/public/assets/*.mp3
 App/public/assets/music/**/*.mp3
 validation/
+wallpapers/
+App/public/assets/wallpapers/macos/
