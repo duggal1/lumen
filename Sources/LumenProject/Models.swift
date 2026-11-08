@@ -97,6 +97,10 @@ public struct Style: Codable, Equatable, Sendable {
     public var cornerRadii: CornerRadii?                // nil = uniform `cornerRadius`
     public var customAspect: Double?                    // nil = `canvas`
     public var zoomBackgroundBlur = true
+    /// Image adjust (0 = off). Additive; old projects decode to defaults.
+    public var imageBlur = 0.0, imageOpacity = 1.0, imageContrast = 1.0, imageBrightness = 1.0
+    /// Frame weight (pt). The frame toggle itself is `innerBorder`.
+    public var frameWeight = 1.0
     /// Local photo for `.image`. Absolute path or bundled sentinel
     /// (`serene-lake.jpg` resolves from Resources/Wallpapers). The
     /// renderer loads it once per modification date, never per frame.
@@ -105,7 +109,7 @@ public struct Style: Codable, Equatable, Sendable {
     public var insets: EdgeInsetsN { paddingInsets ?? EdgeInsetsN(all: padding) }
     public var radii: CornerRadii { cornerRadii ?? CornerRadii(all: cornerRadius) }
     enum CodingKeys: String, CodingKey {
-        case background, colors, gradientAngle, ditherCell, ditherDensity, contentScale, padding, cornerRadius, shadow, innerBorder, canvas, paddingInsets, cornerRadii, customAspect, zoomBackgroundBlur, backgroundImagePath
+        case background, colors, gradientAngle, ditherCell, ditherDensity, contentScale, padding, cornerRadius, shadow, innerBorder, canvas, paddingInsets, cornerRadii, customAspect, zoomBackgroundBlur, backgroundImagePath, imageBlur, imageOpacity, imageContrast, imageBrightness, frameWeight
     }
     public init() {}
     public init(from d: Decoder) throws {
@@ -119,6 +123,9 @@ public struct Style: Codable, Equatable, Sendable {
         customAspect = try? c.decodeIfPresent(Double.self, forKey: .customAspect)
         zoomBackgroundBlur = c.opt(.zoomBackgroundBlur, zoomBackgroundBlur)
         backgroundImagePath = try? c.decodeIfPresent(String.self, forKey: .backgroundImagePath)
+        imageBlur = c.opt(.imageBlur, imageBlur); imageOpacity = c.opt(.imageOpacity, imageOpacity)
+        imageContrast = c.opt(.imageContrast, imageContrast); imageBrightness = c.opt(.imageBrightness, imageBrightness)
+        frameWeight = c.opt(.frameWeight, frameWeight)
     }
 
     /// Makes a downloaded or user-selected photo the canvas background.
