@@ -95,7 +95,7 @@ struct TranscriptTab: View {
                     Text(why).font(AppType.caption).foregroundStyle(Tok.statusBad)
                     LButton(title: "Retry", kind: .secondary) { model.transcribe() }
                 case .notInstalled:
-                    Text("Import a Moonshine model folder above.").font(AppType.caption).foregroundStyle(Tok.text2)
+                    Text("Choose a model folder.").font(AppType.caption).foregroundStyle(Tok.text2)
                 case .idle:
                     if let t = model.transcript {
                         HStack { Text("\(t.words.count) words").font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2); Spacer()
