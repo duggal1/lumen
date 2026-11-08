@@ -379,7 +379,7 @@ struct Inspector: View {
                             Text(String(format: "%.1f s", clip.duration))
                                 .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
                             LButton(title: "Jump", kind: .quiet) { m.seek(clip.start) }
-                            LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.deleteClip(clip.id)) }
+                            LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.rippleDeleteClip(id: clip.id)) }
                         }
                     }
                 }
@@ -543,6 +543,18 @@ struct Inspector: View {
         })
     }
 
+    private func clickColor(_ m: EditorModel) -> Binding<Color> {
+        Binding(get: {
+            let c = m.timeline.cursor.clickColor
+            return Color(.sRGB, red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
+        }, set: { color in
+            guard let c = NSColor(color).usingColorSpace(.sRGB) else { return }
+            m.edit(coalesce: true) { timeline in
+                timeline.cursor.clickColor = RGBA(r: Float(c.redComponent), g: Float(c.greenComponent), b: Float(c.blueComponent))
+            }
+        })
+    }
+
     private var cursor: some View {
         let m = model
         return VStack(alignment: .leading, spacing: 24) {
@@ -574,6 +586,11 @@ struct Inspector: View {
                     LDropdown(sel: m.bind(\.cursor.clickEffect),
                               options: ClickEffect.allCases.map { ($0, $0.rawValue.capitalized, "cursorarrow.click") })
                         .frame(width: 130)
+                }
+                SliderRow(label: "Click size", v: m.bind(\.cursor.clickSize), range: 0.5...2.0, fmt: { String(format: "%.1f×", $0) })
+                SliderRow(label: "Click intensity", v: m.bind(\.cursor.clickIntensity), range: 0...1.5, fmt: { String(format: "%.1f×", $0) })
+                Row(label: "Click color") {
+                    ColorPicker("", selection: clickColor(m), supportsOpacity: false).labelsHidden()
                 }
                 SliderRow(label: "Click duration", v: m.bind(\.cursor.clickDuration), range: 0.2...0.9, fmt: { String(format: "%.2f s", $0) })
                 Text("Glass bloom is baked into the Metal renderer. SwiftUI Liquid Glass macOS 26 APIs cannot run inside that renderer, so editor UI only uses the material fallback.")
