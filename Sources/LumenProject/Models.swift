@@ -151,12 +151,16 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     public var clickEffect: ClickEffect = .glass
     public var clickDuration: Double = 0.50
     public var clickColor: RGBA = RGBA(0xF97316)
+    /// Multiplies the ring radius (0.5...2.0). Renderer consumes it.
+    public var clickSize: Double = 1.0
+    /// Multiplies ring alpha (0...1.5). Renderer consumes it.
+    public var clickIntensity: Double = 1.0
     public var clickRing: Double? = 0.45
     public var zoomCompensation: Double = 0.5
     public var constantSize = false                     // true = cursor keeps its on-screen size during zoom
     public var loop: Double?                            // seconds of tail that glides back to the first frame; nil = off
     public var effectiveCompensation: Double { constantSize ? 1 : zoomCompensation }
-    enum CodingKeys: String, CodingKey { case pack, size, smoothingSigma, glide, idleHide, pressScale, clickRing, zoomCompensation, constantSize, loop, clickEffect, clickDuration, clickColor }
+    enum CodingKeys: String, CodingKey { case pack, size, smoothingSigma, glide, idleHide, pressScale, clickRing, zoomCompensation, constantSize, loop, clickEffect, clickDuration, clickColor, clickSize, clickIntensity }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -164,6 +168,7 @@ public struct CursorStyle: Codable, Equatable, Sendable {
         idleHide = c.contains(.idleHide) ? ((try? c.decodeIfPresent(Double.self, forKey: .idleHide)) ?? nil) : idleHide
         pressScale = c.opt(.pressScale, pressScale)
         clickEffect = c.opt(.clickEffect, clickEffect); clickDuration = c.opt(.clickDuration, clickDuration); clickColor = c.opt(.clickColor, clickColor)
+        clickSize = c.opt(.clickSize, clickSize); clickIntensity = c.opt(.clickIntensity, clickIntensity)
         clickRing = c.contains(.clickRing) ? ((try? c.decodeIfPresent(Double.self, forKey: .clickRing)) ?? nil) : clickRing
         zoomCompensation = c.opt(.zoomCompensation, zoomCompensation); constantSize = c.opt(.constantSize, constantSize)
         loop = try? c.decodeIfPresent(Double.self, forKey: .loop)
@@ -175,6 +180,7 @@ public struct CursorStyle: Codable, Equatable, Sendable {
         try c.encode(clickRing, forKey: .clickRing); try c.encode(zoomCompensation, forKey: .zoomCompensation)
         try c.encode(clickEffect, forKey: .clickEffect); try c.encode(clickDuration, forKey: .clickDuration)
         try c.encode(clickColor, forKey: .clickColor)
+        try c.encode(clickSize, forKey: .clickSize); try c.encode(clickIntensity, forKey: .clickIntensity)
         try c.encode(constantSize, forKey: .constantSize); try c.encodeIfPresent(loop, forKey: .loop)
     }
 }
