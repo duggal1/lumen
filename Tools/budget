@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Tools/budget — budget counter for goal.yaml runs. Owns .proof/budget.json (never hand-edit).
+#
+# Usage:
+#   Tools/budget init                       # fresh run: record start, zero counters, status=active
+#   Tools/budget tick                       # every turn FIRST: turn+=1, print counts, STOP+exit 1 over limit
+#   Tools/budget approach "reason"          # log an abandoned approach, STOP+exit 1 at limit
+#   Tools/budget status                     # print .proof/budget.json
+#   Tools/budget stop done|blocked|budget   # mark terminal status (agent calls before final report)
+#
+# Limits (frozen into budget.json at init; env overrides apply at init only):
+#   GOAL_MAX_TURNS (60), GOAL_MAX_MINUTES (90), GOAL_MAX_APPROACHES (3)
+# Proof dir override: GOAL_PROOF_DIR (default .proof).
+set -euo pipefail
+
+PROOF_DIR="${GOAL_PROOF_DIR:-.proof}"
+BUDGET_FILE="$PROOF_DIR/budget.json"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: Tools/budget <init|tick|approach|status|stop> [args]
+  init                          Fresh run: record start (date -u), zero counters, status=active
+  tick                          Every turn FIRST: turn+=1, print 'turns X/Y, minutes A/B', STOP+exit 1 if over limit
+  approach "reason"             Log one abandoned approach; STOP+exit 1 when count reaches max
+  status                        Print .proof/budget.json
+  stop done|blocked|budget      Mark terminal status (call before DONE/BLOCKED/BUDGET report)
+Env: GOAL_PROOF_DIR=.proof  GOAL_MAX_TURNS=60  GOAL_MAX_MINUTES=90  GOAL_MAX_APPROACHES=3
+EOF
+  exit 2
+}
+
+budget_init() {
+  mkdir -p "$PROOF_DIR"
+  local now_utc now_epoch
+  now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  now_epoch=$(date -u +%s)
+  local max_turns="${GOAL_MAX_TURNS:-60}" max_minutes="${GOAL_MAX_MINUTES:-90}" max_approaches="${GOAL_MAX_APPROACHES:-3}"
+  python3 -c '
+import json, sys
+path, start_utc, start_epoch, max_turns, max_minutes, max_approaches = sys.argv[1:7]
+d = {
+    "start_utc": start_utc,
+    "start_epoch": int(start_epoch),
+    "updated_utc": start_utc,
+    "turn": 0,
+    "approaches": 0,
+    "approach_log": [],
+    "status": "active",
+    "limits": {
+        "max_turns": int(max_turns),
+        "max_minutes": int(max_minutes),
+        "max_distinct_approaches": int(max_approaches),
+    },
+}
+json.dump(d, open(path, "w"), indent=2)
+' "$BUDGET_FILE" "$now_utc" "$now_epoch" "$max_turns" "$max_minutes" "$max_approaches"
+  echo "budget initialized: turns 0/$max_turns, minutes 0/$max_minutes"
+}
+
+budget_tick() {
+  if [[ ! -f "$BUDGET_FILE" ]]; then
+    echo "no budget found at $BUDGET_FILE, initializing" >&2
+    budget_init
+  fi
+  local now_utc now_epoch
+  now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  now_epoch=$(date -u +%s)
+  set +e
+  python3 -c '
+import json, sys
+path, now_utc, now_epoch = sys.argv[1:4]
+now_epoch = int(now_epoch)
+d = json.load(open(path))
+limits = d["limits"]
+elapsed_min = max(0, (now_epoch - int(d["start_epoch"])) // 60)
+if d.get("status") != "active":
+    print("turns {}/{}, minutes {}/{}".format(d.get("turn", 0), limits["max_turns"], elapsed_min, limits["max_minutes"]))
+    print("STOP: budget already stopped (status={})".format(d.get("status")))
+    sys.exit(1)
+d["turn"] = int(d.get("turn", 0)) + 1
+d["updated_utc"] = now_utc
+print("turns {}/{}, minutes {}/{}".format(d["turn"], limits["max_turns"], elapsed_min, limits["max_minutes"]))
+over = []
+if d["turn"] >= limits["max_turns"]:
+    over.append("turns {} >= {}".format(d["turn"], limits["max_turns"]))
+if elapsed_min >= limits["max_minutes"]:
+    over.append("minutes {} >= {}".format(elapsed_min, limits["max_minutes"]))
+if over:
+    d["status"] = "budget"
+    json.dump(d, open(path, "w"), indent=2)
+    print("STOP: budget exceeded ({})".format(", ".join(over)))
+    sys.exit(1)
+json.dump(d, open(path, "w"), indent=2)
+' "$BUDGET_FILE" "$now_utc" "$now_epoch"
+  rc=$?
+  set -e
+  exit $rc
+}
+
+budget_approach() {
+  local reason="${1:-}"
+  if [[ -z "$reason" ]]; then
+    echo "approach requires a reason, e.g. Tools/budget approach \"sqlite lock, need postgres\"" >&2
+    exit 2
+  fi
+  if [[ ! -f "$BUDGET_FILE" ]]; then
+    echo "no budget found at $BUDGET_FILE; run Tools/budget init first" >&2
+    exit 1
+  fi
+  local now_utc now_epoch
+  now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  now_epoch=$(date -u +%s)
+  set +e
+  python3 -c '
+import json, sys
+path, now_utc, now_epoch, reason = sys.argv[1:5]
+d = json.load(open(path))
+d["approaches"] = int(d.get("approaches", 0)) + 1
+d["approach_log"] = d.get("approach_log", []) + [{"ts": now_utc, "reason": reason}]
+d["updated_utc"] = now_utc
+limits = d["limits"]
+print("approaches {}/{}".format(d["approaches"], limits["max_distinct_approaches"]))
+if d["approaches"] >= limits["max_distinct_approaches"]:
+    d["status"] = "budget"
+    json.dump(d, open(path, "w"), indent=2)
+    print("STOP: approach budget exceeded ({} >= {})".format(d["approaches"], limits["max_distinct_approaches"]))
+    sys.exit(1)
+json.dump(d, open(path, "w"), indent=2)
+' "$BUDGET_FILE" "$now_utc" "$now_epoch" "$reason"
+  rc=$?
+  set -e
+  exit $rc
+}
+
+budget_status() {
+  if [[ ! -f "$BUDGET_FILE" ]]; then
+    echo "no budget found at $BUDGET_FILE; run Tools/budget init first" >&2
+    exit 1
+  fi
+  cat "$BUDGET_FILE"
+}
+
+budget_stop() {
+  local status="${1:-}"
+  case "$status" in
+    done|blocked|budget) ;;
+    *) echo "stop requires one of: done blocked budget" >&2; exit 2 ;;
+  esac
+  if [[ ! -f "$BUDGET_FILE" ]]; then
+    echo "no budget found at $BUDGET_FILE; run Tools/budget init first" >&2
+    exit 1
+  fi
+  local now_utc
+  now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  python3 -c '
+import json, sys
+path, now_utc, status = sys.argv[1:4]
+d = json.load(open(path))
+d["status"] = status
+d["updated_utc"] = now_utc
+json.dump(d, open(path, "w"), indent=2)
+print("budget status: " + status)
+' "$BUDGET_FILE" "$now_utc" "$status"
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  init) budget_init ;;
+  tick) budget_tick ;;
+  approach) shift; budget_approach "${1:-}" ;;
+  status) budget_status ;;
+  stop) shift; budget_stop "${1:-}" ;;
+  -h|--help|help) usage ;;
+  *) usage ;;
+esac

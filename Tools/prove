@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+# Tools/prove — ONE command that re-runs proof from a clean state.
+#
+# Usage:
+#   Tools/prove             # fresh .proof/<ts>/ (STAMP.txt, logs, MANIFEST.md); exit 0 iff every criterion PASS
+#   Tools/prove stamp       # print stamp only (UTC time + short git HEAD + working-tree fingerprint)
+#
+# Stamp: UTC time + short git HEAD + fingerprint of the working tree (tracked diff
+# plus untracked files; if no git, a hash of the source files). Recomputed at the
+# end; if the fingerprint differs, the code changed after the proof and it is stale.
+#
+# Core checks (logs saved in .proof/<ts>/):
+#   - project build + test (Makefile build/test if present, else swift build/test), each with PROVE_TIMEOUT (120s)
+#   - stamp freshness (start vs end fingerprint)
+#   - criteria coverage: every bullet in .proof/criteria.md must be annotated PASS
+#     (FAIL/UNVERIFIED/blank => exit 1; UNVERIFIED is never PASS)
+#   - optional .proof/proof-steps.sh (task-specific steps) — run if present, log saved
+#
+# Env: GOAL_PROOF_DIR=.proof  PROVE_TIMEOUT=120  PROVE_SKIP_PROJECT_CHECKS=1 (dry-run only)
+set -euo pipefail
+
+PROOF_DIR="${GOAL_PROOF_DIR:-.proof}"
+CRITERIA_FILE="$PROOF_DIR/criteria.md"
+PROVE_TIMEOUT="${PROVE_TIMEOUT:-120}"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: Tools/prove [run|stamp]
+  run (default)  Fresh .proof/<ts>/ with stamp, logs, MANIFEST.md. Exit 0 iff every criterion PASS.
+  stamp          Print stamp: UTC time + short git HEAD + working-tree fingerprint.
+Env: GOAL_PROOF_DIR=.proof  PROVE_TIMEOUT=120  PROVE_SKIP_PROJECT_CHECKS=1 (dry-run only)
+EOF
+  exit 2
+}
+
+fingerprint() {
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    {
+      git diff --no-color HEAD -- . 2>/dev/null || true
+      git diff --no-color --cached -- . 2>/dev/null || true
+      git ls-files --others --exclude-standard -z -- . 2>/dev/null | sort -z | xargs -0 -I{} shasum -a 256 -- {} 2>/dev/null || true
+    } | shasum -a 256 | cut -c1-16
+  else
+    # No git: hash of source files.
+    find . -type f \( -name '*.swift' -o -name '*.sh' -o -name '*.md' -o -name '*.py' \) -not -path './.build/*' -not -path './.git/*' -print0 2>/dev/null \
+      | sort -z | xargs -0 shasum -a 256 2>/dev/null | shasum -a 256 | cut -c1-16
+  fi
+}
+
+stamp() {
+  local ts head fp
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  head=$(git rev-parse --short HEAD 2>/dev/null || echo "nogit")
+  fp=$(fingerprint)
+  echo "$ts $head $fp"
+}
+
+run_with_timeout() {
+  # run_with_timeout <logfile> <cmd...>
+  local log="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$PROVE_TIMEOUT" "$@" >"$log" 2>&1
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$PROVE_TIMEOUT" "$@" >"$log" 2>&1
+  else
+    echo "WARN: timeout not available; running without 120s wrapper" | tee "$log" >&2
+    "$@" >>"$log" 2>&1
+  fi
+}
+
+prove_run() {
+  mkdir -p "$PROOF_DIR"
+  local start_stamp ts
+  start_stamp=$(stamp)
+  ts=$(echo "$start_stamp" | cut -d' ' -f1)
+  local out="$PROOF_DIR/$ts"
+  mkdir -p "$out"
+  echo "$start_stamp" >"$out/STAMP.txt"
+  echo "stamp: $start_stamp"
+  echo "proof dir: $out"
+
+  local fail=0
+
+  # --- project build + test (real running system, not mocks) ---
+  if [[ "${PROVE_SKIP_PROJECT_CHECKS:-0}" == "1" ]]; then
+    echo "SKIPPED: project checks (PROVE_SKIP_PROJECT_CHECKS=1, dry-run only)" | tee "$out/project-checks.log"
+  else
+    if [[ -f Makefile ]] && grep -q '^build:' Makefile; then
+      echo "running: make build (timeout ${PROVE_TIMEOUT}s)" | tee "$out/project-build.log"
+      if run_with_timeout "$out/project-build.log.tmp" make build; then
+        { echo "running: make build (timeout ${PROVE_TIMEOUT}s)"; cat "$out/project-build.log.tmp"; } >"$out/project-build.log"
+        echo "PASS: build" | tee -a "$out/project-build.log"
+      else
+        { echo "running: make build (timeout ${PROVE_TIMEOUT}s)"; cat "$out/project-build.log.tmp"; echo "FAIL: build exit=$?"; } >"$out/project-build.log"
+        echo "FAIL: build (see $out/project-build.log)" >&2
+        fail=1
+      fi
+    elif [[ -f Package.swift ]]; then
+      echo "running: swift build (timeout ${PROVE_TIMEOUT}s)" | tee "$out/project-build.log"
+      if run_with_timeout "$out/project-build.log.tmp" swift build; then
+        { echo "running: swift build (timeout ${PROVE_TIMEOUT}s)"; cat "$out/project-build.log.tmp"; } >"$out/project-build.log"
+        echo "PASS: build" | tee -a "$out/project-build.log"
+      else
+        { echo "running: swift build (timeout ${PROVE_TIMEOUT}s)"; cat "$out/project-build.log.tmp"; echo "FAIL: build"; } >"$out/project-build.log"
+        fail=1
+      fi
+    else
+      echo "SKIPPED: no Makefile/Package.swift; no project checks to run" | tee "$out/project-build.log"
+    fi
+
+    # Only run tests if build passed (or no build target), to keep logs readable.
+    if [[ $fail -eq 0 ]]; then
+      if [[ -f Makefile ]] && grep -q '^test:' Makefile; then
+        echo "running: make test (timeout ${PROVE_TIMEOUT}s)" | tee "$out/project-test.log"
+        if run_with_timeout "$out/project-test.log.tmp" make test; then
+          { echo "running: make test (timeout ${PROVE_TIMEOUT}s)"; cat "$out/project-test.log.tmp"; } >"$out/project-test.log"
+          echo "PASS: test" | tee -a "$out/project-test.log"
+        else
+          { echo "running: make test (timeout ${PROVE_TIMEOUT}s)"; cat "$out/project-test.log.tmp"; echo "FAIL: test"; } >"$out/project-test.log"
+          echo "FAIL: test (see $out/project-test.log)" >&2
+          fail=1
+        fi
+      elif [[ -f Package.swift ]]; then
+        echo "running: swift test (timeout ${PROVE_TIMEOUT}s)" | tee "$out/project-test.log"
+        if run_with_timeout "$out/project-test.log.tmp" swift test; then
+          { echo "running: swift test (timeout ${PROVE_TIMEOUT}s)"; cat "$out/project-test.log.tmp"; } >"$out/project-test.log"
+          echo "PASS: test" | tee -a "$out/project-test.log"
+        else
+          { echo "running: swift test (timeout ${PROVE_TIMEOUT}s)"; cat "$out/project-test.log.tmp"; echo "FAIL: test"; } >"$out/project-test.log"
+          echo "FAIL: test (see $out/project-test.log)" >&2
+          fail=1
+        fi
+      else
+        echo "SKIPPED: no Makefile/Package.swift test target" | tee "$out/project-test.log"
+      fi
+    else
+      echo "SKIPPED: tests not run (build failed)" | tee "$out/project-test.log"
+    fi
+  fi
+
+  # --- optional task-specific proof steps ---
+  if [[ -f "$PROOF_DIR/proof-steps.sh" ]]; then
+    echo "running: .proof/proof-steps.sh (timeout ${PROVE_TIMEOUT}s)"
+    if run_with_timeout "$out/proof-steps.log.tmp" bash "$PROOF_DIR/proof-steps.sh"; then
+      { echo "running: .proof/proof-steps.sh"; cat "$out/proof-steps.log.tmp"; } >"$out/proof-steps.log"
+      echo "PASS: proof-steps.sh" | tee -a "$out/proof-steps.log"
+    else
+      { echo "running: .proof/proof-steps.sh"; cat "$out/proof-steps.log.tmp"; echo "FAIL: proof-steps.sh"; } >"$out/proof-steps.log"
+      echo "FAIL: proof-steps.sh (see $out/proof-steps.log)" >&2
+      fail=1
+    fi
+  fi
+  rm -f "$out/project-build.log.tmp" "$out/project-test.log.tmp" "$out/proof-steps.log.tmp"
+
+  # --- stamp freshness: recompute, compare fingerprint ---
+  local end_fp start_fp
+  end_fp=$(fingerprint)
+  start_fp=$(cut -d' ' -f3 "$out/STAMP.txt")
+  echo "fingerprint start=$start_fp end=$end_fp" | tee -a "$out/STAMP.txt"
+  if [[ "$start_fp" != "$end_fp" ]]; then
+    echo "FAIL: stamp stale (code changed during prove)" >&2
+    fail=1
+  else
+    echo "PASS: stamp fresh"
+  fi
+
+  # --- criteria coverage ---
+  if [[ ! -f "$CRITERIA_FILE" ]]; then
+    echo "FAIL: $CRITERIA_FILE missing (freeze criteria first)" >&2
+    fail=1
+    echo "# MANIFEST" >"$out/MANIFEST.md"
+    echo "| artifact | criterion | note |" >>"$out/MANIFEST.md"
+    echo "| --- | --- | --- |" >>"$out/MANIFEST.md"
+    echo "| STAMP.txt | — | stamp $start_stamp |" >>"$out/MANIFEST.md"
+    echo "wrote $out/MANIFEST.md"
+    exit 1
+  fi
+
+  # Parse bullets: lines starting with "- ". PASS must appear on the bullet line.
+  local criteria_lines
+  criteria_lines=$(grep -E '^[-*][[:space:]]' "$CRITERIA_FILE" || true)
+  if [[ -z "$criteria_lines" ]]; then
+    echo "FAIL: no criteria bullets in $CRITERIA_FILE" >&2
+    fail=1
+  fi
+
+  # Write MANIFEST.md: stamp + every artifact per criterion.
+  {
+    echo "# MANIFEST"
+    echo ""
+    echo "stamp: $(head -n1 "$out/STAMP.txt")"
+    echo "fingerprint start=$start_fp end=$end_fp"
+    echo ""
+    echo "| artifact | criterion | note |"
+    echo "| --- | --- | --- |"
+    for f in "$out"/*; do
+      [[ -f "$f" ]] || continue
+      [[ "$(basename "$f")" == "MANIFEST.md" ]] && continue
+      echo "| $(basename "$f") | — | $(head -c 120 "$f" | tr '\n' ' ' | sed 's/|/\\/g') |"
+    done
+  } >"$out/MANIFEST.md"
+
+  echo "criteria:"
+  local i=0
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    i=$((i+1))
+    local status="UNVERIFIED"
+    if echo "$line" | grep -qiE '\bFAIL\b'; then
+      status="FAIL"; fail=1
+    elif echo "$line" | grep -qiE '\bPASS\b'; then
+      status="PASS"
+    fi
+    local disp
+    disp=$(echo "$line" | sed 's/^[-*][[:space:]]*//')
+    echo "  $i. $status: $disp"
+    echo "| $out/project-checks.log, $out/project-test.log, $out/proof-steps.log | $disp | $status |" >>"$out/MANIFEST.md"
+  done <<< "$criteria_lines"
+
+  if [[ $fail -ne 0 ]]; then
+    echo "prove: FAIL (see $out/MANIFEST.md)" >&2
+    exit 1
+  fi
+  echo "prove: PASS (see $out/MANIFEST.md)"
+}
+
+cmd="${1:-run}"
+case "$cmd" in
+  run) prove_run ;;
+  stamp) stamp ;;
+  -h|--help|help) usage ;;
+  *) usage ;;
+esac
