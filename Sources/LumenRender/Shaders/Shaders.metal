@@ -336,12 +336,13 @@ fragment float4 cursorFS(VO in [[stage_in]], constant CursorU &u [[buffer(0)]], 
     return c * (u.opacity * rectMask(in.px, u.content, u.radius));
 }
 
-// ---- Click ring
-struct RingU { float4 content; float4 color; float2 center; float radius; float progress; float cr; int mode; };
-// Liquid Glass bloom lives here, not in SwiftUI, so Metal preview and export
-// share the pixels. A translucent refractive disc with a soft specular rim;
-// no hard ring edge.
-fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]]) {
+// ---- Click ripple: expanding front refracts the source video under it,
+// no flat fill. Front radius eases out; amplitude decays (critically damped,
+// no overshoot). Center is the exact corrected click position from Part 1.
+struct RingU { float4 content; float4 color; float2 center; float radius; float progress; float cr; int mode;
+               float2 cam; float scale; float2 srcSize; };
+fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]],
+                       texture2d<float> src [[texture(0)]]) {
     float p = clamp(u.progress, 0.0, 1.0), e = 1.0 - pow(1.0 - p, 3.0);
     float r = mix(0.25, 1.0, e) * u.radius * 0.9, wd = mix(0.16, 0.025, e) * u.radius;
     float2 delta = in.px - u.center;
@@ -362,6 +363,21 @@ fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]]) {
         ink = clamp(bloom * 0.35 + rim * 0.65 + glow * 0.25, 0.0, 1.0);
         float a = ink * pow(1.0 - p, 1.2) * u.color.a * rectMask(in.px, u.content, u.cr);
         return float4(mix(float3(1.0), u.color.rgb, 0.25) * a + float3(0.15) * glow * pow(1.0 - p, 2.0) * u.color.a, a);
+    } else if (u.mode == 0) {
+        // Ripple: map canvas px back to source px through the camera, then
+        // displace the sample by a sine whose amplitude decays with p.
+        float2 view = u.srcSize / max(u.scale, 1.0);
+        float2 n = (in.px - u.content.xy) / max(u.content.zw, 1.0);
+        float2 srcPx = u.cam - view * 0.5 + n * view;
+        float2 d2 = srcPx - (u.cam + (u.center - u.content.xy) / max(u.content.zw, 1.0) * view - view * 0.5);
+        float rr = length(d2);
+        float x = (rr - r / max(u.content.z / u.srcSize.x, 1e-3)) / max(r * 0.15, 1.0);
+        float2 dir = rr > 1e-3 ? d2 / rr : float2(0.0);
+        float2 disp = dir * (6.0 * exp(-x * x) * sin(6.2831853 * (rr - r) / max(24.0, r * 0.4)) * (1.0 - p));
+        float3 refracted = src.sample(linClamp, clamp((srcPx - disp) / u.srcSize, 0.0, 1.0), level(0.0)).rgb;
+        float crest = ring * (0.35 + 0.65 * max(u.color.a, 0.001));
+        float a = pow(1.0 - p, 1.2) * min(crest, 1.0) * rectMask(in.px, u.content, u.cr);
+        return float4(mix(refracted, u.color.rgb, step(0.05, u.color.a) * a * 0.35) * a + refracted * (1.0 - a) * 0.0, a);
     }
     float a = ink * pow(1.0 - p, 1.5) * u.color.a * rectMask(in.px, u.content, u.cr);
     return float4(u.color.rgb * a, a);
