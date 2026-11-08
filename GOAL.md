@@ -11,6 +11,31 @@ session on `session.idle` until DONE, BLOCKED, or BUDGET.
 
 Typing `@goal.yaml <task>` still works too (attach the file via the composer).
 
+## The built-in 4000 limit (and why you saw it)
+
+OpenCode ships a built-in `/goal` with a hardcoded objective limit
+(`A goal objective is limited to 4000 characters`) compiled into the
+`opencode` binary — there is no config option to change it. The project
+command above **replaces** it in this repo, so in `studio` there is no
+4000 check (verified: a 69931-char objective succeeds via the project
+command). You hit the limit only if the built-in ran instead — that
+happens when OpenCode is launched outside `studio/` (project
+`.opencode/` not loaded) or before a `/reload`. Fix: launch from
+`studio/`, run `/reload` if the command list looks stale
+(`/goal` shows "Autonomous goal loop with real proof"), and keep
+objectives in files (below). You cannot remove the binary limit; you
+bypass it by using this project's command.
+
+## Long objectives
+
+Objectives over ~3000 characters belong in a file, not the command line:
+
+1. Write the full text to `.proof/objective.md`.
+2. Run `/goal read .proof/objective.md — <short summary> <criteria>`.
+3. The agent reads the file in full, freezes criteria from it.
+
+This avoids both the built-in limit and a 69KB inline prompt.
+
 ## Before you run
 
 - **Write criteria in the command.** The YAML derives them if you don't, but yours
