@@ -8,7 +8,7 @@ import LumenDirector
     let p = try JSONDecoder().decode(AudioPlan.self, from: Data("{}".utf8))
     #expect(p.micClean)
     #expect(p.studio == 0.25)
-    #expect(p.dereverb == 0)
+    #expect(p.dereverb == 0.5)
     var new = p
     new.studio = 0.65
     new.dereverb = 0.4

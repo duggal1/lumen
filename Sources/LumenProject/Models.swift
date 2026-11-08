@@ -269,7 +269,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var declick = true, declickDepthDb = -12.0
     /// Room-tail suppression, 0...1. Applied before EQ and compression so the
     /// compressor cannot lift the reverb back up after every phrase.
-    public var dereverb = 0.0
+    public var dereverb = 0.5
     /// Auto loudness. Off makes `outputGainDb` the only master gain.
     public var normalize = true
     public var outputGainDb = 0.0
