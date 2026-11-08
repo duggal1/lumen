@@ -12,8 +12,35 @@ public enum CaptureError: Error { case noSource, writer(String) }
 
 public struct RecordingConfig: Sendable {
     public enum Source: Sendable { case display(CGDirectDisplayID), window(CGWindowID), region(CGDirectDisplayID, CGRect) }
-    public enum Resolution: String, Sendable, CaseIterable { case native, ultraHD, twoK, p1080, p720 }
-    public enum Quality: String, Sendable, CaseIterable { case standard, high, max, custom }
+    public enum Resolution: String, Sendable, CaseIterable {
+        case native, eightK, ultraHD, twoK, p1080, p720
+        /// Cap on the native pixel height; width follows the source aspect, always even.
+        public var resolutionHeight: Int {
+            switch self {
+            case .native: Int.max
+            case .eightK: 4320
+            case .ultraHD: 2160
+            case .twoK: 1440
+            case .p1080: 1080
+            case .p720: 720
+            }
+        }
+    }
+    public enum Quality: String, Sendable, CaseIterable {
+        case standard, high, ultraHD, bluray, custom
+        /// Bits per pixel per frame, capped so a 4K/60 screen never writes more than 250 Mbps.
+        public var bitsPerPixel: Double {
+            switch self {
+            case .standard: 0.06
+            case .high: 0.12
+            case .ultraHD: 0.22
+            case .bluray: 0.35
+            case .custom: 0
+            }
+        }
+        public static let offered: [Quality] = [.standard, .high, .ultraHD, .bluray]
+    }
+
     public var source: Source
     public var fps = 60
     public var resolution: Resolution = .native
@@ -321,7 +348,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         let own = content.windows.filter { $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier }
         let sc = SCStreamConfiguration()
         let filter: SCContentFilter
-        var pw = 0, ph = 0, scale = 2.0, origin = CGPoint.zero, maxFPS = 60
+        var pw = 0, ph = 0, scale = 2.0, origin = CGPoint.zero
         switch cfg.source {
         case .display(let id), .region(let id, _):
             guard let d = content.displays.first(where: { $0.displayID == id }) else { throw CaptureError.noSource }
@@ -333,9 +360,6 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
                 sc.sourceRect = r; size = r.size; origin = CGPoint(x: b.minX + r.minX, y: b.minY + r.minY)
             }
             pw = Int((size.width * scale).rounded()) & ~1; ph = Int((size.height * scale).rounded()) & ~1
-            maxFPS = await MainActor.run {
-                NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == id }?.maximumFramesPerSecond ?? 60
-            }
         case .window(let wid):
             guard let w = content.windows.first(where: { $0.windowID == wid }) else { throw CaptureError.noSource }
             filter = SCContentFilter(desktopIndependentWindow: w)
@@ -355,15 +379,9 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
             pw = Int((w.frame.width * scale).rounded()) & ~1
             ph = Int((w.frame.height * scale).rounded()) & ~1
         }
-        let fps = min(cfg.fps, maxFPS)
+        let fps = min(cfg.fps, 120)
         // Capture resolution: cap native pixels, never above native.
-        let maxH: Int = switch cfg.resolution {
-        case .native: Int.max
-        case .ultraHD: 2160
-        case .twoK: 1440
-        case .p1080: 1080
-        case .p720: 720
-        }
+        let maxH = cfg.resolution.resolutionHeight
         if ph > maxH {
             let s = Double(maxH) / Double(ph)
             pw = max(Int((Double(pw) * s).rounded()) & ~1, 64)
@@ -388,9 +406,10 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         // Fragmented so a crash/force-quit still leaves a playable file.
         w.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
         let bitrate: Double = switch cfg.quality {
-        case .standard: min(Double(pw * ph) * Double(fps) * 0.06, 250_000_000)
-        case .high: min(Double(pw * ph) * Double(fps) * 0.12, 250_000_000)
-        case .max: min(Double(pw * ph) * Double(fps) * 0.20, 250_000_000)
+        case .standard: min(Double(pw * ph) * Double(fps) * RecordingConfig.Quality.standard.bitsPerPixel, 250_000_000)
+        case .high: min(Double(pw * ph) * Double(fps) * RecordingConfig.Quality.high.bitsPerPixel, 250_000_000)
+        case .ultraHD: min(Double(pw * ph) * Double(fps) * RecordingConfig.Quality.ultraHD.bitsPerPixel, 250_000_000)
+        case .bluray: min(Double(pw * ph) * Double(fps) * RecordingConfig.Quality.bluray.bitsPerPixel, 250_000_000)
         case .custom: max(cfg.customMbps * 1_000_000, 1_000_000)
         }
         let settings: [String: Any] = [

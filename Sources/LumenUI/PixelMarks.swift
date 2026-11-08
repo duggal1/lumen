@@ -243,6 +243,48 @@ struct LiveWaveform: View {
     }
 }
 
+/// The microphone test as a real envelope: mirrored dB cells on the same
+/// lattice the timeline uses. Nothing is smoothed into a decoration; each
+/// column is the peak of one 512-frame tap buffer, mapped floor -54 to -6 dB.
+struct PixelScope: View {
+    let wave: [Float]
+    var body: some View {
+        Canvas { c, size in
+            let pitch: CGFloat = 4, cell: CGFloat = 3
+            let cols = max(1, Int((size.width - 16) / pitch))
+            let mid = (size.height / 2).rounded(.down)
+            let shown = Array(wave.suffix(cols))
+            let pad = cols - shown.count
+            var dust = Path(), body = Path(), tips = Path(), head = Path()
+            // Empty columns: one 1 pt dust cell on the midline, never a slab.
+            for i in 0..<max(pad, 0) {
+                dust.addRect(CGRect(x: 8 + CGFloat(i) * pitch + 1, y: mid, width: 1, height: 1))
+            }
+            for (i, v) in shown.enumerated() {
+                let x = 8 + CGFloat(i + max(pad, 0)) * pitch
+                let level = TimelineGeometry.level(peak: v)
+                let isHead = i == shown.count - 1
+                if level == 0 {
+                    dust.addRect(CGRect(x: x + 1, y: mid, width: 1, height: 1))
+                    continue
+                }
+                for k in 0..<level {
+                    let up = CGRect(x: x, y: mid - 1 - CGFloat(k + 1) * pitch, width: cell, height: cell)
+                    let dn = CGRect(x: x, y: mid + 1 + CGFloat(k) * pitch, width: cell, height: cell)
+                    if isHead { head.addRect(up); head.addRect(dn) }
+                    else if k == level - 1 { tips.addRect(up); tips.addRect(dn) }
+                    else { body.addRect(up); body.addRect(dn) }
+                }
+            }
+            c.fillCells(dust, Tok.controlPressed)
+            c.fillCells(body, Ramp.o[3])
+            c.fillCells(tips, Ramp.o[4])
+            c.fillCells(head, Tok.text)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 /// Three 2 pt cells stepping every 160 ms. Indeterminate waits only.
 struct PixelWait: View {
     var body: some View {

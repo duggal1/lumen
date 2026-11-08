@@ -50,6 +50,10 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     public var paused = false
     public var micTesting = false
     public var micTestLevel: Float = 0
+    /// Real per-buffer peaks, newest last, for the pixel scope.
+    public var micTestWave: [Float] = []
+    /// RMS in dBFS from the raw input, no cosmetic gain.
+    public var micTestDB: Float = -60
     private var micTestEngine: AVAudioEngine?
     /// Bundles that crashed mid-recording and can be rebuilt from their journal.
     var recoverable: [ProjectBundle] = []
@@ -92,8 +96,11 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var livePreview = false
     private var livePreviewController: LivePreviewController?
     var displays: [(id: CGDirectDisplayID, name: String)] = []
+    /// Refresh the panel reports. Display copy only: 120 fps stays offered on a
+    /// 60 Hz panel, where it still gives the smoothest capture the system can
+    /// deliver and a 120 fps project timeline.
     var maxFPS = 60
-    var supportedFPS: [Int] { [24, 30, 60, 120].filter { $0 <= maxFPS } }
+    var supportedFPS: [Int] { [24, 30, 60, 120] }
     var windows: [(id: CGWindowID, name: String)] = []
     var error: String?
     var stats: CaptureStats?
@@ -124,7 +131,6 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID).map { ($0, s.localizedName) }
         }
         maxFPS = Self.probeMaxFPS(displayID: displayID)
-        if fps > maxFPS { fps = maxFPS }
         let urls = (try? FileManager.default.contentsOfDirectory(at: library, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         projects = urls.filter { $0.pathExtension == "lumen" }.compactMap { u in
             let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
@@ -321,6 +327,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         }
         let token = UUID(); micTestToken = token
         micTesting = true; micTestError = nil; micTestLevel = 0
+        micTestWave = []; micTestDB = -60
         let engine = AVAudioEngine()
         micTestEngine = engine
         engine.prepare()
@@ -336,11 +343,24 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             let n = Int(buffer.frameLength); guard n > 0 else { return }
             var sum: Float = 0; for i in 0..<n { sum += ch[i] * ch[i] }
             let rms = (sum / Float(n)).squareRoot()
+            // One peak per 10 ms-ish bucket: the scope shows the real envelope,
+            // not a smoothed decoration.
+            let buckets = 48
+            let stride = max(n / buckets, 1)
+            var peaks = [Float](repeating: 0, count: buckets)
+            for b in 0..<buckets {
+                var m: Float = 0
+                let lo = b * stride, hi = min(lo + stride, n)
+                if lo < hi { for i in lo..<hi { m = max(m, abs(ch[i])) } }
+                peaks[b] = m
+            }
             DispatchQueue.main.async {
                 Task { @MainActor in
                     guard let self, self.micTesting, self.micTestToken == token else { return }
                     let shown = min(rms * 6, 1)
                     self.micTestLevel = max(shown, self.micTestLevel * 0.75)
+                    self.micTestWave = Array((self.micTestWave + peaks).suffix(96))
+                    self.micTestDB = 20 * log10(max(rms, 0.000001))
                 }
             }
         }
@@ -364,6 +384,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         micTestEngine = nil
         micTesting = false
         micTestLevel = 0
+        micTestWave = []
+        micTestDB = -60
     }
 
     /// Discards the in-progress recording entirely: stops capture, deletes

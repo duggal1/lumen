@@ -136,6 +136,32 @@ extension TimelineStrip {
         func t(atX x: CGFloat, _ dur: Double) -> Double { Double(min(max((x - x0) / span, 0), 1)) * dur }
     }
 
+    /// The visible window over the output timeline: `pps` points per second,
+    /// `origin` = output second at the strip's left edge. Panning only moves
+    /// `origin`; zooming moves `pps` and keeps the anchored second still.
+    struct Viewport {
+        let lattice: Lattice
+        let pps: CGFloat
+        let origin: Double
+        let duration: Double
+        var cols: Int { lattice.cols }
+        var span: CGFloat { lattice.span }
+        var visible: Double { Double(span / max(pps, 0.001)) }
+        var maxOrigin: Double { max(0, duration - visible) }
+
+        func x(_ t: Double) -> CGFloat { lattice.x0 + CGFloat(t - origin) * pps }
+        func t(atX x: CGFloat) -> Double { origin + Double((x - lattice.x0) / pps) }
+        /// Unclamped column, for runs that extend past either edge.
+        func colFloor(_ t: Double) -> Int { Int((Double(t - origin) * Double(pps) / Double(Lattice.pitch)).rounded(.down)) }
+        func colCeil(_ t: Double) -> Int { Int((Double(t - origin) * Double(pps) / Double(Lattice.pitch)).rounded(.up)) }
+        /// Visible column nearest a time, clamped into the strip.
+        func col(_ t: Double) -> Int { min(max(colFloor(t), 0), cols - 1) }
+        func cx(_ t: Double) -> CGFloat { x(t) + Lattice.cell / 2 }
+        func time(atCol col: Int) -> Double { origin + Double(col) * Double(Lattice.pitch) / Double(pps) }
+        func clampOrigin(_ o: Double) -> Double { min(max(o, 0), maxOrigin) }
+        var timeRange: ClosedRange<Double> { origin...(origin + visible) }
+    }
+
     /// Ruler 24, then four lanes of 40 (strip 36, 2 pt air above and below) = 184.
     enum Lanes {
         static let ruler: CGFloat = 24, lane: CGFloat = 40

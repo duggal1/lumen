@@ -34,22 +34,27 @@ extension TimelineStrip {
     }
 
     func layoutRun(_ lat: TimelineStrip.Lattice, c0: Int, c1: Int, bodyH: CGFloat, capH: CGFloat, capCols: Int,
-                   body: Color, cap: Color, labels: [String], truncate: Bool, selected: Bool) -> Run {
-        let end = max(c1, c0 + 1)
-        let caps = (end - c0) >= 2 * capCols + 1 ? capCols : 1
-        let avail = end - c0 - 2 * caps - 2
+                   body: Color, cap: Color, labels: [String], truncate: Bool, selected: Bool) -> Run? {
+        // Keep only the part of the run that touches the visible strip. A clip
+        // that continues past an edge draws flat to that edge; its label is
+        // placed at the visible start.
+        let vis0 = max(c0, -1), vis1 = min(c1, lat.cols + 1)
+        guard vis1 > vis0 else { return nil }
+        let end = max(vis1, vis0 + 1)
+        let caps = (end - vis0) >= 2 * capCols + 1 ? capCols : 1
+        let avail = end - vis0 - 2 * caps - 2
         var label: String? = nil
         if avail > 0 {
             let w = CGFloat(avail) * TimelineStrip.Lattice.pitch
             label = truncate ? TimelineGeometry.truncated(labels[0], width: w)
                              : TimelineGeometry.firstFit(labels, width: w)
         }
-        var hole = c0..<c0
+        var hole = vis0..<vis0
         if let l = label {
             let n = Int((TimelineGeometry.textWidth(l) / TimelineStrip.Lattice.pitch).rounded(.up))
-            hole = (c0 + caps)..<(c0 + caps + n + 2)
+            hole = (vis0 + caps)..<(vis0 + caps + n + 2)
         }
-        return Run(c0: c0, c1: end, bodyH: bodyH, capH: capH, caps: caps, body: body, cap: cap,
+        return Run(c0: vis0, c1: end, bodyH: bodyH, capH: capH, caps: caps, body: body, cap: cap,
                    label: label, hole: hole, selected: selected)
     }
 
@@ -67,8 +72,9 @@ extension TimelineStrip {
         c.fillCells(body, r.body)
         c.fillCells(cap, r.cap)
         if let l = r.label {
+            let x = max(lat.x(col: r.c0 + r.caps + 1), lat.x0 + 6)
             c.draw(Text(l).font(TimelineStrip.Face.label).foregroundStyle(Tok.text),
-                   at: CGPoint(x: lat.x(col: r.c0 + r.caps + 1), y: TimelineStrip.Lanes.mid), anchor: .leading)
+                   at: CGPoint(x: x, y: TimelineStrip.Lanes.mid), anchor: .leading)
         }
         if r.selected {
             let left = lat.x(col: r.c0), right = lat.x(col: r.c1 - 1) + TimelineStrip.Lattice.cell
@@ -78,31 +84,39 @@ extension TimelineStrip {
 
     // MARK: - Ruler
 
-    @ViewBuilder func rulerLane() -> some View {
-        let tm = model.timeline.timeMap, dur = max(tm.outputDuration, 0.001)
+    @ViewBuilder func rulerLane(_ vp: Viewport) -> some View {
         Canvas { c, size in
-            let lat = TimelineStrip.Lattice(width: size.width)
-            let stepS: Double = dur > 120 ? 30 : dur > 40 ? 10 : dur > 12 ? 5 : dur > 3 ? 0.5 : 0.2
-            let sub = stepS / 5
-            let showSub = Double(lat.span) * sub / dur >= 6
+            let step = Self.rulerStep(vp.pps)
+            let sub = step / 5
+            let showSub = CGFloat(sub) * vp.pps >= 6
             var major = Path(), minor = Path()
-            var k = 0
-            while Double(k) * stepS <= dur + 1e-9 {
-                let t = Double(k) * stepS
-                let x = lat.x(col: lat.col(t, dur)) + 1
-                major.addRect(CGRect(x: x, y: 16, width: 1, height: 8))
-                if showSub {
-                    for j in 1..<5 {
-                        let ts = t + Double(j) * sub
-                        if ts < dur { minor.addRect(CGRect(x: lat.x(col: lat.col(ts, dur)) + 1, y: 20, width: 1, height: 4)) }
+            var k = Int((vp.origin / step).rounded(.down))
+            // Never draw more than the strip can hold, even if a time map is wild.
+            var guardCount = 0
+            while guardCount < 512 {
+                let t = Double(k) * step
+                if t > vp.origin + vp.visible + step { break }
+                if t >= 0 {
+                    let x = vp.x(t) + 1
+                    if x >= TimelineStrip.Lattice.inset, x <= size.width - TimelineStrip.Lattice.inset {
+                        major.addRect(CGRect(x: x, y: 16, width: 1, height: 8))
+                        if showSub {
+                            for j in 1..<5 {
+                                let ts = t + Double(j) * sub
+                                if ts < vp.duration, ts >= vp.origin, ts <= vp.origin + vp.visible {
+                                    minor.addRect(CGRect(x: vp.x(ts) + 1, y: 20, width: 1, height: 4))
+                                }
+                            }
+                        }
+                        let label = TimelineGeometry.timecode(t, tenths: step < 1)
+                        let w = ceil((label as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)]).width)
+                        let flip = x + 4 + w > size.width - TimelineStrip.Lattice.inset
+                        c.draw(Text(label).font(TimelineStrip.Face.mono).foregroundStyle(Tok.text2),
+                               at: CGPoint(x: flip ? x - 3 : x + 4, y: 8), anchor: flip ? .trailing : .leading)
                     }
                 }
-                let label = TimelineGeometry.timecode(t, tenths: stepS < 1)
-                let w = ceil((label as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)]).width)
-                let flip = x + 4 + w > size.width - TimelineStrip.Lattice.inset
-                c.draw(Text(label).font(TimelineStrip.Face.mono).foregroundStyle(Tok.text2),
-                       at: CGPoint(x: flip ? x - 3 : x + 4, y: 8), anchor: flip ? .trailing : .leading)
                 k += 1
+                guardCount += 1
             }
             c.fillCells(minor, Tok.controlPressed)
             c.fillCells(major, Tok.text2)
@@ -111,21 +125,32 @@ extension TimelineStrip {
         .accessibilityHidden(true)
     }
 
+    /// Tick step whose labels clear ~72 pt at the current scale.
+    static func rulerStep(_ pps: CGFloat) -> Double {
+        let options: [Double] = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
+        return options.first { CGFloat($0) * pps >= 72 } ?? 600
+    }
+
     // MARK: - Clips
 
-    @ViewBuilder func clipLane() -> some View {
+    @ViewBuilder func clipLane(_ vp: Viewport) -> some View {
         let tl = model.timeline
-        let dur = max(tl.compositionDuration, 0.001)
         Canvas { c, size in
-            let lat = TimelineStrip.Lattice(width: size.width)
+            let lat = vp.lattice
             var runs: [Run] = []
+            let primary = tl.clips.first?.path
             for clip in tl.clips {
                 let sel = clip.id == model.selection, hov = clip.id == hoveredClip
-                let tone: Color = sel ? StripInk.hot : (hov ? StripInk.cellHover : StripInk.cell)
-                runs.append(layoutRun(lat, c0: lat.col(clip.start, dur), c1: lat.colEnd(clip.end, dur),
-                                      bodyH: 24, capH: 28, capCols: 1, body: tone,
-                                      cap: sel ? StripInk.hotDeep : tone,
-                                      labels: [clip.name], truncate: true, selected: sel))
+                let imported = primary != nil && clip.path != primary
+                let base = imported ? StripInk.importInk : StripInk.clip
+                let deep = imported ? StripInk.importDeep : StripInk.clipDeep
+                let tone: Color = sel ? deep : (hov ? StripInk.cellHover : base)
+                if let run = layoutRun(lat, c0: vp.colFloor(clip.start), c1: vp.colCeil(clip.end),
+                                       bodyH: 24, capH: 28, capCols: 1, body: tone,
+                                       cap: sel ? deep : base,
+                                       labels: [clip.name], truncate: true, selected: sel) {
+                    runs.append(run)
+                }
             }
             drawBase(c, size, lat, dust: !tl.clips.isEmpty, holes: runs.map(\.hole))
             if tl.clips.isEmpty { drawEmpty(c, "No clips. Import a clip or split at the playhead.") }
@@ -144,31 +169,35 @@ extension TimelineStrip {
 
     // MARK: - Zoom
 
-    @ViewBuilder func zoomLane() -> some View {
-        let tl = model.timeline, tm = tl.timeMap, dur = max(tm.outputDuration, 0.001)
+    @ViewBuilder func zoomLane(_ vp: Viewport) -> some View {
+        let tl = model.timeline, tm = tl.timeMap
         Canvas { c, size in
-            let lat = TimelineStrip.Lattice(width: size.width)
+            let lat = vp.lattice
             var runs: [Run] = []
             for z in tl.zoom {
                 let zs = tm.output(atSource: z.start), ze = tm.output(atSource: z.end)
                 guard ze > zs else { continue }
                 let sel = z.id == model.selection, hov = z.id == hoveredZoom
                 let h = TimelineGeometry.zoomHeights(scale: z.scale)
-                let base: Color = z.origin == .auto ? StripInk.hot : StripInk.hotDeep
                 let raised = sel || hov
                 let tag = String(format: "%.1f×", z.scale)
                 let labels: [String] = z.origin == .auto ? [tag + " Auto", tag] : [tag]
-                runs.append(layoutRun(lat, c0: lat.col(zs, dur), c1: lat.colEnd(ze, dur),
-                                      bodyH: h.body, capH: h.cap, capCols: raised ? 2 : 1,
-                                      body: base, cap: raised ? StripInk.hotDeep : base,
-                                      labels: labels, truncate: false, selected: sel))
+                if let run = layoutRun(lat, c0: vp.colFloor(zs), c1: vp.colCeil(ze),
+                                       bodyH: h.body, capH: h.cap, capCols: raised ? 2 : 1,
+                                       body: StripInk.zoom, cap: raised ? StripInk.zoomDeep : StripInk.zoom,
+                                       labels: labels, truncate: false, selected: sel) {
+                    runs.append(run)
+                }
             }
             drawBase(c, size, lat, dust: !tl.zoom.isEmpty, holes: runs.map(\.hole))
             if tl.zoom.isEmpty { drawEmpty(c, "No zoom segments. Press Z to add one at the playhead.") }
             // Cuts: a dotted rose column where footage was removed.
             var cuts = Path()
             for cut in tm.cuts {
-                let x = lat.x(col: lat.col(tm.output(atSource: cut.start), dur))
+                let t = tm.output(atSource: cut.start)
+                guard t >= vp.origin - 0.05, t <= vp.origin + vp.visible + 0.05 else { continue }
+                let x = vp.x(t)
+                guard x >= TimelineStrip.Lattice.inset, x <= size.width - TimelineStrip.Lattice.inset else { continue }
                 var y: CGFloat = 6
                 while y + 3 <= 34 {
                     cuts.addRect(CGRect(x: x, y: y, width: TimelineStrip.Lattice.cell, height: 3))
@@ -203,15 +232,14 @@ extension TimelineStrip {
         return ((col - n - 2)..<col, col - 1 - n)
     }
 
-    @ViewBuilder func eventsLane() -> some View {
-        let tm = model.timeline.timeMap, dur = max(tm.outputDuration, 0.001)
+    @ViewBuilder func eventsLane(_ vp: Viewport) -> some View {
         Canvas { c, size in
-            let lat = TimelineStrip.Lattice(width: size.width)
-            let markers = outEvents()
+            let lat = vp.lattice
+            let markers = outEvents().filter { $0.t >= vp.origin - 0.2 && $0.t <= vp.origin + vp.visible + 0.2 }
             let spans = autoZoomSpansOut()
             let focus = focusSpan()
             var byCol: [Int: [Marker]] = [:]
-            for m in markers { byCol[lat.col(m.t, dur), default: []].append(m) }
+            for m in markers { byCol[vp.col(m.t), default: []].append(m) }
             let occupied = Set(byCol.keys)
 
             // Labels first: each reserves a hole that clears dust and neighbouring slats.
@@ -232,17 +260,18 @@ extension TimelineStrip {
             }
 
             drawBase(c, size, lat, dust: !markers.isEmpty, holes: holes)
-            if markers.isEmpty { drawEmpty(c, "No clicks. Zoom needs a click to trigger.") }
+            if markers.isEmpty && model.timeline.clips.isEmpty { drawEmpty(c, "No clicks. Zoom needs a click to trigger.") }
 
             // Typing bursts: runs of low cells.
             var typing = Path()
             for b in TimelineGeometry.bursts(times: keyOutputs(), gap: 0.5) {
-                let c0 = lat.col(b.start, dur), c1 = max(lat.colEnd(b.end, dur), c0 + 1)
+                let c0 = max(vp.colFloor(b.start), 0), c1 = min(max(vp.colCeil(b.end), c0 + 1), lat.cols)
+                guard c1 > c0 else { continue }
                 for col in c0..<c1 { typing.addRect(CGRect(x: lat.x(col: col), y: 28, width: TimelineStrip.Lattice.cell, height: 4)) }
             }
             c.fillCells(typing, StripInk.cell)
 
-            // Solid slat = click, dotted slat = tap. Orange = it caused a zoom. Grey = it did not.
+            // Solid slat = click, dotted slat = tap. Fuchsia = it caused a zoom, grey = it did not.
             var head = Path(), focused = Path(), trig = Path(), idle = Path()
             for (col, ms) in byCol {
                 let isHover = col == hoveredCol
@@ -265,8 +294,8 @@ extension TimelineStrip {
                 else { idle.addPath(p) }
             }
             c.fillCells(idle, StripInk.cell)
-            c.fillCells(trig, StripInk.hot)
-            c.fillCells(focused, StripInk.hotDeep)
+            c.fillCells(trig, StripInk.click)
+            c.fillCells(focused, StripInk.clickDeep)
             c.fillCells(head, Tok.text)
 
             for l in labels {
@@ -281,17 +310,17 @@ extension TimelineStrip {
 
     // MARK: - Audio: mirrored cell tape, 4 rows each side, silence is a dotted midline
 
-    @ViewBuilder func audioLane() -> some View {
-        let tm = model.timeline.timeMap, dur = max(tm.outputDuration, 0.001)
+    @ViewBuilder func audioLane(_ vp: Viewport) -> some View {
+        let tm = model.timeline.timeMap
         Canvas { c, size in
-            let lat = TimelineStrip.Lattice(width: size.width)
+            let lat = vp.lattice
             let wave = model.session.waveform
             drawBase(c, size, lat, dust: false)
             if wave.isEmpty { drawEmpty(c, "No audio. Speech will appear here."); return }
-            let ph = lat.x(model.playhead, dur)
+            let ph = model.playhead
             var played = Path(), tips = Path(), idle = Path(), ramp = Path(), quiet = Path()
             for col in 0..<lat.cols {
-                let t0 = Double(col) / Double(lat.cols) * dur, t1 = Double(col + 1) / Double(lat.cols) * dur
+                let t0 = vp.time(atCol: col), t1 = vp.time(atCol: col + 1)
                 let peak = TimelineGeometry.columnPeak(wave: wave, srcStart: tm.source(atOutput: t0), srcEnd: tm.source(atOutput: t1))
                 let level = TimelineGeometry.level(peak: peak)
                 let x = lat.x(col: col)
@@ -303,7 +332,7 @@ extension TimelineStrip {
                     let a = tm.output(atSource: s.start), b = tm.output(atSource: s.end)
                     return t0 >= a && t0 <= b
                 }
-                let isPlayed = x < ph
+                let isPlayed = t0 < ph
                 for k in 0..<level {
                     let up = CGRect(x: x, y: 16 - 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
                     let dn = CGRect(x: x, y: 21 + 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)

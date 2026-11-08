@@ -272,50 +272,98 @@ struct LibrarySurface: View {
             case .region:
                 Text("Drag to choose an area after you press Record.").font(AppType.caption).foregroundStyle(Tok.text2)
             }
-            HStack(spacing: Space.s4) {
-                Label("Frame rate", systemImage: "speedometer")
-                    .font(AppType.label).foregroundStyle(Tok.text)
-                Spacer(minLength: Space.s4)
+            Row(label: "Frame rate", icon: "speedometer") {
                 LSegmented(sel: Bindable(app).fps, items: app.supportedFPS.map { ($0, "\($0)") },
                            track: Tok.control, thumb: Tok.controlPressed)
                     .frame(width: 180)
             }
-            .frame(height: 48)
-            HStack(spacing: Space.s4) {
-                Label("Resolution", systemImage: "rectangle.fill")
-                    .font(AppType.label).foregroundStyle(Tok.text)
-                Spacer(minLength: Space.s4)
+            Row(label: "Resolution", icon: "rectangle.ratio.16.to.9") {
                 LDropdown(sel: Bindable(app).captureResolution,
-                          options: RecordingConfig.Resolution.allCases.map { ($0, $0 == .native ? "Native" : $0.rawValue, "rectangle.fill") })
+                          options: RecordingConfig.Resolution.allCases.map { ($0, resolutionTitle($0), resolutionIcon($0)) })
                     .frame(width: 180)
             }
-            .frame(height: 48)
-            if app.captureResolution != .native {
-                Text("Below native — zoomed text will be softer.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-            }
-            HStack(spacing: Space.s4) {
-                Label("Quality", systemImage: "signal.3")
-                    .font(AppType.label).foregroundStyle(Tok.text)
-                Spacer(minLength: Space.s4)
+            Text(resolutionReadout).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                .contentTransition(.numericText())
+            Row(label: "Quality", icon: "dial.high") {
                 LDropdown(sel: Bindable(app).captureQuality,
-                          options: RecordingConfig.Quality.allCases.map { ($0, $0.rawValue.capitalized, "signal.3") })
+                          options: RecordingConfig.Quality.offered.map { ($0, qualityTitle($0), qualityIcon($0)) })
                     .frame(width: 180)
             }
-            .frame(height: 48)
-            if app.captureQuality == .custom {
-                HStack(spacing: Space.s2) {
-                    TextField("Mbps", value: Bindable(app).captureMbps, format: .number)
-                        .textFieldStyle(.plain).font(AppType.body).frame(width: 88)
-                        .padding(.horizontal, 12).frame(height: 32)
-                        .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well))
-                    Text("Mbps").font(AppType.caption).foregroundStyle(Tok.text2)
-                }
-            }
+            Text(qualityReadout).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                .contentTransition(.numericText())
             Text(preview).font(AppType.caption).foregroundStyle(Tok.text2)
                 .contentTransition(.opacity)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: Capture copy and estimates, in real numbers
+
+    private func resolutionTitle(_ r: RecordingConfig.Resolution) -> String {
+        switch r {
+        case .native: "Native"
+        case .eightK: "8K"
+        case .ultraHD: "4K"
+        case .twoK: "2K"
+        case .p1080: "1080p"
+        case .p720: "720p"
+        }
+    }
+
+    private func resolutionIcon(_ r: RecordingConfig.Resolution) -> String {
+        switch r {
+        case .native: "display"
+        case .eightK, .ultraHD: "4k.tv"
+        case .twoK, .p1080, .p720: "tv"
+        }
+    }
+
+    private func qualityTitle(_ q: RecordingConfig.Quality) -> String {
+        switch q {
+        case .standard: "Standard"
+        case .high: "High"
+        case .ultraHD: "Ultra HD"
+        case .bluray: "Blu-ray"
+        case .custom: "Custom"
+        }
+    }
+
+    private func qualityIcon(_ q: RecordingConfig.Quality) -> String {
+        switch q {
+        case .standard: "waveform.path"
+        case .high: "waveform.path.ecg"
+        case .ultraHD: "dial.high"
+        case .bluray: "opticaldisc"
+        case .custom: "slider.horizontal.3"
+        }
+    }
+
+    /// Native pixels of the capture source, capped by the chosen preset.
+    private var capturePixels: (w: Int, h: Int) {
+        let did = app.displayID
+        let dw = max(Int(CGDisplayPixelsWide(did)), 64)
+        let dh = max(Int(CGDisplayPixelsHigh(did)), 64)
+        let cap = app.captureResolution.resolutionHeight
+        guard dh > cap else { return (dw & ~1, dh & ~1) }
+        let s = Double(cap) / Double(dh)
+        return (max(Int((Double(dw) * s).rounded()) & ~1, 64), cap & ~1)
+    }
+
+    private var resolutionReadout: String {
+        if app.kind == .window { return "The window's native pixels, capped at \(resolutionTitle(app.captureResolution))." }
+        let p = capturePixels
+        let mp = Double(p.w * p.h) / 1_000_000
+        let capped = app.captureResolution != .native
+        return "\(p.w) × \(p.h) · \(String(format: "%.1f", mp)) MP" + (capped ? " · source capped" : " · native")
+    }
+
+    private var qualityReadout: String {
+        let bpp = app.captureQuality.bitsPerPixel
+        if app.kind == .window { return "HEVC · bitrate follows the window size." }
+        guard bpp > 0 else { return "HEVC · \(Int(app.captureMbps)) Mbps" }
+        let p = capturePixels
+        let mbps = min(Double(p.w * p.h) * Double(app.fps) * bpp, 250_000_000) / 1_000_000
+        return "HEVC · ≈ \(Int(mbps.rounded())) Mbps at \(app.fps) fps"
     }
 
     private var audioTab: some View {
@@ -324,7 +372,7 @@ struct LibrarySurface: View {
             if app.mic {
                 ForEach(app.availableAudioInputs, id: \.id) { device in
                     HStack(spacing: Space.s4) {
-                        Label(device.name, systemImage: device.name.lowercased().contains("airpods") ? "airpods.chargingcase" : device.name.lowercased().contains("headphone") ? "headphones" : "mic.circle")
+                        Label(device.name, systemImage: inputIcon(device.name))
                             .font(AppType.label).foregroundStyle(Tok.text).lineLimit(1)
                         Spacer(minLength: Space.s2)
                         LToggle(on: Binding(
@@ -355,29 +403,55 @@ struct LibrarySurface: View {
                 }
                 .frame(height: 48)
             }
-            VStack(alignment: .leading, spacing: Space.s2) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: Space.s4) {
-                    Image(systemName: "mic.fill").font(.system(size: 14)).foregroundStyle(Tok.text2)
+                    Image(systemName: "waveform").font(.system(size: 14)).foregroundStyle(Tok.text2)
                     Text("Microphone test").font(AppType.label).foregroundStyle(Tok.text)
                     Spacer(minLength: Space.s4)
+                    if app.micTesting {
+                        Text(dbReadout).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                            .frame(width: 76, alignment: .trailing)
+                    }
                     LButton(title: app.micTesting ? "Stop" : "Test", kind: app.micTesting ? .primary : .secondary, height: 24) { app.testMicrophone() }
                 }
                 if app.micTesting {
-                    HStack(spacing: Space.s3) {
-                        LiveWaveform(level: app.micTestLevel)
-                            .frame(width: 220, height: 28)
-                            .background(Capsule().fill(Tok.accent))
-                            .padding(2)
-                        Text(Int(app.micTestLevel * 100).description + "%" + (app.micTestLevel < 0.03 ? " · No sound yet. Check your microphone." : ""))
-                            .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
-                    }
-                    .transition(.opacity)
+                    PixelScope(wave: app.micTestWave)
+                        .frame(height: 44)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Tok.well))
+                        .overlay(alignment: .trailing) {
+                            if app.micTestLevel < 0.03 {
+                                Text("No sound yet")
+                                    .font(AppType.caption).foregroundStyle(Tok.text2)
+                                    .padding(.trailing, 12)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .transition(.opacity)
                 }
                 if let e = app.micTestError { Text(e).font(AppType.caption).foregroundStyle(Tok.statusBad) }
             }
             .frame(minHeight: 48)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var dbReadout: String {
+        app.micTestDB <= -59 ? "−∞ dBFS" : String(format: "%.0f dBFS", app.micTestDB)
+    }
+
+    /// Bare macOS input glyphs. A device that draws its own circle is swapped
+    /// for the plain variant, per the icon rule.
+    private func inputIcon(_ name: String) -> String {
+        let n = name.lowercased()
+        if n.contains("airpods") { return "airpods.gen3" }
+        if n.contains("headphone") || n.contains("headset") { return "headphones" }
+        if n.contains("iphone") { return "iphone" }
+        if n.contains("display") || n.contains("monitor") { return "display" }
+        if n.contains("macbook") || n.contains("built-in") || n.contains("mac ") { return "laptopcomputer" }
+        if n.contains("blackhole") || n.contains("loopback") || n.contains("virtual") { return "waveform" }
+        if n.contains("usb") || n.contains("interface") { return "cable.connector" }
+        return "mic"
     }
 
     private func compactToggle(_ label: String, icon: String, _ on: Binding<Bool>) -> some View {

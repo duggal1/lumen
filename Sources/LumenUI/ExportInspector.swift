@@ -23,7 +23,7 @@ struct ExportInspector: View {
         switch r { case .source: "timer"; case .f24: "clock"; case .f30: "clock.fill"; case .f60: "speedometer"; case .f120: "gauge"; case .f144: "gauge"; case .f240: "gauge.with.dots.needle.67percent" }
     }
     private static func qualityIcon(_ q: ExportQuality) -> String {
-        switch q { case .low: "signal"; case .medium: "signal.2"; case .high: "signal.3"; case .max: "signal.3.fill" }
+        switch q { case .low: "dial.low"; case .medium: "dial.medium"; case .high: "dial.high"; case .max: "dial.high.fill" }
     }
     private static func bitrateIcon(_ kbps: Int) -> String {
         switch kbps { case 128: "speaker.wave.1"; case 192: "speaker.wave.2"; case 256: "speaker.wave.3"; default: "speaker.wave.3.fill" }
