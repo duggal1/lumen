@@ -9,7 +9,7 @@ import LumenAudio
     let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 10, backingScale: 1, originX: 0, originY: 0)
     var timeline = Timeline(duration: 10)
     timeline.audio.speedRampsAuto = false
-    let events = [InputEvent(t: 1, kind: .down, x: 800, y: 400), InputEvent(t: 5, kind: .keyDown, keyCode: 0), InputEvent(t: 5.2, kind: .keyDown, keyCode: 1)]
+    let events = [InputEvent(t: 1, kind: .down, x: 800, y: 400), InputEvent(t: 5, kind: .keyDown, keyCode: 0), InputEvent(t: 5.2, kind: .keyDown, keyCode: 1), InputEvent(t: 5.4, kind: .keyDown, keyCode: 2)]
     let out = Director.derive(timeline, input: DirectorInput(events: events, source: source), revision: 1)
     #expect(out.zoom.contains { $0.start >= 4.7 && $0.start <= 5 && $0.end > 5.2 })
 }

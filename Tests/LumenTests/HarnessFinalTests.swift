@@ -67,6 +67,8 @@ func cameraAt(_ tl: Timeline, _ t: Double) -> (cx: Double, cy: Double, scale: Do
 }
 
 @Test func harnessHoverDock() {
+    // Zoom v3: hover-only activity (waits, moves, pauses) never zooms.
+    // A1: camera lz within 0.01 of 0 for the entire span.
     var tl = Timeline(duration: 12); tl.audio.speedRampsAuto = false
     var ev: [InputEvent] = []
     for i in 0..<5 {
@@ -78,12 +80,7 @@ func cameraAt(_ tl: Timeline, _ t: Double) -> (cx: Double, cy: Double, scale: Do
     }
     let out = Director.derive(tl, input: DirectorInput(events: ev, source: src), revision: 1)
     print("HARNESS dock zooms:", out.zoom.count)
-    #expect(out.zoom.count >= 1)
-    if let z = out.zoom.first {
-        let (cx, cy, s) = cameraAt(out, 0.5)
-        print("dock scale", s)
-        #expect(s >= 1.0)
-    }
+    #expect(out.zoom.count == 0)
 }
 
 @Test func harnessMixedAndIdle() {

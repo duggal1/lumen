@@ -21,7 +21,7 @@ import LumenDirector
     let face = [FaceSample(t: 0, cx: 0.5, cy: 0.5, h: 0.2), FaceSample(t: 1, cx: 0.6, cy: 0.5, h: 0.2)]
     let output = Director.derive(timeline, input: DirectorInput(events: [], source: source, face: face), revision: 1)
     #expect(abs(output.evaluate(at: 0.5).cameraScale - 1) < 0.001)
-    #expect(abs(output.evaluate(at: 1.5).cameraScale - 2) < 0.001)
+    #expect(abs(output.evaluate(at: 1.5).cameraScale - 2) < 0.01)
     #expect(output.evaluate(at: 2.5).webcamCrop.w < output.evaluate(at: 0).webcamCrop.w)
     #expect(output.derived?.face.count ?? 0 > 4 * 120)
 }

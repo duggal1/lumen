@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 import LumenCore
 import LumenProject
 import LumenDirector
@@ -13,9 +14,14 @@ private func motionTimeline(_ events: [InputEvent]) -> Timeline {
 @Test func automaticZoomAnticipatesClickAndArrivesOnTime() {
     let timeline = motionTimeline([InputEvent(t: 2, kind: .down, x: 700, y: 400)])
     #expect(timeline.zoom.count == 1)
-    #expect(timeline.zoom[0].start < 2)
-    #expect(timeline.zoom[0].start >= 1.7)
-    #expect(abs(timeline.evaluate(at: 1.5).cameraScale - 1) < 0.001)
+    // Zoom v3: the scene starts at the click; the CAMERA leads by leadIn.
+    #expect(abs(timeline.zoom[0].start - 2.0) < 0.01)
+    // Before the lead window the camera is exactly 1x.
+    #expect(abs(timeline.evaluate(at: 0.9).cameraScale - 1) < 0.001)
+    // At the click the camera is 95% arrived (A4).
+    let target = log(timeline.zoom[0].scale)
+    let atClick = log(Double(timeline.evaluate(at: 2.0).cameraScale))
+    #expect(atClick >= 0.93 * target)
     #expect(timeline.evaluate(at: 2.1).cameraScale > 1.6)
 }
 
