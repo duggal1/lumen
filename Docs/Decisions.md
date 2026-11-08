@@ -18,6 +18,8 @@
 - Person segmentation is cached as a compact grayscale .lmask sequence; renderer integration is deferred to Part 5.
 
 - Transcription is Moonshine streaming through its C API behind `#if canImport(CMoonshine)`. Apple Speech is not used.
+- LUFS v4 (schemaVersion 4): persisted `targetLUFS` becomes `targetLUFSOverride` (nil = mode table Standard −14 / Loud −12 / Podcast −16); v3 fixtures migrate pure/idempotent, unknown fields preserved.
+- moveTap is the one authorized new command: moves a manual tap without changing its id, `moveZoom` parity.
 - Captions need only the mic, so system audio is not transcribed.
 - The model is imported from a folder. There is no in-app download, because plan rule 9 forbids networking in the core app.
 - Word times come from the line span plus energy-dip snapping, because I couldn't confirm the runtime exposes per-word times.
