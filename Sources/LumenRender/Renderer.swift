@@ -69,7 +69,7 @@ private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; 
                            var time: Float; var pointer: SIMD4<Float>; var imgBlur: Float; var imgAlpha: Float; var imgContrast: Float; var imgBright: Float }
 private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float; var tilt: SIMD2<Float>; var radii: SIMD4<Float> }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
-private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32 }
+private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float> }
 private struct PrivacyU {
     var content: SIMD4<Float>
     var sourceRect: SIMD4<Float>
@@ -657,7 +657,9 @@ public final class Renderer: @unchecked Sendable {
                 case .glass: 3
                 }
                 frag(e, RingU(content: content, color: ringColor, center: SIMD2<Float>(c), radius: Float(R),
-                              progress: ring.progress, cr: Float(g.radius), mode: mode))
+                              progress: ring.progress, cr: Float(g.radius), mode: mode,
+                              cam: SIMD2<Float>(cam), scale: Float(sc), srcSize: SIMD2<Float>(g.src)))
+                e.setFragmentTexture(src, index: 0)
                 draw()
             }
         }
