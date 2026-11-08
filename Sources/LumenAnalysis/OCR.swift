@@ -7,7 +7,7 @@ import LumenProject
 
 public enum OCRAnalyzer {
     public static func analyze(url: URL, offset: Double = 0, projectSalt: UInt64, customPatterns: [String] = [],
-                              entropyThreshold: Double = 3.5, fps: Double = 2) async throws -> [OCRDetection] {
+                              entropyThreshold: Double = 3.5, fps: Double = 4) async throws -> [OCRDetection] {
         guard ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else { return [] }
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { return [] }
@@ -61,11 +61,14 @@ private final class OCRJob: @unchecked Sendable {
             guard time + 0.0001 >= next, let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             next = time + 1 / max(fps, 0.5)
             let grid = try lumaGrid(buffer)
-            let changed = priorGrid.map { changeRatio($0, grid) >= 0.003 } ?? true
+            let changed = priorGrid.map { changeRatio($0, grid) >= 0.001 } ?? true
             priorGrid = grid
             guard changed || time - lastRecognized >= 2 else { continue }
             lastRecognized = time
-            detections.append(contentsOf: try detect(in: buffer, at: time + offset))
+            // Confidence gate: sub-0.3 candidates are jitter, not text. The
+            // bridge in MaskTracks holds masks through single dropouts.
+            detections.append(contentsOf: try detect(in: buffer, at: time + offset)
+                .filter { $0.confidence >= 0.3 })
         }
         if reader.status == .failed { throw reader.error ?? AnalysisError.readerFailed }
         return deduplicate(detections)
