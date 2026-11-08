@@ -257,7 +257,17 @@ public final class InputRecorder: @unchecked Sendable {
               AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sv) == .success else { return nil }
         var pos = CGPoint.zero, size = CGSize.zero
         guard AXValueGetValue(pv as! AXValue, .cgPoint, &pos), AXValueGetValue(sv as! AXValue, .cgSize, &size) else { return nil }
-        return AXFrame(x: (pos.x - origin.x) * scale, y: (pos.y - origin.y) * scale, w: size.width * scale, h: size.height * scale)
+        // Field semantics: secure role/subrole or a password/card label.
+        var role: String?, subrole: String?, title: String?
+        var rv: CFTypeRef?
+        if AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &rv) == .success, let rv { role = (rv as! NSString).utf8String.map { String(cString: $0) } }
+        if AXUIElementCopyAttributeValue(el, kAXSubroleAttribute as CFString, &rv) == .success, let rv { subrole = (rv as! NSString).utf8String.map { String(cString: $0) } }
+        if AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &rv) == .success, let rv { title = (rv as! NSString).utf8String.map { String(cString: $0) } }
+        let hay = "\(role ?? "") \(subrole ?? "") \(title ?? "")".lowercased()
+        let secure = hay.contains("secure") || hay.contains("password") || hay.contains("passwd") || hay.contains("card") || hay.contains("cc-") || hay.contains("cvc")
+        return AXFrame(x: (pos.x - origin.x) * scale, y: (pos.y - origin.y) * scale,
+                       w: size.width * scale, h: size.height * scale,
+                       secure: secure, label: title)
     }
 
     /// Caret rect for typing: AXSelectedTextRange -> AXBoundsForRange.
