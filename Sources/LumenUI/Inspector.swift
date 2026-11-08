@@ -163,9 +163,37 @@ struct Inspector: View {
 
     /// Cuts, imported clips and manual taps share one tab because they are the
     /// three things that change the shape of the deliverable itself.
+    /// Clips are magnetic: gaps ripple closed. Soundtrack lanes shift on
+    /// ripple delete to stay aligned with picture; they clamp at the end.
     private var timelineTab: some View {
         let m = model
         return VStack(spacing: 24) {
+            VStack(spacing: 0) {
+                Row(label: "Main lane") {
+                    HStack(spacing: 8) {
+                        LButton(title: "Split at playhead", icon: "scissors", kind: .quiet) { m.splitAtPlayhead() }
+                        LButton(title: "Duplicate", icon: "doc.on.doc", kind: .quiet) { m.duplicateSelected() }
+                            .disabled(m.selection == nil)
+                        LButton(title: "Join", icon: "link", kind: .quiet) { m.joinSelectedClips() }
+                            .disabled(m.selection == nil)
+                    }
+                }
+                Row(label: "Clipboard") {
+                    HStack(spacing: 8) {
+                        LButton(title: "Copy", icon: "doc.on.doc", kind: .quiet) { m.copySelectedClip() }
+                            .disabled(m.selection == nil)
+                        LButton(title: "Paste", icon: "doc.on.clipboard", kind: .quiet) { m.pasteClipAtPlayhead() }
+                            .disabled(m.copiedClip == nil)
+                    }
+                }
+                Row(label: "Snap") {
+                    ToggleRow(label: "Snap to clip edges", on: Binding(
+                        get: { m.snapEnabled },
+                        set: { m.snapEnabled = $0 }))
+                }
+                Text("Shortcuts: B blade · ⌘C copy · ⌘V paste · ⌘D duplicate · ⌘J join. Snap targets: playhead, clip edges, cuts, click events.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+            }.card()
             VStack(spacing: 0) {
                 Row(label: "Cuts") {
                     LButton(title: "Cut 1s at playhead", icon: "scissors", kind: .quiet) { m.cutAtPlayhead() }
