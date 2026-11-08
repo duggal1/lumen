@@ -242,6 +242,8 @@ extension Timeline {
                 rings.append(ClickRing(position: SIMD2(d.clicks[i].x, d.clicks[i].y), progress: Float((t - d.clicks[i].t) / dur)))
                 i += 1
             }
+            // Cap alive ripples: rapid clicking cannot fan out past 8 feeds.
+            if rings.count > 8 { rings = Array(rings.suffix(8)) }
         }
         // webcam crop: face-aware or centered square
         let ar = max(d.webcamAspect, 0.1)
