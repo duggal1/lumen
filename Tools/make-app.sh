@@ -45,6 +45,10 @@ for sound in App/public/assets/*.mp3; do
     ditto "$sound" "$app/Contents/Resources/Audio/$(basename "$sound")"
 done
 ditto App/public/assets/music "$app/Contents/Resources/Audio/music"
+mkdir -p "$app/Contents/Resources/Wallpapers"
+if [ -f App/public/assets/wallpapers/serene-lake.jpg ]; then
+    ditto App/public/assets/wallpapers/serene-lake.jpg "$app/Contents/Resources/Wallpapers/serene-lake.jpg"
+fi
 for bundle in "$bin_dir/"*.bundle; do
     [ -d "$bundle" ] || continue
     ditto "$bundle" "$app/Contents/Resources/$(basename "$bundle")"
