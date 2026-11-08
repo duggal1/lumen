@@ -71,10 +71,6 @@ struct SettingsSurface: View {
                 Row(label: "Endpoint") {
                     Text("127.0.0.1:\(port)").font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
                 }
-            } else if mcpEnabled {
-                Text("Port 8765 is in use. Change LumenMCPPort in defaults.")
-                    .font(AppType.caption).foregroundStyle(Tok.accentText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             ToggleRow(label: "Email notifications", on: $emailEnabled)
             if emailEnabled {
@@ -88,9 +84,6 @@ struct SettingsSurface: View {
                 }
                 ToggleRow(label: "After recording", on: $emailRecording)
                 ToggleRow(label: "After export", on: $emailExport)
-                Text("Opens a prefilled draft in your default mail app. Nothing sends silently.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .card()
@@ -116,20 +109,12 @@ struct SettingsSurface: View {
                             label: device.name)
                 }
             }
-            Text("Audio inputs: Select multiple devices for independent recording. Leave all off for the macOS default microphone.")
-                .font(AppType.caption).foregroundStyle(Tok.text2)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .card()
     }
 
     private var privacy: some View {
         VStack(spacing: 0) {
-            Row(label: "Licenses") {
-                Text("Mechvibes Default pack — verify license at https://beta.mechvibes.com/sound-packs before shipping.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
         .card()
     }
