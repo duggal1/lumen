@@ -29,7 +29,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         /// Capture pixels, named the way a person would name the output.
         var output: String {
             guard width > 0 else { return "—" }
-            return "\(width)×\(height) \(Int(fps.rounded()))"
+            return "\(width)x\(height) · \(Int(fps.rounded()))"
         }
     }
 
@@ -80,10 +80,18 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var micInputIDs: [String] = UserDefaults.standard.stringArray(forKey: "LumenMicrophoneInputIDs") ?? [] {
         didSet { UserDefaults.standard.set(micInputIDs, forKey: "LumenMicrophoneInputIDs") }
     }
+    /// Discovered once per refresh so opening Inputs never blocks on AVCapture.
+    var cachedAudioInputs: [(id: String, name: String)] = []
+    private var audioInputsDiscovered = false
     var availableAudioInputs: [(id: String, name: String)] {
-        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio,
-                                         position: .unspecified).devices
+        if !audioInputsDiscovered { refreshAudioInputs() }
+        return cachedAudioInputs
+    }
+    func refreshAudioInputs() {
+        cachedAudioInputs = AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio,
+                                          position: .unspecified).devices
             .map { (id: $0.uniqueID, name: $0.localizedName) }
+        audioInputsDiscovered = true
     }
     func selectAudioInput(_ id: String, enabled: Bool) {
         var selected = micInputIDs.filter { $0 != id }
