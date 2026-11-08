@@ -64,11 +64,14 @@ public struct TimelineClip: Codable, Identifiable, Equatable, Sendable {
 extension Array where Element == TimelineClip {
     /// Magnetic normalize: sort by output start and close gaps by rippling
     /// later clips left so `clips[i].start == clips[i-1].end`.
+    /// The first clip keeps its start (recording-end == after-recording
+    /// annexed clips stay put; lane clips at 0 stay put).
     mutating func magneticNormalize() {
         // Keep sort stable w.r.t. insertion order for equal starts: Swift sort
         // is stable, so only the start value rewrites the order.
         sort { $0.start < $1.start }
-        var cursor = 0.0
+        guard !isEmpty else { return }
+        var cursor = self[0].start
         for i in indices {
             self[i].start = cursor
             cursor += self[i].duration
