@@ -58,19 +58,20 @@ struct TimelineStrip: View {
     @State private var drag: Drag?
     @State private var hoveredZoom: UUID?
     @State private var hoveredMarker: Marker?
+    @State private var hoveredClip: UUID?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
-    private struct Drag { enum Kind { case seek, move, left, right }; var kind: Kind; var id: UUID?; var orig: ZoomSegment?; var t0: Double }
+    private struct Drag { enum Kind { case seek, move, left, right, reorder }; var kind: Kind; var id: UUID?; var orig: ZoomSegment?; var origClip: TimelineClip?; var t0: Double }
     private struct Marker { var t: Double; var kind: String; var isTap: Bool }
-    // Fixed lane heights, top to bottom: ruler, clip slot (empty), zoom, events, audio.
-    private let hRuler: CGFloat = 20, hClip: CGFloat = 16, hZoom: CGFloat = 28
+    // Fixed lane heights, top to bottom: ruler, clip (magnetic), zoom, events, audio.
+    private let hRuler: CGFloat = 20, hClip: CGFloat = 28, hZoom: CGFloat = 28
     private let hEvents: CGFloat = 32, hAudio: CGFloat = 32
 
     var body: some View {
         GeometryReader { g in
             VStack(spacing: 0) {
                 rulerLane(width: g.size.width)
-                Color.clear.frame(height: hClip)  // clip slot: reserved, empty in this task
+                clipLane(width: g.size.width)
                 zoomLane(width: g.size.width)
                 eventsLane(width: g.size.width)
                 audioLane(width: g.size.width)
@@ -81,7 +82,7 @@ struct TimelineStrip: View {
                 switch phase {
                 case .active(let p): setHover(at: p, width: g.size.width)
                 case .ended:
-                    hoveredZoom = nil; hoveredMarker = nil
+                    hoveredZoom = nil; hoveredMarker = nil; hoveredClip = nil
                     NSCursor.arrow.set()
                 }
             }
@@ -148,6 +149,49 @@ struct TimelineStrip: View {
         }
         .frame(height: hRuler)
         .accessibilityHidden(true)
+    }
+
+    // MARK: - Clip lane (magnetic main lane)
+
+    @ViewBuilder private func clipLane(width: CGFloat) -> some View {
+        let tl = model.timeline
+        let dur = max(tl.compositionDuration, 0.001)
+        Canvas { c, size in
+            let w = size.width
+            func fill(_ r: CGRect, _ col: Color) { c.fill(Path(r), with: .color(col), style: FillStyle(antialiased: false)) }
+            if tl.clips.isEmpty {
+                c.draw(Text("No clips — Import a clip or split at the playhead.")
+                    .font(.system(size: 10).monospacedDigit()).foregroundStyle(Tok.text2),
+                       at: CGPoint(x: 6, y: hClip / 2), anchor: .leading)
+            }
+            for clip in tl.clips {
+                let a = x(clip.start, dur, w), b = x(clip.end, dur, w)
+                let r = CGRect(x: a + 1, y: 4, width: max(b - a - 2, 4), height: hClip - 8)
+                let isSelected = clip.id == model.selection
+                let isHovered = clip.id == hoveredClip
+                let base: Color = isSelected ? Tok.selection.opacity(0.55) : Tok.controlPressed.opacity(0.85)
+                c.fill(Path(roundedRect: r, cornerRadius: 5), with: .color(base))
+                c.stroke(Path(roundedRect: r, cornerRadius: 5),
+                         with: .color(isSelected ? Tok.text : Tok.text2.opacity(isHovered ? 0.9 : 0.5)), lineWidth: isSelected ? 2 : 1)
+                if TimelineGeometry.labelFits(width: r.width, text: clip.name) || isHovered {
+                    c.draw(Text(clip.name).font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Tok.text), at: CGPoint(x: r.minX + 6, y: r.midY), anchor: .leading)
+                }
+                if isSelected { fill(CGRect(x: r.minX, y: r.maxY - 2, width: r.width, height: 2), Tok.text) }
+            }
+            // Snap indicator
+            if let d = drag, d.kind == .reorder, d.id != nil {
+                // hint text could be added here; drag itself is the indicator
+            }
+        }
+        .frame(height: hClip)
+        .accessibilityLabel(clipAccessibility())
+    }
+
+    private func clipAccessibility() -> String {
+        let tl = model.timeline
+        guard !tl.clips.isEmpty else { return "No clips" }
+        return tl.clips.map { String(format: "Clip %@ %.1f to %.1f seconds", $0.name, $0.start, $0.end) }.joined(separator: ". ")
     }
 
     // MARK: - Zoom
@@ -337,8 +381,18 @@ struct TimelineStrip: View {
     // MARK: - Hit, hover, drag (command path preserved)
 
     private func setHover(at p: CGPoint, width: CGFloat) {
-        let yZoom0 = hRuler + hClip, yEvents0 = yZoom0 + hZoom, yAudio0 = yEvents0 + hEvents
+        let yClip0 = hRuler, yZoom0 = yClip0 + hClip, yEvents0 = yZoom0 + hZoom, yAudio0 = yEvents0 + hEvents
         let tm = model.timeline.timeMap, dur = max(tm.outputDuration, 0.001)
+        if p.y >= yClip0 && p.y < yZoom0 {
+            var hitClip: UUID? = nil
+            for clip in model.timeline.clips.reversed() {
+                let a = x(clip.start, dur, width), b = x(clip.end, dur, width)
+                if p.x >= a - 1 && p.x <= b + 1 { hitClip = clip.id; break }
+            }
+            hoveredClip = hitClip
+            NSCursor.arrow.set()
+            return
+        }
         if p.y >= yZoom0 && p.y < yEvents0 {
             var hitZoom: UUID? = nil
             for z in model.timeline.zoom.reversed() {
@@ -374,9 +428,15 @@ struct TimelineStrip: View {
     }
 
     private func hit(_ p: CGPoint, _ w: CGFloat) -> Drag {
-        let yZoom0 = hRuler + hClip
+        let yClip0 = hRuler, yZoom0 = yClip0 + hClip
         let tm = model.timeline.timeMap, dur = max(tm.outputDuration, 0.001)
         func xx(_ t: Double) -> CGFloat { CGFloat(t / max(dur, 0.001)) * w }
+        if p.y >= yClip0 && p.y < yZoom0 {
+            for clip in model.timeline.clips.reversed() {
+                let a = xx(clip.start), b = xx(clip.end)
+                if p.x > a, p.x < b { return Drag(kind: .reorder, id: clip.id, origClip: clip, t0: clip.start) }
+            }
+        }
         if p.y >= yZoom0 && p.y < yZoom0 + hZoom {
             for z in model.timeline.zoom.reversed() {
                 let a = xx(tm.output(atSource: z.start)), b = xx(tm.output(atSource: z.end))
@@ -399,13 +459,13 @@ struct TimelineStrip: View {
     }
 
     private func change(_ v: DragGesture.Value, _ w: CGFloat) {
-        let dur = model.timeline.timeMap.outputDuration, t = min(max(Double(v.location.x / w) * dur, 0), dur)
+        let dur = model.timeline.compositionDuration, t = min(max(Double(v.location.x / w) * dur, 0), dur)
         if drag == nil {
             drag = hit(v.startLocation, w)
             model.selection = drag?.id
             // Clicking a marker seeks to it exactly.
             if drag?.kind == .seek {
-                let yEvents0 = hRuler + hClip + hZoom
+                let yClip0 = hRuler, yZoom0 = yClip0 + hClip, yEvents0 = yZoom0 + hZoom
                 if v.startLocation.y >= yEvents0 && v.startLocation.y < yEvents0 + hEvents {
                     var bestT: Double? = nil, bestD: CGFloat = 6
                     for m in outEvents() {
@@ -439,6 +499,12 @@ struct TimelineStrip: View {
             // Command path: reduce(.moveZoom) preserves origin->manual + effects.
             let ctx = ReduceContext(playhead: model.playhead, selection: id, duration: dur)
             model.edit(coalesce: true) { tl in _ = try? reduce(&tl, .moveZoom(id, start: s, end: e), ctx: ctx) }
+        case .reorder:
+            guard let id = d.id else { return }
+            // drag reorder: move the clip, then magneticNormalize reorders
+            let target = t
+            let ctx = ReduceContext(playhead: model.playhead, selection: id, duration: dur)
+            model.edit(coalesce: true) { tl in _ = try? reduce(&tl, .moveClip(id, start: target), ctx: ctx) }
         }
     }
 
