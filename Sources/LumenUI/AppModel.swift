@@ -589,9 +589,12 @@ private final class RegionView: NSView {
             p.setFrameOrigin(CGPoint(x: frame.midX - 260, y: frame.maxY - 80))
         }
         panel = p
-        moveObserver = NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: p, queue: nil) { [weak self] note in
+        moveObserver = NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: p, queue: nil) { note in
             guard let w = note.object as? NSWindow else { return }
-            UserDefaults.standard.set(["x": w.frame.origin.x, "y": w.frame.origin.y], forKey: "LumenHUDOrigin")
+            MainActor.assumeIsolated {
+                let origin = w.frame.origin
+                UserDefaults.standard.set(["x": origin.x, "y": origin.y], forKey: "LumenHUDOrigin")
+            }
         }
     }
     func show() { fitToContent(); panel?.orderFrontRegardless() }
