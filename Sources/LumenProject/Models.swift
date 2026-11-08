@@ -148,7 +148,7 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     public var glide: Double = 0.35
     public var idleHide: Double? = 2.0
     public var pressScale: Double = 0.86
-    public var clickEffect: ClickEffect = .glass
+    public var clickEffect: ClickEffect = .ripple
     public var clickDuration: Double = 0.65
     /// Tint off by default (transparent white): the ripple refracts the
     /// video itself, with no flat fill color.
