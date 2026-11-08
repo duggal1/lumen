@@ -572,11 +572,20 @@ enum TimelineSelection: Equatable {
     }
 
     /// System clipboard bridge for Final Cut cmd-C/V paste a single clip.
+    /// Writes a custom UTI with JSON so another Lumen window (and external
+    /// paste reads) can reconstruct the clip; falls back to the path string.
+    static let clipPasteboardType = NSPasteboard.PasteboardType("com.lumen.clip")
     func copySelectedClip() {
         guard let id = selection,
               let clip = timeline.clips.first(where: { $0.id == id }) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(clip.path, forType: .string)
+        if let data = try? JSONEncoder().encode(clip) {
+            let item = NSPasteboardItem()
+            item.setString(clip.path, forType: .string)
+            item.setData(data, forType: Self.clipPasteboardType)
+            NSPasteboard.general.writeObjects([item])
+        }
         copiedClip = clip
     }
 
@@ -585,6 +594,11 @@ enum TimelineSelection: Equatable {
     /// Paste inserts at the playhead with ripple. Playhead is captured at
     /// dispatch via ReduceContext; never read from the last pointer position.
     func pasteClipAtPlayhead() {
+        if copiedClip == nil,
+           let data = NSPasteboard.general.data(forType: Self.clipPasteboardType),
+           let clip = try? JSONDecoder().decode(TimelineClip.self, from: data) {
+            copiedClip = clip
+        }
         guard let clip = copiedClip else { return }
         let ph = playhead
         dispatch(.pasteClip(clip: clip, atOutput: ph))
