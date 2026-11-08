@@ -7,3 +7,7 @@ App/public/assets/music/**/*.mp3
 validation/
 wallpapers/
 App/public/assets/wallpapers/macos/
+
+# /goal proof artifacts: local evidence only. Keep the directory itself.
+.proof/*
+!.proof/.gitkeep
