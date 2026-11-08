@@ -149,8 +149,10 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     public var idleHide: Double? = 2.0
     public var pressScale: Double = 0.86
     public var clickEffect: ClickEffect = .glass
-    public var clickDuration: Double = 0.50
-    public var clickColor: RGBA = RGBA(0xF97316)
+    public var clickDuration: Double = 0.65
+    /// Tint off by default (transparent white): the ripple refracts the
+    /// video itself, with no flat fill color.
+    public var clickColor: RGBA = RGBA(0xFFFFFF, a: 0)
     /// Multiplies the ring radius (0.5...2.0). Renderer consumes it.
     public var clickSize: Double = 1.0
     /// Multiplies ring alpha (0...1.5). Renderer consumes it.
