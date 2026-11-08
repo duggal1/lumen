@@ -162,7 +162,7 @@ import LumenExport
     captioned.captions.style.size = 0.13
     captioned.captions.style.animation = .none
     captioned.derived?.captions = [CaptionChunk(start: 0, end: 1,
-        lines: [[CaptionWord(text: "VISIBLE CAPTION", start: 0, end: 0.8)]], y: 0.5)]
+        lines: [[CaptionWord(text: "VISIBLE CAPTION", start: 0, end: 0.2)]], y: 0.5)]
     let captionFrame = try await FrameImage.render(renderer: renderer, session: session, timeline: captioned,
                                                    t: 0.25, canvas: SIMD2(320, 180))
     #expect(pixels(captionFrame) != pixels(a))
