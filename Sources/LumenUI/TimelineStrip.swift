@@ -411,6 +411,11 @@ struct TimelineScrollCatcher: NSViewRepresentable {
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            if newWindow == nil { removeMonitor() }
+        }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             removeMonitor()
@@ -431,8 +436,6 @@ struct TimelineScrollCatcher: NSViewRepresentable {
                 }
             }
         }
-
-        deinit { removeMonitor() }
 
         private func removeMonitor() {
             if let monitor { NSEvent.removeMonitor(monitor) }
