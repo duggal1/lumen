@@ -13,11 +13,13 @@ public struct DirectorInput: Sendable {
     public var transcript: Transcript?
     public var ocr: [OCRDetection]
     public var personMask: PersonMaskInfo?
+    public var typing: [TypingTrace]
     public init(events: [InputEvent], source: SourceInfo, vad: [ClosedRange<Double>] = [], ax: [AXFrame] = [],
                 face: [FaceSample] = [], webcamAspect: Float = 16.0 / 9, activity: [ActivityPoint] = [],
-                transcript: Transcript? = nil, ocr: [OCRDetection] = [], personMask: PersonMaskInfo? = nil) {
+                transcript: Transcript? = nil, ocr: [OCRDetection] = [], personMask: PersonMaskInfo? = nil,
+                typing: [TypingTrace] = []) {
         self.events = events; self.source = source; self.vad = vad; self.ax = ax; self.face = face
-        self.webcamAspect = webcamAspect; self.activity = activity; self.transcript = transcript; self.ocr = ocr; self.personMask = personMask
+        self.webcamAspect = webcamAspect; self.activity = activity; self.transcript = transcript; self.ocr = ocr; self.personMask = personMask; self.typing = typing
     }
 }
 
@@ -52,7 +54,7 @@ public enum Director {
         guard timeline.camera.autoZoom else { return timeline.zoom }
         let manual = timeline.zoom.filter { $0.origin == .manual }
         let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
-        return (manual + ZoomPlanner.plan(events: events, ax: ax, activity: [],
+        return (manual + ZoomPlanner.plan(events: events, ax: ax, typing: [], activity: [],
                                           src: source, p: timeline.camera, tm: timeline.timeMap,
                                           avoid: avoid)).sorted { $0.start < $1.start }
     }
@@ -81,7 +83,7 @@ public enum Director {
         if t.camera.autoZoom {
             let manual = t.zoom.filter { $0.origin == .manual }
             let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
-            t.zoom = (manual + ZoomPlanner.plan(events: input.events, ax: input.ax, activity: input.activity, src: src, p: t.camera,
+            t.zoom = (manual + ZoomPlanner.plan(events: input.events, ax: input.ax, typing: input.typing, activity: input.activity, src: src, p: t.camera,
                                                 tm: tm, avoid: avoid)).sorted { $0.start < $1.start }
         }
         let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature)
