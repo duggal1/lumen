@@ -517,6 +517,12 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         placingTool = .tap
     }
 
+    /// Drag a manual tap: coalesced so one gesture is one undo snapshot.
+    func moveTap(id: UUID, x: Double, y: Double, atSource: Double?) {
+        let ctx = ReduceContext(playhead: playhead, selection: id, duration: duration)
+        edit(coalesce: true) { tl in _ = try? reduce(&tl, .moveTap(tap: id, x: x, y: y, atSource: atSource), ctx: ctx) }
+    }
+
     /// Arm a glass loupe for placement on a visible source detail.
     func addLoupe() {
         placingTool = .loupe
