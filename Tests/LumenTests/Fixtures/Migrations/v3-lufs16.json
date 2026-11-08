@@ -1,0 +1,11 @@
+{
+  "timeline": {
+    "schemaVersion": 3,
+    "audio": {
+      "micMode": "standard",
+      "targetLUFS": -16,
+      "xCustomUnknownField": "keep-me"
+    }
+  },
+  "xTopUnknown": 42
+}
