@@ -381,9 +381,15 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         }
         let fps = min(cfg.fps, 120)
         // Capture resolution: cap native pixels, never above native.
+        // Events are stored in VIDEO pixels, so the recorder scale follows
+        // the cap factor; otherwise native-px events exceed the capped
+        // width/height and clicks misplace or drop downstream.
+        let nativeScale = scale
+        var capFactor = 1.0
         let maxH = cfg.resolution.resolutionHeight
         if ph > maxH {
             let s = Double(maxH) / Double(ph)
+            capFactor = s
             pw = max(Int((Double(pw) * s).rounded()) & ~1, 64)
             ph = maxH & ~1
         }
@@ -430,7 +436,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         meta = try FrameMetaWriter(url: bundle.framesMetaURL)
         if cfg.mic { mic = CAFWriter(url: bundle.micURL) }
         if cfg.systemAudio { system = CAFWriter(url: bundle.systemURL) }
-        info = SourceInfo(width: pw, height: ph, fps: Double(fps), duration: 0, backingScale: scale, originX: origin.x, originY: origin.y)
+        info = SourceInfo(width: pw, height: ph, fps: Double(fps), duration: 0, backingScale: nativeScale * capFactor, originX: origin.x, originY: origin.y)
 
         let s = SCStream(filter: filter, configuration: sc, delegate: self)
         try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQ)
