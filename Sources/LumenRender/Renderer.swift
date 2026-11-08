@@ -79,6 +79,9 @@ private struct PrivacyU {
     var mode: Int32
     var block: Float
     var pad: Float
+    var cell: Float
+    var sampledMix: Float
+    var levels: Float
 }
 private struct WebU {
     var crop: SIMD4<Float>; var bubble: SIMD4<Float>
@@ -571,11 +574,16 @@ public final class Renderer: @unchecked Sendable {
                                                                       camera: cam, scale: sc),
                       projected.z > 0.2, projected.w > 0.2 else { continue }
                 let safe = PrivacyMaskGeometry.outsideSample(mask.rect, sourceSize: sourceSize)
+                // Mosaic is the default treatment: blur/pixelate request the
+                // same anchored-cell mosaic (they read as weak by hand).
+                let secretCats: Set<String> = ["card", "apiKey", "jwt", "privateKey", "envSecret", "entropy"]
+                let isSecret = secretCats.contains(mask.category ?? "")
+                let textH = Float(max(mask.rect.w, 1))
+                let cell: Float = max(8, textH * (isSecret ? 1.25 : 0.9))
                 let requested: Int32 = switch mask.mode {
-                case .blur: 0
-                case .pixelate: 1
                 case .solid: 2
                 case .blend: 3
+                case .blur, .pixelate: isSecret ? 5 : 4
                 }
                 // If no region outside the mask exists, Blend falls back to
                 // an opaque solid instead of sampling protected pixels.
@@ -583,7 +591,9 @@ public final class Renderer: @unchecked Sendable {
                 quad(e, projected, canvasF)
                 frag(e, PrivacyU(content: content, sourceRect: mask.rect,
                                  sourceSize: sourceSize, safeSample: safe ?? .zero,
-                                 radius: Float(g.radius), mode: mode, block: 20, pad: 0))
+                                 radius: Float(g.radius), mode: mode, block: 20, pad: 0,
+                                 cell: cell, sampledMix: isSecret ? 0 : 1,
+                                 levels: isSecret ? 0 : 5))
                 e.setFragmentTexture(src, index: 0)
                 draw()
             }
