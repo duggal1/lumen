@@ -257,7 +257,7 @@ enum ZoomPlanner {
                     let drift = min(Double(count) * 7 * backing, max((elem?.w ?? 0) * 0.7, 0))
                     var firstPt = Pt(t: presses[first].t, x: anchor.x, y: anchor.y, w: 2)
                     firstPt.element = elem
-                    var lastPt = Pt(t: presses[i].t, x: anchor.x + drift, y: anchor.y, w: 0)
+                    var lastPt = Pt(t: presses[i].t, x: anchor.x + drift, y: anchor.y, w: 0.5)
                     lastPt.element = elem
                     points.append(firstPt)
                     points.append(lastPt)
