@@ -16,7 +16,19 @@ import LumenSpeech
 @main
 struct LumenCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "lumen-cli", abstract: "Headless Lumen",
-        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self, Bench.self, Golden.self, AudioCheckCmd.self])
+        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self, Bench.self, Golden.self, AudioCheckCmd.self, GpuInfo.self])
+}
+
+struct GpuInfo: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "gpu-info", abstract: "Print Metal device for GPU-gated tests")
+    func run() async throws {
+        if let name = MTLCreateSystemDefaultDevice()?.name {
+            print(name)
+        } else {
+            fputs("no Metal device\n", stderr)
+            throw ExitCode(2)
+        }
+    }
 }
 
 func openProject(_ path: String) async throws -> (ProjectSession, Timeline) {
