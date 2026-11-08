@@ -47,6 +47,25 @@ actor DerivePipeline {
 
 struct LookPreset: Codable, Identifiable { var id: String { name }; var name: String; var style: Style; var cursor: CursorStyle; var camera: CameraParams; var audio: AudioPlan }
 
+/// The transient picture of a cut being chosen. Lives only in the editor
+/// (view state): it is never written into `Timeline`, never saved and never
+/// enters the undo stack. Output times.
+struct PendingCut: Equatable {
+    enum Edge: Equatable { case start, end }
+    var start: Double, end: Double
+    var focused: Edge = .end
+    var length: Double { max(end - start, 0) }
+}
+
+/// What the main lane has selected. One thing at a time.
+enum TimelineSelection: Equatable {
+    case none
+    case clip(UUID)
+    case recording(outputStart: Double)
+    case seam(UUID)
+    case cut(UUID)
+}
+
 @MainActor @Observable final class EditorModel {
     enum ExportState: Equatable { case idle, running(Double), done(URL), failed(String) }
     let session: ProjectSession, renderer: Renderer, box: TimelineBox, clock = PlaybackClock()
@@ -63,6 +82,17 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     /// Latest measured master loudness/peak, for the audio meter.
     var mixStats: (lufs: Double, peak: Double)?
     var selection: UUID?
+    /// The main lane's selection (recording strip, imported clip, split seam or
+    /// cut seam). Kept separate from `selection` (overlays/zooms/masks).
+    var timelineSelection = TimelineSelection.none
+    /// The pending cut range, view state only. Committed through `.cutOutputRange`.
+    var pendingCut: PendingCut?
+    /// Why the last command was refused, shown in the readout line.
+    var editIssue: String?
+    /// Bumped when something outside the strip asks it to fit the whole take.
+    var timelineFitRequest = 0
+    var frameRate: Double { max(session.meta.source.fps, 1) }
+    var frameDuration: Double { 1 / frameRate }
     var exportState = ExportState.idle
     var exportSettings: ExportSettings
     var exportSeparateStems = UserDefaults.standard.bool(forKey: "lumen.export.separateWavStems")
@@ -451,12 +481,65 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         edit { $0.zoom.append(z) }; selection = z.id
     }
 
-    /// Blade: removes one second from the playhead. The cut appears in the
-    /// Inspector's cut list, so it stays reversible without an undo hunt.
+    /// Blade: creates a pending range at the playhead. Press Cut again or
+    /// Backspace to commit, Esc to discard. The pending range is view state
+    /// only — never saved, never on the undo stack.
     func cutAtPlayhead() {
-        guard playhead < timeline.timeMap.outputDuration - 0.1 else { return }
-        dispatch(.cutAtPlayhead(length: 1))
+        if pendingCut != nil { commitPendingCut(); return }
+        let dur = timeline.timeMap.outputDuration
+        guard playhead < dur - 0.05 else { editIssue = "Move the playhead before the end to cut here."; return }
+        let e = min(playhead + 1.0, dur)
+        guard e - playhead >= frameDuration else { editIssue = "A cut must keep at least one frame."; return }
+        pendingCut = PendingCut(start: playhead, end: e)
+        editIssue = nil
     }
+
+    /// Pending range helpers. All times OUTPUT seconds. Min one frame.
+    var pendingLength: Double { pendingCut?.length ?? 0 }
+    var pendingWouldRemoveEverything: Bool {
+        guard let p = pendingCut else { return false }
+        return timeline.timeMap.outputDuration - p.length < frameDuration
+    }
+    func setPendingStart(_ t: Double) {
+        guard var p = pendingCut else { return }
+        p.start = min(max(t, 0), p.end - frameDuration)
+        p.focused = .start; pendingCut = p
+    }
+    func setPendingEnd(_ t: Double) {
+        guard var p = pendingCut else { return }
+        p.end = min(max(t, p.start + frameDuration), timeline.timeMap.outputDuration)
+        p.focused = .end; pendingCut = p
+    }
+    func movePending(by dt: Double) {
+        guard var p = pendingCut else { return }
+        let dur = timeline.timeMap.outputDuration
+        let len = p.length
+        let s = min(max(p.start + dt, 0), max(dur - len, 0))
+        p.start = s; p.end = s + len
+        pendingCut = p
+    }
+    func nudgePendingHandle(_ edge: PendingCut.Edge, _ dt: Double) {
+        if edge == .start { setPendingStart((pendingCut?.start ?? 0) + dt) }
+        else { setPendingEnd((pendingCut?.end ?? 0) + dt) }
+    }
+    func setRangeIn() {
+        if pendingCut == nil { pendingCut = PendingCut(start: playhead, end: min(playhead + 1, timeline.timeMap.outputDuration)) }
+        else { setPendingStart(playhead) }
+    }
+    func setRangeOut() {
+        if pendingCut == nil { pendingCut = PendingCut(start: max(playhead - 1, 0), end: playhead) }
+        else { setPendingEnd(playhead) }
+    }
+    func commitPendingCut() {
+        guard let p = pendingCut else { return }
+        guard !pendingWouldRemoveEverything else { editIssue = "That range would remove the whole recording."; return }
+        guard p.length >= frameDuration else { editIssue = "A cut must keep at least one frame."; return }
+        pendingCut = nil
+        dispatch(.cutOutputRange(start: p.start, end: p.end))
+        // Playhead sits on the seam after a commit.
+        seek(p.start)
+    }
+    func discardPendingCut() { pendingCut = nil; editIssue = nil }
 
     // MARK: Magnetic lane actions (playhead-captured)
 
@@ -508,8 +591,60 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
     }
 
     var snapEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: "lumen.timeline.snapEnabled") }
+        get {
+            if UserDefaults.standard.object(forKey: "lumen.timeline.snapEnabled") == nil { return true }
+            return UserDefaults.standard.bool(forKey: "lumen.timeline.snapEnabled")
+        }
         set { UserDefaults.standard.set(newValue, forKey: "lumen.timeline.snapEnabled") }
+    }
+
+    /// Cut to clipboard: copy plus ripple delete, one gesture.
+    func cutSelectedClip() {
+        guard let id = selection,
+              timeline.clips.contains(where: { $0.id == id }) else { return }
+        copySelectedClip()
+        dispatch(.rippleDeleteClip(id: id))
+        selection = nil
+    }
+
+    /// Split the recording at the playhead (logical seam, no output change).
+    func splitRecordingAtPlayhead() {
+        let ph = playhead
+        guard ph > 0.05, ph < timeline.timeMap.outputDuration - 0.05 else { return }
+        dispatch(.splitRecording(atOutput: ph))
+    }
+
+    func trimClipEdge(id: UUID, isStart: Bool, toOutput: Double) {
+        let ctx = ReduceContext(playhead: playhead, selection: id, duration: duration, fps: frameRate)
+        var draft = timeline
+        do {
+            _ = try reduce(&draft, .trimClipEdge(id: id, isStart: isStart, toOutput: toOutput), ctx: ctx)
+        } catch let CommandError.invalid(msg) { editIssue = msg; return }
+          catch { editIssue = "That trim could not be applied."; return }
+        edit(coalesce: true) { $0 = draft }
+        editIssue = nil
+    }
+
+    func moveCutEdge(id: UUID, isStart: Bool, toOutput: Double) {
+        let ctx = ReduceContext(playhead: playhead, selection: id, duration: duration, fps: frameRate)
+        var draft = timeline
+        do {
+            _ = try reduce(&draft, .setCutEdge(id: id, isStart: isStart, toOutput: toOutput), ctx: ctx)
+        } catch let CommandError.invalid(msg) { editIssue = msg; return }
+          catch { editIssue = "That cut edge could not be moved."; return }
+        edit(coalesce: true) { $0 = draft }
+        editIssue = nil
+    }
+
+    func moveSeam(id: UUID, toOutput: Double) {
+        let ctx = ReduceContext(playhead: playhead, selection: id, duration: duration, fps: frameRate)
+        var draft = timeline
+        do {
+            _ = try reduce(&draft, .moveSeam(id: id, toOutput: toOutput), ctx: ctx)
+        } catch let CommandError.invalid(msg) { editIssue = msg; return }
+          catch { editIssue = "That seam could not be moved."; return }
+        edit(coalesce: true) { $0 = draft }
+        editIssue = nil
     }
 
     /// Arm manual click placement at the current playhead time.
@@ -575,8 +710,14 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         dispatch(.deleteWords(indices))
     }
     func dispatch(_ c: Command) {
-        let ctx = ReduceContext(playhead: playhead, selection: selection, duration: duration)
-        edit { tl in _ = try? reduce(&tl, c, ctx: ctx) }
+        let ctx = ReduceContext(playhead: playhead, selection: selection, duration: duration, fps: frameRate)
+        var draft = timeline
+        do {
+            _ = try reduce(&draft, c, ctx: ctx)
+        } catch let CommandError.invalid(msg) { editIssue = msg; return }
+          catch { editIssue = "That edit could not be applied."; return }
+        edit { $0 = draft }
+        editIssue = nil
     }
     func deleteSelected() {
         guard let id = selection else { return }
@@ -584,7 +725,7 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         else if timeline.overlays.texts.contains(where: { $0.id == id }) { dispatch(.deleteText(id)) }
         else if timeline.overlays.highlights.contains(where: { $0.id == id }) { dispatch(.deleteHighlight(id)) }
         else if timeline.overlays.loupes.contains(where: { $0.id == id }) { dispatch(.deleteLoupe(id)) }
-        else if timeline.clips.contains(where: { $0.id == id }) { dispatch(.deleteClip(id)) }
+        else if timeline.clips.contains(where: { $0.id == id }) { dispatch(.rippleDeleteClip(id: id)) }
         else { return }
         selection = nil
     }
