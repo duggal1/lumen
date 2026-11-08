@@ -101,6 +101,7 @@ public enum Director {
         let layout = LayoutSolver.solve(t, spans: layoutSpans.spans, fallback: layoutSpans.fallback, src: size,
                                         webcamAspect: Double(input.webcamAspect), placement: placement, outDur: tm.outputDuration)
         let autoMasks = MaskTracks.build(input.ocr, plan: t.overlays.privacy, src: src)
+            + MaskTracks.secureFields(events: input.events, ax: input.ax, plan: t.overlays.privacy, src: src)
         let captions = CaptionPlanner.plan(words: input.transcript?.words ?? [], tm: tm, p: t.captions, aspect: t.style.aspectRatio,
                                            kindAt: layout.kind(at:), cornerAt: placement.corner(at:))
 
