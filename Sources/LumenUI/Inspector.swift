@@ -62,6 +62,11 @@ struct Inspector: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
                 .padding(.bottom, 12)
+            if tab == .export {
+                ExportInspector(model: model).pinned
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+            }
             ScrollView {
                 tabBody
                     .padding(.horizontal, 16)
@@ -100,34 +105,31 @@ struct Inspector: View {
 
     /// Secondary editor actions live in the inspector, not the preview transport.
     private var tools: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LButton(title: "Add loupe", icon: "magnifyingglass.circle") { model.addLoupe() }
-            LButton(title: "Add tap", icon: "cursorarrow.click") { model.addTapAtPlayhead() }
+        VStack(spacing: 0) {
             LButton(title: "Import clip", icon: "film") { model.importClips() }
-            LButton(title: "Frame selection", icon: "viewfinder") { model.focusEditing.toggle() }
-                .disabled(model.selection == nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
             LButton(title: "Add title", icon: "textformat") { model.addManualTitle() }
+                .frame(maxWidth: .infinity, alignment: .leading)
             LButton(title: "Add highlight", icon: "highlighter") { model.addManualHighlight() }
-            LButton(title: "Delete selection", icon: "trash") { model.deleteSelected() }
-                .disabled(model.selection == nil)
-            LButton(title: "Share project", icon: "person.2.badge.plus") { model.shareProject() }
-            if let tool = model.placingTool {
-                HStack(spacing: Space.s2) {
-                    Text("Click the preview to place the \(tool.rawValue).")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                    Spacer()
-                    LButton(title: "Cancel", kind: .quiet) { model.placingTool = nil }
-                }
-            }
-#if DEBUG
-            let stats = model.renderer.presentStats.snapshot
-            Text("Preview: \(stats.late) late frames / \(stats.frames), worst \(Int(stats.worstMs)) ms")
-                .font(AppType.caption.monospacedDigit())
-                .foregroundStyle(Tok.text2)
-#endif
+                .frame(maxWidth: .infinity, alignment: .leading)
+            LButton(title: "Speed 2×", icon: "gauge") { addSpeedRamp(speed: 2) }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            SliderRow(label: "Cursor size", v: model.bind(\.cursor.size), range: 0.5...2.5)
+            SliderRow(label: "Smoothing", v: model.bind(\.cursor.smoothingSigma), range: 0...0.12, fmt: { "\(Int($0 * 1000)) ms" })
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card(padding: 16)
+    }
+
+    private func addSpeedRamp(speed: Double) {
+        let tm = model.timeline.timeMap
+        let sOut = model.playhead
+        let eOut = min(sOut + 2.0, tm.outputDuration)
+        guard eOut > sOut else { return }
+        let sSrc = tm.source(atOutput: sOut)
+        let eSrc = tm.source(atOutput: eOut)
+        guard eSrc > sSrc else { return }
+        model.dispatch(.addSpeedRamp(start: sSrc, end: eSrc, speed: speed))
     }
 
     private func icon(_ t: Inspector.Tab) -> String {
@@ -139,7 +141,7 @@ struct Inspector: View {
         }
     }
 
-    private struct WallpaperChoice: Identifiable {
+    struct WallpaperChoice: Identifiable {
         var id: String { url.path }
         var displayName: String
         var url: URL
@@ -425,19 +427,21 @@ struct Inspector: View {
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 Row(label: "Main lane") {
-                    HStack(spacing: 8) {
+                    VStack(spacing: 8) {
                         LButton(title: "Split at playhead", icon: "scissors", kind: .quiet) { m.splitAtPlayhead() }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         LButton(title: "Duplicate", icon: "doc.on.doc", kind: .quiet) { m.duplicateSelected() }
                             .disabled(m.selection == nil)
-                        LButton(title: "Join", icon: "link", kind: .quiet) { m.joinSelectedClips() }
-                            .disabled(m.selection == nil)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 Row(label: "Ripple") {
-                    HStack(spacing: 8) {
+                    VStack(spacing: 8) {
                         LButton(title: "Ripple delete", icon: "trash", kind: .quiet) { m.rippleDeleteSelected() }
                             .disabled(m.selection == nil)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         LButton(title: "Split recording", icon: "scissors", kind: .quiet) { m.splitRecordingAtPlayhead() }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 Row(label: "Clipboard") {
@@ -450,74 +454,9 @@ struct Inspector: View {
                             .disabled(m.copiedClip == nil)
                     }
                 }
-                Row(label: "Snap") {
-                    ToggleRow(label: "Snap on", on: Binding(
-                        get: { m.snapEnabled },
-                        set: { m.snapEnabled = $0 }))
-                }
-                Text("B split · C cut · Cmd-C/X/V clipboard · N snap · F fit. Snap targets: playhead, clip edges, cuts, clicks.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-            }.card(padding: 16)
-            VStack(spacing: 0) {
-                Row(label: "Cuts") {
-                    LButton(title: "Cut 1s at playhead", icon: "scissors", kind: .quiet) { m.cutAtPlayhead() }
-                }
-                if m.timeline.timeMap.cuts.isEmpty {
-                    Text("No cuts. Use the Cut button in the transport to remove a second.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                ForEach(m.timeline.timeMap.cuts) { cut in
-                    Row(label: String(format: "%.1f – %.1f s", cut.start, cut.end)) {
-                        HStack(spacing: Space.s2) {
-                            Text(cut.origin.rawValue).font(AppType.caption).foregroundStyle(Tok.text2)
-                            LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.deleteCut(cut.id)) }
-                        }
-                    }
-                }
-            }.card(padding: 16)
-            VStack(spacing: 0) {
-                Row(label: "Video clips") {
-                    LButton(title: "Import…", icon: "film", kind: .quiet) { m.importClips() }
-                }
-                if m.timeline.clips.isEmpty {
-                    Text("Imported movies are appended after the recording on the same timeline.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                ForEach(m.timeline.clips) { clip in
-                    Row(label: clip.name.isEmpty ? URL(fileURLWithPath: clip.path).lastPathComponent : clip.name) {
-                        HStack(spacing: Space.s2) {
-                            Text(String(format: "%.1f s", clip.duration))
-                                .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
-                            LButton(title: "Jump", kind: .quiet) { m.seek(clip.start) }
-                            LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.rippleDeleteClip(id: clip.id)) }
-                        }
-                    }
-                }
-            }.card(padding: 16)
-            VStack(spacing: 0) {
-                Row(label: "Manual taps") {
-                    LButton(title: "Tap at playhead", icon: "cursorarrow.click", kind: .quiet) { m.addTapAtPlayhead() }
-                }
-                if m.timeline.overlays.taps.isEmpty {
-                    Text("Device recordings have no pointer events; taps add a click at the playhead position.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                ForEach(m.timeline.overlays.taps) { tap in
-                    Row(label: String(format: "%.1f s", tap.t)) {
-                        HStack(spacing: 4) {
-                            LIconButton(icon: "chevron.left", label: "Nudge tap left 1 px") { m.moveTap(id: tap.id, x: tap.x - 1, y: tap.y, atSource: nil) }
-                                .help("Nudge tap 1 px left")
-                                .accessibilityLabel("Nudge tap at \(String(format: "%.1f", tap.t)) seconds left")
-                            LIconButton(icon: "chevron.right", label: "Nudge tap right 1 px") { m.moveTap(id: tap.id, x: tap.x + 1, y: tap.y, atSource: nil) }
-                                .help("Nudge tap 1 px right (Shift for 10 px)")
-                                .accessibilityLabel("Nudge tap at \(String(format: "%.1f", tap.t)) seconds right")
-                            LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.deleteTap(tap.id)) }
-                        }
-                    }
-                }
+                ToggleRow(label: "Snap", on: Binding(
+                    get: { m.snapEnabled },
+                    set: { m.snapEnabled = $0 }))
             }.card(padding: 16)
         }
     }
@@ -606,9 +545,6 @@ struct Inspector: View {
                     ColorPicker("", selection: clickColor(m), supportsOpacity: true).labelsHidden()
                 }
                 SliderRow(label: "Click duration", v: m.bind(\.cursor.clickDuration), range: 0.2...0.9, fmt: { String(format: "%.2f s", $0) })
-                Text("Glass bloom is baked into the Metal renderer. SwiftUI Liquid Glass macOS 26 APIs cannot run inside that renderer, so editor UI only uses the material fallback.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 ToggleRow(label: "Constant size", on: m.bind(\.cursor.constantSize))
                 ToggleRow(label: "Loop position", on: Binding(get: { m.timeline.cursor.loop != nil }, set: { v in m.edit { $0.cursor.loop = v ? 1.2 : nil } }))
                 SliderRow(label: "Press scale", v: m.bind(\.cursor.pressScale), range: 0.7...1)
@@ -819,8 +755,6 @@ struct Inspector: View {
                     Text("Transcript appears after speech analysis finishes.")
                         .font(AppType.caption).foregroundStyle(Tok.text2)
                 } else {
-                    Text("Edit a word to fix a caption; delete removes it from captions and the cut map.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
                     ForEach(Array(m.transcriptWords.prefix(200).enumerated()), id: \.offset) { index, word in
                         let deleted = m.timeline.captions.deletedWords.contains(index)
                         HStack(spacing: Space.s2) {
@@ -855,11 +789,6 @@ struct Inspector: View {
                 }
                 SliderRow(label: "Padding", v: m.bind(\.overlays.privacy.padding), range: 0...24, fmt: { "\(Int($0)) px" })
                 SliderRow(label: "Sensitivity", v: m.bind(\.overlays.privacy.entropyThreshold), range: 3...4.5, fmt: { String(format: "%.1f", $0) })
-                if m.timeline.overlays.privacy.mode == .blur || m.timeline.overlays.privacy.mode == .pixelate {
-                    Text("Blur and pixelation are visual effects, not secure redaction. Use Blend or Solid to hide secrets.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
                 if m.privacyScanning {
                     Text("Scanning for sensitive text. Export is disabled until the scan is applied.")
                         .font(AppType.caption).foregroundStyle(Tok.text2)
@@ -950,112 +879,34 @@ struct Inspector: View {
         let m = model
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
-                Row(label: "Studio mode") {
-                    LDropdown(sel: m.bind(\.audio.studioMode),
-                              options: StudioMode.allCases.map { ($0, $0.title, "waveform") })
-                        .frame(width: 138)
-                }
-                Row(label: "Loudness") {
-                    SliderRow(label: "Target", v: Binding(
-                        get: { m.timeline.audio.targetLUFS },
-                        set: { v in m.edit(coalesce: true) { tl in let mode = tl.audio.micMode; tl.audio.targetLUFSOverride = abs(v - mode.targetLUFS) < 1e-9 ? nil : v } }), range: -18...(-8),
-                              fmt: { String(format: "%.0f LUFS", $0) })
-                    .frame(width: 138)
-                }
-                Row(label: "Microphone") {
-                    LDropdown(sel: m.bind(\.audio.micMode),
-                              options: MicMode.allCases.map { ($0, $0.rawValue.capitalized, Self.micModeIcon($0)) })
-                        .frame(width: 138)
-                }
-                ToggleRow(label: "Clean mic", on: m.bind(\.audio.micClean))
-                Row(label: "Studio voice preset") {
-                    LButton(title: "Enhance voice", icon: "waveform", kind: .quiet) {
+                ToggleRow(label: "Enhance voice", on: Binding(
+                    get: { m.timeline.audio.micMode == .podcast },
+                    set: { on in
                         m.edit {
-                            $0.audio.micMode = .podcast
-                            $0.audio.studio = 0.75
-                            $0.audio.micClean = true
-                            $0.audio.dereverb = 0
+                            if on {
+                                $0.audio.studioMode = .optimized
+                                $0.audio.micMode = .podcast
+                                $0.audio.studio = 0.75
+                                $0.audio.micClean = true
+                            } else {
+                                $0.audio.studioMode = .standard
+                                $0.audio.micMode = .standard
+                                $0.audio.studio = 0.25
+                                $0.audio.micClean = false
+                            }
                         }
-                    }
-                }
-                Row(label: "Natural voice") {
-                    LButton(title: "Reset processing", icon: "arrow.counterclockwise", kind: .quiet) {
-                        m.edit { $0.audio.micClean = false; $0.audio.dereverb = 0; $0.audio.studio = 0.25; $0.audio.micMode = .standard }
-                    }
-                }
+                    }))
                 SliderRow(label: "Voice level", v: m.bind(\.audio.micGainDb), range: -18...12,
                           fmt: { String(format: "%+.0f dB", $0) })
-                SliderRow(label: "Room echo", v: m.bind(\.audio.dereverb), range: 0...1,
-                          fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "System level", v: m.bind(\.audio.systemGainDb), range: -24...6,
                           fmt: { String(format: "%+.0f dB", $0) })
-                SliderRow(label: "Studio voice", v: m.bind(\.audio.studio), range: 0...1,
-                          fmt: { "\(Int($0 * 100))%" })
+                ToggleRow(label: "Loudness normalize", on: m.bind(\.audio.normalize))
                 ToggleRow(label: "Click sounds", on: m.bind(\.audio.clickSounds))
                 if m.timeline.audio.clickSounds {
-                    Row(label: "Click tone") {
-                        LDropdown(sel: m.bind(\.audio.clickTone),
-                                  options: [(ClickSound.fresh, "Fresh", "cursorarrow.click"),
-                                            (ClickSound.mouse, "Mouse", "cursorarrow.click"),
-                                            (.subtle, "Subtle", "cursorarrow.click")]).frame(width: 130)
-                    }
                     SliderRow(label: "Click level", v: m.bind(\.audio.sfxGainDb), range: -24...6,
                               fmt: { String(format: "%+.0f dB", $0) })
-                    Row(label: "Preview") {
-                        LButton(title: "Play click", icon: "speaker.wave.2", kind: .quiet) { m.previewClick() }
-                    }
                 }
                 ToggleRow(label: "Zoom whooshes", on: m.bind(\.audio.whooshes))
-                ToggleRow(label: "Typing sound", on: m.bind(\.audio.keySounds))
-                if m.timeline.audio.keySounds {
-                    Row(label: "Pack") {
-                        LDropdown(sel: m.bind(\.audio.typingPackId),
-                                  options: TypingPackLoader.availablePacks().map { ($0.lastPathComponent, $0.lastPathComponent, "keyboard") }
-                                    .isEmpty ? [("mechvibes-default", "Mechvibes Default", "keyboard")] :
-                                    TypingPackLoader.availablePacks().map { ($0.lastPathComponent, $0.lastPathComponent, "keyboard") }).frame(width: 180)
-                    }
-                    SliderRow(label: "Typing level", v: m.bind(\.audio.typingLevelDb), range: -18...0,
-                              fmt: { String(format: "%+.0f dB", $0) })
-                }
-                ToggleRow(label: "Speed up idle spans", on: m.bind(\.audio.speedRampsAuto))
-            }.card(padding: 16)
-            VStack(spacing: 0) {
-                MusicPicker(model: m)
-                Row(label: "Voice-over") {
-                    LButton(title: "Import…", icon: "waveform") { m.importVoiceover() }
-                }
-                ForEach(m.timeline.audio.lanes.filter { $0.role == .voiceover }) { lane in
-                    Row(label: (lane.variant ?? "Voice") + " · " + (lane.path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Recorded")) {
-                        HStack(spacing: Space.s1) {
-                            LButton(title: lane.mute ? "Unmute" : "Mute", kind: .quiet) {
-                                m.edit { tl in
-                                    if let i = tl.audio.lanes.firstIndex(where: { $0.id == lane.id }) {
-                                        tl.audio.lanes[i].mute.toggle()
-                                    }
-                                }
-                            }
-                            LButton(title: "Remove", icon: "trash", kind: .quiet) {
-                                m.edit { tl in tl.audio.lanes.removeAll { $0.id == lane.id } }
-                            }
-                        }
-                    }
-                }
-                if m.timeline.audio.musicPath != nil {
-                    SliderRow(label: "Music level", v: m.bind(\.audio.musicGainDb), range: -30...(-6), fmt: { "\(Int($0)) dB" })
-                    Row(label: "Remove music") { LButton(title: "Remove", icon: "trash", kind: .quiet) { m.edit { $0.audio.musicPath = nil } } }
-                }
-                ToggleRow(label: "Auto loudness", on: m.bind(\.audio.normalize))
-                SliderRow(label: "Trim", v: m.bind(\.audio.outputGainDb), range: -12...6,
-                          fmt: { String(format: "%+.0f dB", $0) })
-                Text("Music ducks under voice with 50 ms attack / 400 ms release; click cues stay above music. Idle ramps mute mic, not music.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-                if let stats = m.mixStats {
-                    Row(label: "Master") {
-                        Text(String(format: "%.1f LUFS · peak %.1f dBTP", stats.lufs, stats.peak))
-                            .font(AppType.caption.monospacedDigit())
-                            .foregroundStyle(stats.peak > -1 ? Tok.statusBad : Tok.text2)
-                    }
-                }
             }.card(padding: 16)
         }
     }
@@ -1102,21 +953,142 @@ struct Inspector: View {
                 }
             }
             if m.timeline.webcam?.backdrop != .original {
-                Text("Person mask generated locally using Vision. It may take time to analyze a recording.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2).frame(maxWidth: .infinity, alignment: .leading)
             }
             Row(label: "4K output") {
                 LToggle(on: Binding(get: { m.exportSettings.resolution == .ultraHD },
                                     set: { on in m.updateExportSettings { $0.resolution = on ? .source : .ultraHD } }),
                         label: "4K composition")
             }
-            Text("4K output increases pixel dimensions; it cannot restore detail the camera never captured.")
-                .font(AppType.caption).foregroundStyle(Tok.text2).frame(maxWidth: .infinity, alignment: .leading)
             }.card(padding: 16)
         }
     }
 
     private var export: some View { ExportInspector(model: model) }
+}
+
+/// 2-column, 16:10, 8pt gaps. Thumbnails decode off the main thread at 2x
+/// cell size and cache on disk; the grid never decodes full-res. No text,
+/// badges, blur, shadow or material per cell — only the accent ring.
+private struct WallpaperGrid: View {
+    let model: EditorModel
+    let choices: [Inspector.WallpaperChoice]
+    let onSelect: (Inspector.WallpaperChoice) -> Void
+
+    private let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 8) {
+            ForEach(choices) { choice in
+                WallpaperCell(choice: choice,
+                              selected: model.timeline.style.background == .image
+                                  && model.timeline.style.backgroundImagePath == choice.url.path,
+                              onSelect: { onSelect(choice) })
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct WallpaperCell: View {
+    let choice: Inspector.WallpaperChoice
+    let selected: Bool
+    let onSelect: () -> Void
+    @State private var thumb: NSImage?
+
+    var body: some View {
+        Button(action: onSelect) {
+            ZStack {
+                if let thumb {
+                    Image(nsImage: thumb)
+                        .resizable()
+                        .aspectRatio(16 / 10, contentMode: .fill)
+                        .clipped()
+                } else {
+                    Color.clear
+                        .aspectRatio(16 / 10, contentMode: .fill)
+                }
+                if selected {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Tok.accent, lineWidth: 2)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .help(choice.displayName)
+        .accessibilityLabel(choice.displayName)
+        .accessibilityValue(selected ? "Selected" : "")
+        .task(id: choice.url.path) {
+            thumb = await WallpaperThumbnailCache.shared.thumbnail(for: choice.url)
+        }
+    }
+}
+
+/// Disk-cached 2x thumbnails. Full-res is never touched by the grid;
+/// picking a cell edits the timeline and the renderer loads full-res async.
+private actor WallpaperThumbnailCache {
+    static let shared = WallpaperThumbnailCache()
+    private var directory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Lumen/WallpaperThumbs", isDirectory: true)
+    }
+    private var memory: [String: NSImage] = [:]
+
+    func thumbnail(for url: URL) async -> NSImage? {
+        let key = cacheKey(for: url)
+        if let hit = memory[key] { return hit }
+        if let disk = diskImage(for: key) {
+            memory[key] = disk
+            return disk
+        }
+        let image = await Task.detached(priority: .userInitiated) {
+            Self.makeThumbnail(at: url, targetWidth: 280)
+        }.value
+        if let image {
+            if let data = Self.jpegData(from: image) {
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try? data.write(to: directory.appendingPathComponent(key), options: .atomic)
+            }
+            memory[key] = image
+        }
+        return image
+    }
+
+    private func cacheKey(for url: URL) -> String {
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let stamp = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let size = values?.fileSize ?? 0
+        let stem = (url.lastPathComponent as NSString).deletingPathExtension
+        return "\(stem)-\(Int(stamp))-\(size)-280.jpg"
+    }
+
+    private func diskImage(for key: String) -> NSImage? {
+        let url = directory.appendingPathComponent(key)
+        return NSImage(contentsOf: url)
+    }
+
+    private nonisolated static func makeThumbnail(at url: URL, targetWidth: Int) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceThumbnailMaxPixelSize: targetWidth,
+        ] as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    }
+
+    private nonisolated static func jpegData(from image: NSImage) -> Data? {
+        guard let rep = image.representations.first else { return nil }
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: rep.pixelsWide, pixelsHigh: rep.pixelsHigh,
+                                      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 32) else { return nil }
+        guard let ctx = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = ctx
+        image.draw(in: NSRect(x: 0, y: 0, width: rep.pixelsWide, height: rep.pixelsHigh))
+        NSGraphicsContext.restoreGraphicsState()
+        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+    }
 }
 
 extension Inspector.Tab {
