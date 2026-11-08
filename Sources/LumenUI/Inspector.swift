@@ -243,7 +243,15 @@ struct Inspector: View {
                 }
                 ForEach(m.timeline.overlays.taps) { tap in
                     Row(label: String(format: "%.1f s", tap.t)) {
-                        LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.deleteTap(tap.id)) }
+                        HStack(spacing: 4) {
+                            LIconButton(icon: "chevron.left", label: "Nudge tap left 1 px") { m.moveTap(id: tap.id, x: tap.x - 1, y: tap.y, atSource: nil) }
+                                .help("Nudge tap 1 px left")
+                                .accessibilityLabel("Nudge tap at \(String(format: "%.1f", tap.t)) seconds left")
+                            LIconButton(icon: "chevron.right", label: "Nudge tap right 1 px") { m.moveTap(id: tap.id, x: tap.x + 1, y: tap.y, atSource: nil) }
+                                .help("Nudge tap 1 px right (Shift for 10 px)")
+                                .accessibilityLabel("Nudge tap at \(String(format: "%.1f", tap.t)) seconds right")
+                            LButton(title: "Remove", icon: "trash", kind: .quiet) { m.dispatch(.deleteTap(tap.id)) }
+                        }
                     }
                 }
             }.card()
