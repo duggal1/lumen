@@ -555,38 +555,34 @@ struct Inspector: View {
 
     private var camera: some View {
         let m = model
-        // "Smoothness" 0...1 maps onto the spring omegas (lower omega = floatier)
-        let smooth = Binding<Double>(get: { (14 - m.timeline.camera.omegaPan) / 11 },
-                                     set: { s in m.edit(coalesce: true) { $0.camera.omegaPan = 14 - 11 * s; $0.camera.omegaZoom = 12 - 9 * s } })
+        // Zoom v3: Auto zoom · Zoom amount · Smoothness on top. Smoothness is
+        // the lead-in (0.3-1.0 s); the camera arrives 95% at the click.
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
+                SliderRow(label: "Zoom amount", v: m.bind(\.camera.baseScale), range: 1.3...3.0,
+                          fmt: { String(format: "%.1f×", $0) })
+                SliderRow(label: "Smoothness", v: m.bind(\.camera.leadIn), range: 0.3...1.0,
+                          fmt: { "\(Int($0 * 1000)) ms" })
                 Row(label: "Preset") { LDropdown(sel: Binding(get: { m.timeline.camera.preset }, set: { v in m.edit { $0.camera.apply(preset: v) } }), options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "plus.magnifyingglass") }).frame(width: 130) }
-                Row(label: "Tilt") { LDropdown(sel: m.bind(\.camera.tilt), options: TiltMode.allCases.map { ($0, $0.rawValue.capitalized, "move.3d") }).frame(width: 130) }
-                SliderRow(label: "Max zoom", v: m.bind(\.camera.maxScale), range: 1.2...6.0, fmt: { String(format: "%.2f×", $0) })
-                Row(label: "Max upscale") { LDropdown(sel: m.bind(\.camera.upscaleMaxFactor), options: [2, 3, 4, 5, 6, 8, 10].map { ($0, "\($0)×", "arrow.up.right.and.arrow.down.right") }).frame(width: 130) }
-                ToggleRow(label: "Real-time upscale", on: m.bind(\.camera.upscaleEnabled))
-                SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.0...2.5, fmt: { String(format: "%.2f×", $0) })
-                SliderRow(label: "Smoothness", v: smooth, range: 0...1)
             }.card(padding: 16)
-            VStack(spacing: 0) {
-                SliderRow(label: "Dead zone", v: m.bind(\.camera.deadZone), range: 0.1...0.45)
-                SliderRow(label: "Click weight", v: m.bind(\.camera.clickWeight), range: 1...8, fmt: { String(format: "%.1f×", $0) })
-                SliderRow(label: "Motion blur", v: m.bind(\.camera.shutter), range: 0...1)
-                SliderRow(label: "Hover sensitivity", v: m.bind(\.camera.sensitivity), range: 0...1,
-                          fmt: { "\(Int($0 * 100))%" })
-                SliderRow(label: "Follow delay", v: m.bind(\.camera.followDelay), range: 0...0.5,
-                          fmt: { "\(Int($0 * 1000)) ms" })
-                SliderRow(label: "Focus X", v: m.bind(\.camera.centerOffsetX), range: (-0.2)...0.2,
-                          fmt: { "\(Int($0 * 100))%" })
-                SliderRow(label: "Focus Y", v: m.bind(\.camera.centerOffsetY), range: (-0.2)...0.2,
-                          fmt: { "\(Int($0 * 100))%" })
-                SliderRow(label: "Anticipation", v: m.bind(\.camera.leadIn), range: 0.15...0.30,
-                          fmt: { "\(Int($0 * 1000)) ms" })
-                SliderRow(label: "Zoom hold", v: m.bind(\.camera.tail), range: 0.8...1.5,
-                          fmt: { String(format: "%.1f s", $0) })
-                ToggleRow(label: "Focus debug", on: Binding(get: { m.zoomDebug }, set: { m.zoomDebug = $0 }))
-            }.card(padding: 16)
+            DisclosureGroup("Advanced") {
+                VStack(spacing: 0) {
+                    Row(label: "Tilt") { LDropdown(sel: m.bind(\.camera.tilt), options: TiltMode.allCases.map { ($0, $0.rawValue.capitalized, "move.3d") }).frame(width: 130) }
+                    SliderRow(label: "Max zoom", v: m.bind(\.camera.maxScale), range: 1.2...6.0, fmt: { String(format: "%.2f×", $0) })
+                    Row(label: "Max upscale") { LDropdown(sel: m.bind(\.camera.upscaleMaxFactor), options: [2, 3, 4, 5, 6, 8, 10].map { ($0, "\($0)×", "arrow.up.right.and.arrow.down.right") }).frame(width: 130) }
+                    ToggleRow(label: "Real-time upscale", on: m.bind(\.camera.upscaleEnabled))
+                    SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.0...2.5, fmt: { String(format: "%.2f×", $0) })
+                    SliderRow(label: "Motion blur", v: m.bind(\.camera.shutter), range: 0...1)
+                    SliderRow(label: "Follow delay", v: m.bind(\.camera.followDelay), range: 0...0.5,
+                              fmt: { "\(Int($0 * 1000)) ms" })
+                    SliderRow(label: "Focus X", v: m.bind(\.camera.centerOffsetX), range: (-0.2)...0.2,
+                              fmt: { "\(Int($0 * 100))%" })
+                    SliderRow(label: "Focus Y", v: m.bind(\.camera.centerOffsetY), range: (-0.2)...0.2,
+                              fmt: { "\(Int($0 * 100))%" })
+                    ToggleRow(label: "Focus debug", on: Binding(get: { m.zoomDebug }, set: { m.zoomDebug = $0 }))
+                }.card(padding: 16)
+            }
         }
     }
 
