@@ -51,11 +51,9 @@ enum TimelineGeometry {
 }
 
 extension TimelineGeometry {
-    static let labelFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-    static let monoFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
     static func textWidth(_ s: String) -> CGFloat {
-        ceil((s as NSString).size(withAttributes: [.font: labelFont]).width)
+        ceil((s as NSString).size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)]).width)
     }
     static func firstFit(_ options: [String], width: CGFloat) -> String? {
         options.first { textWidth($0) <= width }
