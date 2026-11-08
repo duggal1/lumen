@@ -96,9 +96,9 @@ enum ZoomPlanner {
             frame.x < width && frame.y < height
     }
 
-    /// A purposeful hover needs real travel followed by stationary dwell.
+    /// Dwell: cursor stationary within `still` for `minDwell` (250-400mc typical).
     static func hovers(_ events: [InputEvent], radius: Double, still: Double,
-                       endT: Double, usable: (Double) -> Bool) -> [Pt] {
+                       endT: Double, minDwell: Double = 0.3, usable: (Double) -> Bool) -> [Pt] {
         let mv = events.filter { ($0.kind == .move || $0.kind == .drag) && usable($0.t) }
         var out: [Pt] = [], i = 0
         while i < mv.count {
@@ -107,17 +107,16 @@ enum ZoomPlanner {
                   hypot(Double(mv[j + 1].x - mv[i].x),
                         Double(mv[j + 1].y - mv[i].y)) < still { j += 1 }
             let dwellEnd = j + 1 < mv.count ? mv[j + 1].t : endT
-            if dwellEnd - mv[i].t >= 0.2 {
+            if dwellEnd - mv[i].t >= minDwell {
                 var distance = 0.0, k = i
                 while k > 0, mv[i].t - mv[k - 1].t <= 0.4 {
                     distance += hypot(Double(mv[k].x - mv[k - 1].x),
                                       Double(mv[k].y - mv[k - 1].y))
                     k -= 1
                 }
-                if distance > radius {
-                    out.append(Pt(t: mv[i].t, x: Double(mv[i].x),
-                                  y: Double(mv[i].y), w: 1))
-                }
+                // Weight 2 so a single dwell passes the group.reduce >=2 gate.
+                out.append(Pt(t: mv[i].t, x: Double(mv[i].x),
+                              y: Double(mv[i].y), w: 2))
             }
             i = j + 1
         }
@@ -132,8 +131,8 @@ enum ZoomPlanner {
             minX = min(minX, pt.x); maxX = max(maxX, pt.x)
             minY = min(minY, pt.y); maxY = max(maxY, pt.y)
         }
-        return (maxX - minX + 0.24 * width) * max(minScale, 1) <= 0.8 * width &&
-               (maxY - minY + 0.24 * height) * max(minScale, 1) <= 0.8 * height
+        return (maxX - minX + 0.12 * width) * max(minScale, 1) <= 0.8 * width &&
+               (maxY - minY + 0.12 * height) * max(minScale, 1) <= 0.8 * height
     }
 
     /// A wide cluster of clicks contains separate intentions. Break it at
@@ -219,38 +218,53 @@ enum ZoomPlanner {
             $0.kind == .keyDown && usable($0.t) && $0.flags & 0x14 == 0 &&
             $0.keyCode < 53 && ![36, 48, 51].contains($0.keyCode)
         }
+        // Caret-first typing: AX caret > focused element > last click > last cursor.
+        // Priority: typing > click > dwell > cursor-follow with hysteresis.
+        let clicked = sorted.filter { $0.kind == .down && $0.button == 0 && usable($0.t) }
         let positioned = sorted.filter {
             $0.hasPosition && usable($0.t) &&
             Double($0.x) >= 0 && Double($0.x) <= width &&
             Double($0.y) >= 0 && Double($0.y) <= height
         }
-        let clicked = sorted.filter { $0.kind == .down && $0.button == 0 && usable($0.t) }
-        func typingAnchor(_ t: Double) -> SIMD2<Double>? {
+        func typingAnchor(_ t: Double) -> (SIMD2<Double>, AXFrame?)?? {
+            // Caret rect from AX (Chromium if accessibility on). Peak: element frame.
+            if let lastClick = clicked.last(where: { $0.t <= t && t - $0.t < 20 }),
+               lastClick.axFrameIndex > 0, Int(lastClick.axFrameIndex) <= ax.count {
+                let f = ax[Int(lastClick.axFrameIndex) - 1]
+                // Caret x is left edge of focused text range, not box centre.
+                let caretX = clamp(f.x + min(f.w * 0.15, 8 * backing), 0, width)
+                return (SIMD2(caretX, f.y + f.h / 2), f)
+            }
             if let last = clicked.last(where: { $0.t <= t && t - $0.t < 20 }) {
-                return SIMD2(Double(last.x), Double(last.y))
+                return (SIMD2(Double(last.x), Double(last.y)), nil)
             }
             if let last = positioned.last(where: { $0.t <= t && t - $0.t < 8 }) {
-                return SIMD2(Double(last.x), Double(last.y))
+                return (SIMD2(Double(last.x), Double(last.y)), nil)
             }
-            return nil
+            return nil // never window edge/margin — unanchored typing makes no zoom
         }
         var first = 0
         for i in presses.indices where i == presses.count - 1 || presses[i + 1].t - presses[i].t > 0.9 {
             let count = i - first + 1
             let hasClickedField = clicked.contains { $0.t <= presses[first].t && presses[first].t - $0.t < 20 }
-            // Two keys after a known field click indicate actual typing;
-            // unanchored keys still require three to reject keyboard noise.
-            if (count >= 3 || (count >= 2 && hasClickedField)),
-               let anchor = typingAnchor(presses[first].t) {
-                points.append(Pt(t: presses[first].t, x: anchor.x, y: anchor.y, w: 2))
-                points.append(Pt(t: presses[i].t, x: anchor.x, y: anchor.y, w: 0))
+            if (count >= 3 || (count >= 2 && hasClickedField)) {
+                if let anchorObj = typingAnchor(presses[first].t),
+                   let (anchor, elem) = anchorObj {
+                    var firstPt = Pt(t: presses[first].t, x: anchor.x, y: anchor.y, w: 2)
+                    firstPt.element = elem
+                    var lastPt = Pt(t: presses[i].t, x: anchor.x, y: anchor.y, w: 0)
+                    lastPt.element = elem
+                    points.append(firstPt)
+                    points.append(lastPt)
+                }
             }
             first = i + 1
         }
 
+        // Dwell 250-400ms, gentle — maps to 1.4x-2.2x via target size, not fixed.
         let radius = lerp(120, 12, clamp(p.sensitivity, 0, 1)) * backing
-        points += hovers(sorted, radius: radius, still: 6 * backing,
-                         endT: tm.trimEnd, usable: usable)
+        points += hovers(sorted, radius: radius, still: 12 * backing,
+                         endT: tm.trimEnd, minDwell: 0.3, usable: usable)
         if positioned.isEmpty {
             var last = -10.0
             for item in activity where usable(item.t) && item.t - last > 0.5 {
@@ -290,23 +304,31 @@ enum ZoomPlanner {
                     bottom = max(bottom, (point.element.map { $0.y + $0.h }) ?? point.y)
                 }
                 let boxWidth = max(right - left, 0), boxHeight = max(bottom - top, 0)
-                let fit = 0.8 * min(width / (boxWidth + 0.24 * width),
-                                    height / (boxHeight + 0.24 * height))
+                // Derive scale from target size: smaller target -> higher zoom.
+                // 1.4-3.3 typical, configurable min/max. Pure point targets hit cap.
+                let targetArea = (boxWidth + 48 * backing) * (boxHeight + 48 * backing)
+                // Sigmoid: 0 area -> 3.3, large area -> 1.4
+                let norm = 1.0 / (1.0 + targetArea / 40_000)
+                let targetScale = 1.4 + 1.9 * norm
+                let fit = 0.8 * min(width / (boxWidth + 0.12 * width),
+                                    height / (boxHeight + 0.12 * height))
                 let usableFit = fit >= max(p.minScale, p.minTrigger)
-                // Continuous content-driven scale: preserve the fit ratio at
-                // full precision. The previous 0.1 quantization collapsed
-                // 1.15x, 1.5x and 1.9x into the same 1.1-1.2 band.
-                let scale = clamp(fit, p.minScale, p.maxScale)
+                let scale = clamp(min(fit, targetScale), p.minScale, p.maxScale)
                 let mass = max(anchors.reduce(0) { $0 + $1.w }, 1)
                 let cx = anchors.reduce(0) { $0 + $1.x * $1.w } / mass
                 let cy = anchors.reduce(0) { $0 + $1.y * $1.w } / mass
                 let focus: Focus
-                // A recorded click is the ground truth for where the camera
-                // must land. Hover/typing anchors in the same cluster only
-                // widen the fit box; they must never drag the center off the
-                // click (weighted centroids did exactly that).
                 let clickAnchor = anchors.first(where: \.isClick)
-                if group.contains(where: \.path) && !usableFit {
+                let dwellOnly = !anchors.contains(where: \.isClick)
+                // Typing caret: frame the caret rect, not box centre for wide fields.
+                let typingAnchor = anchors.first { $0.w == 2 && $0.element != nil } ?? anchors.first { $0.w == 2 }
+                if let typingAnchor, let el = typingAnchor.element, dwellOnly {
+                    // Left-aligned caret for wide fields
+                    let caretX = clamp(el.x + min(el.w * 0.15, 8 * backing), 0, width)
+                    focus = .fixed(x: caretX / width, y: (el.y + el.h / 2) / height)
+                } else if let typingAnchor, dwellOnly {
+                    focus = .fixed(x: typingAnchor.x / width, y: typingAnchor.y / height)
+                } else if group.contains(where: \.path) && !usableFit {
                     focus = .follow
                 } else if let clickAnchor, anchors.count == 1, let element = clickAnchor.element {
                     focus = .element(x: element.x / width, y: element.y / height,

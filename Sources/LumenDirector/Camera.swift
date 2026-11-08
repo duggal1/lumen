@@ -32,12 +32,12 @@ enum CameraSolver {
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams, src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
         let zoom = zoom.map { z in ZoomSegment(id: z.id, start: tm.output(atSource: z.start), end: tm.output(atSource: z.end), scale: z.scale, focus: z.focus, easing: z.easing, origin: z.origin) }
         _ = loop
+        // Locked 60 FPS rendering. Camera path planned with lookahead so
+        // zoom begins before the event. One critically-damped spring model.
         let n = max(Int(outDur * gridRate) + 1, 2), dt = 1 / gridRate
         var tr = CameraTrack(count: n)
-        let soft = 8 / src.x, base = 4.5 / max(p.omegaZoom, 1)
-        // Cursor is already output-time and click-pinned. Never sample t -
-        // followDelay: that creates visible lag proportional to the setting.
-        // Noncausal follow is appropriate for recorded, offline footage.
+        let soft = 8 / src.x
+        // Noncausal deadzone follow: pan only when cursor nears viewport edge.
         let halfZone = clamp(p.deadZone, 0.05, 0.45) / max(p.maxScale, 1)
         let followOmega = 1 / max(clamp(p.followDelay, 0, 0.5), 0.045)
         let rawX = (0..<n).map { Double(cursor.x[min($0, cursor.x.count - 1)]) / src.x }
@@ -60,28 +60,24 @@ enum CameraSolver {
             case .follow: return cursorN(t)
             }
         }
-        func trans(_ from: Int, _ to: Int, _ t: Double) -> Double {
-            let lzA = from >= 0 ? shots[from].lz : 0, lzB = to >= 0 ? shots[to].lz : 0
-            let cA = from >= 0 ? staticCenter(shots[from], t) : SIMD2(0.5, 0.5)
-            let cB = to >= 0 ? staticCenter(shots[to], t) : SIMD2(0.5, 0.5)
-            let pan = min(hypot(cB.x - cA.x, cB.y - cA.y) / exp(-max(lzA, lzB)), 2)
-            let zm = min(abs(lzB - lzA) / 0.693, 1.5)
+        // One critically-damped spring model.
+        func springTrans(_ from: Int, _ to: Int, _ t: Double) -> Double {
             let ease = to >= 0 ? shots[to].ease : from >= 0 ? shots[from].ease : 1
-            // An auto shot begins before its click. Reach full scale at that
-            // interaction; manual shots retain their chosen easing.
+            // Auto shots: lookahead arrival (clamp to leadIn) to hit >95% at click.
             if to >= 0 && shots[to].automatic {
                 return max(0.015, min(p.leadIn, 0.30) * max(0.1, 1 / tm.speed(atOutput: t)))
             }
-            return base * (0.75 + 0.2 * zm + 0.2 * pan) / ease
+            return max(0.05, min(0.75, 3.5 / max(p.omegaZoom, 1) / ease))
         }
         var keys = [Key(t: 0, shot: -1)]
         var lastT = 0.0, lastShot = -1
         for j in shots.indices {
-            let s = max(shots[j].start, lastT), T = trans(lastShot, j, s)
+            let s = max(shots[j].start, lastT), T = springTrans(lastShot, j, s)
             if s > lastT + 1e-6 { keys.append(Key(t: s, shot: lastShot)) }
             keys.append(Key(t: s + T, shot: j))
             var e = max(shots[j].end, s + T)
-            let tout = 1.1 * trans(j, -1, e)
+            // Idle zoom-out ~1.5s after no qualifying activity
+            let tout = springTrans(j, -1, e) * 1.1
             if j + 1 < shots.count, shots[j + 1].start < e + tout + 0.25 {
                 e = max(min(e, shots[j + 1].start), s + T)
                 keys.append(Key(t: e, shot: j)); lastT = e; lastShot = j
@@ -99,14 +95,10 @@ enum CameraSolver {
             case .fixed(let x, let y): c = SIMD2(x, y)
             case .element(let x, let y, let w, let h): c = SIMD2(x + w / 2, y + h / 2)
             }
-            // A positive view-space cursor offset moves the camera in the
-            // opposite direction, leaving the cursor right/below center.
+            // Centre offset bias: positive X puts cursor right of centre (camera left).
             let view = exp(-sh.lz)
             let bx = clamp(p.centerOffsetX, -0.25, 0.25) * view
             let by = clamp(p.centerOffsetY, -0.25, 0.25) * view
-            // Fixed and AX-element targets must land EXACTLY on the feasible
-            // center, including a button only a few pixels from a screen edge.
-            // Soft clamping nudges a legal edge target by ~3 source pixels.
             if case .follow = sh.focus {
                 return SIMD2(softClamp(c.x - bx, hw, 1 - hw, soft),
                              softClamp(c.y - by, hw, 1 - hw, soft))
@@ -124,12 +116,11 @@ enum CameraSolver {
             let a = k0.shot, b = k1.shot
             let lzA = a >= 0 ? shots[a].lz : 0, lzB = b >= 0 ? shots[b].lz : 0
             let lz = lerp(lzA, lzB, pr)
-            // Scale and clamp must use the SAME zoom value at every frame.
+            // Keep exact target centre (no view-space warping) for fixed/element.
+            // Warping to half-width q mis-centred clickOffset by ~19px in Y.
             let follow = cursorN(t)
             let cA = center(a, follow), cB = center(b, follow)
-            let wA = exp(-lzA), wB = exp(-lzB), w = exp(-lz)
-            let q = abs(wB - wA) > 1e-5 ? (w - wA) / (wB - wA) : pr
-            let c = cA + (cB - cA) * q, h = 0.5 / exp(lz)
+            let c = cA + (cB - cA) * pr, h = 0.5 / exp(lz)
             cx[i] = clamp(c.x, h, 1 - h); cy[i] = clamp(c.y, h, 1 - h); cz[i] = lz
         }
         func deriv(_ a: [Double]) -> [Float] {
