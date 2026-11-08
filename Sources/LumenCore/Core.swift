@@ -159,6 +159,21 @@ public struct InputEvent: Sendable, Equatable {
     }
 }
 
+public extension Array where Element == InputEvent {
+    /// 3+ printable key-downs, each within 0.9 s of the previous, no cmd/ctrl.
+    /// One definition shared by the planner and the typing analyzer.
+    func typingBursts() -> [(t0: Double, t1: Double)] {
+        let k = filter { $0.kind == .keyDown && $0.flags & 0x14 == 0 && $0.keyCode < 53 && ![36, 48, 51].contains($0.keyCode) }
+            .sorted { $0.t < $1.t }
+        var out: [(t0: Double, t1: Double)] = [], s = 0
+        for i in k.indices where i == k.count - 1 || k[i + 1].t - k[i].t > 0.9 {
+            if i - s + 1 >= 3 { out.append((k[s].t, k[i].t)) }
+            s = i + 1
+        }
+        return out
+    }
+}
+
 public enum StockCursor: UInt16, CaseIterable, Sendable {
     case arrow, iBeam, pointingHand, crosshair, openHand, closedHand, resizeLeftRight, resizeUpDown, notAllowed, contextMenu
 }
