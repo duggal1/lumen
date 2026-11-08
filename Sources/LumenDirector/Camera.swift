@@ -7,12 +7,20 @@ import LumenProject
 }
 
 enum CameraSolver {
-    private struct Shot { var start: Double, end: Double, lz: Double, focus: Focus, ease: Double, automatic: Bool }
-    private struct Key { var t: Double; var shot: Int }
+    private struct Shot { var on: Double, off: Double, lz: Double, focus: Focus, ease: Double }
+    /// Two equal critically-damped springs in series (a cascade) = 4 equal
+    /// real poles. Monotonic (no overshoot), and 95 % arrival at ω·t ≈ 7.75.
+    private struct Cascade {
+        var a: Double, av = 0.0, b: Double, bv = 0.0
+        init(_ x: Double) { a = x; b = x }
+        mutating func step(to target: Double, omega: Double, dt: Double) {
+            springStep(&a, &av, target: target, omega: omega, dt: dt)
+            springStep(&b, &bv, target: a, omega: omega, dt: dt)
+        }
+    }
 
     /// Forward and backward dead-zone tracking. The average does not bias
-    /// the target toward where the pointer came from. Jitter remains suppressed
-    /// without dragging the viewport behind a deliberate movement.
+    /// the target toward where the pointer came from.
     static func centredPlay(_ samples: [Double], halfZone: Double) -> [Double] {
         guard let first = samples.first, let last = samples.last else { return samples }
         func pass(_ input: [Double], start: Double) -> [Double] {
@@ -30,100 +38,59 @@ enum CameraSolver {
     }
 
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams, src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
-        let zoom = zoom.map { z in ZoomSegment(id: z.id, start: tm.output(atSource: z.start), end: tm.output(atSource: z.end), scale: z.scale, focus: z.focus, easing: z.easing, origin: z.origin) }
         _ = loop
-        // Locked 60 FPS rendering. Camera path planned with lookahead so
-        // zoom begins before the event. One critically-damped spring model.
         let n = max(Int(outDur * gridRate) + 1, 2), dt = 1 / gridRate
         var tr = CameraTrack(count: n)
-        let soft = 8 / src.x
-        // Noncausal deadzone follow: pan only when cursor nears viewport edge.
-        // Divide by a mid-scale (2x), not maxScale: the old divisor made the
-        // zone ~2.5x too tight at typical zooms, so the camera hunted motion.
-        let halfZone = clamp(p.deadZone, 0.05, 0.45) / 2.0
-        let followOmega = 1 / max(clamp(p.followDelay, 0, 0.5), 0.045)
-        let rawX = (0..<n).map { Double(cursor.x[min($0, cursor.x.count - 1)]) / src.x }
-        let rawY = (0..<n).map { Double(cursor.y[min($0, cursor.y.count - 1)]) / src.y }
-        let fx = zeroPhaseSmooth(centredPlay(rawX, halfZone: halfZone),
-                                 omega: followOmega, dt: dt)
-        let fy = zeroPhaseSmooth(centredPlay(rawY, halfZone: halfZone),
-                                 omega: followOmega, dt: dt)
-        func cursorN(_ t: Double) -> SIMD2<Double> {
-            let i = min(max(Int((t * gridRate).rounded()), 0), n - 1)
-            return SIMD2(fx[i], fy[i])
+        let omegaIn = 7.75 / max(p.leadIn, 0.2), omegaOut = omegaIn * 0.62
+
+        // Output-time shots. Auto shots activate `leadIn` early; manual shots
+        // exactly where the user put them.
+        let shots: [Shot] = zoom.compactMap { z in
+            let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
+            guard b - a > 0.1, z.scale > 1.001, a < outDur else { return nil }
+            return Shot(on: a - (z.origin == .auto ? p.leadIn : 0), off: b, lz: log(min(z.scale, 16)),
+                        focus: z.focus, ease: z.easing?.omegaScale ?? 1)
+        }.sorted { $0.on < $1.on }
+
+        // .follow shots (manual only now) still need the dead-zone cursor path.
+        var fx: [Double] = [], fy: [Double] = []
+        if shots.contains(where: { if case .follow = $0.focus { true } else { false } }) {
+            let halfZone = clamp(p.deadZone, 0.05, 0.45) / 2.0
+            let followOmega = 1 / max(clamp(p.followDelay, 0, 0.5), 0.045)
+            let rawX = (0..<n).map { Double(cursor.x[min($0, cursor.x.count - 1)]) / src.x }
+            let rawY = (0..<n).map { Double(cursor.y[min($0, cursor.y.count - 1)]) / src.y }
+            fx = zeroPhaseSmooth(centredPlay(rawX, halfZone: halfZone), omega: followOmega, dt: dt)
+            fy = zeroPhaseSmooth(centredPlay(rawY, halfZone: halfZone), omega: followOmega, dt: dt)
         }
-        let shots: [Shot] = zoom.filter { $0.end - $0.start > 0.1 && $0.scale > 1.001 && $0.start < outDur }
-            .sorted { $0.start < $1.start }
-            .map { Shot(start: max($0.start, 0), end: min($0.end, outDur), lz: log(min($0.scale, 16)), focus: $0.focus, ease: $0.easing?.omegaScale ?? 1, automatic: $0.origin == .auto) }
-        func staticCenter(_ s: Shot, _ t: Double) -> SIMD2<Double> {
+        func targetCenter(_ s: Shot, _ i: Int) -> SIMD2<Double> {
+            var c: SIMD2<Double>
             switch s.focus {
-            case .fixed(let x, let y): return SIMD2(x, y)
-            case .element(let x, let y, let w, let h): return SIMD2(x + w / 2, y + h / 2)
-            case .follow: return cursorN(t)
-            }
-        }
-        // One critically-damped spring model.
-        func springTrans(_ from: Int, _ to: Int, _ t: Double) -> Double {
-            let ease = to >= 0 ? shots[to].ease : from >= 0 ? shots[from].ease : 1
-            // Auto shots: lookahead arrival (clamp to leadIn) to hit >95% at click.
-            if to >= 0 && shots[to].automatic {
-                return max(0.015, min(p.leadIn, 0.30) * max(0.1, 1 / tm.speed(atOutput: t)))
-            }
-            return max(0.05, min(0.75, 3.5 / max(p.omegaZoom, 1) / ease))
-        }
-        var keys = [Key(t: 0, shot: -1)]
-        var lastT = 0.0, lastShot = -1
-        for j in shots.indices {
-            let s = max(shots[j].start, lastT), T = springTrans(lastShot, j, s)
-            if s > lastT + 1e-6 { keys.append(Key(t: s, shot: lastShot)) }
-            keys.append(Key(t: s + T, shot: j))
-            var e = max(shots[j].end, s + T)
-            // Idle zoom-out ~1.5s after no qualifying activity
-            let tout = springTrans(j, -1, e) * 1.1
-            if j + 1 < shots.count, shots[j + 1].start < e + tout + 0.25 {
-                e = max(min(e, shots[j + 1].start), s + T)
-                keys.append(Key(t: e, shot: j)); lastT = e; lastShot = j
-            } else {
-                keys.append(Key(t: e, shot: j)); keys.append(Key(t: e + tout, shot: -1))
-                lastT = e + tout; lastShot = -1
-            }
-        }
-        func center(_ s: Int, _ f: SIMD2<Double>) -> SIMD2<Double> {
-            guard s >= 0 else { return SIMD2(0.5, 0.5) }
-            let sh = shots[s], hw = 0.5 / exp(sh.lz)
-            let c: SIMD2<Double>
-            switch sh.focus {
-            case .follow: c = f
             case .fixed(let x, let y): c = SIMD2(x, y)
             case .element(let x, let y, let w, let h): c = SIMD2(x + w / 2, y + h / 2)
+            case .follow: c = SIMD2(fx[min(i, fx.count - 1)], fy[min(i, fy.count - 1)])
             }
-            // Centre offset bias: positive X puts cursor right of centre (camera left).
-            let view = exp(-sh.lz)
-            let bx = clamp(p.centerOffsetX, -0.25, 0.25) * view
-            let by = clamp(p.centerOffsetY, -0.25, 0.25) * view
-            if case .follow = sh.focus {
-                return SIMD2(softClamp(c.x - bx, hw, 1 - hw, soft),
-                             softClamp(c.y - by, hw, 1 - hw, soft))
-            }
-            return SIMD2(clamp(c.x - bx, hw, 1 - hw),
-                         clamp(c.y - by, hw, 1 - hw))
+            c -= SIMD2(clamp(p.centerOffsetX, -0.25, 0.25), clamp(p.centerOffsetY, -0.25, 0.25)) * exp(-s.lz)
+            let h = 0.5 / exp(s.lz)
+            return SIMD2(clamp(c.x, h, 1 - h), clamp(c.y, h, 1 - h))      // pre-clamped to the TARGET view
         }
-        var cx = [Double](repeating: 0.5, count: n), cy = cx, cz = [Double](repeating: 0, count: n)
-        var ki = 0
+
+        var cz = Cascade(0), cx = Cascade(0.5), cy = Cascade(0.5)
+        var si = -1, omega = omegaIn, lastLz = 0.0
+        var X = [Double](repeating: 0.5, count: n), Y = X, Z = [Double](repeating: 0, count: n)
         for i in 0..<n {
             let t = Double(i) * dt
-            while ki + 1 < keys.count && keys[ki + 1].t <= t { ki += 1 }
-            let k0 = keys[ki], k1 = ki + 1 < keys.count ? keys[ki + 1] : keys[ki]
-            let pr = k1.t > k0.t ? smootherstep((t - k0.t) / (k1.t - k0.t)) : 0
-            let a = k0.shot, b = k1.shot
-            let lzA = a >= 0 ? shots[a].lz : 0, lzB = b >= 0 ? shots[b].lz : 0
-            let lz = lerp(lzA, lzB, pr)
-            // Keep exact target centre (no view-space warping) for fixed/element.
-            // Warping to half-width q mis-centred clickOffset by ~19px in Y.
-            let follow = cursorN(t)
-            let cA = center(a, follow), cB = center(b, follow)
-            let c = cA + (cB - cA) * pr, h = 0.5 / exp(lz)
-            cx[i] = clamp(c.x, h, 1 - h); cy[i] = clamp(c.y, h, 1 - h); cz[i] = lz
+            while si + 1 < shots.count, shots[si + 1].on <= t {           // latest shot wins; contiguous shots = pan, no rest in between
+                si += 1
+                let lz = shots[si].lz
+                omega = (lz < lastLz - 1e-4 ? omegaOut : omegaIn) * shots[si].ease
+                lastLz = lz
+            }
+            var tlz = 0.0, tc = SIMD2(0.5, 0.5)
+            if si >= 0, t < shots[si].off { tlz = shots[si].lz; tc = targetCenter(shots[si], i) }
+            else if lastLz != 0 { omega = omegaOut; lastLz = 0 }          // rest: zoom back out, slowly
+            cx.step(to: tc.x, omega: omega, dt: dt); cy.step(to: tc.y, omega: omega, dt: dt); cz.step(to: tlz, omega: omega, dt: dt)
+            let h = 0.5 / exp(cz.b)
+            X[i] = clamp(cx.b, h, 1 - h); Y[i] = clamp(cy.b, h, 1 - h); Z[i] = cz.b   // safety clamp only
         }
         func deriv(_ a: [Double]) -> [Float] {
             var v = [Float](repeating: 0, count: a.count)
@@ -133,12 +100,12 @@ enum CameraSolver {
             }
             return v
         }
-        tr.nx = cx.map { Float($0) }; tr.ny = cy.map { Float($0) }; tr.lz = cz.map { Float($0) }
-        tr.vx = deriv(cx); tr.vy = deriv(cy); tr.vz = deriv(cz)
+        tr.nx = X.map { Float($0) }; tr.ny = Y.map { Float($0) }; tr.lz = Z.map { Float($0) }
+        tr.vx = deriv(X); tr.vy = deriv(Y); tr.vz = deriv(Z)
         var yaw = p.tilt == .reveal ? 12.0 : 0.0, yawV = 0.0, pitch = 0.0, pitchV = 0.0
         func phase(_ k: Int) -> Double { Double((p.tiltSeed >> UInt64(k * 8)) & 255) / 255 * 2 * .pi }
         for i in 0..<n {
-            let t = Double(i) * dt, z = exp(cz[i])
+            let t = Double(i) * dt, z = exp(Z[i])
             var yT = 0.0, pT = 0.0
             switch p.tilt {
             case .lean: yT = clamp(Double(tr.vx[i]) * z * 12, -p.maxYaw, p.maxYaw); pT = clamp(-Double(tr.vy[i]) * z * 9, -p.maxPitch, p.maxPitch)
