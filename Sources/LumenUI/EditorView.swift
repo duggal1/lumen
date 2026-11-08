@@ -127,6 +127,23 @@ struct EditorView: View {
         .onKeyPress(.delete) { model.deleteSelected(); return .handled }
         .onKeyPress(.leftArrow) { model.seek(model.playhead - 1); return .handled }
         .onKeyPress(.rightArrow) { model.seek(model.playhead + 1); return .handled }
+        .onKeyPress("b") { model.splitAtPlayhead(); return .handled }
+    }
+    private var editShortcuts: some View {
+        Group {}
+            .onKeyPress { press in
+                if press.modifiers.contains(.command) {
+                    switch press.key {
+                    case .init("c"): model.copySelectedClip(); return .handled
+                    case .init("v"): model.pasteClipAtPlayhead(); return .handled
+                    case .init("d"): model.duplicateSelected(); return .handled
+                    case .init("j"): model.joinSelectedClips(); return .handled
+                    case .init("z"): model.undo(); return .handled
+                    default: break
+                    }
+                }
+                return .ignored
+            }
     }
 
     private var transport: some View {
