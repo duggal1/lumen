@@ -248,7 +248,7 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-public enum ClickSound: String, Codable, CaseIterable, Sendable { case mouse, subtle }
+public enum ClickSound: String, Codable, CaseIterable, Sendable { case mouse, subtle, fresh }
 
 public enum StudioMode: String, Codable, CaseIterable, Sendable {
     case standard = "Studio Standard"
@@ -277,7 +277,9 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var targetLUFS: Double { targetLUFSOverride ?? micMode.targetLUFS }
     public var studioMode: StudioMode = .standard
     public var clickSounds = true, whooshes = true, keySounds = false
-    public var clickTone: ClickSound = .mouse
+    public var typingPackId: String = "mechvibes-default"
+    public var typingLevelDb: Double = -6.0
+    public var clickTone: ClickSound = .fresh
     public var sfxGainDb = -9.0
     public var musicPath: String?
     public var musicGainDb = -18.0
@@ -289,7 +291,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     private enum LegacyKeys: String, CodingKey { case studioAmount }
     private enum LegacyLUFSKeys: String, CodingKey { case targetLUFS }
     enum CodingKeys: String, CodingKey {
-        case outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFSOverride, clickSounds, whooshes, keySounds, clickTone, sfxGainDb, musicPath
+        case outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFSOverride, clickSounds, whooshes, keySounds, typingPackId, typingLevelDb, clickTone, sfxGainDb, musicPath
         case dereverb, normalize, studioMode
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
@@ -317,7 +319,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         let legacyLUFS = (try? d.container(keyedBy: LegacyLUFSKeys.self).decodeIfPresent(Double.self, forKey: .targetLUFS)) ?? nil
         targetLUFSOverride = AudioPlan.migrateLUFS(override: (try? c.decode(Double.self, forKey: .targetLUFSOverride)), legacy: legacyLUFS, mode: micMode); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = c.opt(.whooshes, whooshes)
         studioMode = c.opt(.studioMode, studioMode)
-        keySounds = c.opt(.keySounds, keySounds); clickTone = c.opt(.clickTone, clickTone); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)
+        keySounds = c.opt(.keySounds, keySounds); typingPackId = c.opt(.typingPackId, typingPackId); typingLevelDb = c.opt(.typingLevelDb, typingLevelDb); clickTone = c.opt(.clickTone, clickTone); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)
         musicPath = try? c.decodeIfPresent(String.self, forKey: .musicPath)
         musicGainDb = c.opt(.musicGainDb, musicGainDb); duckDepthDb = c.opt(.duckDepthDb, duckDepthDb); duckAttack = c.opt(.duckAttack, duckAttack)
         duckRelease = c.opt(.duckRelease, duckRelease); muteMicInRamps = c.opt(.muteMicInRamps, muteMicInRamps)

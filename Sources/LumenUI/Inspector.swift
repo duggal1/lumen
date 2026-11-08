@@ -793,7 +793,8 @@ struct Inspector: View {
                 if m.timeline.audio.clickSounds {
                     Row(label: "Click tone") {
                         LDropdown(sel: m.bind(\.audio.clickTone),
-                                  options: [(ClickSound.mouse, "Mouse", "cursorarrow.click"),
+                                  options: [(ClickSound.fresh, "Fresh", "cursorarrow.click"),
+                                            (ClickSound.mouse, "Mouse", "cursorarrow.click"),
                                             (.subtle, "Subtle", "cursorarrow.click")]).frame(width: 130)
                     }
                     SliderRow(label: "Click level", v: m.bind(\.audio.sfxGainDb), range: -24...6,
@@ -803,7 +804,17 @@ struct Inspector: View {
                     }
                 }
                 ToggleRow(label: "Zoom whooshes", on: m.bind(\.audio.whooshes))
-                ToggleRow(label: "Key sounds", on: m.bind(\.audio.keySounds))
+                ToggleRow(label: "Typing sound", on: m.bind(\.audio.keySounds))
+                if m.timeline.audio.keySounds {
+                    Row(label: "Pack") {
+                        LDropdown(sel: m.bind(\.audio.typingPackId),
+                                  options: TypingPackLoader.availablePacks().map { ($0.lastPathComponent, $0.lastPathComponent, "keyboard") }
+                                    .isEmpty ? [("mechvibes-default", "Mechvibes Default", "keyboard")] :
+                                    TypingPackLoader.availablePacks().map { ($0.lastPathComponent, $0.lastPathComponent, "keyboard") }).frame(width: 180)
+                    }
+                    SliderRow(label: "Typing level", v: m.bind(\.audio.typingLevelDb), range: -18...0,
+                              fmt: { String(format: "%+.0f dB", $0) })
+                }
                 ToggleRow(label: "Speed up idle spans", on: m.bind(\.audio.speedRampsAuto))
             }.card()
             VStack(spacing: 0) {

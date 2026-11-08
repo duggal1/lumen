@@ -26,6 +26,14 @@ public enum BundledAudioAssets {
         return path
     }
 
+    /// Fresh click sfx (new-click.mp3) — default clickTone .fresh.
+    public static var freshClick: [Float] {
+        guard let url = effect(named: "new-click.mp3"),
+              let pcm = try? AudioIO.readMono(url), !pcm.isEmpty else { return [] }
+        let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
+        return peak > 0.0001 ? pcm.map { $0 * (1.0 / peak) } : []
+    }
+
     public static let music: [Music] = {
         guard let root = root?.appendingPathComponent("music", isDirectory: true) else { return [] }
         let fm = FileManager.default
