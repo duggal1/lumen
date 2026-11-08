@@ -138,6 +138,6 @@ enum Motion {
 
 extension View {
     func card(padding: CGFloat = Metrics.cardPad) -> some View {
-        self.padding(padding).background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
+        self.frame(maxWidth: .infinity, alignment: .leading).padding(padding).background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
     }
 }
