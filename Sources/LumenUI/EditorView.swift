@@ -124,49 +124,127 @@ struct EditorView: View {
         .background(Tok.bg)
         .focusable().focusEffectDisabled()
         .onKeyPress(.space) { model.togglePlay(); return .handled }
-        .onKeyPress(.delete) { model.deleteSelected(); return .handled }
-        .onKeyPress(.leftArrow) { model.seek(model.playhead - 1); return .handled }
-        .onKeyPress(.rightArrow) { model.seek(model.playhead + 1); return .handled }
-        .onKeyPress("b") { model.splitAtPlayhead(); return .handled }
-    }
-    private var editShortcuts: some View {
-        Group {}
-            .onKeyPress { press in
-                if press.modifiers.contains(.command) {
-                    switch press.key {
-                    case .init("c"): model.copySelectedClip(); return .handled
-                    case .init("v"): model.pasteClipAtPlayhead(); return .handled
-                    case .init("d"): model.duplicateSelected(); return .handled
-                    case .init("j"): model.joinSelectedClips(); return .handled
-                    case .init("z"): model.undo(); return .handled
-                    default: break
-                    }
+        .onKeyPress(.delete) {
+            if model.pendingCut != nil { model.commitPendingCut() } else { model.deleteSelected() }
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            if model.pendingCut != nil { model.discardPendingCut() }
+            else { model.selection = nil }
+            return .handled
+        }
+        .onKeyPress { press in
+            let hasCmd = press.modifiers.contains(.command)
+            let hasShift = press.modifiers.contains(.shift)
+            if press.key == .leftArrow {
+                if hasCmd { return .ignored }
+                if model.pendingCut != nil {
+                    model.nudgePendingHandle(model.pendingCut?.focused ?? .end, hasShift ? -1 : -model.frameDuration)
+                    return .handled
+                }
+                model.seek(model.playhead - (hasShift ? 1 : 1.0 / 30.0)); return .handled
+            }
+            if press.key == .rightArrow {
+                if hasCmd { return .ignored }
+                if model.pendingCut != nil {
+                    model.nudgePendingHandle(model.pendingCut?.focused ?? .end, hasShift ? 1 : model.frameDuration)
+                    return .handled
+                }
+                model.seek(model.playhead + (hasShift ? 1 : 1.0 / 30.0)); return .handled
+            }
+            if hasCmd {
+                switch press.key {
+                case .init("z"): if hasShift { model.redo() } else { model.undo() }; return .handled
+                case .init("b"): model.splitAtPlayhead(); return .handled
+                case .init("c"): model.copySelectedClip(); return .handled
+                case .init("x"): model.cutSelectedClip(); return .handled
+                case .init("v"): model.pasteClipAtPlayhead(); return .handled
+                case .init("d"): model.duplicateSelected(); return .handled
+                case .init("j"): model.joinSelectedClips(); return .handled
+                default: break
                 }
                 return .ignored
             }
-    }
-
-    private var transport: some View {
-        HStack(spacing: 12) {
-            LButton(title: model.clock.playing ? "Pause" : "Play", icon: model.clock.playing ? "pause.fill" : "play.fill", kind: .secondary) { model.togglePlay() }
-            Text("\(fmt(model.playhead)) / \(fmt(model.duration))").font(AppType.body.monospacedDigit()).foregroundStyle(Tok.text2)
-            Spacer()
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    LButton(title: "Cut", icon: "scissors", kind: .quiet) { model.cutAtPlayhead() }
-                    LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
-                    LButton(title: "Tools", icon: "slider.horizontal.3", kind: .secondary) { openTools() }
-                }
-                HStack(spacing: 4) {
-                    LIconButton(icon: "scissors", label: "Cut at playhead") { model.cutAtPlayhead() }
-                        .help("Cut at playhead")
-                    LIconButton(icon: "plus.magnifyingglass", label: "Add zoom") { model.addZoom() }
-                        .help("Add zoom")
-                    LIconButton(icon: "slider.horizontal.3", label: "More editing tools") { openTools() }
-                        .help("More editing tools")
-                }
+            switch press.key {
+            case .init("b"), .init("s"): model.splitAtPlayhead(); return .handled
+            case .init("c"): model.cutAtPlayhead(); return .handled
+            case .init("i"): model.setRangeIn(); return .handled
+            case .init("o"): model.setRangeOut(); return .handled
+            case .init("n"): model.snapEnabled.toggle(); return .handled
+            case .init("f"): model.timelineFitRequest += 1; return .handled
+            default: return .ignored
             }
         }
+    }
+    // One table drives both the keys and the shortcut list so they cannot drift.
+    static let shortcuts: [(String, String)] = [
+        ("Space", "Play / pause"), ("← / →", "Step one frame (Shift: 1s / handle)"),
+        ("B / S", "Split at playhead"), ("Cmd-B", "Split at playhead"),
+        ("C", "Cut — start a range"), ("Backspace", "Commit cut / Delete selection"),
+        ("I / O", "Set range start / end"), ("Esc", "Discard range / clear selection"),
+        ("Cmd-C", "Copy clip"), ("Cmd-X", "Cut clip to clipboard"), ("Cmd-V", "Paste at playhead"), ("Cmd-D", "Duplicate"),
+        ("Cmd-J", "Join with next"), ("Cmd-Z", "Undo"), ("Shift-Cmd-Z", "Redo"),
+        ("N", "Toggle snapping"), ("F", "Fit timeline"), ("[ / ]", "Step to click"),
+    ]
+
+    private var transport: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 12) {
+                LButton(title: model.clock.playing ? "Pause" : "Play", icon: model.clock.playing ? "pause.fill" : "play.fill", kind: .secondary) { model.togglePlay() }
+                Text("\(fmt(model.playhead)) / \(fmt(model.duration))").font(AppType.body.monospacedDigit()).foregroundStyle(Tok.text2)
+                Spacer()
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        LButton(title: "Cut", icon: "scissors", kind: .quiet) { model.cutAtPlayhead() }
+                        LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
+                        LButton(title: "Tools", icon: "slider.horizontal.3", kind: .secondary) { openTools() }
+                    }
+                    HStack(spacing: 4) {
+                        LIconButton(icon: "scissors", label: "Cut — start a range") { model.cutAtPlayhead() }
+                        LIconButton(icon: "plus.magnifyingglass", label: "Add zoom") { model.addZoom() }
+                        LIconButton(icon: "slider.horizontal.3", label: "More editing tools") { openTools() }
+                    }
+                }
+            }
+            HStack(spacing: 12) {
+                // Edit controls live beside the readout line: the timeline is
+                // full at 184pt (ruler + 4 lanes), so there is no toolbar row.
+                HStack(spacing: 4) {
+                    LIconButton(icon: "scissors", label: "Split at playhead (B)") { model.splitAtPlayhead() }
+                    LIconButton(icon: "scissors", label: model.pendingCut != nil ? "Commit cut (Backspace)" : "Cut range (C)") { model.cutAtPlayhead() }
+                    LIconButton(icon: "trash", label: "Delete selection (Backspace)") { model.deleteSelected() }
+                        .disabled(model.selection == nil && model.pendingCut == nil)
+                    LIconButton(icon: model.snapEnabled ? "magnet.fill" : "magnet", label: model.snapEnabled ? "Snapping on (N)" : "Snapping off (N)") { model.snapEnabled.toggle() }
+                    LIconButton(icon: "arrow.uturn.backward", label: "Undo (Cmd-Z)") { model.undo() }.disabled(!model.canUndo)
+                    LIconButton(icon: "arrow.uturn.forward", label: "Redo (Shift-Cmd-Z)") { model.redo() }.disabled(!model.canRedo)
+                }
+                Text(readout)
+                    .font(AppType.body.monospacedDigit()).foregroundStyle(Tok.text2)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(readout)
+        }
+    }
+
+    /// The readout line: what is selected and what the next key will do.
+    var readout: String {
+        if let p = model.pendingCut {
+            if model.pendingWouldRemoveEverything { return "That range would remove the whole recording." }
+            return "Cut \(fmt(p.start)) to \(fmt(p.end)) — \(String(format: "%.1fs", p.length)). Backspace commits, Esc discards."
+        }
+        if let issue = model.editIssue { return issue }
+        if let id = model.selection {
+            if let z = model.timeline.zoom.first(where: { $0.id == id }) {
+                return "Zoom \(String(format: "%.1f×", z.scale)) selected. Drag edges or body. Delete removes."
+            }
+            if let clip = model.timeline.clips.first(where: { $0.id == id }) {
+                return "Clip \(clip.name) selected. Backspace ripples it out."
+            }
+            return "Selected. Backspace deletes."
+        }
+        return model.snapEnabled ? "Ready. Snap on: playhead, clip edges, cuts, clicks." : "Ready. Snap off."
     }
     private func openTools() {
         showsInspector = true
