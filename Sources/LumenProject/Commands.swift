@@ -20,8 +20,12 @@ public struct Effects: OptionSet, Sendable {
 
 /// Captured at dispatch so "at playhead" can never read stale pointer state. `playhead` is OUTPUT seconds.
 public struct ReduceContext: Sendable {
-    public var playhead: Double, selection: UUID?, duration: Double
-    public init(playhead: Double, selection: UUID? = nil, duration: Double) { self.playhead = playhead; self.selection = selection; self.duration = duration }
+    public var playhead: Double, selection: UUID?, duration: Double, fps: Double
+    public init(playhead: Double, selection: UUID? = nil, duration: Double, fps: Double = 60) {
+        self.playhead = playhead; self.selection = selection; self.duration = duration; self.fps = max(fps, 1)
+    }
+    /// One frame in seconds at the project rate.
+    public var frame: Double { 1 / max(fps, 1) }
 }
 
 public enum CommandError: Error, Sendable { case notFound(UUID), invalid(String) }
@@ -47,6 +51,9 @@ public enum Command: Codable, Sendable {
     case addClip(TimelineClip), deleteClip(UUID), moveClip(UUID, start: Double), trimClip(UUID, inPoint: Double, duration: Double)
     case splitClip(atOutput: Double), rippleDeleteClip(id: UUID), joinClips(ids: [UUID]),
          duplicateClip(id: UUID), pasteClip(clip: TimelineClip, atOutput: Double)
+    case splitRecording(atOutput: Double), removeSeam(id: UUID), moveSeam(id: UUID, toOutput: Double)
+    case setCutEdge(id: UUID, isStart: Bool, toOutput: Double), deleteRecordingSegment(atOutput: Double)
+    case trimClipEdge(id: UUID, isStart: Bool, toOutput: Double), reorderClip(id: UUID, toIndex: Int)
     case applyAutoTidy([CutRange]), clearAutoTidy
 }
 
@@ -65,10 +72,14 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         t.timeMap.cuts.append(CutRange(start: s, end: e)); return .replan
     case .cutOutputRange(let s, let e):
         guard e > s else { throw CommandError.invalid("cut end <= start") }
-        t.timeMap.cuts.append(CutRange(start: tm.source(atOutput: s), end: tm.source(atOutput: e))); return .replan
+        do { try t.removeOutputRange(s, e, frame: ctx.frame) }
+        catch let err as EditError { throw mapEdit(err) }
+        return .replan
     case .cutAtPlayhead(let len):
         guard len > 0.05 else { throw CommandError.invalid("cut too short") }
-        t.timeMap.cuts.append(CutRange(start: playSrc, end: min(playSrc + len, tm.trimEnd))); return .replan
+        do { try t.removeOutputRange(ctx.playhead, ctx.playhead + len, frame: ctx.frame) }
+        catch let err as EditError { throw mapEdit(err) }
+        return .replan
     case .deleteCut(let id): t.timeMap.cuts.removeAll { $0.id == id }; return .replan
     case .trim(let s, let e):
         guard s >= 0, e > s, e <= tm.sourceDuration + 0.001 else { throw CommandError.invalid("bad trim") }
@@ -223,6 +234,53 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         t.clips.append(pasted); t.clips.magneticNormalize()
         shiftSoundtrackLanesBefore(&t, beforeOutput: pasted.start, by: pasted.duration)
         return .replan
+    case .splitRecording(let atOutput):
+        let src = tm.source(atOutput: max(min(atOutput, tm.outputDuration), 0))
+        do { try t.addSeam(atSource: src) }
+        catch let err as EditError { throw mapEdit(err) }
+        return []
+    case .removeSeam(let id):
+        t.removeSeam(id: id)
+        return []
+    case .moveSeam(let id, let toOutput):
+        do { try t.moveSeam(id: id, toSource: tm.source(atOutput: max(min(toOutput, tm.outputDuration), 0)), frame: ctx.frame) }
+        catch let err as EditError { throw mapEdit(err) }
+        return []
+    case .setCutEdge(let id, let isStart, let toOutput):
+        let src = tm.source(atOutput: max(min(toOutput, tm.outputDuration), 0))
+        do { try t.trimCut(id: id, isStart: isStart, toSource: src, frame: ctx.frame) }
+        catch let err as EditError { throw mapEdit(err) }
+        return .replan
+    case .deleteRecordingSegment(let atOutput):
+        do { try t.removeSegment(atOutput: max(min(atOutput, tm.outputDuration), 0), frame: ctx.frame) }
+        catch let err as EditError { throw mapEdit(err) }
+        return .replan
+    case .trimClipEdge(let id, let isStart, let toOutput):
+        guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        var clip = t.clips[i]
+        let edge = min(max(toOutput, clip.start), clip.end)
+        if isStart {
+            let delta = edge - clip.start
+            guard clip.duration - delta >= ctx.frame else { throw CommandError.invalid("A clip must stay at least one frame long.") }
+            let inPoint = clip.inPoint + delta
+            guard inPoint >= 0 else { throw CommandError.invalid("There is no more source before this clip.") }
+            clip.inPoint = inPoint; clip.duration -= delta
+        } else {
+            let delta = edge - clip.end
+            guard clip.duration + delta >= ctx.frame else { throw CommandError.invalid("A clip must stay at least one frame long.") }
+            clip.duration += delta
+        }
+        t.clips[i] = clip
+        t.clips.magneticNormalize()
+        return [.masks, .zoom, .camera, .audio, .layout, .webcam]
+    case .reorderClip(let id, let toIndex):
+        guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        var clip = t.clips.remove(at: i)
+        let j = min(max(toIndex, 0), t.clips.count)
+        t.clips.insert(clip, at: j)
+        clip = t.clips[j]
+        t.clips.magneticNormalize()
+        return .replan
     case .addTapAtPlayhead(let x, let y): t.overlays.taps.append(TapIndicator(t: playSrc, x: x, y: y)); return [.cursor, .audio]
     case .deleteTap(let id): t.overlays.taps.removeAll { $0.id == id }; return [.cursor, .audio]
     case .moveTap(let id, let x, let y, let atSource):
@@ -248,6 +306,15 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         t.timeMap.cuts.removeAll { $0.origin == .autoTidy }
         t.timeMap.cuts.append(contentsOf: cuts.map { CutRange(id: $0.id, start: $0.start, end: $0.end, origin: .autoTidy) }); return .replan
     case .clearAutoTidy: t.timeMap.cuts.removeAll { $0.origin == .autoTidy }; return .replan
+    }
+}
+
+/// Plain-language mapping so the readout can say why an edit was refused.
+private func mapEdit(_ e: EditError) -> CommandError {
+    switch e {
+    case .emptyRange: return .invalid("Select a range first.")
+    case .removesEverything: return .invalid("That range would remove the whole recording.")
+    case .tooShort: return .invalid("A cut must keep at least one frame.")
     }
 }
 
