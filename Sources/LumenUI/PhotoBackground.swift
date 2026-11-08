@@ -169,7 +169,7 @@ struct PhotoBackgroundRow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Row(label: "Photo") {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     TextField("Unsplash search", text: $query)
                         .textFieldStyle(.plain)
@@ -177,19 +177,23 @@ struct PhotoBackgroundRow: View {
                         .padding(.horizontal, 10)
                         .frame(height: 28)
                         .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well))
-                        .frame(width: 150)
+                        .frame(maxWidth: .infinity)
                         .onSubmit { Task { await find() } }
+                        .accessibilityLabel("Photo search")
                     LButton(title: busy ? "Finding…" : "Find", icon: "magnifyingglass", kind: .secondary) {
                         Task { await find() }
                     }
                     .disabled(busy)
-                    LButton(title: "Choose…", kind: .quiet) { chooseLocal() }
                 }
-            }
-            if let path = model.timeline.style.backgroundImagePath {
-                Row(label: "File") {
+                .frame(maxWidth: .infinity)
+                LButton(title: "Choose…", icon: "folder", kind: .secondary) { chooseLocal() }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let path = model.timeline.style.backgroundImagePath {
                     Text(URL(fileURLWithPath: path).lastPathComponent)
-                        .font(AppType.body).foregroundStyle(Tok.text2).lineLimit(1)
+                        .font(AppType.body).foregroundStyle(Tok.text2)
+                        .lineLimit(1).truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel(URL(fileURLWithPath: path).lastPathComponent)
                 }
             }
             if let error {
