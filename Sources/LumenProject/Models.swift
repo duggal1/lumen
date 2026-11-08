@@ -84,7 +84,7 @@ public struct CornerRadii: Codable, Equatable, Sendable {
 }
 
 public struct Style: Codable, Equatable, Sendable {
-    public var background: BackgroundKind = .solid
+    public var background: BackgroundKind = .image
     public var colors: [RGBA] = [RGBA(0xF4F4F4), RGBA(0xDADADA)]
     public var gradientAngle: Double = 35
     public var ditherCell: Double = 4, ditherDensity: Double = 0.55, contentScale: Double = 1
@@ -96,10 +96,11 @@ public struct Style: Codable, Equatable, Sendable {
     public var paddingInsets: EdgeInsetsN?              // nil = uniform `padding`
     public var cornerRadii: CornerRadii?                // nil = uniform `cornerRadius`
     public var customAspect: Double?                    // nil = `canvas`
-    public var zoomBackgroundBlur = false
-    /// Local photo for `.image`. Absolute path; the renderer loads it once per
-    /// modification date, never per frame.
-    public var backgroundImagePath: String?
+    public var zoomBackgroundBlur = true
+    /// Local photo for `.image`. Absolute path or bundled sentinel
+    /// (`serene-lake.jpg` resolves from Resources/Wallpapers). The
+    /// renderer loads it once per modification date, never per frame.
+    public var backgroundImagePath: String? = "serene-lake.jpg"
     public var aspectRatio: Double { customAspect ?? canvas.ratio }
     public var insets: EdgeInsetsN { paddingInsets ?? EdgeInsetsN(all: padding) }
     public var radii: CornerRadii { cornerRadii ?? CornerRadii(all: cornerRadius) }
