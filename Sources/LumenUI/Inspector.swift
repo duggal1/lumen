@@ -30,7 +30,7 @@ struct Inspector: View {
         switch p { case .auto: "sparkles"; case .bottom: "arrow.down"; case .top: "arrow.up" }
     }
     private static func captionAnimationIcon(_ a: CaptionAnimation) -> String {
-        switch a { case .none: "minus"; case .fade: "eye"; case .pop: "sparkles"; case .slide: "arrow.right" }
+        switch a { case .none: "minus"; case .fade: "eye"; case .blur: "wind"; case .pop: "sparkles"; case .slide: "arrow.right" }
     }
     private static func micModeIcon(_ m: MicMode) -> String {
         switch m { case .standard: "mic"; case .loud: "mic.fill"; case .podcast: "waveform.and.mic"; case .off: "mic.slash" }
@@ -682,14 +682,26 @@ struct Inspector: View {
         }
     }
 
+    private func highlightColor(_ m: EditorModel) -> Binding<Color> {
+        Binding(get: {
+            let c = m.timeline.captions.style.highlightColor
+            return Color(.sRGB, red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
+        }, set: { color in
+            guard let c = NSColor(color).usingColorSpace(.sRGB) else { return }
+            m.edit(coalesce: true) { timeline in
+                timeline.captions.style.highlightColor = RGBA(r: Float(c.redComponent), g: Float(c.greenComponent), b: Float(c.blueComponent))
+            }
+        })
+    }
+
     private var captions: some View {
         let m = model
         return VStack(spacing: 24) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Captions", on: m.bind(\.captions.enabled))
-                Row(label: "Position") {
-                    LDropdown(sel: m.bind(\.captions.style.position), options: CaptionPosition.allCases.map {
-                        ($0, $0.rawValue.capitalized, Self.captionPositionIcon($0))
+                Row(label: "Font") {
+                    LDropdown(sel: m.bind(\.captions.style.font), options: CaptionFont.allCases.map {
+                        ($0, $0.title, "textformat")
                     }).frame(width: 130)
                 }
                 Row(label: "Animation") {
@@ -697,19 +709,27 @@ struct Inspector: View {
                         ($0, $0.rawValue.capitalized, Self.captionAnimationIcon($0))
                     }).frame(width: 130)
                 }
+                Row(label: "Highlight") {
+                    ColorPicker("Highlight", selection: highlightColor(m), supportsOpacity: false).labelsHidden()
+                }
+                DisclosureGroup("Advanced") {
+                    Row(label: "Position") {
+                        LDropdown(sel: m.bind(\.captions.style.position), options: CaptionPosition.allCases.map {
+                            ($0, $0.rawValue.capitalized, Self.captionPositionIcon($0))
+                        }).frame(width: 130)
+                    }
+                    Row(label: "Language") {
+                        TextField("en-US", text: locale).textFieldStyle(.plain).font(AppType.body)
+                            .padding(.horizontal, 12).frame(width: 130, height: 32)
+                            .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well))
+                            .accessibilityLabel("Caption language")
+                    }
+                }
             }.card()
             VStack(spacing: 0) {
                 SliderRow(label: "Size", v: m.bind(\.captions.style.size), range: 0.02...0.08, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Lines", v: maxLines, range: 1...3, fmt: { "\(Int($0))" })
                 ToggleRow(label: "Word highlight", on: m.bind(\.captions.style.wordHighlight))
-            }.card()
-            VStack(spacing: 0) {
-                Row(label: "Language") {
-                    TextField("en-US", text: locale).textFieldStyle(.plain).font(AppType.body)
-                        .padding(.horizontal, 12).frame(width: 130, height: 32)
-                        .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well))
-                        .accessibilityLabel("Caption language")
-                }
             }.card()
             VStack(spacing: 0) {
                 Row(label: "Manual titles") {
