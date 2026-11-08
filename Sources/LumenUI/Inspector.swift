@@ -8,7 +8,7 @@ import LumenCapture
 
 struct Inspector: View {
     let model: EditorModel
-    enum Tab: String, CaseIterable { case look = "Look", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
+    enum Tab: String, CaseIterable { case background = "Background", look = "Look", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
 
 
     static func visibleFor(model: EditorModel) -> [Inspector.Tab] {
@@ -50,6 +50,8 @@ struct Inspector: View {
                 if let saved = UserDefaults.standard.string(forKey: "lumen.inspector.tab") {
                     if saved == "Transcript" { tab = .captions }
                     else if let t = Inspector.Tab(rawValue: saved) { tab = t }
+                } else {
+                    tab = .background
                 }
             }
     }
@@ -76,6 +78,7 @@ struct Inspector: View {
 
     @ViewBuilder private var tabBody: some View {
         switch tab {
+        case .background: backgroundPage
         case .look: look
         case .tools: tools
         case .cursor: cursor
@@ -124,9 +127,149 @@ struct Inspector: View {
 
     private func icon(_ t: Inspector.Tab) -> String {
         switch t {
+        case .background: "photo.stack"
         case .look: "paintpalette"; case .tools: "slider.horizontal.3"; case .cursor: "cursorarrow"; case .camera: "video"
         case .layout: "rectangle.3.group"; case .audio: "waveform"; case .webcam: "person.crop.circle"
         case .captions: "captions.bubble"; case .timeline: "timeline.selection"; case .privacy: "lock"; case .export: "square.and.arrow.up"
+        }
+    }
+
+    private struct WallpaperChoice: Identifiable {
+        var id: String { url.path }
+        var title: String
+        var url: URL
+        var isPainting: Bool
+    }
+
+    private static func wallpaperChoices() -> [WallpaperChoice] {
+        var out: [WallpaperChoice] = []
+        // Bundled gallery: Pictures + Serene (Contents/Resources/Wallpapers)
+        if let root = Bundle.main.resourceURL?.appendingPathComponent("Wallpapers"),
+           let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) {
+            for case let f as URL in en {
+                let ext = f.pathExtension.lowercased()
+                guard ["jpg", "png", "heic"].contains(ext) else { continue }
+                let rel = f.path.replacingOccurrences(of: root.path + "/", with: "")
+                out.append(WallpaperChoice(title: rel, url: f, isPainting: rel.contains("paintings")))
+            }
+        }
+        // Every macOS wallpaper on this Mac (14/15/26 incl. Dynamic)
+        let sysDir = "/System/Library/Desktop Pictures"
+        if let files = try? FileManager.default.contentsOfDirectory(atPath: sysDir) {
+            for name in files.sorted() {
+                let ext = (name as NSString).pathExtension.lowercased()
+                guard ["heic", "jpg", "png", "tiff"].contains(ext) else { continue }
+                out.append(WallpaperChoice(title: (name as NSString).deletingPathExtension, url: URL(fileURLWithPath: sysDir).appendingPathComponent(name), isPainting: false))
+            }
+        }
+        return out.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    private var wallpaperList: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(Self.wallpaperChoices()) { w in
+                Button {
+                    model.edit { $0.style.setPhotoBackground(w.url.path) }
+                    model.edit { $0.style.background = .image }
+                } label: {
+                    HStack(spacing: 12) {
+                        Text(w.title).font(AppType.caption).foregroundStyle(Tok.text2)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let image = NSImage(contentsOf: w.url) {
+                            Image(nsImage: image)
+                                .resizable().aspectRatio(contentMode: .fill)
+                                .frame(width: 72, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                        if model.timeline.style.background == .image && model.timeline.style.backgroundImagePath == w.url.path {
+                            Image(systemName: "checkmark").font(.system(size: 12)).foregroundStyle(Tok.accentText)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.plain)
+                Divider().opacity(0.2)
+            }
+        }
+        .frame(height: 240)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var backgroundPage: some View {
+        let m = model
+        return VStack(spacing: 24) {
+            VStack(spacing: 0) {
+                Row(label: "Background") {
+                    LDropdown(sel: m.bind(\.style.background),
+                              options: (BackgroundKind.offered + (m.timeline.style.background == .dither ? [.dither] : []))
+                                .map { ($0, $0 == .dither ? "Legacy" : $0.rawValue.capitalized, backgroundIcon($0)) })
+                        .frame(width: 130)
+                }
+                if m.timeline.style.background == .image || m.timeline.style.background == .wallpaper {
+                    wallpaperList
+                        .padding(.top, 8)
+                    if m.timeline.style.background == .image {
+                        PhotoBackgroundRow(model: m)
+                    }
+                }
+                ToggleRow(label: "Blur behind zoom", on: m.bind(\.style.zoomBackgroundBlur))
+            }.card()
+
+            VStack(spacing: 0) {
+                Row(label: "Canvas") {
+                    HStack(spacing: 8) {
+                        LDropdown(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, Self.canvasIcon($0)) }).frame(width: 130)
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Tok.text2, lineWidth: 1)
+                            .frame(width: 64, height: min(36, max(12, 64 / m.timeline.style.canvas.ratio)))
+                            .overlay(Text(m.timeline.style.canvas.title).font(AppType.caption).foregroundStyle(Tok.text2))
+                            .frame(width: 64, height: 36)
+                    }
+                }
+                SliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
+                ToggleRow(label: "Independent padding",
+                          on: Binding(get: { m.timeline.style.paddingInsets != nil },
+                                      set: { enabled in
+                                          m.edit { $0.style.paddingInsets = enabled ? EdgeInsetsN(all: $0.style.padding) : nil }
+                                      }))
+                if m.timeline.style.paddingInsets == nil {
+                    SliderRow(label: "Padding", v: m.bind(\.style.padding), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
+                } else {
+                    SliderRow(label: "Top", v: paddingEdge(\.top), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
+                    SliderRow(label: "Right", v: paddingEdge(\.right), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
+                    SliderRow(label: "Bottom", v: paddingEdge(\.bottom), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
+                    SliderRow(label: "Left", v: paddingEdge(\.left), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
+                }
+            }.card()
+
+            VStack(spacing: 0) {
+                SliderRow(label: "Blur", v: m.bind(\.style.imageBlur), range: 0...4, fmt: { "\(Int($0))" })
+                SliderRow(label: "Opacity", v: m.bind(\.style.imageOpacity), range: 0...1, fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Contrast", v: m.bind(\.style.imageContrast), range: 0...2, fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Brightness", v: m.bind(\.style.imageBrightness), range: 0...2, fmt: { "\(Int($0 * 100))%" })
+            }.card()
+
+            VStack(spacing: 0) {
+                SliderRow(label: "Radius", v: m.bind(\.style.cornerRadius), range: 0...40, fmt: { "\(Int($0))" })
+                ToggleRow(label: "Independent corners",
+                          on: Binding(get: { m.timeline.style.cornerRadii != nil },
+                                      set: { enabled in
+                                          m.edit { $0.style.cornerRadii = enabled
+                                              ? CornerRadii(all: $0.style.cornerRadius) : nil }
+                                      }))
+                if m.timeline.style.cornerRadii != nil {
+                    SliderRow(label: "Top left", v: radiusCorner(\.tl), range: 0...40, fmt: { "\(Int($0))" })
+                    SliderRow(label: "Top right", v: radiusCorner(\.tr), range: 0...40, fmt: { "\(Int($0))" })
+                    SliderRow(label: "Bottom right", v: radiusCorner(\.br), range: 0...40, fmt: { "\(Int($0))" })
+                    SliderRow(label: "Bottom left", v: radiusCorner(\.bl), range: 0...40, fmt: { "\(Int($0))" })
+                }
+                ToggleRow(label: "Frame", on: m.bind(\.style.innerBorder))
+                if m.timeline.style.innerBorder {
+                    SliderRow(label: "Weight", v: m.bind(\.style.frameWeight), range: 0...4, fmt: { "\(Int($0)) pt" })
+                }
+                SliderRow(label: "Shadow", v: m.bind(\.style.shadow), range: 0...1)
+            }.card()
         }
     }
 
