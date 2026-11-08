@@ -75,7 +75,7 @@ public struct EditorRoot: View {
 
 struct EditorView: View {
     let model: EditorModel
-    @State private var inspectorTab: Inspector.Tab = .look
+    @State private var inspectorTab: Inspector.Tab = .background
     @State private var showsInspector = true
 
     var body: some View {
@@ -90,34 +90,37 @@ struct EditorView: View {
                         .layoutPriority(1)
                 }
             }
-            GeometryReader { available in
-                HStack(spacing: 0) {
-                    VStack(spacing: 8) {
-                        GeometryReader { area in
-                            // Use aspectRatio (customAspect-aware), not canvas.ratio:
-                            // custom 1:1 / 9:16 exports were previewed at 16:9.
-                            let ratio = CGFloat(max(model.timeline.style.aspectRatio, 0.1))
-                            let w = min(area.size.width, area.size.height * ratio)
-                            let h = min(area.size.height, area.size.width / ratio)
-                            PreviewView(model: model)
-                                .overlay { if model.focusEditing { FocusOverlay(model: model) } }
-                                .overlay { if model.maskEditing { ManualMaskOverlay(model: model) } }
-                                .overlay { if model.zoomDebug { ZoomDebugOverlay(model: model) } }
-                                .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-                                .frame(width: w, height: h)
-                                .position(x: area.size.width / 2, y: area.size.height / 2)
-                        }
-                        transport
-                        TimelineStrip(model: model)
+            HStack(spacing: 0) {
+                VStack(spacing: 8) {
+                    GeometryReader { area in
+                        // Use aspectRatio (customAspect-aware), not canvas.ratio:
+                        // custom 1:1 / 9:16 exports were previewed at 16:9.
+                        let ratio = CGFloat(max(model.timeline.style.aspectRatio, 0.1))
+                        let w = min(area.size.width, area.size.height * ratio)
+                        let h = min(area.size.height, area.size.width / ratio)
+                        PreviewView(model: model)
+                            .overlay { if model.focusEditing { FocusOverlay(model: model) } }
+                            .overlay { if model.maskEditing { ManualMaskOverlay(model: model) } }
+                            .overlay { if model.zoomDebug { ZoomDebugOverlay(model: model) } }
+                            .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+                            .frame(width: w, height: h)
+                            .position(x: area.size.width / 2, y: area.size.height / 2)
                     }
-                    .padding(16)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .layoutPriority(1)
-                    if showsInspector {
-                        Inspector(model: model, tab: $inspectorTab, width: 320)
-                    }
+                    transport
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
+                if showsInspector {
+                    Inspector(model: model, tab: $inspectorTab, width: 320)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            TimelineStrip(model: model)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity)
         }
         .background(Tok.bg)
         .focusable().focusEffectDisabled()
