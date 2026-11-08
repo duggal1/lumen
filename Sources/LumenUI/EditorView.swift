@@ -82,8 +82,6 @@ struct EditorView: View {
         VStack(spacing: 0) {
             PageBar(title: "Lumen Studio") {
                 HStack(spacing: 8) {
-                    LIconButton(icon: "arrow.uturn.backward", label: "Undo") { model.undo() }.disabled(!model.canUndo)
-                    LIconButton(icon: "arrow.uturn.forward", label: "Redo") { model.redo() }.disabled(!model.canRedo)
                     LIconButton(icon: "sidebar.right", label: showsInspector ? "Hide inspector" : "Show inspector") {
                         showsInspector.toggle()
                     }
@@ -193,27 +191,17 @@ struct EditorView: View {
                 LButton(title: model.clock.playing ? "Pause" : "Play", icon: model.clock.playing ? "pause.fill" : "play.fill", kind: .secondary) { model.togglePlay() }
                 Text("\(fmt(model.playhead)) / \(fmt(model.duration))").font(AppType.body.monospacedDigit()).foregroundStyle(Tok.text2)
                 Spacer()
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        LButton(title: "Cut", icon: "scissors", kind: .quiet) { model.cutAtPlayhead() }
-                        LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
-                        LButton(title: "Tools", icon: "slider.horizontal.3", kind: .secondary) { openTools() }
-                    }
-                    HStack(spacing: 4) {
-                        LIconButton(icon: "scissors", label: "Cut — start a range") { model.cutAtPlayhead() }
-                        LIconButton(icon: "plus.magnifyingglass", label: "Add zoom") { model.addZoom() }
-                        LIconButton(icon: "slider.horizontal.3", label: "More editing tools") { openTools() }
-                    }
-                }
+                LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
+                LButton(title: "Tools", icon: "slider.horizontal.3", kind: .secondary) { openTools() }
             }
             HStack(spacing: 12) {
-                // Edit controls live beside the readout line: the timeline is
-                // full at 184pt (ruler + 4 lanes), so there is no toolbar row.
+                // One control per action beside the readout line. The timeline
+                // is full at 184pt (ruler + 4 lanes), so there is no toolbar.
                 HStack(spacing: 4) {
-                    LIconButton(icon: "scissors", label: "Split at playhead (B)") { model.splitAtPlayhead() }
-                    LIconButton(icon: "scissors", label: model.pendingCut != nil ? "Commit cut (Backspace)" : "Cut range (C)") { model.cutAtPlayhead() }
+                    LIconButton(icon: "square.split.2x1", label: "Split at playhead (B)") { model.splitAtPlayhead() }
+                    LIconButton(icon: "scissors", label: model.pendingCut != nil ? "Cut now (Backspace)" : "Cut range (C)") { model.cutAtPlayhead() }
                     LIconButton(icon: "trash", label: "Delete selection (Backspace)") { model.deleteSelected() }
-                        .disabled(model.selection == nil && model.pendingCut == nil)
+                        .disabled(model.selection == nil)
                     LIconButton(icon: model.snapEnabled ? "magnet.fill" : "magnet", label: model.snapEnabled ? "Snapping on (N)" : "Snapping off (N)") { model.snapEnabled.toggle() }
                     LIconButton(icon: "arrow.uturn.backward", label: "Undo (Cmd-Z)") { model.undo() }.disabled(!model.canUndo)
                     LIconButton(icon: "arrow.uturn.forward", label: "Redo (Shift-Cmd-Z)") { model.redo() }.disabled(!model.canRedo)
@@ -232,7 +220,7 @@ struct EditorView: View {
     var readout: String {
         if let p = model.pendingCut {
             if model.pendingWouldRemoveEverything { return "That range would remove the whole recording." }
-            return "Cut \(fmt(p.start)) to \(fmt(p.end)) — \(String(format: "%.1fs", p.length)). Backspace commits, Esc discards."
+            return "Cut \(fmt(p.start)) to \(fmt(p.end)) — \(String(format: "%.1fs", p.length)). Release to cut, Backspace cuts now, Esc discards."
         }
         if let issue = model.editIssue { return issue }
         if let id = model.selection {
