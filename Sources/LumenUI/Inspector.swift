@@ -150,7 +150,8 @@ struct Inspector: View {
                 let ext = f.pathExtension.lowercased()
                 guard ["jpg", "png", "heic"].contains(ext) else { continue }
                 let rel = f.path.replacingOccurrences(of: root.path + "/", with: "")
-                out.append(WallpaperChoice(title: rel, url: f, isPainting: rel.contains("paintings")))
+                let name = ((rel as NSString).lastPathComponent as NSString).deletingPathExtension
+                out.append(WallpaperChoice(title: name, url: f, isPainting: rel.contains("paintings")))
             }
         }
         // Every macOS wallpaper on this Mac (14/15/26 incl. Dynamic)
@@ -219,12 +220,12 @@ struct Inspector: View {
             VStack(spacing: 0) {
                 Row(label: "Canvas") {
                     HStack(spacing: 8) {
-                        LDropdown(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, Self.canvasIcon($0)) }).frame(width: 130)
+                        LDropdown(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, Self.canvasIcon($0)) }).frame(width: 110)
                         RoundedRectangle(cornerRadius: 4)
                             .stroke(Tok.text2, lineWidth: 1)
-                            .frame(width: 64, height: min(36, max(12, 64 / m.timeline.style.canvas.ratio)))
+                            .frame(width: 48, height: min(28, max(10, 48 / m.timeline.style.canvas.ratio)))
                             .overlay(Text(m.timeline.style.canvas.title).font(AppType.caption).foregroundStyle(Tok.text2))
-                            .frame(width: 64, height: 36)
+                            .frame(width: 48, height: 28)
                     }
                 }
                 SliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
