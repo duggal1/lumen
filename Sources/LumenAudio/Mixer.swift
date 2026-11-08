@@ -372,11 +372,47 @@ public final class AudioMixer: @unchecked Sendable {
             hasProgram = true
         }
 
+        // Export typing: same hits as preview, offline mixed into the typing track.
+        // Same key = same sample, gain 0.7...1.0 from gap since previous key.
+        var prevKeyT: Double? = nil
+        let typingBuffers: [Int: [Float]] = {
+            guard a.keySounds else { return [:] }
+            let dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("Resources/TypingPacks/\(a.typingPackId)", isDirectory: true)
+            let avail = TypingPackLoader.buffers(in: dir)
+            var map: [Int: [Float]] = [:]
+            for (code, buf) in avail {
+                guard let ch = buf.floatChannelData?[0], buf.format.channelCount > 0 else { continue }
+                let n = Int(buf.frameLength)
+                map[code] = Array(UnsafeBufferPointer(start: ch, count: n))
+            }
+            return map
+        }()
         for cue in d.cues {
-            let (buf, gain) = bank.render(cue.kind, clickTone: a.clickTone)
-            let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + gain) / 20)), s0 = Int(cue.t * fs)
+            let buf: [Float]
+            if cue.kind == .key {
+                guard a.keySounds else { continue }
+                let packCode = TypingPackLoader.macToPack[Int(cue.keyCode)] ?? TypingPackLoader.genericCode
+                guard let samples = typingBuffers[packCode] else { continue }
+                // Fast typing quieter per key: gain from gap since previous key
+                if let prev = prevKeyT {
+                    let gap = cue.t - prev
+                    let g: Float = gap < 0.05 ? 0.7 : gap < 0.15 ? 0.85 : 1.0
+                    let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + a.typingLevelDb) / 20)) * g
+                    buf = samples.map { $0 * amp }
+                } else {
+                    let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + a.typingLevelDb) / 20))
+                    buf = samples.map { $0 * amp }
+                }
+                prevKeyT = cue.t
+            } else {
+                let (b, gain) = bank.render(cue.kind, clickTone: a.clickTone)
+                let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + gain) / 20))
+                buf = b.map { $0 * amp }
+            }
+            let s0 = Int(cue.t * fs)
             for (k, v) in buf.enumerated() where s0 + k >= 0 && s0 + k < n {
-                L[s0 + k] += v * amp; R[s0 + k] += v * amp
+                L[s0 + k] += v; R[s0 + k] += v
             }
         }
 

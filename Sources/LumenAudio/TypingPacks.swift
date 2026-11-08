@@ -98,9 +98,8 @@ public enum TypingPackLoader {
         36: 28,  // Return
         51: 14,  // Delete (Backspace)
         48: 15,  // Tab
-        56: 42,  // Shift (left)
-        60: 42,  // Shift (right)
-        15: 57,  // Enter (numpad Enter -> Space fallback)
+        56: 42,  // Shift
+        60: 42,  // Shift right -> same sample
     ]
     public static let genericCode = 30
 }

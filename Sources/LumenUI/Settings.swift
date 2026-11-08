@@ -14,7 +14,7 @@ import AppKit
 
 struct SettingsSurface: View {
     let app: AppModel
-    enum Tab: String, CaseIterable { case general = "General", capture = "Capture" }
+    enum Tab: String, CaseIterable { case general = "General", capture = "Capture", privacy = "Privacy" }
     @State private var tab = Tab.general
     @AppStorage("LumenAppearance") private var appearance = "system"
     @AppStorage("Lumen24Hour") private var use24Hour = false
@@ -31,10 +31,11 @@ struct SettingsSurface: View {
                 VStack(alignment: .leading, spacing: Metrics.sectionGap) {
                     LSegmented(sel: $tab, items: Tab.allCases.map { ($0, $0.rawValue) },
                                track: Tok.surface, thumb: Tok.control)
-                        .frame(width: 240)
+                        .frame(width: 300)
                     switch tab {
                     case .general: general
                     case .capture: capture
+                    case .privacy: privacy
                     }
                 }
                 .padding(.horizontal, Metrics.pagePad)
@@ -118,6 +119,17 @@ struct SettingsSurface: View {
             Text("Audio inputs: Select multiple devices for independent recording. Leave all off for the macOS default microphone.")
                 .font(AppType.caption).foregroundStyle(Tok.text2)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .card()
+    }
+
+    private var privacy: some View {
+        VStack(spacing: 0) {
+            Row(label: "Licenses") {
+                Text("Mechvibes Default pack — verify license at https://beta.mechvibes.com/sound-packs before shipping.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .card()
     }
