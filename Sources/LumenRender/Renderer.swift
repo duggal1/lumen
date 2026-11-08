@@ -633,7 +633,10 @@ public final class Renderer: @unchecked Sendable {
         // click rings
         if tl.cursor.clickRing != nil {
             e.setRenderPipelineState(pRing)
-            let R = 70 * g.ui * pow(sc, 0.5)
+            let ringSize = min(max(tl.cursor.clickSize, 0.5), 2.0)
+            let R = 70 * g.ui * pow(sc, 0.5) * ringSize
+            let ringAlpha = Float(min(max(tl.cursor.clickIntensity, 0), 1.5))
+            let ringColor = SIMD4<Float>(tl.cursor.clickColor.r, tl.cursor.clickColor.g, tl.cursor.clickColor.b, tl.cursor.clickColor.a * ringAlpha)
             for ring in st.clickFX {
                 let c = g.toCanvas(SIMD2<Double>(Double(ring.position.x), Double(ring.position.y)), cam: cam, scale: sc)
                 quad(e, SIMD4<Float>(Float(c.x - R), Float(c.y - R), Float(2 * R), Float(2 * R)), canvasF)
@@ -643,7 +646,7 @@ public final class Renderer: @unchecked Sendable {
                 case .burst: 2
                 case .glass: 3
                 }
-                frag(e, RingU(content: content, color: tl.cursor.clickColor.simd, center: SIMD2<Float>(c), radius: Float(R),
+                frag(e, RingU(content: content, color: ringColor, center: SIMD2<Float>(c), radius: Float(R),
                               progress: ring.progress, cr: Float(g.radius), mode: mode))
                 draw()
             }
