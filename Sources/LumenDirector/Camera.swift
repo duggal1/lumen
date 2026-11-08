@@ -38,7 +38,9 @@ enum CameraSolver {
         var tr = CameraTrack(count: n)
         let soft = 8 / src.x
         // Noncausal deadzone follow: pan only when cursor nears viewport edge.
-        let halfZone = clamp(p.deadZone, 0.05, 0.45) / max(p.maxScale, 1)
+        // Divide by a mid-scale (2x), not maxScale: the old divisor made the
+        // zone ~2.5x too tight at typical zooms, so the camera hunted motion.
+        let halfZone = clamp(p.deadZone, 0.05, 0.45) / 2.0
         let followOmega = 1 / max(clamp(p.followDelay, 0, 0.5), 0.045)
         let rawX = (0..<n).map { Double(cursor.x[min($0, cursor.x.count - 1)]) / src.x }
         let rawY = (0..<n).map { Double(cursor.y[min($0, cursor.y.count - 1)]) / src.y }
@@ -89,6 +91,10 @@ enum CameraSolver {
         func center(_ s: Int, _ f: SIMD2<Double>) -> SIMD2<Double> {
             guard s >= 0 else { return SIMD2(0.5, 0.5) }
             let sh = shots[s], hw = 0.5 / exp(sh.lz)
+            // Overshoot: an edge click centres on itself (revealing canvas on
+            // one side) so it still frames with margin, never clipped.
+            let over = min(clamp(p.viewportMargin, 0, 0.45), hw)
+            let lo = hw - over, hi = 1 - hw + over
             let c: SIMD2<Double>
             switch sh.focus {
             case .follow: c = f
@@ -100,11 +106,11 @@ enum CameraSolver {
             let bx = clamp(p.centerOffsetX, -0.25, 0.25) * view
             let by = clamp(p.centerOffsetY, -0.25, 0.25) * view
             if case .follow = sh.focus {
-                return SIMD2(softClamp(c.x - bx, hw, 1 - hw, soft),
-                             softClamp(c.y - by, hw, 1 - hw, soft))
+                return SIMD2(softClamp(c.x - bx, lo, hi, soft),
+                             softClamp(c.y - by, lo, hi, soft))
             }
-            return SIMD2(clamp(c.x - bx, hw, 1 - hw),
-                         clamp(c.y - by, hw, 1 - hw))
+            return SIMD2(clamp(c.x - bx, lo, hi),
+                         clamp(c.y - by, lo, hi))
         }
         var cx = [Double](repeating: 0.5, count: n), cy = cx, cz = [Double](repeating: 0, count: n)
         var ki = 0
@@ -121,7 +127,8 @@ enum CameraSolver {
             let follow = cursorN(t)
             let cA = center(a, follow), cB = center(b, follow)
             let c = cA + (cB - cA) * pr, h = 0.5 / exp(lz)
-            cx[i] = clamp(c.x, h, 1 - h); cy[i] = clamp(c.y, h, 1 - h); cz[i] = lz
+            let fx = { (v: Double) in clamp(v, h - min(clamp(p.viewportMargin, 0, 0.45), h), 1 - h + min(clamp(p.viewportMargin, 0, 0.45), h)) }
+            cx[i] = fx(c.x); cy[i] = fx(c.y); cz[i] = lz
         }
         func deriv(_ a: [Double]) -> [Float] {
             var v = [Float](repeating: 0, count: a.count)
