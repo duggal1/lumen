@@ -29,14 +29,19 @@ struct ExportInspector: View {
         switch kbps { case 128: "speaker.wave.1"; case 192: "speaker.wave.2"; case 256: "speaker.wave.3"; default: "speaker.wave.3.fill" }
     }
 
+    @State private var showMore = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s6) {
+        VStack(alignment: .leading, spacing: 16) {
             output
             destination
-            action
+            more
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    /// Pinned estimate + actions, rendered above the scroll area.
+    var pinned: some View { action }
 
     private var output: some View {
         VStack(alignment: .leading, spacing: Space.s2) {
@@ -46,10 +51,22 @@ struct ExportInspector: View {
                            items: [(.video, "Video"), (.gif, "GIF")])
                     .frame(width: 132)
             }
-            if settings.kind == .gif {
-                Text("800 px wide, 15 fps, loops forever.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-            } else {
+            if settings.kind != .gif {
+                Row(label: "Quality") {
+                    LDropdown(sel: model.exportBinding(\.quality),
+                              options: ExportQuality.allCases.map { ($0, $0.rawValue, Self.qualityIcon($0)) })
+                        .frame(width: 132)
+                }
+                Row(label: "Audio") {
+                    HStack(spacing: Space.s2) {
+                        LToggle(on: model.exportBinding(\.includeAudio), label: "Include audio")
+                        if settings.includeAudio {
+                            LDropdown(sel: model.exportBinding(\.audioBitrate),
+                                      options: [128, 192, 256, 320].map { ($0 * 1000, "\($0) kbps", Self.bitrateIcon($0)) })
+                                .frame(width: 110)
+                        }
+                    }
+                }
                 Row(label: "Format") {
                     HStack(spacing: Space.s2) {
                         LDropdown(sel: model.exportBinding(\.container),
@@ -83,45 +100,23 @@ struct ExportInspector: View {
                               options: ExportRate.allCases.map { ($0, $0.rawValue == "Source" ? "Source" : "\($0.rawValue) fps", Self.rateIcon($0)) })
                         .frame(width: 132)
                 }
-                Row(label: "Quality") {
-                    LDropdown(sel: model.exportBinding(\.quality),
-                              options: ExportQuality.allCases.map { ($0, $0.rawValue, Self.qualityIcon($0)) })
-                        .frame(width: 132)
-                }
-                Row(label: "Audio") {
-                    HStack(spacing: Space.s2) {
-                        LToggle(on: model.exportBinding(\.includeAudio), label: "Include audio")
-                        if settings.includeAudio {
-                            LDropdown(sel: model.exportBinding(\.audioBitrate),
-                                      options: [128, 192, 256, 320].map { ($0 * 1000, "\($0) kbps", Self.bitrateIcon($0)) })
-                                .frame(width: 110)
-                        }
-                    }
-                }
+            }
+        }.card(padding: 16)
+    }
+
+    private var more: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DisclosureGroup("More", isExpanded: $showMore) {
                 ToggleRow(label: "Also 1:1 and 9:16", on: model.exportBinding(\.batchAspects))
                 ToggleRow(label: "Transparent background", on: model.exportBinding(\.alpha))
-                if settings.alpha {
-                    Text("Writes ProRes 4444 with a premultiplied alpha channel. Background, shadow and padding become transparent.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                ToggleRow(label: "Separate cursor layer",
-                          on: model.exportBinding(\.cursorLayer))
-                if settings.cursorLayer {
-                    Text("Also writes a cursor-only ProRes 4444 .mov with alpha beside the movie, for editors that want the pointer on its own layer.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                ToggleRow(label: "Separate cursor layer", on: model.exportBinding(\.cursorLayer))
                 ToggleRow(label: "Separate WAV stems",
                           on: Binding(get: { model.exportSeparateStems },
                                       set: { model.setSeparateWavStems($0) }))
-                if model.exportSeparateStems {
-                    Text("Microphone, system sound and voice-over export as separate 32-bit float WAV files alongside the movie.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
-        }.card()
+            .font(AppType.label).foregroundStyle(Tok.text)
+        }
+        .card(padding: 16)
     }
 
     private var destination: some View {
@@ -140,7 +135,7 @@ struct ExportInspector: View {
             TextField("Name", text: model.exportBinding(\.filename))
                 .textFieldStyle(.plain).font(AppType.body).field()
                 .accessibilityLabel("Export filename")
-        }.card()
+        }.card(padding: 16)
     }
 
     private func setFolder(_ directory: FileManager.SearchPathDirectory) {
@@ -154,19 +149,10 @@ struct ExportInspector: View {
             Text("Estimate").font(AppType.title).foregroundStyle(Tok.text)
             if settings.kind == .gif {
                 Text("GIF").font(AppType.metric).foregroundStyle(Tok.text)
-                Text("Small, silent and loopable.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
             } else {
                 let bytes = settings.estimatedBytes(source: source, aspect: aspect, outputDuration: model.duration)
                 Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
                     .font(AppType.metric).foregroundStyle(Tok.text)
-                if let seconds = model.estimatedExportSeconds {
-                    Text("Around \(Int(seconds.rounded())) s based on your last export")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                } else {
-                    Text("Export time is measured after the first export.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                }
             }
             switch model.exportState {
             case .idle:
@@ -204,7 +190,7 @@ struct ExportInspector: View {
                 LButton(title: "Retry export", kind: .primary, height: 32) { model.exportVideo() }
             }
             if let notice = model.notice { Text(notice).font(AppType.caption).foregroundStyle(Tok.text2) }
-        }.card()
+        }.card(padding: 16)
     }
 
     private func progress(_ value: Double) -> some View {
