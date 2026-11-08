@@ -627,6 +627,14 @@ public final class Renderer: @unchecked Sendable {
             e.setRenderPipelineState(pLoupe)
             let sourceSize = SIMD2<Float>(Float(g.src.x), Float(g.src.y))
             for glass in st.emphasis.loupes where glass.opacity > 0.001 {
+                // A loupe magnifies RAW source pixels — skip it where an
+                // active mask covers its target, or it would re-expose them.
+                let coveredByMask = st.emphasis.masks.contains { m in
+                    let r = m.rect
+                    return r.x < glass.target.x + 16 && r.x + r.z > glass.target.x - 16
+                        && r.y < glass.target.y + 16 && r.y + r.w > glass.target.y - 16
+                }
+                if coveredByMask { continue }
                 let R = Float(max(glass.radius, 0.02)) * canvasF.x
                 let center = SIMD2<Float>(glass.glass.x * canvasF.x, glass.glass.y * canvasF.y)
                 quad(e, SIMD4<Float>(center.x - R * 1.35, center.y - R * 1.35, R * 2.7, R * 2.7), canvasF)
