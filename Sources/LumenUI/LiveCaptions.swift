@@ -12,13 +12,22 @@ import LumenSpeech
 struct Sentence: Identifiable, Equatable { let id: Int; let range: Range<Int>; let start: Double; let end: Double }
 enum Sentences {
     static func split(_ w: [WordToken]) -> [Sentence] {
+        // Moonshine overlapping windows can re-emit the same word twice.
+        // Drop an overlapping re-emit (same text, start inside prev end)
+        // so it never becomes its own sentence ("So does work." / "work.").
         var out: [Sentence] = [], s = 0
+        var prev: WordToken?
         for i in w.indices {
+            let word = w[i]
+            if let p = prev, word.text.lowercased() == p.text.lowercased(), word.start < p.end + 0.15 {
+                continue
+            }
+            prev = word
             let last = i == w.count - 1
-            let stop = w[i].text.last.map { ".?!…".contains($0) } ?? false
-            let gap = !last && w[i + 1].start - w[i].end > 0.8
+            let stop = word.text.last.map { ".?!…".contains($0) } ?? false
+            let gap = !last && w[i + 1].start - word.end > 0.8
             if last || stop || gap || i - s + 1 >= 14 {
-                out.append(Sentence(id: out.count, range: s..<(i + 1), start: w[s].start, end: w[i].end)); s = i + 1
+                out.append(Sentence(id: out.count, range: s..<(i + 1), start: w[s].start, end: word.end)); s = i + 1
             }
         }
         return out
