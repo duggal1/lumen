@@ -22,6 +22,11 @@ public struct PauseInterval: Codable, Equatable, Sendable, Identifiable {
 /// imported clip is addressed in OUTPUT seconds and contributes `duration`
 /// seconds of footage starting at `start`. This keeps one unambiguous timeline
 /// and lets the renderer compose both with the same `FrameState`.
+///
+/// Editing-layer rule: the magnetic main lane orders `clips` by OUTPUT `start`
+/// and keeps them gapless. A split is a logical boundary inside a contiguous
+/// source range, not a material edit — it never trims the underlying file and
+/// never resets camera/cursor state.
 public struct TimelineClip: Codable, Identifiable, Equatable, Sendable {
     public var id: UUID
     public var path: String
@@ -45,6 +50,42 @@ public struct TimelineClip: Codable, Identifiable, Equatable, Sendable {
     /// Output seconds -> seconds inside the imported file.
     public func sourceTime(atOutput t: Double) -> Double { inPoint + max(min(t - start, duration), 0) }
     public var url: URL { URL(fileURLWithPath: path) }
+
+    /// Two clips are contiguous when the second starts exactly where the first
+    /// ends, they share the same file, and their inPoints continue without a
+    /// gap or overlap. Join only succeeds on this predicate.
+    public func isContiguous(with other: TimelineClip) -> Bool {
+        guard path == other.path else { return false }
+        let eps = 0.001
+        return abs(end - other.start) < eps && abs(other.inPoint - (inPoint + duration)) < eps
+    }
+}
+
+extension Array where Element == TimelineClip {
+    /// Magnetic normalize: sort by output start and close gaps by rippling
+    /// later clips left so `clips[i].start == clips[i-1].end`.
+    mutating func magneticNormalize() {
+        // Keep sort stable w.r.t. insertion order for equal starts: Swift sort
+        // is stable, so only the start value rewrites the order.
+        sort { $0.start < $1.start }
+        var cursor = 0.0
+        for i in indices {
+            self[i].start = cursor
+            cursor += self[i].duration
+        }
+    }
+
+    /// Snap a candidate start to the nearest clip edge when within `eps`.
+    func snappedStart(_ start: Double, eps: Double = 0.05) -> Double {
+        var best = start, bestDelta = eps
+        for clip in self {
+            for edge in [clip.start, clip.end] {
+                let d = abs(edge - start)
+                if d < bestDelta { bestDelta = d; best = edge }
+            }
+        }
+        return best
+    }
 }
 
 /// Crash-recovery journal written while a recording is in progress. Kept tiny
