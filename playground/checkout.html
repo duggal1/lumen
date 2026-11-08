@@ -1,0 +1,12 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Acme Pay — Checkout</title><link rel="stylesheet" href="styles.css"></head>
+<body><span class="fixture-label">TEST FIXTURE — documented test cards only (Acme Pay)</span>
+<div class="card">
+<label>Card (one field) <input data-secret name="card1" autocomplete="cc-number" inputmode="numeric" value="4242 4242 4242 4242"></label><br>
+<label>Card (four fields) <input data-secret name="c1" autocomplete="cc-number" value="4111"><input data-secret name="c2" value="1111"><input data-secret name="c3" value="1111"><input data-secret name="c4" value="1111"></label><br>
+<label>Expiry <input data-secret name="exp" autocomplete="cc-exp" value="12/30"></label>
+<label>CVC <input data-secret name="cvc" autocomplete="cc-csc" value="123"></label>
+<label>Name <input data-identity name="name" autocomplete="cc-name" value="Test User"></label>
+<label>ZIP <input data-identity name="zip" autocomplete="postal-code" value="94105"></label>
+<label>Billing email <input data-identity name="billing" autocomplete="email" value="billing@example.com"></label></div>
+<div class="card"><strong>Saved cards</strong><p data-secret>5555 5555 5555 4444</p><p data-secret>3782 822463 10005</p><p data-secret>6011-1111-1111-1117</p></div>
+<script src="fixture.js"></script></body></html>

@@ -3,7 +3,7 @@
 # Text typed next to @goal.yaml is the OBJECTIVE. If none, use `objective` below.
 
 goal:
-  objective: "TODO: set me, or just type the task next to @goal.yaml"
+  objective: ""
 
   contract: |
     This file is binding, not advice. Start immediately. Do not recap it. Do not ask "want me to proceed?".

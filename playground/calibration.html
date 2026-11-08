@@ -1,0 +1,6 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Cursor calibration grid — TEST FIXTURE</title>
+<style>body{font:14px/1.4 system-ui;margin:0}.grid{display:grid;grid-template-columns:repeat(8,120px);gap:8px;padding:16px}.tgt{height:72px;border:2px solid #39c;border-radius:8px;display:grid;place-items:center}</style></head>
+<body><span style="display:inline-block;padding:.2rem .6rem;border:2px dashed #888">TEST FIXTURE — calibration grid (known screen coords; drive with CGEvent)</span>
+<div class="grid" id="g"></div>
+<script>for(let r=0;r<6;r++)for(let c=0;c<8;c++){const d=document.createElement('div');d.className='tgt';d.id=`t-${r}-${c}`;d.textContent=`${r},${c}`;d.style.background=(r+c)%2?'#eef':'#fff';document.getElementById('g').appendChild(d);}</script>
+</body></html>

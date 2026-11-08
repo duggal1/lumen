@@ -1,0 +1,37 @@
+<!-- Lumen test fixture. No network. Fictional brands only. -->
+<!doctype html><html><head><meta charset="utf-8"><title>Acme Mail — test fixture</title>
+<style>body{margin:0;font:16px system-ui} .acct{position:fixed;inset:0 0 auto 0;display:flex;gap:8px;padding:12px;background:#fff}
+.field{display:block;margin:12px} .mask{border:1px solid #999;padding:2px}</style></head>
+<body>
+<div class="acct" id="accounts">
+  <span class="mask">alice@example.com</span><span class="mask">bob@example.org</span>
+  <span class="mask">carol.user@gmail.com</span><span class="mask">dave@example.com</span>
+  <span class="mask">erin@example.org</span>
+</div>
+<!-- Sign-in: email + password (type=password, show-password toggle) -->
+<label class="field">Email <input id="login_hint" autocomplete="email" value="alice@example.com?login_hint=alice@example.com"></label>
+<label class="field">Password <input id="pw" type="password" autocomplete="current-password" value="P@ssw0rd-Visible-123"></label>
+<label class="field"><input id="showpw" type="checkbox"> Show password</label>
+<!-- Mail page: dropdown lists emails, inbox senders, bodies -->
+<div id="dropdown"><p>From: sender@example.com</p><p>Body: contact fm.david@gmail.com or call 415-555-0100</p></div>
+<!-- Checkout: card one field + four split fields -->
+<label class="field">Card number <input id="card1" autocomplete="cc-number" value="4242 4242 4242 4242"></label>
+<label class="field">Card split
+<input id="c1" value="4111"><input id="c2" value="1111"><input id="c3" value="1111"><input id="c4" value="1111"></label>
+<label class="field">Expiry <input id="exp" autocomplete="cc-exp" value="12/28"></label>
+<label class="field">CVC <input id="cvc" autocomplete="cc-csc" value="123"></label>
+<label class="field">Name <input autocomplete="cc-name" value="Test User"></label>
+<label class="field">Zip <input autocomplete="postal-code" value="94105"></label>
+<label class="field">Billing email <input autocomplete="email" value="billing@example.com"></label>
+<p>Saved cards: 5555 5555 5555 4444 · 3782 822463 10005 · 6011 1111 1111 1117</p>
+<!-- Settings: API keys -->
+<p>API keys: sk_test_1234567890abcdefgh · AKIAIOSFODNN7EXAMPLE</p>
+<p>Grid targets at known screen coordinates (cursor calibration).</p>
+<div id="grid"></div>
+<script>
+(function(){var g=document.getElementById('grid');
+for(var i=0;i<6;i++){var d=document.createElement('div');
+d.style.cssText='position:fixed;left:'+(100+i*140)+'px;top:'+(200+ (i%2)*120)+'px;width:80px;height:40px;border:2px solid #00c;';
+d.textContent='Target '+i;g.appendChild(d);}}());
+</script>
+</body></html>
