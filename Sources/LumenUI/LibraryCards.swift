@@ -195,9 +195,12 @@ private struct RecordingRow: View {
                 PixelBadge(kind: .caution, text: "\(row.dropped) dropped")
             }
             Text(duration).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
+                .lineLimit(1)
                 .frame(width: 44, alignment: .trailing)
             Text(row.output).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
-                .frame(width: 64, alignment: .trailing)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 88, alignment: .trailing)
 
             HStack(spacing: 0) {
                 LIconButton(icon: "slider.horizontal.below.rectangle", label: "Open in Studio", action: open)
