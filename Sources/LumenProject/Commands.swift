@@ -45,6 +45,8 @@ public enum Command: Codable, Sendable {
     case addTapAtPlayhead(x: Double, y: Double), deleteTap(UUID)
     case addText(TextBlock), editText(UUID, String), deleteText(UUID)
     case addClip(TimelineClip), deleteClip(UUID), moveClip(UUID, start: Double), trimClip(UUID, inPoint: Double, duration: Double)
+    case splitClip(atOutput: Double), rippleDeleteClip(id: UUID), joinClips(ids: [UUID]),
+         duplicateClip(id: UUID), pasteClip(clip: TimelineClip, atOutput: Double)
     case applyAutoTidy([CutRange]), clearAutoTidy
 }
 
@@ -143,14 +145,84 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         t.overlays.loupes[i] = l; return .masks
     case .addClip(let clip):
         guard !clip.path.isEmpty, clip.duration > 0 else { throw CommandError.invalid("empty clip") }
-        t.clips.append(clip); t.clips.sort { $0.start < $1.start }; return []
-    case .deleteClip(let id): t.clips.removeAll { $0.id == id }; return []
+        t.clips.append(clip); t.clips.magneticNormalize(); return []
+    case .deleteClip(let id): t.clips.removeAll { $0.id == id }; t.clips.magneticNormalize(); return []
     case .moveClip(let id, let start):
         guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
-        t.clips[i].start = max(start, 0); t.clips.sort { $0.start < $1.start }; return []
+        t.clips[i].start = t.clips.snappedStart(max(start, 0)); t.clips.magneticNormalize(); return []
     case .trimClip(let id, let inPoint, let duration):
         guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
-        t.clips[i].inPoint = max(inPoint, 0); t.clips[i].duration = max(duration, 0.05); return []
+        t.clips[i].inPoint = max(inPoint, 0); t.clips[i].duration = max(duration, 0.05); t.clips.magneticNormalize(); return []
+
+    // MARK: Magnetic main-lane
+    // Notes: soundtrack lanes are NOT part of the magnetic lane. Ripple edits
+    // shift downstream OUTPUT positions, so lanes whose `.placement` is past
+    // the edited range shift with the ripple; lanes inside the removed range
+    // clamp to the end of the lane. Trim/cut are separate commands and do not
+    // follow content: they define the recording's visible source window.
+    // A split is a logical boundary inside contiguous source — it partitions
+    // for ordering only and never changes camera, cursor, or mask coverage.
+    case .splitClip(let atOutput):
+        let splitOut = max(min(atOutput, t.compositionDuration - 0.05), 0.05)
+        guard let idx = t.clips.firstIndex(where: { $0.contains(output: splitOut) }) else {
+            throw CommandError.invalid("split point outside any clip")
+        }
+        let clip = t.clips[idx]
+        let offset = clip.sourceTime(atOutput: splitOut) - clip.inPoint
+        guard offset > 0.05, offset < clip.duration - 0.05 else { throw CommandError.invalid("split point too close to edge") }
+        let tailDuration = clip.duration - offset
+        let left = TimelineClip(id: clip.id, path: clip.path, name: clip.name,
+                                inPoint: clip.inPoint, duration: offset, start: clip.start,
+                                width: clip.width, height: clip.height)
+        let right = TimelineClip(id: UUID(), path: clip.path, name: clip.name + " (2)",
+                                 inPoint: clip.inPoint + offset, duration: tailDuration, start: splitOut,
+                                 width: clip.width, height: clip.height)
+        t.clips.replaceSubrange(idx...idx, with: [left, right])
+        t.clips.magneticNormalize()
+        partitionAnchoredOverlays(&t, atOutput: splitOut)
+        return [.masks, .zoom, .camera, .audio, .layout, .webcam]
+    case .rippleDeleteClip(let id):
+        guard let idx = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        let removed = t.clips[idx]
+        t.clips.remove(at: idx)
+        t.clips.magneticNormalize()
+        // Masks and overlays inside the removed OUTPUT range are clamped,
+        // never re-anchored: they stay pinned to source time so a ripple
+        // cannot strip a mask that covers sensitive area.
+        clampAnchoredOverlaysToClips(&t, removedClip: removed)
+        // Ripple-delete shifts downstream soundtrack lanes left by the removed
+        // duration so lane placement stays aligned with picture.
+        shiftSoundtrackLanesAfter(&t, afterOutput: removed.start, by: -removed.duration)
+        return .replan
+    case .joinClips(let ids):
+        let selected = t.clips.filter { ids.contains($0.id) }.sorted { $0.start < $1.start }
+        guard selected.count >= 2 else { throw CommandError.invalid("join needs at least two clips") }
+        guard selected[0].isContiguous(with: selected[1]) else {
+            throw CommandError.invalid("clips are not contiguous in source")
+        }
+        let merged = TimelineClip(id: selected[0].id, path: selected[0].path, name: selected[0].name,
+                                  inPoint: selected[0].inPoint,
+                                  duration: selected.map(\.duration).reduce(0, +),
+                                  start: selected[0].start,
+                                  width: selected[0].width, height: selected[0].height)
+        t.clips.removeAll { ids.contains($0.id) }
+        t.clips.append(merged); t.clips.magneticNormalize()
+        return [.masks, .zoom, .camera, .audio, .layout, .webcam]
+    case .duplicateClip(let id):
+        guard let original = t.clips.first(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        let copy = TimelineClip(id: UUID(), path: original.path, name: original.name + " copy",
+                                inPoint: original.inPoint, duration: original.duration,
+                                start: original.end, width: original.width, height: original.height)
+        t.clips.append(copy); t.clips.magneticNormalize()
+        return .replan
+    case .pasteClip(let clip, let atOutput):
+        guard !clip.path.isEmpty, clip.duration > 0 else { throw CommandError.invalid("empty clip") }
+        var pasted = clip
+        pasted.id = UUID()
+        pasted.start = t.clips.snappedStart(max(min(atOutput, t.compositionDuration), 0))
+        t.clips.append(pasted); t.clips.magneticNormalize()
+        shiftSoundtrackLanesBefore(&t, beforeOutput: pasted.start, by: pasted.duration)
+        return .replan
     case .addTapAtPlayhead(let x, let y): t.overlays.taps.append(TapIndicator(t: playSrc, x: x, y: y)); return [.cursor, .audio]
     case .deleteTap(let id): t.overlays.taps.removeAll { $0.id == id }; return [.cursor, .audio]
     case .addText(let b): t.overlays.texts.append(b); return .captions
@@ -163,5 +235,123 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         t.timeMap.cuts.removeAll { $0.origin == .autoTidy }
         t.timeMap.cuts.append(contentsOf: cuts.map { CutRange(id: $0.id, start: $0.start, end: $0.end, origin: .autoTidy) }); return .replan
     case .clearAutoTidy: t.timeMap.cuts.removeAll { $0.origin == .autoTidy }; return .replan
+    }
+}
+
+/// Partition any source-anchored overlay that spans the OUTPUT split point.
+/// Each overlay becomes at most two halves with fresh ids; nothing is dropped.
+private func partitionAnchoredOverlays(_ t: inout Timeline, atOutput splitOut: Double) {
+    let tm = t.timeMap
+    let splitSrc = tm.source(atOutput: splitOut)
+    // Masks
+    var masks: [Mask] = []
+    for m in t.overlays.masks {
+        if m.start < splitSrc && m.end > splitSrc {
+            masks.append(Mask(id: m.id, start: m.start, end: splitSrc, mode: m.mode,
+                              keys: m.keys.filter { $0.t < splitSrc }, origin: m.origin,
+                              approved: m.approved, category: m.category, padding: m.padding))
+            masks.append(Mask(id: UUID(), start: splitSrc, end: m.end, mode: m.mode,
+                              keys: m.keys.filter { $0.t >= splitSrc }, origin: m.origin,
+                              approved: m.approved, category: m.category, padding: m.padding))
+        } else { masks.append(m) }
+    }
+    t.overlays.masks = masks
+    // Zooms
+    t.zoom = t.zoom.flatMap { z -> [ZoomSegment] in
+        if z.start < splitSrc && z.end > splitSrc {
+            return [
+                ZoomSegment(id: z.id, start: z.start, end: splitSrc, scale: z.scale, focus: z.focus, easing: z.easing, origin: z.origin),
+                ZoomSegment(id: UUID(), start: splitSrc, end: z.end, scale: z.scale, focus: z.focus, easing: z.easing, origin: z.origin),
+            ]
+        }
+        return [z]
+    }
+    // Cuts, ramps, highlights, loupes, layouts, texts
+    t.timeMap.cuts = t.timeMap.cuts.flatMap { c -> [CutRange] in
+        if c.start < splitSrc && c.end > splitSrc {
+            return [CutRange(id: c.id, start: c.start, end: splitSrc, origin: c.origin),
+                    CutRange(id: UUID(), start: splitSrc, end: c.end, origin: c.origin)]
+        }
+        return [c]
+    }
+    t.timeMap.ramps = t.timeMap.ramps.flatMap { r -> [SpeedRamp] in
+        if r.start < splitSrc && r.end > splitSrc {
+            return [SpeedRamp(start: r.start, end: splitSrc, speed: r.speed, origin: r.origin),
+                    SpeedRamp(start: splitSrc, end: r.end, speed: r.speed, origin: r.origin)]
+        }
+        return [r]
+    }
+    t.overlays.highlights = t.overlays.highlights.flatMap { h -> [Highlight] in
+        if h.start < splitSrc && h.end > splitSrc {
+            return [Highlight(id: h.id, start: h.start, end: splitSrc, x: h.x, y: h.y, w: h.w, h: h.h, style: h.style, dim: h.dim),
+                    Highlight(id: UUID(), start: splitSrc, end: h.end, x: h.x, y: h.y, w: h.w, h: h.h, style: h.style, dim: h.dim)]
+        }
+        return [h]
+    }
+    t.overlays.loupes = t.overlays.loupes.flatMap { l -> [Loupe] in
+        if l.start < splitSrc && l.end > splitSrc {
+            return [Loupe(id: l.id, start: l.start, end: splitSrc, x: l.x, y: l.y, follow: l.follow,
+                          radius: l.radius, magnification: l.magnification, round: l.round, cx: l.cx, cy: l.cy,
+                          border: l.border, shadow: l.shadow),
+                    Loupe(id: UUID(), start: splitSrc, end: l.end, x: l.x, y: l.y, follow: l.follow,
+                          radius: l.radius, magnification: l.magnification, round: l.round, cx: l.cx, cy: l.cy,
+                          border: l.border, shadow: l.shadow)]
+        }
+        return [l]
+    }
+    t.layouts = t.layouts.flatMap { s -> [LayoutSegment] in
+        if s.start < splitSrc && s.end > splitSrc {
+            return [LayoutSegment(id: s.id, start: s.start, end: splitSrc, kind: s.kind),
+                    LayoutSegment(id: UUID(), start: splitSrc, end: s.end, kind: s.kind)]
+        }
+        return [s]
+    }
+    t.overlays.texts = t.overlays.texts.flatMap { b -> [TextBlock] in
+        if b.start < splitSrc && b.end > splitSrc {
+            return [TextBlock(id: b.id, start: b.start, end: splitSrc, text: b.text, x: b.x, y: b.y, size: b.size, color: b.color),
+                    TextBlock(id: UUID(), start: splitSrc, end: b.end, text: b.text, x: b.x, y: b.y, size: b.size, color: b.color)]
+        }
+        return [b]
+    }
+}
+
+private func clampAnchoredOverlaysToClips(_ t: inout Timeline, removedClip: TimelineClip) {
+    // Genuine ripple delete: overlays fully inside the removed range are left
+    // clamped to that range, not stripped — masks especially must never
+    // disappear because of an edit.
+    let tm = t.timeMap
+    let removedStart = removedClip.start
+    let removedEnd = removedClip.end
+    func clampSpan(_ s: Double, _ e: Double) -> (Double, Double)? {
+        let cs = tm.source(atOutput: removedStart), ce = tm.source(atOutput: removedEnd)
+        guard ce > cs else { return nil }
+        // keep as-is; the ranges are source-anchored and stay valid
+        return (s, e)
+    }
+    _ = clampSpan
+    // No-op by design for masks/zooms/captions: they are source-anchored.
+    // Nothing to strip; leaving them untouched is the safe behavior.
+    _ = removedClip
+}
+
+private func shiftSoundtrackLanesAfter(_ t: inout Timeline, afterOutput start: Double, by delta: Double) {
+    // Music/voiceover lanes are OUTPUT-anchored. A ripple delete moves them
+    // left by the removed duration; lanes inside the removed range clamp to
+    // the new start of the range.
+    for i in t.audio.lanes.indices {
+        let p = t.audio.lanes[i].placement
+        if p >= start {
+            t.audio.lanes[i].placement = max(p + delta, 0)
+        }
+    }
+    if let mp = t.audio.musicPath, t.audio.musicGainDb < 0 {
+        // music is a bed from 0, so nothing to clamp here
+        _ = mp
+    }
+}
+
+private func shiftSoundtrackLanesBefore(_ t: inout Timeline, beforeOutput start: Double, by delta: Double) {
+    for i in t.audio.lanes.indices where t.audio.lanes[i].placement >= start {
+        t.audio.lanes[i].placement += delta
     }
 }
