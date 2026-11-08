@@ -72,7 +72,7 @@ struct LibrarySurface: View {
     // MARK: Page bar
 
     private var pageBar: some View {
-        HStack(alignment: .bottom, spacing: Space.s4) {
+        HStack(alignment: .center, spacing: Space.s4) {
             PageTitle(text: "Library")
             Spacer(minLength: Space.s4)
             if app.phase == .idle {
@@ -80,8 +80,9 @@ struct LibrarySurface: View {
             }
             primaryAction
         }
-        .padding(.horizontal, Metrics.pagePad)
-        .frame(height: Metrics.pageBar, alignment: .bottom)
+        .padding(.leading, 108)
+        .padding(.trailing, Metrics.pagePad)
+        .frame(height: Metrics.pageBar + 8, alignment: .center)
     }
 
     @ViewBuilder private var primaryAction: some View {
@@ -190,7 +191,8 @@ struct LibrarySurface: View {
 
                     // Tab control (fixed)
                     LSegmented(sel: $recordTab, items: RecordTab.allCases.map { ($0, tabTitle($0)) })
-                        .frame(height: 24)
+                        .frame(height: 32)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.bottom, 16)
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel("Recording sections")
@@ -202,8 +204,10 @@ struct LibrarySurface: View {
                             else { audioTab }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
                     }
                     .scrollIndicators(.hidden)
+                    .contentMargins(.top, 0)
                     .frame(maxHeight: .infinity)
 
                     // Footer pinned
@@ -258,19 +262,24 @@ struct LibrarySurface: View {
             LSegmented(sel: Bindable(app).kind,
                        items: AppModel.SourceKind.allCases.map { ($0, label($0)) },
                        track: Tok.control, thumb: Tok.controlPressed)
+                .frame(height: 32)
+                .fixedSize(horizontal: false, vertical: true)
             switch app.kind {
             case .display:
                 field("Display", icon: "display") {
                     LDropdown(sel: Bindable(app).displayID,
                               options: app.displays.map { ($0.id, $0.name, "display") })
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             case .window:
                 field("Window", icon: "macwindow") {
                     LDropdown(sel: Bindable(app).windowID,
                               options: app.windows.map { ($0.id, $0.name, "macwindow") })
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             case .region:
                 Text("Drag to choose an area after you press Record.").font(AppType.caption).foregroundStyle(Tok.text2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Row(label: "Frame rate", icon: "speedometer") {
                 LSegmented(sel: Bindable(app).fps, items: app.supportedFPS.map { ($0, "\($0)") },
@@ -330,10 +339,10 @@ struct LibrarySurface: View {
 
     private func qualityIcon(_ q: RecordingConfig.Quality) -> String {
         switch q {
-        case .standard: "waveform.path"
-        case .high: "waveform.path.ecg"
+        case .standard: "dial.low"
+        case .high: "dial.medium"
         case .ultraHD: "dial.high"
-        case .bluray: "opticaldisc"
+        case .bluray: "dial.high.fill"
         case .custom: "slider.horizontal.3"
         }
     }
@@ -403,41 +412,8 @@ struct LibrarySurface: View {
                 }
                 .frame(height: 48)
             }
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: Space.s4) {
-                    Image(systemName: "waveform").font(.system(size: 14)).foregroundStyle(Tok.text2)
-                    Text("Microphone test").font(AppType.label).foregroundStyle(Tok.text)
-                    Spacer(minLength: Space.s4)
-                    if app.micTesting {
-                        Text(dbReadout).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
-                            .frame(width: 76, alignment: .trailing)
-                    }
-                    LButton(title: app.micTesting ? "Stop" : "Test", kind: app.micTesting ? .primary : .secondary, height: 24) { app.testMicrophone() }
-                }
-                if app.micTesting {
-                    PixelScope(wave: app.micTestWave)
-                        .frame(height: 44)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Tok.well))
-                        .overlay(alignment: .trailing) {
-                            if app.micTestLevel < 0.03 {
-                                Text("No sound yet")
-                                    .font(AppType.caption).foregroundStyle(Tok.text2)
-                                    .padding(.trailing, 12)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .transition(.opacity)
-                }
-                if let e = app.micTestError { Text(e).font(AppType.caption).foregroundStyle(Tok.statusBad) }
-            }
-            .frame(minHeight: 48)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var dbReadout: String {
-        app.micTestDB <= -59 ? "−∞ dBFS" : String(format: "%.0f dBFS", app.micTestDB)
     }
 
     /// Bare macOS input glyphs. A device that draws its own circle is swapped
