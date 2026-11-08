@@ -61,7 +61,7 @@ struct TimelineStrip: View {
     @State private var hoveredClip: UUID?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
-    private struct Drag { enum Kind { case seek, move, left, right, reorder }; var kind: Kind; var id: UUID?; var orig: ZoomSegment?; var origClip: TimelineClip?; var t0: Double }
+    private struct Drag { enum Kind { case seek, move, left, right, reorder, tapMove }; var kind: Kind; var id: UUID?; var orig: ZoomSegment?; var origClip: TimelineClip?; var origTap: TapIndicator?; var t0: Double }
     private struct Marker { var t: Double; var kind: String; var isTap: Bool }
     // Fixed lane heights, top to bottom: ruler, clip (magnetic), zoom, events, audio.
     private let hRuler: CGFloat = 20, hClip: CGFloat = 28, hZoom: CGFloat = 28
@@ -445,6 +445,13 @@ struct TimelineStrip: View {
                 if p.x > a, p.x < b { return Drag(kind: .move, id: z.id, orig: z, t0: Double(p.x / w) * dur) }
             }
         }
+        let yEvents0 = yZoom0 + hZoom
+        if p.y >= yEvents0 && p.y < yEvents0 + hEvents {
+            for tap in model.timeline.overlays.taps.reversed() {
+                let tx = xx(tm.output(atSource: tap.t))
+                if abs(p.x - tx) < 8 { return Drag(kind: .tapMove, id: tap.id, origTap: tap, t0: Double(p.x / w) * dur) }
+            }
+        }
         return Drag(kind: .seek, id: nil, orig: nil, t0: 0)
     }
 
@@ -505,6 +512,10 @@ struct TimelineStrip: View {
             let target = t
             let ctx = ReduceContext(playhead: model.playhead, selection: id, duration: dur)
             model.edit(coalesce: true) { tl in _ = try? reduce(&tl, .moveClip(id, start: target), ctx: ctx) }
+        case .tapMove:
+            guard let id = d.id, let tap = d.origTap else { return }
+            let tm = model.timeline.timeMap
+            model.moveTap(id: id, x: tap.x, y: tap.y, atSource: tm.source(atOutput: t))
         }
     }
 
