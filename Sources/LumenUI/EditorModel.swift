@@ -458,6 +458,60 @@ struct LookPreset: Codable, Identifiable { var id: String { name }; var name: St
         dispatch(.cutAtPlayhead(length: 1))
     }
 
+    // MARK: Magnetic lane actions (playhead-captured)
+
+    /// Final Cut blade: split the clip under the playhead. Playhead is the
+    /// only time source; no pointer or last-click state is consulted.
+    func splitAtPlayhead() {
+        let ph = playhead
+        guard ph > 0.05, ph < timeline.compositionDuration - 0.05 else { return }
+        dispatch(.splitClip(atOutput: ph))
+    }
+
+    func rippleDeleteSelected() {
+        guard let id = selection,
+              timeline.clips.contains(where: { $0.id == id }) else { return }
+        dispatch(.rippleDeleteClip(id: id))
+        selection = nil
+    }
+
+    func duplicateSelected() {
+        guard let id = selection else { return }
+        dispatch(.duplicateClip(id: id))
+    }
+
+    func joinSelectedClips() {
+        guard let id = selection else { return }
+        // join with the next clip if adjacent
+        let sorted = timeline.clips.sorted { $0.start < $1.start }
+        guard let idx = sorted.firstIndex(where: { $0.id == id }), idx + 1 < sorted.count else { return }
+        dispatch(.joinClips(ids: [id, sorted[idx + 1].id]))
+    }
+
+    /// System clipboard bridge for Final Cut cmd-C/V paste a single clip.
+    func copySelectedClip() {
+        guard let id = selection,
+              let clip = timeline.clips.first(where: { $0.id == id }) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(clip.path, forType: .string)
+        copiedClip = clip
+    }
+
+    var copiedClip: TimelineClip?
+
+    /// Paste inserts at the playhead with ripple. Playhead is captured at
+    /// dispatch via ReduceContext; never read from the last pointer position.
+    func pasteClipAtPlayhead() {
+        guard let clip = copiedClip else { return }
+        let ph = playhead
+        dispatch(.pasteClip(clip: clip, atOutput: ph))
+    }
+
+    var snapEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "lumen.timeline.snapEnabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "lumen.timeline.snapEnabled") }
+    }
+
     /// Arm manual click placement at the current playhead time.
     func addTapAtPlayhead() {
         placingTool = .tap
