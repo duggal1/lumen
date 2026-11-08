@@ -263,7 +263,9 @@ public final class Renderer: @unchecked Sendable {
     /// only when the path or file modification date changes.
     private func loadStyleImageIfNeeded(_ path: String?) {
         guard let path, !path.isEmpty else { styleImageID = ""; styleImage = nil; return }
-        let url = URL(fileURLWithPath: path)
+        let url: URL = (path == "serene-lake.jpg" ? Bundle.main.url(forResource: "serene-lake", withExtension: "jpg", subdirectory: "Wallpapers")
+            ?? Bundle.main.url(forResource: "serene-lake", withExtension: "jpg")
+            : nil) ?? URL(fileURLWithPath: path)
         let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
         let version = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
         let id = "\(url.path)#\(version)"
