@@ -9,7 +9,7 @@ import LumenProject
 @Test func bundledEffectsAreRealRecordedAudio() {
     let bank = SFXBank()
     let cues: [(SFXCue.Kind, ClickSound)] = [
-        (.click, .mouse), (.click, .subtle), (.key, .mouse),
+        (.click, .mouse), (.click, .subtle), (.click, .fresh),
         (.whooshIn, .mouse), (.whooshOut, .mouse),
     ]
     for (kind, tone) in cues {
@@ -19,6 +19,9 @@ import LumenProject
         #expect(peak > 0.5)
         #expect(gain == 0)
     }
+    // Per-key typing is rendered from the pack buffers, not the cue path.
+    let (keySamples, _) = bank.render(.key, clickTone: .mouse)
+    #expect(keySamples.isEmpty)
 }
 
 @Test func bundledMusicLibraryIsPresent() {
