@@ -8,7 +8,7 @@ import LumenCapture
 
 struct Inspector: View {
     let model: EditorModel
-    enum Tab: String, CaseIterable { case background = "Background", look = "Look", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
+    enum Tab: String, CaseIterable { case background = "Background", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
 
 
     static func visibleFor(model: EditorModel) -> [Inspector.Tab] {
@@ -57,13 +57,19 @@ struct Inspector: View {
     }
 
     private var content: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Space.s6) {
-                tabSelector
+        VStack(spacing: 0) {
+            tabSelector
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+            ScrollView {
                 tabBody
-            }.padding(Space.s4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }.scrollIndicators(.hidden)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.hidden)
+        }
         .frame(width: width).frame(maxHeight: .infinity).background(Tok.bg)
     }
 
@@ -79,7 +85,6 @@ struct Inspector: View {
     @ViewBuilder private var tabBody: some View {
         switch tab {
         case .background: backgroundPage
-        case .look: look
         case .tools: tools
         case .cursor: cursor
         case .camera: camera
@@ -122,13 +127,13 @@ struct Inspector: View {
 #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .card()
+        .card(padding: 16)
     }
 
     private func icon(_ t: Inspector.Tab) -> String {
         switch t {
         case .background: "photo.stack"
-        case .look: "paintpalette"; case .tools: "slider.horizontal.3"; case .cursor: "cursorarrow"; case .camera: "video"
+        case .tools: "slider.horizontal.3"; case .cursor: "cursorarrow"; case .camera: "video"
         case .layout: "rectangle.3.group"; case .audio: "waveform"; case .webcam: "person.crop.circle"
         case .captions: "captions.bubble"; case .timeline: "timeline.selection"; case .privacy: "lock"; case .export: "square.and.arrow.up"
         }
@@ -136,76 +141,180 @@ struct Inspector: View {
 
     private struct WallpaperChoice: Identifiable {
         var id: String { url.path }
-        var title: String
+        var displayName: String
         var url: URL
         var isPainting: Bool
     }
 
-    private static func wallpaperChoices() -> [WallpaperChoice] {
-        var out: [WallpaperChoice] = []
-        // Bundled gallery: Pictures + Serene (Contents/Resources/Wallpapers)
-        if let root = Bundle.main.resourceURL?.appendingPathComponent("Wallpapers"),
-           let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) {
-            for case let f as URL in en {
-                let ext = f.pathExtension.lowercased()
-                guard ["jpg", "png", "heic"].contains(ext) else { continue }
-                let rel = f.path.replacingOccurrences(of: root.path + "/", with: "")
-                let name = ((rel as NSString).lastPathComponent as NSString).deletingPathExtension
-                out.append(WallpaperChoice(title: name, url: f, isPainting: rel.contains("paintings")))
-            }
-        }
-        // Every macOS wallpaper on this Mac (14/15/26 incl. Dynamic)
-        let sysDir = "/System/Library/Desktop Pictures"
-        if let files = try? FileManager.default.contentsOfDirectory(atPath: sysDir) {
-            for name in files.sorted() {
-                let ext = (name as NSString).pathExtension.lowercased()
-                guard ["heic", "jpg", "png", "tiff"].contains(ext) else { continue }
-                out.append(WallpaperChoice(title: (name as NSString).deletingPathExtension, url: URL(fileURLWithPath: sysDir).appendingPathComponent(name), isPainting: false))
-            }
-        }
-        return out.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    private static let wallpaperExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "webp"]
+
+    private static func isJunkToken(_ token: String) -> Bool {
+        let t = token.lowercased()
+        if ["download", "light", "dark", "web", "4k", "iclarified", "cma", "the", "a", "an"].contains(t) { return true }
+        if t.isEmpty { return true }
+        if Int(t) != nil { return true }
+        if t.range(of: #"^[0-9a-f]{6,}$"#, options: .regularExpression) != nil && t.range(of: #"[a-f]"#, options: .regularExpression) != nil { return true }
+        if t.hasPrefix("cma-") || t.hasPrefix("download") { return true }
+        return false
     }
 
-    private var wallpaperList: some View {
-        LazyVStack(spacing: 0) {
-            ForEach(Self.wallpaperChoices()) { w in
-                Button {
-                    model.edit { $0.style.setPhotoBackground(w.url.path) }
-                    model.edit { $0.style.background = .image }
-                } label: {
-                    HStack(spacing: 12) {
-                        Text(w.title).font(AppType.caption).foregroundStyle(Tok.text2)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        if let image = NSImage(contentsOf: w.url) {
-                            Image(nsImage: image)
-                                .resizable().aspectRatio(contentMode: .fill)
-                                .frame(width: 72, height: 44)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-                        if model.timeline.style.background == .image && model.timeline.style.backgroundImagePath == w.url.path {
-                            Image(systemName: "checkmark").font(.system(size: 12)).foregroundStyle(Tok.accentText)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                .buttonStyle(.plain)
-                Divider().opacity(0.2)
+    private static func titleWord(_ w: String) -> String {
+        let l = w.lowercased()
+        switch l {
+        case "macos": return "macOS"
+        case "imac": return "iMac"
+        case "mac": return "Mac"
+        case "of": return "of"
+        case "in": return "in"
+        case "the": return "the"
+        case "a": return "a"
+        case "an": return "an"
+        default: return l.capitalized
+        }
+    }
+
+    private static func humanizedTokens(_ raw: String) -> [String] {
+        var parts: [String] = []
+        for chunk in raw.split(separator: "_", omittingEmptySubsequences: true) {
+            for w in chunk.split(separator: "-", omittingEmptySubsequences: true) {
+                let s = String(w)
+                if !isJunkToken(s) { parts.append(s) }
             }
         }
-        .frame(height: 240)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        // "of / in / the" inside paintings are junk noise; keep only for empty fallback
+        return parts
+    }
+
+    /// Humanized tooltip/VoiceOver name: strip folder prefixes, hashes,
+    /// extensions, "download-light_web" junk, Title Case, macOS-style.
+    static func humanizedName(for url: URL) -> String {
+        var raw = (url.lastPathComponent as NSString).deletingPathExtension
+        // System wallpapers already humanized ("iMac Blue.heic").
+        if raw.contains(" ") && !raw.contains("_") && !raw.contains("download") {
+            return raw
+        }
+        // Painting file is artist_subject_cma-id: use the subject.
+        if raw.contains("_") {
+            let comps = raw.split(separator: "_", omittingEmptySubsequences: true).map(String.init)
+            if comps.count >= 3 {
+                let last = comps.last!
+                if last.lowercased().hasPrefix("cma-") || last.lowercased() == "cma" {
+                    raw = comps.dropLast().joined(separator: "_")
+                    // Drop the artist prefix token before the first "_".
+                    let afterFirst = raw.split(separator: "_", maxSplits: 1, omittingEmptySubsequences: true)
+                    if afterFirst.count == 2 { raw = String(afterFirst[1]) } else { raw = comps[1] }
+                } else {
+                    raw = comps.last ?? raw
+                }
+            } else if comps.count == 2 {
+                raw = comps[1]
+            }
+        }
+        var tokens = humanizedTokens(raw)
+        if tokens.isEmpty {
+            // Fall back to the parent folder ("14-sonoma" -> "Sonoma").
+            let parent = url.deletingLastPathComponent().lastPathComponent
+            tokens = humanizedTokens(parent)
+        }
+        if tokens.isEmpty { return "Wallpaper" }
+        return tokens.map(titleWord).joined(separator: " ")
+    }
+
+    private static func wallpaperChoices() -> [WallpaperChoice] {
+        var out: [WallpaperChoice] = []
+        var seen = Set<String>()
+        func add(_ url: URL, isPainting: Bool) {
+            let name = humanizedName(for: url)
+            let key = name.lowercased()
+            guard !seen.contains(key) else { return }
+            seen.insert(key)
+            out.append(WallpaperChoice(displayName: name, url: url, isPainting: isPainting))
+        }
+        func collect(_ root: URL) {
+            guard let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else { return }
+            while let f = en.nextObject() as? URL {
+                let ext = f.pathExtension.lowercased()
+                guard wallpaperExtensions.contains(ext) else { continue }
+                guard (try? f.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+                let rel = f.path.replacingOccurrences(of: root.path + "/", with: "")
+                add(f, isPainting: rel.contains("paintings"))
+            }
+        }
+        // Bundled gallery (packaged app + source assets for `swift run`).
+        let roots: [URL?] = [
+            Bundle.main.resourceURL?.appendingPathComponent("Wallpapers"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("App/public/assets/wallpapers"),
+            URL(fileURLWithPath: "/Users/harshitduggal/workspace/Lumen/studio/wallpapers/paintings"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("wallpapers/paintings"),
+        ]
+        for r in roots.compactMap({ $0 }) {
+            if FileManager.default.fileExists(atPath: r.path) { collect(r) }
+        }
+        // Every macOS wallpaper on this Mac (14/15/26 incl. Dynamic).
+        let sysDir = URL(fileURLWithPath: "/System/Library/Desktop Pictures")
+        if FileManager.default.fileExists(atPath: sysDir.path),
+           let en = FileManager.default.enumerator(at: sysDir, includingPropertiesForKeys: [.isRegularFileKey]) {
+            while let f = en.nextObject() as? URL {
+                let ext = f.pathExtension.lowercased()
+                guard ["heic", "jpg", "jpeg", "png", "tiff", "webp"].contains(ext) else { continue }
+                guard (try? f.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+                add(f, isPainting: false)
+            }
+        }
+        return out.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    @State private var wallpaperSelectTask: Task<Void, Never>?
+
+    private var wallpaperList: some View {
+        WallpaperGrid(model: model, choices: Self.wallpaperChoices()) { choice in
+            wallpaperSelectTask?.cancel()
+            wallpaperSelectTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled else { return }
+                model.edit { $0.style.setPhotoBackground(choice.url.path) }
+                model.edit { $0.style.background = .image }
+            }
+        }
+        .padding(.top, 8)
     }
 
     private var backgroundPage: some View {
         let m = model
-        return VStack(spacing: 24) {
+        return VStack(spacing: 16) {
             VStack(spacing: 0) {
+                if m.session.webcam != nil {
+                    ToggleRow(label: "Show face cam", on: Binding(get: { m.timeline.webcam != nil }, set: { m.setWebcam($0) }))
+                }
                 Row(label: "Background") {
                     LDropdown(sel: m.bind(\.style.background),
                               options: (BackgroundKind.offered + (m.timeline.style.background == .dither ? [.dither] : []))
                                 .map { ($0, $0 == .dither ? "Legacy" : $0.rawValue.capitalized, backgroundIcon($0)) })
                         .frame(width: 130)
+                }
+                if m.timeline.style.background != .wallpaper && m.timeline.style.background != .image {
+                    Row(label: "Palette") {
+                        LDropdown(sel: paletteName(m),
+                                  options: (DitherPalettes.all.map { ($0.0, $0.0, "circle.lefthalf.filled") }
+                                    + (DitherPalettes.all.contains { $0.1 == m.timeline.style.colors } ? [] : [("Custom", "Custom", "paintpalette")])) )
+                            .frame(width: 130)
+                    }
+                    Row(label: "Canvas color") {
+                        ColorPicker("Canvas color", selection: canvasColor(m, index: 0), supportsOpacity: false).labelsHidden()
+                    }
+                    if m.timeline.style.background != .solid {
+                        Row(label: "Pattern color") {
+                            ColorPicker("Pattern color", selection: canvasColor(m, index: 1), supportsOpacity: false).labelsHidden()
+                        }
+                    }
+                }
+                if m.timeline.style.background == .dither || m.timeline.style.background == .wave || m.timeline.style.background == .field {
+                    SliderRow(label: "Cell", v: m.bind(\.style.ditherCell), range: 2...24, fmt: { "\(Int($0)) pt" })
+                }
+                if m.timeline.style.background == .dither || m.timeline.style.background == .wave {
+                    SliderRow(label: "Ink", v: m.bind(\.style.ditherDensity), range: 0.15...0.9, fmt: { "\(Int($0 * 100))%" })
                 }
                 if m.timeline.style.background == .image || m.timeline.style.background == .wallpaper {
                     wallpaperList
@@ -215,18 +324,11 @@ struct Inspector: View {
                     }
                 }
                 ToggleRow(label: "Blur behind zoom", on: m.bind(\.style.zoomBackgroundBlur))
-            }.card()
+            }.card(padding: 16)
 
             VStack(spacing: 0) {
                 Row(label: "Canvas") {
-                    HStack(spacing: 8) {
-                        LDropdown(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, Self.canvasIcon($0)) }).frame(width: 110)
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(Tok.text2, lineWidth: 1)
-                            .frame(width: 48, height: min(28, max(10, 48 / m.timeline.style.canvas.ratio)))
-                            .overlay(Text(m.timeline.style.canvas.title).font(AppType.caption).foregroundStyle(Tok.text2))
-                            .frame(width: 48, height: 28)
-                    }
+                    LDropdown(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, Self.canvasIcon($0)) }).frame(width: 130)
                 }
                 SliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
                 ToggleRow(label: "Independent padding",
@@ -242,14 +344,14 @@ struct Inspector: View {
                     SliderRow(label: "Bottom", v: paddingEdge(\.bottom), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
                     SliderRow(label: "Left", v: paddingEdge(\.left), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
                 }
-            }.card()
+            }.card(padding: 16)
 
             VStack(spacing: 0) {
                 SliderRow(label: "Blur", v: m.bind(\.style.imageBlur), range: 0...4, fmt: { "\(Int($0))" })
                 SliderRow(label: "Opacity", v: m.bind(\.style.imageOpacity), range: 0...1, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Contrast", v: m.bind(\.style.imageContrast), range: 0...2, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Brightness", v: m.bind(\.style.imageBrightness), range: 0...2, fmt: { "\(Int($0 * 100))%" })
-            }.card()
+            }.card(padding: 16)
 
             VStack(spacing: 0) {
                 SliderRow(label: "Radius", v: m.bind(\.style.cornerRadius), range: 0...40, fmt: { "\(Int($0))" })
@@ -270,7 +372,16 @@ struct Inspector: View {
                     SliderRow(label: "Weight", v: m.bind(\.style.frameWeight), range: 0...4, fmt: { "\(Int($0)) pt" })
                 }
                 SliderRow(label: "Shadow", v: m.bind(\.style.shadow), range: 0...1)
-            }.card()
+            }.card(padding: 16)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack { Text("Looks").font(AppType.title); Spacer() }
+                ForEach(presets) { p in LButton(title: p.name, kind: .quiet) { m.apply(p) } }
+                HStack(spacing: 8) {
+                    TextField("Name", text: $newName).textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 32).background(RoundedRectangle(cornerRadius: 8).fill(Tok.well))
+                    LButton(title: "Save", kind: .secondary, height: 32) { if !newName.isEmpty { m.savePreset(newName); presets = EditorModel.loadPresets(); newName = "" } }
+                }
+            }.card(padding: 16)
         }
     }
 
@@ -311,7 +422,7 @@ struct Inspector: View {
     /// ripple delete to stay aligned with picture; they clamp at the end.
     private var timelineTab: some View {
         let m = model
-        return VStack(spacing: 24) {
+        return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 Row(label: "Main lane") {
                     HStack(spacing: 8) {
@@ -346,7 +457,7 @@ struct Inspector: View {
                 }
                 Text("B split · C cut · Cmd-C/X/V clipboard · N snap · F fit. Snap targets: playhead, clip edges, cuts, clicks.")
                     .font(AppType.caption).foregroundStyle(Tok.text2)
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 Row(label: "Cuts") {
                     LButton(title: "Cut 1s at playhead", icon: "scissors", kind: .quiet) { m.cutAtPlayhead() }
@@ -364,7 +475,7 @@ struct Inspector: View {
                         }
                     }
                 }
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 Row(label: "Video clips") {
                     LButton(title: "Import…", icon: "film", kind: .quiet) { m.importClips() }
@@ -384,7 +495,7 @@ struct Inspector: View {
                         }
                     }
                 }
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 Row(label: "Manual taps") {
                     LButton(title: "Tap at playhead", icon: "cursorarrow.click", kind: .quiet) { m.addTapAtPlayhead() }
@@ -407,107 +518,7 @@ struct Inspector: View {
                         }
                     }
                 }
-            }.card()
-        }
-    }
-
-    private var look: some View {
-        let m = model
-        return VStack(spacing: 24) {
-            VStack(spacing: 0) {
-                if m.session.webcam != nil {
-                    ToggleRow(label: "Show face cam", on: Binding(get: { m.timeline.webcam != nil }, set: { m.setWebcam($0) }))
-                }
-                Row(label: "Canvas") { LDropdown(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, Self.canvasIcon($0)) }).frame(width: 130) }
-                SliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
-                ToggleRow(label: "Independent padding",
-                          on: Binding(get: { m.timeline.style.paddingInsets != nil },
-                                      set: { enabled in
-                                          m.edit { $0.style.paddingInsets = enabled
-                                              ? EdgeInsetsN(all: $0.style.padding) : nil }
-                                      }))
-                if m.timeline.style.paddingInsets == nil {
-                    SliderRow(label: "Padding", v: m.bind(\.style.padding), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
-                } else {
-                    SliderRow(label: "Top", v: paddingEdge(\.top), range: 0...0.2,
-                              fmt: { "\(Int($0 * 100))%" })
-                    SliderRow(label: "Right", v: paddingEdge(\.right), range: 0...0.2,
-                              fmt: { "\(Int($0 * 100))%" })
-                    SliderRow(label: "Bottom", v: paddingEdge(\.bottom), range: 0...0.2,
-                              fmt: { "\(Int($0 * 100))%" })
-                    SliderRow(label: "Left", v: paddingEdge(\.left), range: 0...0.2,
-                              fmt: { "\(Int($0 * 100))%" })
-                }
-            }.card()
-            VStack(spacing: 0) {
-                Row(label: "Background") {
-                    LDropdown(sel: m.bind(\.style.background),
-                              options: (BackgroundKind.offered + (m.timeline.style.background == .dither ? [.dither] : []))
-                                .map { ($0, $0 == .dither ? "Legacy" : $0.rawValue.capitalized, backgroundIcon($0)) })
-                        .frame(width: 130)
-                }
-                if m.timeline.style.background != .wallpaper && m.timeline.style.background != .image {
-                    Row(label: "Palette") {
-                        LDropdown(sel: paletteName(m),
-                                  options: (DitherPalettes.all.map { ($0.0, $0.0, "circle.lefthalf.filled") }
-                                    + (DitherPalettes.all.contains { $0.1 == m.timeline.style.colors } ? [] : [("Custom", "Custom", "paintpalette")])) )
-                            .frame(width: 130)
-                    }
-                    Row(label: "Canvas color") {
-                        ColorPicker("Canvas color", selection: canvasColor(m, index: 0), supportsOpacity: false).labelsHidden()
-                    }
-                    if m.timeline.style.background != .solid {
-                        Row(label: "Pattern color") {
-                            ColorPicker("Pattern color", selection: canvasColor(m, index: 1), supportsOpacity: false).labelsHidden()
-                        }
-                    }
-                }
-                if m.timeline.style.background == .dither || m.timeline.style.background == .wave || m.timeline.style.background == .field {
-                    SliderRow(label: "Cell", v: m.bind(\.style.ditherCell), range: 2...24, fmt: { "\(Int($0)) pt" })
-                }
-                if m.timeline.style.background == .dither || m.timeline.style.background == .wave {
-                    SliderRow(label: "Ink", v: m.bind(\.style.ditherDensity), range: 0.15...0.9, fmt: { "\(Int($0 * 100))%" })
-                }
-                if m.timeline.style.background == .wallpaper {
-                    Row(label: "Source") {
-                        Text("This Mac").font(AppType.body).foregroundStyle(Tok.text2)
-                    }
-                }
-                if m.timeline.style.background == .image {
-                    PhotoBackgroundRow(model: m)
-                }
-                ToggleRow(label: "Blur behind zoom", on: m.bind(\.style.zoomBackgroundBlur))
-                if m.timeline.style.zoomBackgroundBlur {
-                    Text("Softens only the background. Screen text and cursor stay sharp.")
-                        .font(AppType.caption).foregroundStyle(Tok.text2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }.card()
-            VStack(spacing: 0) {
-                SliderRow(label: "Radius", v: m.bind(\.style.cornerRadius), range: 0...40, fmt: { "\(Int($0))" })
-                ToggleRow(label: "Independent corners",
-                          on: Binding(get: { m.timeline.style.cornerRadii != nil },
-                                      set: { enabled in
-                                          m.edit { $0.style.cornerRadii = enabled
-                                              ? CornerRadii(all: $0.style.cornerRadius) : nil }
-                                      }))
-                if m.timeline.style.cornerRadii != nil {
-                    SliderRow(label: "Top left", v: radiusCorner(\.tl), range: 0...40, fmt: { "\(Int($0))" })
-                    SliderRow(label: "Top right", v: radiusCorner(\.tr), range: 0...40, fmt: { "\(Int($0))" })
-                    SliderRow(label: "Bottom right", v: radiusCorner(\.br), range: 0...40, fmt: { "\(Int($0))" })
-                    SliderRow(label: "Bottom left", v: radiusCorner(\.bl), range: 0...40, fmt: { "\(Int($0))" })
-                }
-                SliderRow(label: "Shadow", v: m.bind(\.style.shadow), range: 0...1)
-                ToggleRow(label: "Inner border", on: m.bind(\.style.innerBorder))
-            }.card()
-            VStack(alignment: .leading, spacing: 12) {
-                HStack { Text("Looks").font(AppType.title); Spacer() }
-                ForEach(presets) { p in LButton(title: p.name, kind: .quiet) { m.apply(p) } }
-                HStack(spacing: 8) {
-                    TextField("Name", text: $newName).textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 32).background(RoundedRectangle(cornerRadius: 8).fill(Tok.well))
-                    LButton(title: "Save", kind: .secondary, height: 32) { if !newName.isEmpty { m.savePreset(newName); presets = EditorModel.loadPresets(); newName = "" } }
-                }
-            }.card()
+            }.card(padding: 16)
         }
     }
 
@@ -551,7 +562,8 @@ struct Inspector: View {
         }, set: { color in
             guard let c = NSColor(color).usingColorSpace(.sRGB) else { return }
             m.edit(coalesce: true) { timeline in
-                timeline.cursor.clickColor = RGBA(r: Float(c.redComponent), g: Float(c.greenComponent), b: Float(c.blueComponent))
+                // Preserve alpha so tint-off (transparent) survives the picker.
+                timeline.cursor.clickColor = RGBA(r: Float(c.redComponent), g: Float(c.greenComponent), b: Float(c.blueComponent), a: Float(c.alphaComponent))
             }
         })
     }
@@ -579,7 +591,7 @@ struct Inspector: View {
                 SliderRow(label: "Size", v: m.bind(\.cursor.size), range: 0.5...2.5)
                 SliderRow(label: "Smoothing", v: m.bind(\.cursor.smoothingSigma), range: 0...0.12, fmt: { "\(Int($0 * 1000)) ms" })
                 SliderRow(label: "Glide", v: m.bind(\.cursor.glide), range: 0...1)
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 ToggleRow(label: "Hide when idle", on: Binding(get: { m.timeline.cursor.idleHide != nil }, set: { v in m.edit { $0.cursor.idleHide = v ? 2.0 : nil } }))
                 ToggleRow(label: "Click ring", on: Binding(get: { m.timeline.cursor.clickRing != nil }, set: { v in m.edit { $0.cursor.clickRing = v ? 0.45 : nil } }))
@@ -591,7 +603,7 @@ struct Inspector: View {
                 SliderRow(label: "Click size", v: m.bind(\.cursor.clickSize), range: 0.5...2.0, fmt: { String(format: "%.1f×", $0) })
                 SliderRow(label: "Click intensity", v: m.bind(\.cursor.clickIntensity), range: 0...1.5, fmt: { String(format: "%.1f×", $0) })
                 Row(label: "Click color") {
-                    ColorPicker("", selection: clickColor(m), supportsOpacity: false).labelsHidden()
+                    ColorPicker("", selection: clickColor(m), supportsOpacity: true).labelsHidden()
                 }
                 SliderRow(label: "Click duration", v: m.bind(\.cursor.clickDuration), range: 0.2...0.9, fmt: { String(format: "%.2f s", $0) })
                 Text("Glass bloom is baked into the Metal renderer. SwiftUI Liquid Glass macOS 26 APIs cannot run inside that renderer, so editor UI only uses the material fallback.")
@@ -601,7 +613,7 @@ struct Inspector: View {
                 ToggleRow(label: "Loop position", on: Binding(get: { m.timeline.cursor.loop != nil }, set: { v in m.edit { $0.cursor.loop = v ? 1.2 : nil } }))
                 SliderRow(label: "Press scale", v: m.bind(\.cursor.pressScale), range: 0.7...1)
                 SliderRow(label: "Zoom comp.", v: m.bind(\.cursor.zoomCompensation), range: 0...1)
-            }.card()
+            }.card(padding: 16)
         }
     }
 
@@ -610,7 +622,7 @@ struct Inspector: View {
         // "Smoothness" 0...1 maps onto the spring omegas (lower omega = floatier)
         let smooth = Binding<Double>(get: { (14 - m.timeline.camera.omegaPan) / 11 },
                                      set: { s in m.edit(coalesce: true) { $0.camera.omegaPan = 14 - 11 * s; $0.camera.omegaZoom = 12 - 9 * s } })
-        return VStack(spacing: 24) {
+        return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
                 Row(label: "Preset") { LDropdown(sel: Binding(get: { m.timeline.camera.preset }, set: { v in m.edit { $0.camera.apply(preset: v) } }), options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "plus.magnifyingglass") }).frame(width: 130) }
@@ -620,7 +632,7 @@ struct Inspector: View {
                 ToggleRow(label: "Real-time upscale", on: m.bind(\.camera.upscaleEnabled))
                 SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.0...2.5, fmt: { String(format: "%.2f×", $0) })
                 SliderRow(label: "Smoothness", v: smooth, range: 0...1)
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 SliderRow(label: "Dead zone", v: m.bind(\.camera.deadZone), range: 0.1...0.45)
                 SliderRow(label: "Click weight", v: m.bind(\.camera.clickWeight), range: 1...8, fmt: { String(format: "%.1f×", $0) })
@@ -638,13 +650,13 @@ struct Inspector: View {
                 SliderRow(label: "Zoom hold", v: m.bind(\.camera.tail), range: 0.8...1.5,
                           fmt: { String(format: "%.1f s", $0) })
                 ToggleRow(label: "Focus debug", on: Binding(get: { m.zoomDebug }, set: { m.zoomDebug = $0 }))
-            }.card()
+            }.card(padding: 16)
         }
     }
 
     private var layout: some View {
         let kind = currentLayout
-        return VStack(spacing: 24) {
+        return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 Row(label: "Layout") {
                     LDropdown(sel: layoutKind, options: LayoutKind.allCases.map {
@@ -667,19 +679,19 @@ struct Inspector: View {
                 Row(label: "Shape") {
                     LSegmented(sel: layoutBinding(kind, \.shape), items: [(.circle, "Circle"), (.roundRect, "Square")]).frame(width: 130)
                 }
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 ToggleRow(label: "Mirror", on: layoutBinding(kind, \.mirror))
                 ToggleRow(label: "Border", on: layoutBinding(kind, \.border))
                 ToggleRow(label: "Auto framing", on: layoutBinding(kind, \.autoFrame))
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 ToggleRow(label: "Avoid cursor", on: layoutBinding(kind, \.avoidCursor))
                 Row(label: "Behind face") {
                     LSegmented(sel: layoutBinding(kind, \.behindFace), items: [(.move, "Move"), (.hide, "Hide"), (.fade, "Fade")]).frame(width: 170)
                 }
                 ToggleRow(label: "Hide on silence", on: layoutBinding(kind, \.hideOnSilence))
-            }.card()
+            }.card(padding: 16)
         }
     }
 
@@ -697,7 +709,7 @@ struct Inspector: View {
 
     private var captions: some View {
         let m = model
-        return VStack(spacing: 24) {
+        return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Captions", on: m.bind(\.captions.enabled))
                 Row(label: "Font") {
@@ -726,12 +738,12 @@ struct Inspector: View {
                             .accessibilityLabel("Caption language")
                     }
                 }
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 SliderRow(label: "Size", v: m.bind(\.captions.style.size), range: 0.02...0.08, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Lines", v: maxLines, range: 1...3, fmt: { "\(Int($0))" })
                 ToggleRow(label: "Word highlight", on: m.bind(\.captions.style.wordHighlight))
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 Row(label: "Manual titles") {
                     LButton(title: "Add title", icon: "textformat", kind: .quiet) { m.addManualTitle() }
@@ -750,7 +762,7 @@ struct Inspector: View {
                         }
                     }
                 }
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 Row(label: "Spotlights") {
                     LButton(title: "Add highlight", icon: "highlighter", kind: .quiet) { m.addManualHighlight() }
@@ -768,7 +780,7 @@ struct Inspector: View {
                         }
                     }
                 }
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 Row(label: "Magnifier") {
                     LButton(title: "Add loupe", icon: "plus.magnifyingglass", kind: .quiet) { m.addLoupe() }
@@ -796,7 +808,7 @@ struct Inspector: View {
                             }))
                     }
                 }
-            }.card()
+            }.card(padding: 16)
             VStack(alignment: .leading, spacing: Space.s2) {
                 HStack(spacing: Space.s2) {
                     Text("Transcript").font(AppType.title).foregroundStyle(Tok.text)
@@ -825,7 +837,7 @@ struct Inspector: View {
                         }
                     }
                 }
-            }.card()
+            }.card(padding: 16)
             TranscriptTab(model: model)
         }
     }
@@ -833,7 +845,7 @@ struct Inspector: View {
     private var privacy: some View {
         let m = model
         let detected = m.timeline.derived?.autoMasks.count ?? 0
-        return VStack(spacing: 24) {
+        return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Detect sensitive data", on: m.bind(\.overlays.privacy.autoDetect))
                 Row(label: "Mask style") {
@@ -857,7 +869,7 @@ struct Inspector: View {
                         .font(AppType.caption).foregroundStyle(Tok.text2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            }.card()
+            }.card(padding: 16)
             VStack(alignment: .leading, spacing: Space.s2) {
                 HStack(spacing: Space.s2) {
                     Text("Manual masks").font(AppType.title).foregroundStyle(Tok.text)
@@ -894,12 +906,12 @@ struct Inspector: View {
                         }
                     }
                 }
-            }.card()
+            }.card(padding: 16)
             VStack(alignment: .leading, spacing: Space.s2) {
                 Text("Automatic detection").font(AppType.title).foregroundStyle(Tok.text)
                 Text(detected == 0 ? "No sensitive text found." : "\(detected) detected mask\(detected == 1 ? "" : "s") follow content through zooms.")
                     .font(AppType.caption).foregroundStyle(Tok.text2)
-            }.card()
+            }.card(padding: 16)
         }
     }
 
@@ -936,7 +948,7 @@ struct Inspector: View {
 
     private var audio: some View {
         let m = model
-        return VStack(spacing: 24) {
+        return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 Row(label: "Studio mode") {
                     LDropdown(sel: m.bind(\.audio.studioMode),
@@ -1006,7 +1018,7 @@ struct Inspector: View {
                               fmt: { String(format: "%+.0f dB", $0) })
                 }
                 ToggleRow(label: "Speed up idle spans", on: m.bind(\.audio.speedRampsAuto))
-            }.card()
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 MusicPicker(model: m)
                 Row(label: "Voice-over") {
@@ -1044,13 +1056,13 @@ struct Inspector: View {
                             .foregroundStyle(stats.peak > -1 ? Tok.statusBad : Tok.text2)
                     }
                 }
-            }.card()
+            }.card(padding: 16)
         }
     }
 
     private var webcam: some View {
         let m = model
-        return VStack(spacing: 24) {
+        return VStack(spacing: 16) {
             VStack(spacing: 0) {
             Row(label: "Corner") { LDropdown(sel: layoutBinding(.cameraOverlay, \.corner),
                 options: WebcamLayout.Corner.allCases.map { ($0, $0.rawValue, "rectangle.inset.filled") }).frame(width: 130) }
@@ -1062,7 +1074,7 @@ struct Inspector: View {
             ToggleRow(label: "Auto framing", on: layoutBinding(.cameraOverlay, \.autoFrame))
             SliderRow(label: "Face zoom", v: Binding(get: { m.timeline.webcam?.faceZoom ?? 0.6 }, set: { v in m.edit(coalesce: true) { $0.webcam?.faceZoom = v } }), range: 0...1)
             SliderRow(label: "Face size", v: Binding(get: { m.timeline.webcam?.faceFill ?? 0.31 }, set: { v in m.edit(coalesce: true) { $0.webcam?.faceFill = v } }), range: 0.2...0.5)
-        }.card()
+        }.card(padding: 16)
         VStack(spacing: 0) {
             Row(label: "Video polish") {
                 LSegmented(sel: Binding(get: { m.timeline.webcam?.enhancement ?? .natural },
@@ -1100,7 +1112,7 @@ struct Inspector: View {
             }
             Text("4K output increases pixel dimensions; it cannot restore detail the camera never captured.")
                 .font(AppType.caption).foregroundStyle(Tok.text2).frame(maxWidth: .infinity, alignment: .leading)
-            }.card()
+            }.card(padding: 16)
         }
     }
 
@@ -1113,10 +1125,10 @@ extension Inspector.Tab {
         Inspector.Tab.allCases.filter { $0 != Inspector.Tab.webcam || model.timeline.webcam != nil }
     }
 
-    static var primaryTabs: [Inspector.Tab] { [Inspector.Tab.look, Inspector.Tab.camera, Inspector.Tab.cursor, Inspector.Tab.captions, Inspector.Tab.audio] }
+    static var primaryTabs: [Inspector.Tab] { [Inspector.Tab.camera, Inspector.Tab.cursor, Inspector.Tab.captions, Inspector.Tab.audio] }
 
     var isPrimary: Bool {
-        switch self { case Inspector.Tab.look, Inspector.Tab.camera, Inspector.Tab.cursor, Inspector.Tab.captions, Inspector.Tab.audio: return true; default: return false }
+        switch self { case Inspector.Tab.camera, Inspector.Tab.cursor, Inspector.Tab.captions, Inspector.Tab.audio: return true; default: return false }
     }
 
     @MainActor static func moreTabs(for model: EditorModel) -> [Inspector.Tab] {
