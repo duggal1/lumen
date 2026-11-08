@@ -478,9 +478,20 @@ public struct TimeMap: Codable, Equatable, Sendable {
     public func speed(atOutput t: Double) -> Double { (source(atOutput: t + 0.01) - source(atOutput: t)) / 0.01 }
 }
 
+/// A logical split boundary inside the recording. A seam changes nothing in
+/// the output: it only lets the magnetic lane show, select and join two halves
+/// of one continuous source range. Stored in SOURCE seconds.
+public struct SplitSeam: Codable, Identifiable, Equatable, Sendable {
+    public var id: UUID
+    public var t: Double
+    public init(id: UUID = UUID(), t: Double) { self.id = id; self.t = t }
+}
+
 public struct Timeline: Sendable, Codable, Equatable {
     public var schemaVersion = 4
     public var timeMap: TimeMap
+    /// Logical split points in the recording, source seconds. No output effect.
+    public var seams: [SplitSeam] = []
     public var zoom: [ZoomSegment] = []
     public var style = Style()
     public var cursor = CursorStyle()
@@ -495,7 +506,7 @@ public struct Timeline: Sendable, Codable, Equatable {
     public var clips: [TimelineClip] = []
     public var derived: DerivedTracks?
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, timeMap, zoom, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips
+        case schemaVersion, timeMap, zoom, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips, seams
     }
     public init(duration: Double) { timeMap = TimeMap(sourceDuration: duration) }
     public init(from d: Decoder) throws {
@@ -503,6 +514,7 @@ public struct Timeline: Sendable, Codable, Equatable {
         timeMap = try c.decode(TimeMap.self, forKey: .timeMap)
         let version = c.opt(.schemaVersion, 1)
         schemaVersion = 4
+        seams = c.opt(.seams, seams)
         zoom = c.opt(.zoom, zoom)
         if version < 2 { for i in zoom.indices { zoom[i].start = timeMap.source(atOutput: zoom[i].start); zoom[i].end = timeMap.source(atOutput: zoom[i].end) } }
         if version < 4 {
