@@ -273,7 +273,8 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     /// Auto loudness. Off makes `outputGainDb` the only master gain.
     public var normalize = true
     public var outputGainDb = 0.0
-    public var targetLUFS = -14.0
+    public var targetLUFSOverride: Double?
+    public var targetLUFS: Double { targetLUFSOverride ?? micMode.targetLUFS }
     public var studioMode: StudioMode = .standard
     public var clickSounds = true, whooshes = true, keySounds = false
     public var clickTone: ClickSound = .mouse
@@ -286,12 +287,20 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var speedRampMinIdle = 4.0, speedRampMaxSpeed = 8.0
     public var lanes: [AudioLane] = []
     private enum LegacyKeys: String, CodingKey { case studioAmount }
+    private enum LegacyLUFSKeys: String, CodingKey { case targetLUFS }
     enum CodingKeys: String, CodingKey {
-        case outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFS, clickSounds, whooshes, keySounds, clickTone, sfxGainDb, musicPath
+        case outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFSOverride, clickSounds, whooshes, keySounds, clickTone, sfxGainDb, musicPath
         case dereverb, normalize, studioMode
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
     public init() {}
+    public static func migrateLUFS(override: Double?, legacy: Double?, mode: MicMode) -> Double? {
+        if let o = override { return o }
+        guard let l = legacy else { return nil }
+        let oldDefault: Double = mode == .loud ? -12 : -16
+        if abs(l - oldDefault) < 1e-9 || abs(l - mode.targetLUFS) < 1e-9 { return nil }
+        return l
+    }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         outputGainDb = c.opt(.outputGainDb, outputGainDb)
@@ -305,7 +314,8 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         micGainDb = c.opt(.micGainDb, micGainDb)
         dereverb = c.opt(.dereverb, dereverb); normalize = c.opt(.normalize, normalize)
         systemGainDb = c.opt(.systemGainDb, systemGainDb); declick = c.opt(.declick, declick); declickDepthDb = c.opt(.declickDepthDb, declickDepthDb)
-        targetLUFS = c.opt(.targetLUFS, targetLUFS); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = c.opt(.whooshes, whooshes)
+        let legacyLUFS = (try? d.container(keyedBy: LegacyLUFSKeys.self).decodeIfPresent(Double.self, forKey: .targetLUFS)) ?? nil
+        targetLUFSOverride = AudioPlan.migrateLUFS(override: (try? c.decode(Double.self, forKey: .targetLUFSOverride)), legacy: legacyLUFS, mode: micMode); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = c.opt(.whooshes, whooshes)
         studioMode = c.opt(.studioMode, studioMode)
         keySounds = c.opt(.keySounds, keySounds); clickTone = c.opt(.clickTone, clickTone); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)
         musicPath = try? c.decodeIfPresent(String.self, forKey: .musicPath)
@@ -459,7 +469,7 @@ public struct TimeMap: Codable, Equatable, Sendable {
 }
 
 public struct Timeline: Sendable, Codable, Equatable {
-    public var schemaVersion = 3
+    public var schemaVersion = 4
     public var timeMap: TimeMap
     public var zoom: [ZoomSegment] = []
     public var style = Style()
@@ -482,9 +492,12 @@ public struct Timeline: Sendable, Codable, Equatable {
         let c = try d.container(keyedBy: CodingKeys.self)
         timeMap = try c.decode(TimeMap.self, forKey: .timeMap)
         let version = c.opt(.schemaVersion, 1)
-        schemaVersion = 3
+        schemaVersion = 4
         zoom = c.opt(.zoom, zoom)
         if version < 2 { for i in zoom.indices { zoom[i].start = timeMap.source(atOutput: zoom[i].start); zoom[i].end = timeMap.source(atOutput: zoom[i].end) } }
+        if version < 4 {
+            // v3 -> v4: legacy Loudness key targetLUFS is handled inside AudioPlan decode.
+        }
          style = c.opt(.style, style); cursor = c.opt(.cursor, cursor); camera = c.opt(.camera, camera)
         audio = c.opt(.audio, audio); webcam = try? c.decodeIfPresent(WebcamLayout.self, forKey: .webcam)
         overlays = c.opt(.overlays, overlays); layouts = c.opt(.layouts, layouts); layoutSettings = c.opt(.layoutSettings, layoutSettings)

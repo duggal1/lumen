@@ -746,7 +746,9 @@ struct Inspector: View {
                         .frame(width: 138)
                 }
                 Row(label: "Loudness") {
-                    SliderRow(label: "Target", v: m.bind(\.audio.targetLUFS), range: -18...(-8),
+                    SliderRow(label: "Target", v: Binding(
+                        get: { m.timeline.audio.targetLUFS },
+                        set: { v in m.edit(coalesce: true) { tl in let mode = tl.audio.micMode; tl.audio.targetLUFSOverride = abs(v - mode.targetLUFS) < 1e-9 ? nil : v } }), range: -18...(-8),
                               fmt: { String(format: "%.0f LUFS", $0) })
                     .frame(width: 138)
                 }
