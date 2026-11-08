@@ -617,11 +617,26 @@ public struct AXFrame: Codable, Sendable {
     public var y: Double
     public var w: Double
     public var h: Double
-    public init(x: Double, y: Double, w: Double, h: Double) {
+    /// Secure text field (password/CC) or a field whose title names one.
+    public var secure: Bool
+    /// Best-effort AX title/description so labels like "Password" mask too.
+    public var label: String?
+    public init(x: Double, y: Double, w: Double, h: Double, secure: Bool = false, label: String? = nil) {
         self.x = x
         self.y = y
         self.w = w
         self.h = h
+        self.secure = secure
+        self.label = label
+    }
+    enum CodingKeys: String, CodingKey { case x, y, w, h, secure, label }
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        x = (try? c.decodeIfPresent(Double.self, forKey: .x)) ?? 0
+        y = (try? c.decodeIfPresent(Double.self, forKey: .y)) ?? 0
+        w = (try? c.decodeIfPresent(Double.self, forKey: .w)) ?? 0
+        h = (try? c.decodeIfPresent(Double.self, forKey: .h)) ?? 0
+        secure = c.opt(.secure, false); label = (try? c.decodeIfPresent(String.self, forKey: .label)) ?? nil
     }
 }
 
