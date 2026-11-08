@@ -161,19 +161,38 @@ public struct LayoutSet: Codable, Equatable, Sendable {
     }
 }
 
-public enum CaptionAnimation: String, Codable, CaseIterable, Sendable { case none, fade, pop, slide }
+public enum CaptionAnimation: String, Codable, CaseIterable, Sendable { case none, fade, blur, pop, slide }
+public enum CaptionFont: String, Codable, CaseIterable, Sendable {
+    case sfPro, newYork, menlo
+    public var title: String { switch self { case .sfPro: "SF Pro"; case .newYork: "New York"; case .menlo: "SF Mono" } }
+    public var postScript: String { switch self { case .sfPro: "HelveticaNeue"; case .newYork: "New York"; case .menlo: "Menlo" } }
+    public var postScriptBold: String { switch self { case .sfPro: "HelveticaNeue-Bold"; case .newYork: "New York Bold"; case .menlo: "Menlo-Bold" } }
+}
 public enum CaptionPosition: String, Codable, CaseIterable, Sendable { case auto, bottom, top }
 public struct CaptionStyle: Codable, Equatable, Sendable {
     public var size = 0.060                                         // fraction of canvas height
     public var bold = true
     public var color = RGBA(0xFFFFFF)
-    public var pill: RGBA? = RGBA(0xFFFFFF, a: 0.20)
+    /// Dark card so white text keeps 4.5:1+ contrast on bright pages;
+    /// a light pill on a white page fails regardless of blur.
+    public var pill: RGBA? = RGBA(0x0A0A0A, a: 0.62)
     public var outline = false
-    public var animation: CaptionAnimation = .pop
+    public var animation: CaptionAnimation = .blur
     public var wordHighlight = true
-    public var highlightColor = RGBA(0xF97316)
+    /// Spoken word is full white; the rest sit at ~60% white (see TextOverlay).
+    public var highlightColor = RGBA(0xFFFFFF)
     public var position: CaptionPosition = .auto
+    public var font: CaptionFont = .sfPro
+    enum CodingKeys: String, CodingKey { case size, bold, color, pill, outline, animation, wordHighlight, highlightColor, position, font }
     public init() {}
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        size = c.opt(.size, size); bold = c.opt(.bold, bold); color = c.opt(.color, color)
+        pill = c.contains(.pill) ? ((try? c.decodeIfPresent(RGBA.self, forKey: .pill)) ?? nil) : pill
+        outline = c.opt(.outline, outline); animation = c.opt(.animation, animation)
+        wordHighlight = c.opt(.wordHighlight, wordHighlight); highlightColor = c.opt(.highlightColor, highlightColor)
+        position = c.opt(.position, position); font = c.opt(.font, font)
+    }
 }
 public struct CaptionPlan: Codable, Equatable, Sendable {
     public var enabled = true
