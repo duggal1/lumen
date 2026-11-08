@@ -1,0 +1,5 @@
+#!/bin/sh
+# Pre-push gate: must be descendant of origin/main, then make test.
+set -e
+git merge-base --is-ancestor origin/main HEAD || { echo "pre-push: not descendant of origin/main (pull/rebase first)" >&2; exit 1; }
+make test
