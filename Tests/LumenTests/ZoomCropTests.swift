@@ -1,6 +1,7 @@
 import Testing
 @testable import LumenProject
 @testable import LumenDirector
+import LumenCore
 
 /// Zoom-crop oracle: the clicked AX control + 8% context must stay inside the
 /// camera viewport at the click time (screenshot at 0:25 cut text on the right).
@@ -11,7 +12,7 @@ import Testing
     tl.camera.minScale = 1.1
     tl.camera.maxScale = 3.5
     tl.audio.speedRampsAuto = false
-    let ax = AXFrame(x: 1400, y: 400, w: 300, h: 80, isPasswordField: false) // right-edge control
+    let ax = AXFrame(x: 1400, y: 400, w: 300, h: 80) // right-edge control
     let events = [InputEvent(t: 2.0, kind: .down, x: 1550, y: 440, button: 0, axFrameIndex: 1)]
     tl = try Director.derive(tl, input: DirectorInput(events: events, source: src, ax: [ax]), revision: 1)
     let f = tl.evaluate(at: 2.0)

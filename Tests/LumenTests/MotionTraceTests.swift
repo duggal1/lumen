@@ -14,7 +14,7 @@ private func scriptedTimeline() throws -> Timeline {
     tl.style.padding = 0
     return try Director.derive(tl, input: DirectorInput(
         events: (0..<8).map { InputEvent(t: Double($0) + 0.5, kind: .down, x: 400 + Float($0 * 150), y: 540, button: 0) },
-        source: src, ax: [AXFrame(x: 400, y: 440, w: 200, h: 100, isPasswordField: false)],
+        source: src, ax: [AXFrame(x: 400, y: 440, w: 200, h: 100)],
         transcript: Transcript(words: [WordToken(text: "hello", start: 2.0, end: 2.3)], locale: "en")
     ), revision: 1)
 }
