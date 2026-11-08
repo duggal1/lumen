@@ -266,9 +266,11 @@ struct Row<C: View>: View {
     var body: some View {
         HStack(spacing: 12) {
             if let icon { Image(systemName: icon).font(.system(size: 14)).foregroundStyle(Tok.text2).frame(width: 20) }
-            Text(label).font(AppType.label).foregroundStyle(Tok.text).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+            Text(label).font(AppType.label).foregroundStyle(Tok.text).lineLimit(1).truncationMode(.tail)
+                .layoutPriority(0)
             Spacer(minLength: 8)
             control
+                .layoutPriority(1)
         }.frame(minHeight: 48)
     }
 }
@@ -276,8 +278,8 @@ struct SliderRow: View {
     let label: String; @Binding var v: Double; let range: ClosedRange<Double>; var fmt: (Double) -> String = { String(format: "%.2f", $0) }
     var body: some View {
         Row(label: label) {
-            HStack(spacing: 8) { LSlider(value: $v, range: range, width: 100)
-                Text(fmt(v)).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2).frame(width: 40, alignment: .trailing) }
+            HStack(spacing: 8) { LSlider(value: $v, range: range, width: 96)
+                Text(fmt(v)).font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2).lineLimit(1).frame(width: 40, alignment: .trailing) }
         }
     }
 }
@@ -386,20 +388,20 @@ struct UndoToast: View {
     }
 }
 
-// MARK: Page bar (52 tall, one primary action, title baseline at y = 60)
+// MARK: Page bar (60 tall, centered: toggle at top 16 centers with title; title starts clear of toggle at leading 108)
 
 struct PageBar<Action: View>: View {
     let title: String
     @ViewBuilder var action: Action
     var body: some View {
-        HStack(alignment: .bottom, spacing: Space.s4) {
+        HStack(alignment: .center, spacing: Space.s4) {
             PageTitle(text: title)
             Spacer(minLength: Space.s4)
             action
         }
-        .padding(.horizontal, Metrics.pagePad)
-        .padding(.bottom, 8)
-        .frame(height: Metrics.pageBar + 8, alignment: .bottom)
+        .padding(.leading, 108)
+        .padding(.trailing, Metrics.pagePad)
+        .frame(height: Metrics.pageBar + 8, alignment: .center)
     }
 }
 
