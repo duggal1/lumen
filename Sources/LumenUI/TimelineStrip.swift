@@ -48,7 +48,15 @@ struct TimelineStrip: View {
             .overlay { pendingLayer(vp) }
             .overlay { seamLayer(vp) }
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onChanged { change($0, w) }.onEnded { _ in drag = nil })
+            .gesture(DragGesture(minimumDistance: 0).onChanged { change($0, w) }.onEnded { _ in
+                // Live cut: releasing a handle/body drag cuts immediately (one
+                // undo step). Esc before release discards instead.
+                if let k = drag?.kind,
+                   k == .pendingStart || k == .pendingEnd || k == .pendingBody {
+                    model.commitPendingCut()
+                }
+                drag = nil
+            })
             .simultaneousGesture(MagnifyGesture().onChanged { value in
                 zoomBy(1 + CGFloat(value.magnification - 1) * 2, anchorX: value.startLocation.x, width: w)
             })
