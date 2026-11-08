@@ -3,6 +3,7 @@ import ArgumentParser
 import Metal
 import CoreGraphics
 import ImageIO
+import os
 import LumenCore
 import LumenProject
 import LumenDirector
@@ -16,7 +17,30 @@ import LumenSpeech
 @main
 struct LumenCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "lumen-cli", abstract: "Headless Lumen",
-        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self, Bench.self, Golden.self, AudioCheckCmd.self, GpuInfo.self])
+        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self, Bench.self, Golden.self, AudioCheckCmd.self, GpuInfo.self, TapMove.self])
+}
+
+struct TapMove: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "tap", abstract: "Tap commands")
+    @Argument var action: String
+    @Argument var project: String
+    @Option var id: String = ""
+    @Option var x: Double = 0
+    @Option var y: Double = 0
+    @Option var t: Double?
+    func run() async throws {
+        guard action == "move" else { throw ValidationError("tap move <project> --id <uuid> --x --y [--t]") }
+        guard let uuid = UUID(uuidString: id) else { throw ValidationError("tap move needs --id <uuid>") }
+        let signpost = OSSignposter(subsystem: "com.lumen.studio", category: "moveTap")
+        let interval = signpost.beginInterval("moveTap")
+        defer { signpost.endInterval("moveTap", interval) }
+        let (s, tl0) = try await openProject(project)
+        var tl = tl0
+        let ctx = ReduceContext(playhead: 0, selection: uuid, duration: tl.compositionDuration)
+        _ = try reduce(&tl, .moveTap(tap: uuid, x: x, y: y, atSource: t), ctx: ctx)
+        try s.bundle.save(ProjectFile(meta: s.meta, timeline: tl))
+        print("moved \(uuid.uuidString)")
+    }
 }
 
 struct GpuInfo: AsyncParsableCommand {
