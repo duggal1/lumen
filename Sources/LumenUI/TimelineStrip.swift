@@ -32,52 +32,20 @@ struct TimelineStrip: View {
     struct Marker { var t: Double; var kind: String; var isTap: Bool }
 
     var body: some View {
-        GeometryReader { g in
-            let w = g.size.width
-            let vp = viewport(width: w)
-            VStack(spacing: 0) {
-                rulerLane(vp)
-                clipLane(vp)
-                zoomLane(vp)
-                eventsLane(vp)
-                audioLane(vp)
-            }
-            .overlay { threadLayer(vp) }
-            .overlay { GhostLine(vp: vp, col: drag == nil ? scrubCol : nil) }
-            .overlay { PlayheadLine(model: model, vp: vp) }
-            .overlay { pendingLayer(vp) }
-            .overlay { seamLayer(vp) }
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onChanged { change($0, w) }.onEnded { _ in
-                // Live cut: releasing a handle/body drag cuts immediately (one
-                // undo step). Esc before release discards instead.
-                if let k = drag?.kind,
-                   k == .pendingStart || k == .pendingEnd || k == .pendingBody {
-                    model.commitPendingCut()
-                }
-                drag = nil
-            })
-            .simultaneousGesture(MagnifyGesture().onChanged { value in
-                zoomBy(1 + CGFloat(value.magnification - 1) * 2, anchorX: value.startLocation.x, width: w)
-            })
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let p): setHover(at: p, width: w)
-                case .ended:
-                    hoveredZoom = nil; hoveredCol = nil; hoveredClip = nil; hoveredCut = nil; scrubCol = nil
-                    NSCursor.arrow.set()
-                }
-            }
-            .background(TimelineScrollCatcher(
-                onScroll: { dx, dy, command in scroll(dx: dx, dy: dy, command: command, width: w) },
-                onMagnify: { delta, x in zoomBy(1 + delta * 2, anchorX: x, width: w) }))
-            .onChange(of: model.playhead) { _, t in follow(t, width: w) }
+        GeometryReader { geometry in
+            timelineContent(width: geometry.size.width)
+        }
+        .frame(height: Lanes.total)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Tok.surface))
+    }
+
+    private func timelineContent(width: CGFloat) -> some View {
+        let vp = viewport(width: width)
+        return timelineInteraction(width: width, vp: vp)
+            .onChange(of: model.playhead) { _, t in follow(t, width: width) }
             .onChange(of: model.timelineFitRequest) { _, _ in
-                // Fit-all: show the whole take at the minimum zoom.
-                let dur = max(model.timeline.timeMap.outputDuration, 0.001)
-                zoom = minZoom(width: w)
+                zoom = minZoom(width: width)
                 origin = 0
-                _ = dur
             }
             .onKeyPress("[") { stepClick(direction: -1); return .handled }
             .onKeyPress("]") { stepClick(direction: 1); return .handled }
@@ -87,9 +55,58 @@ struct TimelineStrip: View {
             .accessibilityLabel("Timeline")
             .accessibilityHint("Scroll sideways to pan. Pinch or hold Command and scroll to zoom. Drag a zoom segment to move or resize it.")
             .accessibilityValue(eventsSummary())
+    }
+
+    private func timelineInteraction(width: CGFloat, vp: Viewport) -> some View {
+        timelineLayers(vp)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { change($0, width) }
+                .onEnded { _ in
+                    if let kind = drag?.kind,
+                       kind == .pendingStart || kind == .pendingEnd || kind == .pendingBody {
+                        model.commitPendingCut()
+                    }
+                    drag = nil
+                })
+            .simultaneousGesture(MagnifyGesture().onChanged { value in
+                zoomBy(1 + CGFloat(value.magnification - 1) * 2,
+                       anchorX: value.startLocation.x, width: width)
+            })
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let point): setHover(at: point, width: width)
+                case .ended:
+                    hoveredZoom = nil
+                    hoveredCol = nil
+                    hoveredClip = nil
+                    hoveredCut = nil
+                    scrubCol = nil
+                    NSCursor.arrow.set()
+                }
+            }
+            .background(TimelineScrollCatcher(
+                onScroll: { dx, dy, command in
+                    scroll(dx: dx, dy: dy, command: command, width: width)
+                },
+                onMagnify: { delta, x in
+                    zoomBy(1 + delta * 2, anchorX: x, width: width)
+                }))
+    }
+
+    private func timelineLayers(_ vp: Viewport) -> some View {
+        VStack(spacing: 0) {
+            rulerLane(vp)
+            clipLane(vp)
+            zoomLane(vp)
+            eventsLane(vp)
+            audioLane(vp)
         }
-        .frame(height: Lanes.total)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Tok.surface))
+        .overlay { threadLayer(vp) }
+        .overlay { GhostLine(vp: vp, col: drag == nil ? scrubCol : nil) }
+        .overlay { PlayheadLine(model: model, vp: vp) }
+        .overlay { pendingLayer(vp) }
+        .overlay { seamLayer(vp) }
     }
 
     // MARK: - Viewport
