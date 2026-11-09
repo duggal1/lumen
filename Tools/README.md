@@ -2,34 +2,33 @@
 
 Two mandatory tools for `goal.yaml` runs, plus task-specific helpers on demand.
 
-## `Tools/budget`
+## `Tools/pulse`
 
-Owns `.proof/budget.json` (never hand-edit). Run this **first every turn**.
+Owns `.proof/pulse.json` (never hand-edit). **Not a kill switch** — it forces periodic re-orientation so long runs do not drift or forget. Run this **first every turn**.
 
 ```sh
-Tools/budget init                       # fresh run: record start (date -u), zero counters, status=active
-Tools/budget tick                       # every turn: turn+=1, print 'turns X/Y, minutes A/B', STOP+exit 1 over limit
-Tools/budget approach "reason"          # log one abandoned approach; STOP+exit 1 when count reaches max
-Tools/budget status                     # print .proof/budget.json
-Tools/budget stop done|blocked|budget   # mark terminal status (call before final STATUS report)
+Tools/pulse init                       # fresh run: new run id + start time (date -u)
+Tools/pulse tick                       # every turn: turn+=1, print 'turn N, minutes M'; CHECKPOINT every 20 turns / 30 min. Never exits non-zero.
+Tools/pulse approach "reason"          # log one abandoned approach; never stops
+Tools/pulse status                     # print .proof/pulse.json
 ```
 
-- Limits frozen at `init`: `GOAL_MAX_TURNS` (60), `GOAL_MAX_MINUTES` (90), `GOAL_MAX_APPROACHES` (3) — matching `goal.yaml`. Change defaults via env at `init` only.
+- There is **no hard budget stop** in v4. The only valid stops are DONE or BLOCKED. Hitting a checkpoint means re-read `criteria.md` + `progress.md`, write a 5-line status, and if the last 2 checkpoints show no criterion changed state, switch approach hard and continue. Same failure 3× means change approach, not stop.
 - Proof dir override: `GOAL_PROOF_DIR=.proof` (e.g. `/tmp/goal-dryrun` for dry-runs).
-- `status` is `active` until `stop` or a limit hits (`budget`). The `goal-continue` plugin only auto-continues `active` budgets.
-- Same-failure (3×) counts as one abandoned approach; two no-progress turns stop — the agent judges, `approach` records.
-- `init` resets the budget. For resume, do **not** re-init; the existing budget continues.
+- The `goal-continue` plugin only auto-continues goal sessions with `.proof/pulse.json` present and no terminal `STATUS:` yet.
+- `init` starts a fresh pulse. For resume, do **not** re-init; the existing pulse continues.
 
 Example:
 
 ```sh
-Tools/budget init          # once, on a fresh objective
-Tools/budget tick          # FIRST every turn
+Tools/pulse init          # once, on a fresh objective
+Tools/pulse tick          # FIRST every turn
 # ... one loop cycle ...
-echo "- turn 1: tried X / happened Y / next Z" >> .proof/progress.md   # LAST every turn
-Tools/budget approach "tried X, reason Y"   # when abandoning an approach
-Tools/budget stop done     # before the final STATUS: DONE report
+echo "- turn 1: did X / result Y / next Z" >> .proof/progress.md   # LAST every turn
+Tools/pulse approach "tried X, abandoned because Y"   # when abandoning an approach; continue
 ```
+
+`Tools/budget` was removed in v4. The old `.proof/budget.json` kill switch is gone; ignore any stale copy (new runs archive `.proof/` per `goal.yaml` run_start).
 
 ## `Tools/prove`
 
