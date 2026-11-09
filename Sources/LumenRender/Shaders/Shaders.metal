@@ -364,20 +364,35 @@ fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]],
         float a = ink * pow(1.0 - p, 1.2) * u.color.a * rectMask(in.px, u.content, u.cr);
         return float4(mix(float3(1.0), u.color.rgb, 0.25) * a + float3(0.15) * glow * pow(1.0 - p, 2.0) * u.color.a, a);
     } else if (u.mode == 0) {
-        // Ripple: map canvas px back to source px through the camera, then
-        // displace the sample by a sine whose amplitude decays with p.
+        // Liquid-glass ripple: the expanding front bends the video beneath it,
+        // then a soft specular crest catches the light. No hard-edged ring.
+        float2 toCenter = in.px - u.center;
+        float dist = length(toCenter);
+        float2 dir = dist > 1e-3 ? toCenter / dist : float2(0.0);
+        float front = max(r, 1.0);
+        // Lens band: widest at the front, decaying with progress.
+        float x = (dist - front) / max(front * 0.30, 1.0);
+        float band = exp(-x * x) * pow(1.0 - p, 1.1);
+        float inside = smoothstep(front * 1.05, 0.0, dist);
+        float pinch = inside * 0.045 * pow(1.0 - p, 1.4);
+        // Map canvas px back to source px through the camera.
         float2 view = u.srcSize / max(u.scale, 1.0);
         float2 n = (in.px - u.content.xy) / max(u.content.zw, 1.0);
+        float2 centerN = (u.center - u.content.xy) / max(u.content.zw, 1.0);
         float2 srcPx = u.cam - view * 0.5 + n * view;
-        float2 d2 = srcPx - (u.cam + (u.center - u.content.xy) / max(u.content.zw, 1.0) * view - view * 0.5);
-        float rr = length(d2);
-        float x = (rr - r / max(u.content.z / u.srcSize.x, 1e-3)) / max(r * 0.15, 1.0);
-        float2 dir = rr > 1e-3 ? d2 / rr : float2(0.0);
-        float2 disp = dir * (6.0 * exp(-x * x) * sin(6.2831853 * (rr - r) / max(24.0, r * 0.4)) * (1.0 - p));
-        float3 refracted = src.sample(linClamp, clamp((srcPx - disp) / u.srcSize, 0.0, 1.0), level(0.0)).rgb;
-        float crest = ring * (0.35 + 0.65 * max(u.color.a, 0.001));
-        float a = pow(1.0 - p, 1.2) * min(crest, 1.0) * rectMask(in.px, u.content, u.cr);
-        return float4(mix(refracted, u.color.rgb, step(0.05, u.color.a) * a * 0.35) * a + refracted * (1.0 - a) * 0.0, a);
+        float2 centerSrc = u.cam - view * 0.5 + centerN * view;
+        float srcPerCanvas = u.srcSize.x / max(u.content.z, 1.0);
+        float2 refractedPx = centerSrc + (srcPx - centerSrc) * (1.0 - pinch);
+        refractedPx += dir * (band * 13.0 * srcPerCanvas);
+        float3 refracted = src.sample(linClamp, clamp(refractedPx / u.srcSize, 0.0, 1.0), level(0.0)).rgb;
+        // Soft crest + glass bloom; tint is optional and never a flat fill.
+        float crest = exp(-pow((dist - front) / max(front * 0.11, 1.0), 2.0));
+        float bloom = smoothstep(front * 0.92, 0.0, dist) * 0.20;
+        float tintMix = clamp(u.color.a, 0.0, 1.0);
+        float3 glass = mix(refracted, float3(1.0), crest * 0.42);
+        glass = mix(glass, u.color.rgb, tintMix * crest * 0.35);
+        float a = clamp(crest * 0.72 + bloom, 0.0, 1.0) * pow(1.0 - p, 1.25) * rectMask(in.px, u.content, u.cr);
+        return float4(glass * a, a);
     }
     float a = ink * pow(1.0 - p, 1.5) * u.color.a * rectMask(in.px, u.content, u.cr);
     return float4(u.color.rgb * a, a);
@@ -468,10 +483,59 @@ fragment float4 resolveFS(VO in [[stage_in]], constant ResU &u [[buffer(0)]],
 
 // Premultiplied text sprite rasterized by CoreText on the CPU once per content/style.
 // The Metal pass is shared by the editor preview and offline export.
-struct TextSpriteU { float opacity; };
+struct TextSpriteU { float opacity; float blur; float pad0; float pad1; };
 fragment float4 textSpriteFS(VO in [[stage_in]], constant TextSpriteU &u [[buffer(0)]],
                             texture2d<float> image [[texture(0)]]) {
-    return image.sample(linClamp, in.q) * clamp(u.opacity, 0.0, 1.0);
+    float4 c = image.sample(linClamp, in.q);
+    float b = max(u.blur, 0.0);
+    if (b > 0.05) {
+        // Short blur-in only. Nine samples at the requested radius are enough
+        // at caption sizes and cheaper than a per-sprite mip chain.
+        float2 tx = b / float2(image.get_width(), image.get_height());
+        float4 sum = c * 0.227027;
+        sum += image.sample(linClamp, in.q + float2(tx.x, 0.0)) * 0.1945946;
+        sum += image.sample(linClamp, in.q - float2(tx.x, 0.0)) * 0.1945946;
+        sum += image.sample(linClamp, in.q + float2(0.0, tx.y)) * 0.1216216;
+        sum += image.sample(linClamp, in.q - float2(0.0, tx.y)) * 0.1216216;
+        sum += image.sample(linClamp, in.q + tx) * 0.054054;
+        sum += image.sample(linClamp, in.q - tx) * 0.054054;
+        sum += image.sample(linClamp, in.q + float2(tx.x, -tx.y)) * 0.016216;
+        sum += image.sample(linClamp, in.q + float2(-tx.x, tx.y)) * 0.016216;
+        c = sum;
+    }
+    return c * clamp(u.opacity, 0.0, 1.0);
+}
+
+// ---- Caption card: a real frosted material, not a baked grey pill.
+// Samples a blurred copy of the already-composited scene, boosts saturation,
+// then adapts a dark tint until white text keeps >= 4.5:1 contrast. The CPU
+// draws this before the sharp text; preview and export share the shader.
+struct CaptionCardU { float4 rect; float4 tint; float2 canvas; float radius; float lod; };
+fragment float4 captionCardFS(VO in [[stage_in]], constant CaptionCardU &u [[buffer(0)]],
+                              texture2d<float> scene [[texture(0)]]) {
+    float a = rectMask(in.px, u.rect, u.radius);
+    if (a <= 0.001) return float4(0.0);
+    float2 uv = in.px / u.canvas;
+    float3 b = scene.sample(linMip, uv, level(max(u.lod, 0.0))).rgb;
+    float luma = dot(b, float3(0.2126, 0.7152, 0.0722));
+    // Frosted glass lifts colour before the dark tint lands on it.
+    float3 sat = clamp(mix(float3(luma), b, 1.65), 0.0, 1.0);
+    float3 face = mix(u.tint.rgb, sat, 0.10);
+    float faceL = dot(face, float3(0.2126, 0.7152, 0.0722));
+    // Solve overlay alpha so the resulting backdrop luminance stays <= 0.14
+    // (target 0.14, threshold 0.18 for 4.5:1 with white).
+    float need = (luma - 0.14) / max(luma - faceL, 1e-3);
+    float alpha = clamp(max(need, u.tint.a), 0.55, 0.97);
+    // A hairline specular rim keeps the material from reading as flat paint.
+    float2 h = u.rect.zw * 0.5;
+    float d = sdSquircle(in.px - (u.rect.xy + h), h, u.radius);
+    float rim = exp(-pow(d / 1.6, 2.0)) * step(d, 0.0);
+    face = clamp(face + float3(0.10) * rim, 0.0, 1.0);
+    // Composite the blurred backdrop and the tint inside the card, then make
+    // the card opaque. A translucent card would reveal the sharp scene and
+    // defeat the blur; only the rounded edge uses the mask alpha.
+    float3 finalColor = face * alpha + b * (1.0 - alpha);
+    return float4(finalColor * a, a);
 }
 
 struct HighlightU {

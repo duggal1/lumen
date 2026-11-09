@@ -92,7 +92,13 @@ private struct WebU {
 }
 private struct AccU { var weight: Float }
 private struct ResU { var levels: Float; var seed: UInt32; var blur: Float; var alpha: Float }
-private struct TextSpriteU { var opacity: Float }
+private struct TextSpriteU {
+    var opacity: Float; var blur: Float; var pad0: Float; var pad1: Float
+    init(opacity: Float, blur: Float = 0) { self.opacity = opacity; self.blur = blur; pad0 = 0; pad1 = 0 }
+}
+private struct CaptionCardU {
+    var rect: SIMD4<Float>; var tint: SIMD4<Float>; var canvas: SIMD2<Float>; var radius: Float; var lod: Float
+}
 private struct LoupeU {
     var glass: SIMD4<Float>    // centre x,y, radius, border
     var source: SIMD4<Float>   // target x,y, width,height
@@ -165,6 +171,7 @@ public final class Renderer: @unchecked Sendable {
     private let lib: MTLLibrary
     private let pBackdrop, pContent, pCursor, pRing, pWeb, pPrivacy, pAccum: MTLRenderPipelineState
     private let pTextSprite: MTLRenderPipelineState
+    private let pCaptionCard: MTLRenderPipelineState
     private let pHighlight: MTLRenderPipelineState
     private let pLoupe: MTLRenderPipelineState
     private let textCache = TextOverlayCache()
@@ -175,6 +182,10 @@ public final class Renderer: @unchecked Sendable {
     private let perSample = OSAllocatedUnfairLock<Double>(initialState: 0)
     private var slot = 0
     private var work: [MTLTexture] = [], accum: [MTLTexture] = []
+    /// One blurred copy per in-flight slot, allocated only when a caption card
+    /// is actually on screen. The caption pass may not sample the render
+    /// target it is writing, so the scene is copied before the card is drawn.
+    private var captionSrc: [MTLTexture?] = [nil, nil, nil]
     private var backdrop: MTLTexture?
     private var backdropKey: BackdropKey?
     private var backdropMipmapped = false
@@ -207,6 +218,7 @@ public final class Renderer: @unchecked Sendable {
         pWeb = try Self.pipe(d, l, "webFS", f, 1)
         pAccum = try Self.pipe(d, l, "accumFS", f, 2)
         pTextSprite = try Self.pipe(d, l, "textSpriteFS", f, 1)
+        pCaptionCard = try Self.pipe(d, l, "captionCardFS", f, 1)
         pHighlight = try Self.pipe(d, l, "highlightFS", f, 1)
         pLoupe = try Self.pipe(d, l, "loupeFS", f, 1)
         var c: CVMetalTextureCache?
@@ -316,6 +328,7 @@ public final class Renderer: @unchecked Sendable {
             return device.makeTexture(descriptor: d)!
         }
         work = (0..<3).map { _ in mk() }; accum = (0..<3).map { _ in mk() }
+        captionSrc = [nil, nil, nil]
         // Allocate mip storage only when the user enables blur. Ordinary video
         // exports keep their previous memory footprint and renderer stages.
         backdrop = mk(mipmapped: backdropBlur)
@@ -455,7 +468,7 @@ public final class Renderer: @unchecked Sendable {
             let off = ((Double(i) + 0.5) / Double(K) - 0.5) * tl.camera.shutter * dt
             var st = r.live ?? tl.evaluate(at: r.t + off)
             if r.live == nil, tl.derived == nil { st.cameraCenter = SIMD2<Float>(Float(g.src.x / 2), Float(g.src.y / 2)) }
-            scene(cb, into: work[s], st: st, r: r, g: g, src: srcTex, web: webTex, matte: matte)
+            scene(cb, into: work[s], slot: s, st: st, r: r, g: g, src: srcTex, web: webTex, matte: matte)
             if K > 1 {
                 let pd = MTLRenderPassDescriptor()
                 pd.colorAttachments[0].texture = accum[s]; pd.colorAttachments[0].loadAction = i == 0 ? .clear : .load
@@ -518,7 +531,7 @@ public final class Renderer: @unchecked Sendable {
         return min(max(n, 1), cap)
     }
 
-    private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, st: FrameState, r: RenderRequest, g: Geometry,
+    private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, slot: Int, st: FrameState, r: RenderRequest, g: Geometry,
                        src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
         let tl = r.timeline
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y)), content = SIMD4<Float>(g.content)
@@ -751,16 +764,72 @@ public final class Renderer: @unchecked Sendable {
             }
         }
         if !sprites.isEmpty {
-            e.setRenderPipelineState(pTextSprite)
-            for sprite in sprites where sprite.opacity > 0.001 {
-                let w = Float(sprite.texture.width), h = Float(sprite.texture.height)
-                quad(e, SIMD4<Float>(sprite.center.x - w / 2, sprite.center.y - h / 2, w, h), canvasF)
-                frag(e, TextSpriteU(opacity: sprite.opacity))
-                e.setFragmentTexture(sprite.texture, index: 0)
-                draw()
+            // A caption card needs the scene behind it, and Metal cannot read
+            // the texture it is writing. Copy the finished scene once (only
+            // when a card is visible), blur it via mipmaps, then reopen the
+            // pass for card + sharp text. Export and preview share this path.
+            let wantsCard = sprites.contains { $0.card != nil && $0.opacity > 0.001 }
+            var cardTexture: MTLTexture?
+            var reopened: MTLRenderCommandEncoder?
+            if wantsCard, let cap = captionSourceTexture(slot: slot, canvas: r.canvas) {
+                e.endEncoding()
+                if let blit = cb.makeBlitCommandEncoder() {
+                    blit.copy(from: tex, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                              sourceSize: MTLSize(width: tex.width, height: tex.height, depth: 1),
+                              to: cap, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+                    blit.generateMipmaps(for: cap)
+                    blit.endEncoding()
+                    cardTexture = cap
+                }
+                let pd = MTLRenderPassDescriptor()
+                pd.colorAttachments[0].texture = tex
+                pd.colorAttachments[0].loadAction = .load
+                pd.colorAttachments[0].storeAction = .store
+                reopened = cb.makeRenderCommandEncoder(descriptor: pd)
             }
+            let encoder = reopened ?? e
+            let split = cardTexture != nil
+            if let cardTexture, split {
+                encoder.setRenderPipelineState(pCaptionCard)
+                for sprite in sprites where sprite.opacity > 0.001 {
+                    guard let card = sprite.card else { continue }
+                    let w = Float(sprite.texture.width) * sprite.scale
+                    let h = Float(sprite.texture.height) * sprite.scale
+                    let rect = SIMD4<Float>(sprite.center.x - w / 2, sprite.center.y - h / 2, w, h)
+                    let blurPx = max(4, h * 0.12 + sprite.blur * 2)
+                    let lod = Float(log2(Double(max(blurPx / 2, 1))))
+                    quad(encoder, rect, canvasF)
+                    frag(encoder, CaptionCardU(rect: rect, tint: card.tint, canvas: canvasF,
+                                               radius: card.radius * sprite.scale, lod: lod))
+                    encoder.setFragmentTexture(cardTexture, index: 0)
+                    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                }
+            }
+            encoder.setRenderPipelineState(pTextSprite)
+            for sprite in sprites where sprite.opacity > 0.001 {
+                let w = Float(sprite.texture.width) * sprite.scale
+                let h = Float(sprite.texture.height) * sprite.scale
+                quad(encoder, SIMD4<Float>(sprite.center.x - w / 2, sprite.center.y - h / 2, w, h), canvasF)
+                frag(encoder, TextSpriteU(opacity: sprite.opacity, blur: sprite.blur))
+                encoder.setFragmentTexture(sprite.texture, index: 0)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            }
+            encoder.endEncoding()
+        } else {
+            e.endEncoding()
         }
-        e.endEncoding()
+    }
+
+    /// Mip-mapped copy of the scene used only by the caption card material.
+    /// Lazily allocated: recordings without captions pay nothing.
+    private func captionSourceTexture(slot: Int, canvas: SIMD2<Int>) -> MTLTexture? {
+        let index = min(max(slot, 0), 2)
+        if let t = captionSrc[index], t.width == canvas.x, t.height == canvas.y { return t }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: canvas.x, height: canvas.y,
+                                                           mipmapped: true)
+        d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
+        captionSrc[index] = device.makeTexture(descriptor: d)
+        return captionSrc[index]
     }
 
     private func transparentTexture() -> MTLTexture? {

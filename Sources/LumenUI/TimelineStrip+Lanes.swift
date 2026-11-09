@@ -271,7 +271,7 @@ extension TimelineStrip {
             }
             c.fillCells(typing, StripInk.cell)
 
-            // Solid slat = click, dotted slat = tap. Fuchsia = it caused a zoom, grey = it did not.
+            // Solid slat = click, dotted slat = tap. Orange [4] = it caused a zoom, grey = it did not.
             var head = Path(), focused = Path(), trig = Path(), idle = Path()
             for (col, ms) in byCol {
                 let isHover = col == hoveredCol

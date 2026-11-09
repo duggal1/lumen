@@ -84,5 +84,6 @@ import LumenExport
     let mosaicURL = outDir.appendingPathComponent("mosaic.png")
     try FrameImage.writePNG(mosaic, to: mosaicURL)
     print("mosaic png: \(mosaicURL.path)")
-    #expect(try FileManager.default.contentsOfDirectory(atPath: outDir.path).count == 2)
+    #expect(FileManager.default.fileExists(atPath: capURL.path))
+    #expect(FileManager.default.fileExists(atPath: mosaicURL.path))
 }

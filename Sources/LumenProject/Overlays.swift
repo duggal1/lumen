@@ -163,10 +163,26 @@ public struct LayoutSet: Codable, Equatable, Sendable {
 
 public enum CaptionAnimation: String, Codable, CaseIterable, Sendable { case none, fade, blur, pop, slide }
 public enum CaptionFont: String, Codable, CaseIterable, Sendable {
-    case sfPro, newYork, menlo
-    public var title: String { switch self { case .sfPro: "SF Pro"; case .newYork: "New York"; case .menlo: "SF Mono" } }
-    public var postScript: String { switch self { case .sfPro: "HelveticaNeue"; case .newYork: "New York"; case .menlo: "Menlo" } }
-    public var postScriptBold: String { switch self { case .sfPro: "HelveticaNeue-Bold"; case .newYork: "New York Bold"; case .menlo: "Menlo-Bold" } }
+    case sfPro, sfRounded, newYork, menlo
+    public var title: String {
+        switch self {
+        case .sfPro: "SF Pro"
+        case .sfRounded: "SF Rounded"
+        case .newYork: "New York"
+        case .menlo: "SF Mono"
+        }
+    }
+    public var postScript: String {
+        switch self {
+        case .sfPro: "SF Pro Text"; case .sfRounded: "SF Pro Rounded"; case .newYork: "New York"; case .menlo: "Menlo"
+        }
+    }
+    public var postScriptBold: String {
+        switch self {
+        case .sfPro: "SF Pro Text Bold"; case .sfRounded: "SF Pro Rounded Bold"
+        case .newYork: "New York Bold"; case .menlo: "Menlo-Bold"
+        }
+    }
 }
 public enum CaptionPosition: String, Codable, CaseIterable, Sendable { case auto, bottom, top }
 public struct CaptionStyle: Codable, Equatable, Sendable {

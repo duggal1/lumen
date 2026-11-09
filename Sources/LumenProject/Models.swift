@@ -149,7 +149,8 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     public var idleHide: Double? = 2.0
     public var pressScale: Double = 0.86
     public var clickEffect: ClickEffect = .ripple
-    public var clickDuration: Double = 0.65
+    /// Apple-glass bloom expands on release and settles in about half a second.
+    public var clickDuration: Double = 0.55
     /// Tint off by default (transparent white): the ripple refracts the
     /// video itself, with no flat fill color.
     public var clickColor: RGBA = RGBA(0xFFFFFF, a: 0)
