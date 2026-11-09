@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
 const CONTINUE_TEXT =
-  "Continue the goal loop. Re-read goal.yaml, .proof/criteria.md, .proof/progress.md, .proof/budget.json (rebuild state if missing per goal.yaml state.rule). Run Tools/budget tick first, then do exactly one loop cycle (plan/build/run_for_real/verify/fix), append one line to .proof/progress.md, and stop only on DONE, BLOCKED, or BUDGET per goal.yaml. Only emit a final STATUS report on DONE, BLOCKED, or BUDGET."
+  "Continue the goal loop. Re-read goal.yaml, .proof/criteria.md, .proof/progress.md, .proof/pulse.json (recreate state if missing per goal.yaml state.rule). Run Tools/pulse tick first, then do exactly one loop cycle (plan/build/run_for_real/verify/fix), append one line to .proof/progress.md, and stop only on DONE or BLOCKED per goal.yaml. Only emit a final STATUS report on DONE or BLOCKED."
 
 function extractLastAssistantText(messages: unknown): string {
   if (!Array.isArray(messages) || messages.length === 0) return ""
@@ -43,32 +43,20 @@ export default Plugin.define({
             const session = (await ctx.session.get({ sessionID })) as any
             if (session?.agent !== "goal") continue
 
-            // No active goal budget => not a goal run.
-            const budgetPath = join(ctx.location.directory, ".proof", "budget.json")
-            if (!existsSync(budgetPath)) continue
-            let budget: any
+            // No goal pulse => not a goal run. v4 has no hard budget stop:
+            // pulse never says stop, so the plugin only checks for a run file.
+            const pulsePath = join(ctx.location.directory, ".proof", "pulse.json")
+            if (!existsSync(pulsePath)) continue
             try {
-              budget = JSON.parse(readFileSync(budgetPath, "utf8"))
+              JSON.parse(readFileSync(pulsePath, "utf8"))
             } catch {
-              continue
-            }
-            if (budget?.status && budget.status !== "active") continue
-
-            const limits = budget?.limits ?? {}
-            const maxTurns = limits.max_turns ?? 60
-            const maxMinutes = limits.max_minutes ?? 90
-            const maxApproaches = limits.max_distinct_approaches ?? 3
-            if (typeof budget?.turn === "number" && budget.turn >= maxTurns) continue
-            if (typeof budget?.approaches === "number" && budget.approaches >= maxApproaches) continue
-            if (typeof budget?.start_epoch === "number") {
-              const elapsed = Math.floor((Date.now() / 1000 - budget.start_epoch) / 60)
-              if (elapsed >= maxMinutes) continue
+              // Corrupt pulse: let the agent recreate it per state.rule; still continue.
             }
 
             // Terminal final report already emitted => stop.
             const messages = (await ctx.session.context({ sessionID }).catch(() => [])) as unknown
             const text = extractLastAssistantText(messages)
-            if (/STATUS:\s*(DONE|BLOCKED|BUDGET)/.test(text)) continue
+            if (/STATUS:\s*(DONE|BLOCKED)/.test(text)) continue
 
             // Cooldown to avoid tight re-prompt loops on fast failures.
             const now = Date.now()
