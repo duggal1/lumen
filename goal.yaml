@@ -1,28 +1,38 @@
-# goal.yaml (v3)
-# OpenCode:  @goal.yaml <what I want>
-# Text typed next to @goal.yaml is the OBJECTIVE. If none, use `objective` below.
+# goal.yaml (v4)
+# OpenCode:  /goal <what I want>   (or @goal.yaml <what I want>)
+# Text next to it is the OBJECTIVE. Add the word "resume" to continue the previous run instead of starting fresh.
 
 goal:
-  objective: ""
+  objective: "TODO: set me, or just type the task next to the command"
 
   contract: |
-    This file is binding, not advice. Start immediately. Do not recap it. Do not ask "want me to proceed?".
-    Keep working until exactly one of three stops:
+    This file is binding. Start immediately. Do not recap it.
+    Keep working until exactly one of two stops:
       DONE     every criterion PASS with proof (see definition_of_done)
-      BLOCKED  only I can unblock it (credential, paid account, product decision); show everything you tried
-      BUDGET   a limit in `budget` is hit. Limits override "keep working". Hitting one is a valid stop, not a failure.
-    NOT valid reasons to stop: finished one step, wrote the code, "should work", haven't run it yet,
-    annoying error, slow command.
+      BLOCKED  something only I can supply (credential, paid account, product decision),
+               OR a harness/provider error literally prevents further calls. Quote that error.
+    NOT a stop: finished a step, wrote the code, "should work", slow command, long task,
+    many items, a hard bug, or feeling like it has been a long time.
+    You know NOTHING about my token or cost budget. Never guess about it, never ask about it,
+    never say it is used up, never stop for it. Only a real error message from a tool or the harness counts, and then you quote it.
+    Never ask me questions mid-run. Decide, record the assumption in progress.md, keep going.
+
+  run_start:
+    rule: |
+      Every invocation of this file is a NEW RUN, unless my message contains "resume".
+      New run: if .proof/ exists, move everything in it except .proof/archive into .proof/archive/<UTC-timestamp>/.
+      Old counters, old criteria, and old results from earlier runs do not apply. Never read them as current.
+      Then create fresh state. Resume: keep .proof/ and continue from progress.md.
 
   state:
     files:
       criteria: .proof/criteria.md   # frozen acceptance criteria
-      progress: .proof/progress.md   # append-only: tried / happened / next
-      budget: .proof/budget.json     # counters, owned by tools/budget, never hand-edit
+      progress: .proof/progress.md   # append-only: did / result / next
+      pulse: .proof/pulse.json       # owned by tools/pulse
     rule: >
-      FIRST THING every turn, and immediately after any context compaction or reset, re-read all three.
-      If any is missing or unreadable you lost state. Rebuild from git log and progress.md if possible,
-      otherwise stop as BLOCKED and say what was lost.
+      Re-read criteria and progress at the start of every turn and right after any context compaction.
+      If a file is missing, recreate it from the objective and git history and keep going.
+      Missing state is never a reason to stop.
 
   scope:
     allowed_paths: ["TODO: dirs/files you may change. Default: whatever the objective clearly needs"]
@@ -36,46 +46,46 @@ goal:
       - No test, assertion, or criterion was weakened, skipped, deleted, or special-cased.
       - Zero criteria marked UNVERIFIED. UNVERIFIED is never PASS.
     acceptance_criteria:
-      - "TODO: concrete, checkable behaviors. If none given, derive them from the objective, write them to .proof/criteria.md FIRST, then treat them as frozen. You may never loosen them."
+      - "TODO: concrete, checkable behaviors. If none given, derive them from the objective, write them to .proof/criteria.md FIRST, then freeze them. You may never loosen them."
+    criteria_rules:
+      - 8 criteria max. Group similar items (assets, pages, endpoints, screens) into ONE criterion with an automated check over every item. Never one criterion per item.
+      - "Judge by outcome, not item count. 'Every new art asset loads and renders correctly' is one criterion."
 
   loop:
     cycle: [plan, build, run_for_real, verify, fix, repeat]
     rules:
       - "Run it, don't reason about it. Behavior is only known after you executed it and saw the output."
-      - Re-verify affected criteria after every meaningful change, not only at the end.
+      - Re-verify affected criteria after each meaningful change, not only at the end.
       - Fix root causes. No hard-coded outputs, swallowed errors, or disabled checks.
-      - "Can't tell whether a criterion passes after 2 attempts to measure it? Mark it UNVERIFIED, write what would settle it, move on."
-      - No single command runs longer than 120s without a timeout wrapper. A hung command eats the whole budget.
-      - "Every turn: run tools/budget tick FIRST, append one line to progress.md LAST (did / result / next)."
+      - "Can't tell whether a criterion passes? Mark it UNVERIFIED and measure it a different way. After 3 different ways, report BLOCKED with exactly what you need from me."
+      - No single command runs longer than 120s without a timeout wrapper.
+      - "Every turn: run tools/pulse tick FIRST, append one line to progress.md LAST."
 
-  budget:
-    why: "A cap you only remember is a cap you will forget. A script counts, not you."
-    enforced_by: tools/budget   # build it on turn 1. It owns .proof/budget.json.
-    tools_budget_spec:
-      init: "write start time from `date -u`, zero the counters"
-      tick: "turn += 1, recompute elapsed minutes from `date -u`, print 'turns X/Y, minutes A/B', print STOP and exit 1 if any limit is exceeded"
-      approach: "log an abandoned approach with its reason, STOP at the limit"
-    limits:
-      max_turns: 60                # 1 turn = 1 loop cycle, marked by one `tools/budget tick`
-      max_minutes: 90
-      max_distinct_approaches: 3   # after the 3rd abandoned approach, stop. Do not invent a 4th.
-    same_failure: "Same failure 3 times means change approach, which costs one approach."
-    no_progress: "Two consecutive turns with every criterion unchanged and no new evidence means stop."
-    on_stop: "Stop immediately. Report BUDGET with what you tried, your best hypothesis, what you are unsure about, and the ONE input or decision that would unblock you."
+  pulse:
+    why: "Not a kill switch. It forces periodic re-orientation so long runs do not drift or forget."
+    tool: tools/pulse   # build on turn 1
+    spec:
+      init: "new run id and start time from `date -u`"
+      tick: "turn += 1, print 'turn N, minutes M'. Every 20 turns or 30 minutes print CHECKPOINT. Never exits non-zero. Never says stop."
+    on_checkpoint:
+      - Re-read criteria.md and progress.md.
+      - "Write a 5-line status to progress.md: passing, failing, unverified, next, what is not working."
+      - "If the last 2 checkpoints show no criterion changed state, switch approach hard (new hypothesis, add probes and logging, read the library source or docs, bisect), log the old approach as abandoned, and continue."
+    same_failure: "Same failure 3 times means change approach, not stop."
 
   tools:
     principle: >
       To work this problem, build your own custom tools so you can operate my software agentically:
-      fast, repeatable, scriptable. Two are mandatory on every task. The rest are for tasks that need
+      fast, repeatable, scriptable. Two are mandatory on every task. The rest only when the task needs
       repeated driving of the system. Skip them on small tasks and say you skipped.
     mandatory:
-      budget: "as specified in `budget`"
-      prove: "ONE command that re-runs every proof step from a clean state and writes a fresh .proof/<ts>/ (stamp, logs, MANIFEST.md, screenshots, short video as needed). Exit 0 only if every criterion passes."
+      pulse: "as specified in `pulse`"
+      prove: "ONE command that re-runs every proof step from a clean state and writes a fresh .proof/<ts>/ (stamp, logs, MANIFEST.md, screenshots, short video). Exit 0 only if every criterion passes."
     as_needed:
       drive: real user actions (HTTP, CLI, browser clicks via Playwright, macOS UI actions)
       seed: known state in, clean reset out
       probe: read state without side effects (DB rows, queue depth, logs, process status)
-      assert: check ONE criterion, print PASS or FAIL with evidence, set exit code
+      assert: check ONE criterion or one group of items, print PASS or FAIL with evidence, set exit code
       shot: screenshot the relevant window, page, or terminal
       rec: record a short video of one flow
     how:
@@ -89,11 +99,14 @@ goal:
     priority:
       1_executable_evidence: "Exact command or request, full output, exit code. Primary proof, especially for backend."
       2_screenshots: "Key states: before, after, final result. Command, URL, or window title visible in frame."
-      3_short_video: "3 to 10 seconds, one key flow, a few clicks or commands. A few seconds is plenty."
-    required_for: "Anything complicated or user-visible (backend flows, integrations, auth, jobs, migrations, UI). Trivial change means one log plus one screenshot."
+      3_short_video: "3 to 10 seconds, one key flow, a few clicks or commands."
+    batching:
+      - "Proof is per RUN, not per item. One tools/prove run, one screenshot set, one short video can cover many criteria."
+      - "Many similar items? Run an automated check over ALL of them, then show one contact sheet or one short clip of a representative sample. Never a screenshot or video per item."
+      - "Ceiling: at most 8 screenshots and 2 videos per run unless I ask for more."
     stamp:
       what: "UTC time + short git HEAD + fingerprint of the working tree (tracked diff plus untracked files; if no git, a hash of the source files). Printed by `tools/prove stamp`."
-      use: "Saved as .proof/<ts>/STAMP.txt, printed at the top of every log, visible in the first second of every video and in screenshots where feasible. Recompute it at the end. If the fingerprint differs, the code changed after the proof and the proof is stale."
+      use: "Saved as .proof/<ts>/STAMP.txt, printed at the top of every log, visible in the first second of every video. Recompute at the end. If the fingerprint differs, the code changed after the proof and the proof is stale."
     manifest: "MANIFEST.md has one row per artifact: file | criterion | one line saying what is visibly in it. If you can't view images in this harness, say so and mark visual proof UNVERIFIED."
     rules:
       - "No-UI backend: show request, then response, then the resulting state change (DB row, job status, file). A bare 200 is not proof."
@@ -106,7 +119,7 @@ goal:
       terminal: "asciinema or script, plus a screenshot of the terminal"
 
   adversarial_pass:
-    when: "Complicated or stateful work (persistence, jobs, auth, sandbox payments, concurrency). Trivial work: skip and say skipped."
+    when: "Complicated or stateful work (persistence, jobs, auth, sandbox payments, concurrency). Otherwise skip and say skipped."
     run_once_each:
       - Invalid or hostile input
       - Same action twice (idempotency, duplicates)
@@ -116,12 +129,11 @@ goal:
     record: "Results go into MANIFEST.md like any other criterion. A failure here is a failure."
 
   independent_review:
-    why: "You are grading your own work. That is the failure this file exists to prevent."
+    when: "Skip for trivial tasks (2 criteria or fewer) and finish as DONE-SELF-GRADED."
     do: |
       Before declaring DONE, if the harness can spawn a fresh-context subagent (OpenCode: the task tool),
-      spawn one with the prompt below and nothing else (no chat history, no excuses). A FAIL stands.
-      Fix, then re-review (it costs budget). If you cannot spawn one, finish as DONE-SELF-GRADED
-      and say so first in the report.
+      spawn one with the prompt below and nothing else. A FAIL stands. Fix, then re-review.
+      If you cannot spawn one, finish as DONE-SELF-GRADED and say so first in the report.
     reviewer_prompt: |
       You did not build this. Assume it is broken until the evidence says otherwise.
       Read .proof/criteria.md and the newest .proof/*/MANIFEST.md. Run tools/prove yourself and recompute
@@ -136,13 +148,13 @@ goal:
     - Do not edit this file, the objective, or the frozen criteria.
 
   final_report:
-    send_only_when: DONE, BLOCKED, or BUDGET
+    send_only_when: DONE or BLOCKED
     format: |
-      STATUS: DONE-REVIEWED | DONE-SELF-GRADED | BLOCKED | BUDGET
+      STATUS: DONE-REVIEWED | DONE-SELF-GRADED | BLOCKED
       Per criterion: PASS / FAIL / UNVERIFIED, one-line evidence, artifact paths
-      Budget used: turns, minutes, approaches
       Built: files and tools, one line each
       Could not verify, and why
+      If BLOCKED: the exact thing I must provide, or the exact error quoted
       Known risks
       Re-run everything: tools/prove
     honesty: "Anything partial, failing, flaky, or unverified goes FIRST. A truthful FAIL beats a fake PASS."
