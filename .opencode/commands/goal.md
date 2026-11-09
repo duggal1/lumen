@@ -3,7 +3,7 @@ description: Autonomous goal loop with real proof
 agent: goal
 ---
 
-Follow goal.yaml exactly. It is binding. Read goal.yaml, .proof/criteria.md, .proof/progress.md, .proof/budget.json FIRST (rebuild state if missing or unreadable per goal.yaml state.rule). Start immediately. Do not recap the contract.
+Follow goal.yaml exactly. It is binding. Read goal.yaml, .proof/criteria.md, .proof/progress.md, .proof/pulse.json FIRST (recreate state if missing per goal.yaml state.rule). Start immediately. Do not recap the contract.
 
 OBJECTIVE: $ARGUMENTS
 
