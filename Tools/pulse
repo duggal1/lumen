@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# Tools/pulse — v4 pulse for goal.yaml runs. Owns .proof/pulse.json (never hand-edit).
+#
+# Usage:
+#   Tools/pulse init                     # fresh run: record start (date -u), zero turn
+#   Tools/pulse tick                     # every turn FIRST: turn+=1, print 'turn N, minutes M'
+#                                        # Every 20 turns or 30 minutes prints CHECKPOINT.
+#                                        # Never exits non-zero. Never says stop.
+#   Tools/pulse status                   # print .proof/pulse.json
+#   Tools/pulse approach "reason"        # log one abandoned approach; always exit 0, never stop
+#
+# Proof dir override: GOAL_PROOF_DIR (default .proof).
+set -euo pipefail
+
+PROOF_DIR="${GOAL_PROOF_DIR:-.proof}"
+PULSE_FILE="$PROOF_DIR/pulse.json"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: Tools/pulse <init|tick|status|approach> [args]
+  init                Fresh run: record start (date -u), zero turn
+  tick                Every turn FIRST: turn+=1, print 'turn N, minutes M', CHECKPOINT every 20 turns / 30 min. Never exits non-zero.
+  status              Print .proof/pulse.json
+  approach "reason"   Log one abandoned approach; never stops
+Env: GOAL_PROOF_DIR=.proof
+EOF
+  exit 2
+}
+
+pulse_init() {
+  mkdir -p "$PROOF_DIR"
+  local now_utc now_epoch run_id
+  now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  now_epoch=$(date -u +%s)
+  run_id=$(date -u +%Y%m%dT%H%M%SZ)
+  python3 -c '
+import json, sys
+path, run_id, start_utc, start_epoch = sys.argv[1:5]
+d = {
+    "run_id": run_id,
+    "start_utc": start_utc,
+    "start_epoch": int(start_epoch),
+    "updated_utc": start_utc,
+    "turn": 0,
+    "last_checkpoint_turn": 0,
+    "last_checkpoint_epoch": int(start_epoch),
+    "approach_log": [],
+}
+json.dump(d, open(path, "w"), indent=2)
+' "$PULSE_FILE" "$run_id" "$now_utc" "$now_epoch"
+  echo "pulse initialized: run $run_id turn 0"
+}
+
+pulse_tick() {
+  # Never exits non-zero. If state is missing/corrupt, start a fresh pulse and continue.
+  if [[ ! -f "$PULSE_FILE" ]]; then
+    pulse_init >/dev/null
+  fi
+  local now_utc now_epoch
+  now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  now_epoch=$(date -u +%s)
+  set +e
+  python3 -c '
+import json, sys
+path, now_utc, now_epoch = sys.argv[1:4]
+now_epoch = int(now_epoch)
+try:
+    d = json.load(open(path))
+except Exception:
+    # Corrupt state: start fresh, never stop.
+    d = {"run_id": now_utc.replace(":", "").replace("-", ""), "start_utc": now_utc, "start_epoch": now_epoch, "last_checkpoint_turn": 0, "last_checkpoint_epoch": now_epoch, "approach_log": []}
+d["turn"] = int(d.get("turn", 0)) + 1
+d["updated_utc"] = now_utc
+elapsed_min = max(0, (now_epoch - int(d.get("start_epoch", now_epoch))) // 60)
+print("turn {}, minutes {}".format(d["turn"], elapsed_min))
+last_cp_turn = int(d.get("last_checkpoint_turn", 0))
+last_cp_epoch = int(d.get("last_checkpoint_epoch", int(d.get("start_epoch", now_epoch))))
+is_cp = (d["turn"] % 20 == 0) or ((now_epoch - last_cp_epoch) >= 1800)
+if is_cp:
+    print("CHECKPOINT")
+    d["last_checkpoint_turn"] = d["turn"]
+    d["last_checkpoint_epoch"] = now_epoch
+json.dump(d, open(path, "w"), indent=2)
+' "$PULSE_FILE" "$now_utc" "$now_epoch"
+  rc=$?
+  set -e
+  # Force 0: pulse never stops a run.
+  exit 0
+}
+
+pulse_status() {
+  if [[ ! -f "$PULSE_FILE" ]]; then
+    echo "no pulse found at $PULSE_FILE; run Tools/pulse init first" >&2
+    # Still exit 0: missing state is never a reason to stop.
+    pulse_init >/dev/null
+  fi
+  cat "$PULSE_FILE"
+  # Always succeed.
+  return 0
+}
+
+pulse_approach() {
+  local reason="${1:-}"
+  if [[ -z "$reason" ]]; then
+    echo "approach requires a reason, e.g. Tools/pulse approach \"sqlite lock, need postgres\"" >&2
+    return 0
+  fi
+  if [[ ! -f "$PULSE_FILE" ]]; then
+    pulse_init >/dev/null
+  fi
+  local now_utc
+  now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  set +e
+  python3 -c '
+import json, sys
+path, now_utc, reason = sys.argv[1:4]
+try:
+    d = json.load(open(path))
+except Exception:
+    d = {"approach_log": []}
+d["approach_log"] = d.get("approach_log", []) + [{"ts": now_utc, "reason": reason}]
+d["updated_utc"] = now_utc
+json.dump(d, open(path, "w"), indent=2)
+print("approach logged: {}".format(reason))
+' "$PULSE_FILE" "$now_utc" "$reason"
+  rc=$?
+  set -e
+  exit 0
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  init) pulse_init ;;
+  tick) pulse_tick ;;
+  status) pulse_status ;;
+  approach) shift; pulse_approach "${1:-}" ;;
+  -h|--help|help) usage ;;
+  *) usage ;;
+esac
