@@ -40,5 +40,6 @@ let package = Package(
         .executableTarget(name: "LumenCLI", dependencies: [
             "LumenProject", "LumenDirector", "LumenRender", "LumenAudio", "LumenExport", "LumenSpeech",
             .product(name: "ArgumentParser", package: "swift-argument-parser")]),
+        .executableTarget(name: "LumenRecordDemo", dependencies: ["LumenCapture"]),
     ]
 )

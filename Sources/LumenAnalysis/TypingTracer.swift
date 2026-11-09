@@ -37,7 +37,7 @@ public enum TypingTracer {
             return out
         }
         // First frame with a single-line-high blob = where the first typed characters appeared.
-        var band: (r0: Int, r1: Int, left: Int)?, k0 = 1
+        var band: (r0: Int, r1: Int, left: Int)?, k0 = 1, lineRows = 1
         for k in 1..<ts.count {
             let blobs = components(dilate(changed(grids[k]))).filter { $0.r1 - $0.r0 + 1 <= maxLineRows && $0.area >= 2 }
             guard !blobs.isEmpty else { continue }
@@ -45,6 +45,7 @@ public enum TypingTracer {
             var pick = blobs.min { $0.r0 < $1.r0 }!
             if let a = anchor, let n = blobs.filter({ abs(cy($0) - a.y) < 0.25 * srcH }).min(by: { abs(cy($0) - a.y) < abs(cy($1) - a.y) }) { pick = n }
             band = (max(pick.r0 - 1, 0), min(pick.r1 + 1, rows - 1), max(pick.c0 + 2 - 1, 0)); k0 = k
+            lineRows = pick.r1 - pick.r0 + 1   // the text line itself; the band's ±1 rows are tracking slack
             break
         }
         guard let band else { return nil }
@@ -58,7 +59,7 @@ public enum TypingTracer {
         guard let last = samples.last else { return nil }
         let left = Double(band.left) * tile
         return TypingTrace(t0: burst.t0, t1: burst.t1,
-                           rect: CGRect(x: left, y: Double(band.r0) * tile, width: max(last.x - left, tile), height: Double(band.r1 - band.r0 + 1) * tile),
+                           rect: CGRect(x: left, y: Double(band.r0) * tile, width: max(last.x - left, tile), height: Double(lineRows) * tile),
                            samples: samples)
     }
 }

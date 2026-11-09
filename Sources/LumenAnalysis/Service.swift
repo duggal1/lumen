@@ -47,15 +47,19 @@ public struct AnalysisRequest: Sendable {
     public var includeActivity: Bool
     public var includeFace: Bool
     public var includePersonMask: Bool
+    public var includeTyping: Bool
+    public var events: [InputEvent]
 
     public init(screen: URL, webcam: URL? = nil, mic: URL? = nil, cacheDirectory: URL, webcamOffset: Double = 0,
                 micOffset: Double = 0, projectSalt: UInt64, privacy: PrivacyPlan = PrivacyPlan(), locale: String = "en-US",
                 vocabulary: [String] = [], includeSpeech: Bool = false, includeActivity: Bool = false,
-                includeFace: Bool = true, includePersonMask: Bool = false) {
+                includeFace: Bool = true, includePersonMask: Bool = false, includeTyping: Bool = false,
+                events: [InputEvent] = []) {
         self.screen = screen; self.webcam = webcam; self.mic = mic; self.cacheDirectory = cacheDirectory
         self.webcamOffset = webcamOffset; self.micOffset = micOffset; self.projectSalt = projectSalt; self.privacy = privacy
         self.locale = locale; self.vocabulary = vocabulary; self.includeSpeech = includeSpeech; self.includeActivity = includeActivity
         self.includeFace = includeFace; self.includePersonMask = includePersonMask
+        self.includeTyping = includeTyping; self.events = events
     }
 }
 
@@ -65,11 +69,12 @@ public struct AnalysisResult: Sendable {
     public var ocr: [OCRDetection]
     public var transcript: Transcript?
     public var personMask: PersonMaskInfo?
+    public var typing: [TypingTrace]
     public var errors: [String: String]
     public init(face: [FaceSample] = [], activity: [ActivityPoint] = [], ocr: [OCRDetection] = [], transcript: Transcript? = nil,
-                personMask: PersonMaskInfo? = nil, errors: [String: String] = [:]) {
+                personMask: PersonMaskInfo? = nil, typing: [TypingTrace] = [], errors: [String: String] = [:]) {
         self.face = face; self.activity = activity; self.ocr = ocr; self.transcript = transcript
-        self.personMask = personMask; self.errors = errors
+        self.personMask = personMask; self.typing = typing; self.errors = errors
     }
 }
 
@@ -95,14 +100,16 @@ public actor AnalysisService {
         let (detections, ocrError) = await ocrResult
         let (words, transcriptError) = await transcriptResult
         let (mask, maskError) = await personMask(request)
+        let (traces, typingError) = await typing(request)
         var errors: [String: String] = [:]
         if let faceError { errors["face"] = faceError }
         if let activityError { errors["activity"] = activityError }
         if let ocrError { errors["ocr"] = ocrError }
         if let transcriptError { errors["speech"] = transcriptError }
         if let maskError { errors["personMask"] = maskError }
+        if let typingError { errors["typing"] = typingError }
         return AnalysisResult(face: faces, activity: activities, ocr: detections, transcript: words,
-                              personMask: mask, errors: errors)
+                              personMask: mask, typing: traces, errors: errors)
     }
 
     private func face(_ r: AnalysisRequest) async -> ([FaceSample], String?) {
@@ -165,6 +172,23 @@ public actor AnalysisService {
         } catch { return (nil, error.localizedDescription) }
     }
 
+    private func typing(_ r: AnalysisRequest) async -> ([TypingTrace], String?) {
+        guard r.includeTyping, !r.events.isEmpty else { return ([], nil) }
+        let bursts = r.events.typingBursts()
+        guard !bursts.isEmpty else { return ([], nil) }
+        let clicks = r.events.filter { $0.kind == .down && $0.button == 0 }
+        let anchors: [SIMD2<Double>?] = bursts.map { b in
+            clicks.last(where: { $0.t <= b.t0 && b.t0 - $0.t < 20 }).map { SIMD2(Double($0.x), Double($0.y)) }
+        }
+        let params = TypingParameters(bursts: bursts.map { [$0.t0, $0.t1] },
+                                      anchors: anchors.map { $0.map { [$0.x, $0.y] } ?? [-1, -1] })
+        let (traces, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "typing", version: 2,
+                                           parameters: params) {
+            try await TypingAnalyzer.analyze(url: r.screen, bursts: bursts, anchors: anchors)
+        }
+        return (traces ?? [], error)
+    }
+
     private func cached<Value: Codable & Sendable, Parameters: Encodable & Sendable>(url: URL, directory: URL, analyzer: String, version: Int,
                                                                            parameters: Parameters,
                                                                            produce: () async throws -> Value) async -> (Value?, String?) {
@@ -191,3 +215,4 @@ private struct ActivityParameters: Codable, Sendable { var offset: Double; var f
 private struct OCRParameters: Codable { var salt: UInt64; var patterns: [String]; var entropyThreshold: Double; var fps: Double }
 private struct SpeechParameters: Codable { var locale: String; var vocabulary: [String]; var offset: Double }
 private struct PersonMaskParameters: Codable { var offset: Double; var fps: Double; var maxDimension: Int }
+private struct TypingParameters: Codable { var bursts: [[Double]]; var anchors: [[Double]] }

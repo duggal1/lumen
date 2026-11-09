@@ -1,37 +1,77 @@
-<!-- Lumen calibration fixture. No network. Visible "test fixture" label. -->
-<!doctype html><html><head><meta charset="utf-8"><title>Acme — test fixture</title>
-<style>body{margin:0;font:16px system-ui} .tag{position:fixed;top:8px;left:12px;color:#888}
-#input{width:600px;height:48px;font:28px monospace}
-#scroll{height:1200px;background:repeating-linear-gradient(#fff 0 100px,#eee 100px 200px)}</style></head>
+<!-- Lumen calibration fixture. No network. Visible "test fixture" label.
+     Every click draws a 28x28 #FF00FF square for 1 s; every input event
+     draws a 6x32 #FF00FF caret bar. Both are measured from the exported
+     video, never from the event log. -->
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Acme — test fixture</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { font: 16px system-ui; background: #f7f7f7; color: #111; }
+  #tag { position: fixed; left: 10px; bottom: 8px; color: #888; font: 12px ui-monospace, monospace; z-index: 50; }
+  nav { position: fixed; top: 0; left: 0; right: 0; height: 44px; background: #fff;
+        border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 22px;
+        padding: 0 20px; z-index: 40; }
+  nav a { color: #06c; text-decoration: none; font-weight: 600; }
+  #input { position: absolute; left: 84px; top: 96px; width: 640px; height: 48px;
+           font: 28px ui-monospace, monospace; padding: 0 10px; box-sizing: border-box;
+           border: 2px solid #333; border-radius: 6px; background: #fff; z-index: 30; }
+  #grid { position: absolute; left: 84px; top: 190px; width: 900px; display: grid;
+          grid-template-columns: repeat(4, 160px); gap: 18px; z-index: 30; }
+  #grid button { height: 44px; font: 15px system-ui; border: 1px solid #999;
+                 border-radius: 6px; background: #fff; }
+  #far { position: absolute; right: 60px; bottom: 70px; width: 180px; height: 52px; z-index: 30;
+         font: 15px system-ui; border: 1px solid #999; border-radius: 6px; background: #fff; }
+  #scroll { position: absolute; left: 0; right: 0; top: 520px; height: 1800px; z-index: 10;
+            background: repeating-linear-gradient(#fff 0 120px, #eee 120px 240px); }
+  .row { padding: 22px 84px; font: 15px ui-monospace, monospace; color: #333; }
+</style></head>
 <body>
-<p class="tag">test fixture — no real data</p>
-<p><input id="input" placeholder="type here"></p>
+<p id="tag">test fixture — no real data</p>
+<nav><a href="#" data-nav>Home</a><a href="#" data-nav>Pricing</a><a href="#" data-nav>Docs</a></nav>
+<input id="input" placeholder="type here" autocomplete="off" spellcheck="false">
+<div id="grid">
+  <button type="button">Save</button><button type="button">Cancel</button>
+  <button type="button">Next</button><button type="button">Back</button>
+  <button type="button">Open</button><button type="button">Close</button>
+  <button type="button">Apply</button><button type="button">Reset</button>
+  <button type="button">Share</button><button type="button">Copy</button>
+</div>
+<button id="far" type="button">Far corner</button>
 <div id="scroll"></div>
 <script>
 (function(){
-  // Click marker: 28x28 pure magenta square centred on the click, fading after 1s.
+  document.querySelectorAll('[data-nav]').forEach(function(a){
+    a.addEventListener('click', function(ev){ ev.preventDefault(); });
+  });
+  // Click marker: 28x28 pure magenta square centred on the click, fully
+  // opaque for 2 s (so video measurement is not biased by fade-over-text),
+  // then a 1 s fade.
   addEventListener('mousedown', function(ev){
     var d = document.createElement('div');
-    d.style.cssText = 'position:fixed;z-index:99;width:28px;height:28px;background:#FF00FF;left:'+(ev.clientX-14)+'px;top:'+(ev.clientY-14)+'px';
+    d.style.cssText = 'position:fixed;z-index:99;width:28px;height:28px;background:#FF00FF;left:'
+      + (ev.clientX-14) + 'px;top:' + (ev.clientY-14) + 'px;pointer-events:none';
     document.body.appendChild(d);
-    setTimeout(function(){ d.style.transition='opacity 1s'; d.style.opacity='0'; setTimeout(function(){d.remove();},1000); },1000);
-  });
+    setTimeout(function(){ d.style.transition='opacity 1s'; d.style.opacity='0';
+      setTimeout(function(){d.remove();},1000); }, 2000);
+  }, true);
   // Typing caret bar: 6x32 magenta bar at the caret position.
   var input = document.getElementById('input');
   var mirror = document.createElement('span');
-  mirror.style.cssText = 'position:absolute;visibility:hidden;font:28px monospace';
+  mirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;' +
+    'font:28px ui-monospace, monospace;padding:0 10px';
   document.body.appendChild(mirror);
   var bar = document.createElement('div');
-  bar.style.cssText = 'position:fixed;z-index:99;width:6px;height:32px;background:#FF00FF;display:none';
+  bar.style.cssText = 'position:fixed;z-index:99;width:6px;height:32px;background:#FF00FF;display:none;pointer-events:none';
   document.body.appendChild(bar);
   input.addEventListener('input', function(){
     mirror.textContent = input.value;
     var r = input.getBoundingClientRect();
     bar.style.display = 'block';
-    bar.style.left = (r.left + mirror.getBoundingClientRect().width) + 'px';
+    bar.style.left = (r.left + 10 + mirror.getBoundingClientRect().width) + 'px';
     bar.style.top = (r.top + 8) + 'px';
   });
   input.addEventListener('blur', function(){ bar.style.display = 'none'; });
+  input.focus();
 })();
 </script>
 </body></html>

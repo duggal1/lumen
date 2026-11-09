@@ -11,3 +11,7 @@ App/public/assets/wallpapers/macos/
 # /goal proof artifacts: local evidence only. Keep the directory itself.
 .proof/*
 !.proof/.gitkeep
+
+# Built Verify binaries (from Tools/Verify/*.swift)
+Tools/Verify/drive
+Tools/Verify/locate

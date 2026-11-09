@@ -38,7 +38,7 @@ public struct ActivityPoint: Codable, Sendable {
 }
 /// Typed-text line located by pixel change (see TypingTracer). Rect/caret in
 /// source px; samples are the caret approach found per keystroke frame.
-public struct TypingTrace: Sendable, Equatable {
+public struct TypingTrace: Codable, Sendable, Equatable {
     public struct Sample: Codable, Sendable, Equatable {
         public var t: Double, x: Double, y: Double
         public init(t: Double, x: Double, y: Double) { self.t = t; self.x = x; self.y = y }

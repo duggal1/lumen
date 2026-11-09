@@ -76,7 +76,9 @@ public final class ProjectSession: @unchecked Sendable {
                                       includeActivity: !snapshot.events.contains(where: \.hasPosition),
                                       includeFace: meta.webcam != nil,
                                       includePersonMask: timeline.layouts.contains { $0.kind == .cameraCutout }
-                                          || (timeline.webcam?.backdrop != nil && timeline.webcam?.backdrop != .original))
+                                          || (timeline.webcam?.backdrop != nil && timeline.webcam?.backdrop != .original),
+                                      includeTyping: !snapshot.events.isEmpty,
+                                      events: snapshot.events)
         let result = await AnalysisService.shared.run(request)
         guard !Task.isCancelled else { return result }
         inputState.withLock { current in
@@ -85,6 +87,7 @@ public final class ProjectSession: @unchecked Sendable {
             if result.errors["ocr"] == nil, timeline.overlays.privacy.enabled, timeline.overlays.privacy.autoDetect { current.ocr = result.ocr }
             if result.errors["speech"] == nil, let transcript = result.transcript { current.transcript = transcript }
             if result.errors["personMask"] == nil, let personMask = result.personMask { current.personMask = personMask }
+            if result.errors["typing"] == nil, request.includeTyping { current.typing = result.typing }
         }
         return result
     }
