@@ -216,8 +216,48 @@ private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
     let out = Director.derive(tl, input: DirectorInput(events: events, source: precisionSource), revision: 1)
     #expect(out.zoom.count == 2)
     // Midpoint between scenes (well beyond hold + zoom-out settle) is unzoomed.
+    // Spec §10: 1.0 ± 0.02 at the midpoint.
     let mid = out.evaluate(at: 5.5)
-    #expect(abs(Double(mid.cameraScale) - 1.0) < 0.05)
+    #expect(abs(Double(mid.cameraScale) - 1.0) < 0.02)
+}
+
+@Test func caretSweepStaysInRangeWithFewRetargets() {
+    // Spec §10: synthetic caret trace sweeping 0->0.9 W over 8 s =>
+    // <= 3 retargets, caret within d.x in (-0.85, 0.60) at every sample.
+    // Measured against the planner's segment target centres (the decision
+    // layer); the derived camera spring that trails mid-pan is not part of
+    // this pure-planner assertion.
+    let src = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 16,
+                         backingScale: 1, originX: 0, originY: 0)
+    var events: [InputEvent] = []
+    for i in 0..<24 { events.append(InputEvent(t: 2.0 + Double(i) * 0.3, kind: .keyDown, keyCode: 7)) }
+    // One typing burst 2.0..8.9; caret sweeps across the field.
+    // The bullet says 0->0.9 W, but at 1.8x those absolute extremes are
+    // outside the feasibility clamp (centre must lie in [533, 1387] at
+    // 1920 wide), so d.x bounds cannot hold there for ANY planner.
+    // Sweep the widest checkable range instead (0.06W->0.85W); the 0.9W
+    // frame edge is covered by the A7 viewport bound on video.
+    let samples = (0..<24).map { TypingTrace.Sample(t: 2.0 + Double($0) * 0.3,
+                                                    x: 115 + Double($0) * (1517.0 / 23.0), y: 540) }
+    let trace = TypingTrace(t0: 2.0, t1: 8.9,
+                            rect: CGRect(x: 115, y: 520, width: 1517, height: 36),
+                            samples: samples)
+    var tl = Timeline(duration: 16)
+    tl.audio.speedRampsAuto = false
+    let out = Director.derive(tl, input: DirectorInput(events: events, source: src, typing: [trace]), revision: 1)
+    let inWindow = out.zoom.filter { $0.end >= 2.0 && $0.start <= 8.9 }
+    print("CARET-SWEEP scenes:", inWindow.map { "\(String(format: "%.1f-%.1f", $0.start, $0.end))" }.joined(separator: " | "))
+    #expect(inWindow.count - 1 <= 3, "retargets=\(inWindow.count - 1)")
+    for s in samples {
+        guard let seg = out.zoom.first(where: { s.t >= $0.start && s.t < $0.end })
+                ?? out.zoom.last(where: { $0.end <= s.t }) else { continue }
+        guard case .fixed(let fx, let fy) = seg.focus else { continue }
+        let halfX = 1920.0 / (2 * seg.scale)
+        let dx = ((s.x - fx * 1920.0) / halfX)
+        let dy = ((s.y - fy * 1080.0) / (1080.0 / (2 * seg.scale)))
+        #expect(dx > -0.85 && dx < 0.60, "dx=\(dx) at t=\(s.t)")
+        #expect(abs(dy) <= 0.62, "dy=\(dy) at t=\(s.t)")
+    }
 }
 
 @Test func cameraArrivesByClickAndNotEarly() {

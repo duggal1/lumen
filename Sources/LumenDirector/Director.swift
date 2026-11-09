@@ -145,12 +145,24 @@ public enum Director {
                                   webcamAspect: input.webcamAspect, layout: layout, placement: placement,
                                   captions: captions, autoMasks: autoMasks, personMask: input.personMask)
         if ProcessInfo.processInfo.environment["LUMEN_ZOOM_DEBUG"] == "1" {
+            let cam = t.derived?.camera
             for event in input.events where event.kind == .down && event.button == 0 {
                 let outTime = tm.output(atSource: event.t)
                 let frame = t.evaluate(at: outTime)
-                let message = String(format: "LUMEN_ZOOM event=%.5f source=%.5f output=%.5f click=(%.1f,%.1f) focus=(%.1f,%.1f) scale=%.3f\\n",
+                // Per-click: target lz, arrival at click, click in viewport (normalised).
+                let idx = min(max(Int(outTime * gridRate), 0), (cam?.lz.count ?? 1) - 1)
+                let lzNow = (cam?.lz.isEmpty == false) ? Double(cam!.lz[idx]) : log(Double(frame.cameraScale))
+                let targetScale = t.zoom.first { abs($0.start - event.t) < 0.01 }?.scale
+                                    ?? t.zoom.first { event.t >= $0.start && event.t <= $0.end }?.scale ?? 1
+                let targetLz = log(targetScale)
+                let arrival = targetLz > 0.001 ? lzNow / targetLz : 0
+                let vw = Double(src.width) / Double(frame.cameraScale), vh = Double(src.height) / Double(frame.cameraScale)
+                let vx = (Double(event.x) - (Double(frame.cameraCenter.x) - vw / 2)) / vw
+                let vy = (Double(event.y) - (Double(frame.cameraCenter.y) - vh / 2)) / vh
+                let message = String(format: "LUMEN_ZOOM event=%.5f source=%.5f output=%.5f click=(%.1f,%.1f) focus=(%.1f,%.1f) scale=%.3f target_lz=%.3f arrival=%.3f viewport=(%.3f,%.3f)\n",
                                      event.t, event.t, outTime, event.x, event.y,
-                                     frame.cameraCenter.x, frame.cameraCenter.y, frame.cameraScale)
+                                     frame.cameraCenter.x, frame.cameraCenter.y, frame.cameraScale,
+                                     targetLz, arrival, vx, vy)
                 FileHandle.standardError.write(Data(message.utf8))
             }
         }

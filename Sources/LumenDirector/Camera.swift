@@ -2,10 +2,6 @@ import Foundation
 import LumenCore
 import LumenProject
 
-@inline(__always) func smootherstep(_ x: Double) -> Double {
-    let t = clamp(x, 0, 1); return t * t * t * t * (35 + t * (-84 + t * (70 - 20 * t)))
-}
-
 enum CameraSolver {
     private struct Shot { var on: Double, off: Double, lz: Double, focus: Focus, ease: Double }
     /// Two equal critically-damped springs in series (a cascade) = 4 equal
@@ -119,12 +115,5 @@ enum CameraSolver {
             tr.yaw[i] = Float(yaw); tr.pitch[i] = Float(pitch)
         }
         return tr
-    }
-
-    static func softClamp(_ v: Double, _ lo: Double, _ hi: Double, _ s: Double) -> Double {
-        func f(_ d: Double) -> Double { d >= s ? d : s * exp(d / s - 1) }
-        let mid = (lo + hi) / 2
-        let a = lo + f(v - lo), c = hi - f(hi - a)
-        return lerp(mid, c, smoothstep((hi - lo) / (2 * s)))
     }
 }

@@ -3,6 +3,15 @@ import LumenCore
 import LumenProject
 
 /// Causal camera. The owner serializes event ingestion and display updates.
+/// The offline CameraSolver is a cascade; the live preview keeps its own
+/// causal clamp here so the two paths never share a helper by accident.
+private func liveSoftClamp(_ v: Double, _ lo: Double, _ hi: Double, _ s: Double) -> Double {
+    func f(_ d: Double) -> Double { d >= s ? d : s * exp(d / s - 1) }
+    let mid = (lo + hi) / 2
+    let a = lo + f(v - lo), c = hi - f(hi - a)
+    return lerp(mid, c, smoothstep((hi - lo) / (2 * s)))
+}
+
 public struct LiveCamera: Sendable {
     public var maxScale = 2.2, hold = 1.6, omegaZoom = 8.0, omegaPan = 7.0, lookahead = 0.15, deadZone = 0.28
     public var cursor = CursorStyle()
@@ -87,7 +96,7 @@ public struct LiveCamera: Sendable {
         let wS = exp(-lzShot), w = exp(-lz)
         let q = abs(wS - 1) > 1e-5 ? (w - 1) / (wS - 1) : z
         let hw = 0.5 / exp(lzShot), soft = 8 / src.x
-        let f = SIMD2(CameraSolver.softClamp(fx2.x, hw, 1 - hw, soft), CameraSolver.softClamp(fx2.y, hw, 1 - hw, soft))
+        let f = SIMD2(liveSoftClamp(fx2.x, hw, 1 - hw, soft), liveSoftClamp(fx2.y, hw, 1 - hw, soft))
         let c = SIMD2(0.5, 0.5) + (f - SIMD2(0.5, 0.5)) * q
         let cs = CursorSample(position: SIMD2(Float(cur2.x.x), Float(cur2.x.y)), velocity: SIMD2(Float(cur2.v.x), Float(cur2.v.y)),
                               opacity: Float(smoothstep(opacity)), press: Float(press.x.x), shape: shape)

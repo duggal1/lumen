@@ -560,8 +560,9 @@ struct Inspector: View {
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
-                SliderRow(label: "Zoom amount", v: m.bind(\.camera.baseScale), range: 1.3...3.0,
-                          fmt: { String(format: "%.1f×", $0) })
+                SliderRow(label: "Zoom amount", v: Binding(get: { m.timeline.camera.baseScale },
+                                        set: { v in m.edit { $0.camera.baseScale = v; $0.camera.autoMaxScale = min(1.45 * v, $0.camera.maxScale) } }),
+                          range: 1.3...3.0, fmt: { String(format: "%.1f×", $0) })
                 SliderRow(label: "Smoothness", v: m.bind(\.camera.leadIn), range: 0.3...1.0,
                           fmt: { "\(Int($0 * 1000)) ms" })
                 Row(label: "Preset") { LDropdown(sel: Binding(get: { m.timeline.camera.preset }, set: { v in m.edit { $0.camera.apply(preset: v) } }), options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "plus.magnifyingglass") }).frame(width: 130) }
@@ -573,6 +574,12 @@ struct Inspector: View {
                     Row(label: "Max upscale") { LDropdown(sel: m.bind(\.camera.upscaleMaxFactor), options: [2, 3, 4, 5, 6, 8, 10].map { ($0, "\($0)×", "arrow.up.right.and.arrow.down.right") }).frame(width: 130) }
                     ToggleRow(label: "Real-time upscale", on: m.bind(\.camera.upscaleEnabled))
                     SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.0...2.5, fmt: { String(format: "%.2f×", $0) })
+                    SliderRow(label: "Zoom-out delay", v: m.bind(\.camera.zoomOutGap), range: 2.0...6.0,
+                              fmt: { String(format: "%.1f s", $0) })
+                    SliderRow(label: "Hold", v: m.bind(\.camera.hold), range: 0.5...2.5,
+                              fmt: { String(format: "%.1f s", $0) })
+                    SliderRow(label: "Safe zone", v: m.bind(\.camera.safeZone), range: 0.4...0.8,
+                              fmt: { String(format: "%.2f", $0) })
                     SliderRow(label: "Motion blur", v: m.bind(\.camera.shutter), range: 0...1)
                     SliderRow(label: "Follow delay", v: m.bind(\.camera.followDelay), range: 0...0.5,
                               fmt: { "\(Int($0 * 1000)) ms" })

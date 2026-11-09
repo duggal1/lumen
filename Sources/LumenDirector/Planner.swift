@@ -89,7 +89,7 @@ enum ZoomPlanner {
         guard W > 0, H > 0 else { return [] }
         if p.preset == .fixed {
             return [ZoomSegment(id: stableID(tm.trimStart, tm.trimEnd), start: tm.trimStart, end: tm.trimEnd,
-                                scale: p.maxScale, focus: .follow, origin: .auto)]
+                                scale: p.baseScale, focus: .follow, origin: .auto)]
         }
         let sorted = events.sorted { $0.t < $1.t }
         func ok(_ t: Double) -> Bool { t.isFinite && t >= tm.trimStart + 0.3 && t <= tm.trimEnd - 0.8 && !tm.isCut(t) }
