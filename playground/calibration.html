@@ -40,6 +40,10 @@
 <div id="scroll"></div>
 <script>
 (function(){
+  // Deterministic fixture: never restore a stale scroll position from a
+  // previous demo run, and do not let autofocus scroll the page.
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+  window.scrollTo(0, 0);
   document.querySelectorAll('[data-nav]').forEach(function(a){
     a.addEventListener('click', function(ev){ ev.preventDefault(); });
   });
@@ -71,7 +75,6 @@
     bar.style.top = (r.top + 8) + 'px';
   });
   input.addEventListener('blur', function(){ bar.style.display = 'none'; });
-  input.focus();
 })();
 </script>
 </body></html>

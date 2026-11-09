@@ -992,6 +992,15 @@ private struct WallpaperGrid: View {
     }
 }
 
+/// A Sendable snapshot of decoded thumb pixels. NSImage is not Sendable, so
+/// the cache moves Data across its boundary and the cell builds the image on
+/// the main actor (`WallpaperCell.thumb`), which also decodes the disk path.
+private struct WallpaperThumbData: Sendable {
+    let data: Data
+    let pixelWidth: Int
+    let pixelHeight: Int
+}
+
 private struct WallpaperCell: View {
     let choice: Inspector.WallpaperChoice
     let selected: Bool
@@ -1022,7 +1031,8 @@ private struct WallpaperCell: View {
         .accessibilityLabel(choice.displayName)
         .accessibilityValue(selected ? "Selected" : "")
         .task(id: choice.url.path) {
-            thumb = await WallpaperThumbnailCache.shared.thumbnail(for: choice.url)
+            guard let snapshot = await WallpaperThumbnailCache.shared.thumbnail(for: choice.url) else { return }
+            thumb = NSImage(data: snapshot.data)
         }
     }
 }
@@ -1035,26 +1045,24 @@ private actor WallpaperThumbnailCache {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Lumen/WallpaperThumbs", isDirectory: true)
     }
-    private var memory: [String: NSImage] = [:]
+    private var memory: [String: WallpaperThumbData] = [:]
 
-    func thumbnail(for url: URL) async -> NSImage? {
+    func thumbnail(for url: URL) async -> WallpaperThumbData? {
         let key = cacheKey(for: url)
         if let hit = memory[key] { return hit }
         if let disk = diskImage(for: key) {
             memory[key] = disk
             return disk
         }
-        let image = await Task.detached(priority: .userInitiated) {
+        let snapshot = await Task.detached(priority: .userInitiated) {
             Self.makeThumbnail(at: url, targetWidth: 280)
         }.value
-        if let image {
-            if let data = Self.jpegData(from: image) {
-                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                try? data.write(to: directory.appendingPathComponent(key), options: .atomic)
-            }
-            memory[key] = image
+        if let snapshot {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? snapshot.data.write(to: directory.appendingPathComponent(key), options: .atomic)
+            memory[key] = snapshot
         }
-        return image
+        return snapshot
     }
 
     private func cacheKey(for url: URL) -> String {
@@ -1065,30 +1073,40 @@ private actor WallpaperThumbnailCache {
         return "\(stem)-\(Int(stamp))-\(size)-280.jpg"
     }
 
-    private func diskImage(for key: String) -> NSImage? {
+    private func diskImage(for key: String) -> WallpaperThumbData? {
         let url = directory.appendingPathComponent(key)
-        return NSImage(contentsOf: url)
+        guard let data = FileManager.default.contents(atPath: url.path),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int,
+              let h = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        return WallpaperThumbData(data: data, pixelWidth: w, pixelHeight: h)
     }
 
-    private nonisolated static func makeThumbnail(at url: URL, targetWidth: Int) -> NSImage? {
+    private nonisolated static func makeThumbnail(at url: URL, targetWidth: Int) -> WallpaperThumbData? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCache: false,
             kCGImageSourceThumbnailMaxPixelSize: targetWidth,
         ] as CFDictionary) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        guard let data = cg.asBitmapData() else { return nil }
+        return WallpaperThumbData(data: data, pixelWidth: cg.width, pixelHeight: cg.height)
     }
+}
 
-    private nonisolated static func jpegData(from image: NSImage) -> Data? {
-        guard let rep = image.representations.first else { return nil }
-        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: rep.pixelsWide, pixelsHigh: rep.pixelsHigh,
-                                      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 32) else { return nil }
-        guard let ctx = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+extension CGImage {
+    /// Renders the image to JPEG data, fully off the main thread.
+    nonisolated func asBitmapData() -> Data? {
+        let width = self.width, height = self.height
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                                            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 32),
+              let ctx = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = ctx
-        image.draw(in: NSRect(x: 0, y: 0, width: rep.pixelsWide, height: rep.pixelsHigh))
+        NSImage(cgImage: self, size: NSSize(width: width, height: height))
+            .draw(in: NSRect(x: 0, y: 0, width: width, height: height))
         NSGraphicsContext.restoreGraphicsState()
         return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
     }

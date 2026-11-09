@@ -155,14 +155,8 @@ enum ZoomPlanner {
             let outside = typing ? (d.x > 0.60 || d.x < -0.85 || abs(d.y) > p.safeZone)   // text grows rightwards
                                  : (abs(d.x) > p.safeZone || abs(d.y) > p.safeZone)
             guard outside else { return }
-            // Prefer the rect centre only when the click is near it; otherwise
-            // keep the exact click pixel.
-            var c = pt
-            if let r = rect, r.width < 1.6 * h.x {
-                let m = SIMD2(Double(r.midX), Double(r.midY))
-                if hypot(m.x - pt.x, m.y - pt.y) <= 12 * b { c = m }
-            }
-            if typing { c = SIMD2(pt.x + 0.35 * h.x, pt.y) }   // caret lands ~18 % from the left edge
+            let c = typing ? SIMD2(pt.x + 0.35 * h.x, pt.y)                         // caret lands ~18 % from the left edge
+                           : (rect.map { $0.width < 1.6 * h.x ? SIMD2($0.midX, $0.midY) : pt } ?? pt)
             retarget(c, at: t)
         }
         func absorbKeepAlive(upTo t: Double) {
@@ -179,18 +173,13 @@ enum ZoomPlanner {
                 s = i.kind == .typing ? 0.06 * H / r.height                              // text line ≈ 6 % of view height
                                       : min(0.42 * W / r.width, 0.30 * H / r.height)     // element ≈ 42 % of view width
             }
-            if abs(log(s / prevScale)) < log(1.3) { s = prevScale }                      // no breathing between scenes
             s = clamp(s, p.minScale, min(p.autoMaxScale, p.maxScale))
+            if abs(log(s / prevScale)) < log(1.3) { s = prevScale }                      // no breathing between scenes
             return s
         }
         func focusCenter(_ i: Intent, _ s: Double) -> SIMD2<Double> {
             if i.kind == .typing { return SIMD2(i.x + 0.35 * half(s).x, i.y) }
-            // AX center only when the click is essentially ON the element's
-            // centre; off-centre clicks keep their exact pixel.
-            if let r = i.rect, r.width < 1.6 * half(s).x {
-                let m = SIMD2(Double(r.midX), Double(r.midY))
-                if hypot(m.x - i.x, m.y - i.y) <= 12 * b { return m }
-            }
+            if let r = i.rect, r.width < 1.6 * half(s).x { return SIMD2(r.midX, r.midY) }
             return SIMD2(i.x, i.y)
         }
 

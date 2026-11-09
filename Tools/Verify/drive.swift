@@ -92,7 +92,7 @@ func sleepS(_ s: Double) { Thread.sleep(forTimeInterval: s) }
         let save = CGPoint(x: 164, y: 305)      // grid row 1
         let open = CGPoint(x: 164, y: 368)      // grid row 2
         let next = CGPoint(x: 522, y: 305)      // grid row 1, right
-        let far = CGPoint(x: 1291, y: 703)      // far corner button
+        let far = CGPoint(x: 1289, y: 806)      // far corner button (locate-verified 2026-11-09)
         // 0–6 s: wander with pauses + jitter, no clicks.
         for p in [CGPoint(x: 500, y: 300), CGPoint(x: 900, y: 250), CGPoint(x: 600, y: 500), CGPoint(x: 1100, y: 700)] {
             glide(to: p, dur: 0.6); sleepS(0.7)
