@@ -80,18 +80,24 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var micInputIDs: [String] = UserDefaults.standard.stringArray(forKey: "LumenMicrophoneInputIDs") ?? [] {
         didSet { UserDefaults.standard.set(micInputIDs, forKey: "LumenMicrophoneInputIDs") }
     }
-    /// Discovered once per refresh so opening Inputs never blocks on AVCapture.
+    /// Discovered off-main so opening Inputs never blocks the tab on AVCapture.
     var cachedAudioInputs: [(id: String, name: String)] = []
     private var audioInputsDiscovered = false
+    private var audioInputsTask: Task<Void, Never>?
     var availableAudioInputs: [(id: String, name: String)] {
-        if !audioInputsDiscovered { refreshAudioInputs() }
+        if !audioInputsDiscovered, audioInputsTask == nil {
+            audioInputsTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                let found = await Task.detached(priority: .userInitiated) {
+                    AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio,
+                                                    position: .unspecified).devices
+                        .map { (id: $0.uniqueID, name: $0.localizedName) }
+                }.value
+                self.cachedAudioInputs = found
+                self.audioInputsDiscovered = true
+            }
+        }
         return cachedAudioInputs
-    }
-    func refreshAudioInputs() {
-        cachedAudioInputs = AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio,
-                                          position: .unspecified).devices
-            .map { (id: $0.uniqueID, name: $0.localizedName) }
-        audioInputsDiscovered = true
     }
     func selectAudioInput(_ id: String, enabled: Bool) {
         var selected = micInputIDs.filter { $0 != id }
@@ -139,12 +145,18 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID).map { ($0, s.localizedName) }
         }
         maxFPS = Self.probeMaxFPS(displayID: displayID)
-        let urls = (try? FileManager.default.contentsOfDirectory(at: library, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        projects = urls.filter { $0.pathExtension == "lumen" }.compactMap { u in
-            let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            let file = try? ProjectBundle(url: u).load()
-            let meta = file?.meta
-            return ProjectRow(url: u,
+        // Project metas + recovery scan are disk work: load off-main so the
+        // shell appears immediately, then publish incrementally.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let rows = await Task.detached(priority: .userInitiated) {
+                let urls = (try? FileManager.default.contentsOfDirectory(at: self.library,
+                    includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+                return urls.filter { $0.pathExtension == "lumen" }.compactMap { u -> ProjectRow in
+                    let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                    let file = try? ProjectBundle(url: u).load()
+                    let meta = file?.meta
+                    return ProjectRow(url: u,
                               name: Self.displayName(meta?.name ?? u.deletingPathExtension().lastPathComponent),
                               date: meta?.created ?? d,
                               size: meta.map { "\($0.source.width)×\($0.source.height) · \(Int($0.source.duration)) s" } ?? "Couldn’t read this recording.",
@@ -153,18 +165,19 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                               fps: meta?.source.fps ?? 0,
                               dropped: meta?.droppedFrames ?? 0,
                               unreadable: meta == nil || !FileManager.default.fileExists(atPath: u.appendingPathComponent("screen.mov").path))
-        }.sorted { $0.date > $1.date }
-        recoverable = RecoveryScanner.scan(library: library)
-        Task {
+                }.sorted { $0.date > $1.date }
+            }.value
+            self.projects = rows
+            self.recoverable = await Task.detached(priority: .userInitiated) { RecoveryScanner.scan(library: self.library) }.value
             let c = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
-            windows = (c?.windows ?? []).filter { $0.isOnScreen && ($0.title?.isEmpty == false) && $0.owningApplication?.bundleIdentifier != Bundle.main.bundleIdentifier }
+            self.windows = (c?.windows ?? []).filter { $0.isOnScreen && ($0.title?.isEmpty == false) && $0.owningApplication?.bundleIdentifier != Bundle.main.bundleIdentifier }
                 .map { ($0.windowID, "\($0.owningApplication?.applicationName ?? "") — \($0.title ?? "")") }
-            if windowID == 0 { windowID = windows.first?.id ?? 0 }
+            if self.windowID == 0 { self.windowID = self.windows.first?.id ?? 0 }
         }
     }
 
     /// Bundles created before human naming carry an ISO stamp; the meta line already holds the time.
-    static func displayName(_ raw: String) -> String {
+    nonisolated static func displayName(_ raw: String) -> String {
         let pattern = #"^Recording \d{4}-\d{2}-\d{2}T\d{6}(.*)$"#
         guard raw.range(of: pattern, options: .regularExpression) != nil else { return raw }
         return raw.replacingOccurrences(of: pattern, with: "Screen recording$1", options: .regularExpression)
@@ -346,7 +359,9 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             micTestError = "No microphone input is available."
             return
         }
-        input.installTap(onBus: 0, bufferSize: 512, format: format) { @Sendable [weak self, token] buffer, _ in
+        final class TickBox: @unchecked Sendable { var n = 0; let lock = NSLock() }
+        let tickBox = TickBox()
+        input.installTap(onBus: 0, bufferSize: 512, format: format) { @Sendable [weak self, token, tickBox] buffer, _ in
             guard let ch = buffer.floatChannelData?[0] else { return }
             let n = Int(buffer.frameLength); guard n > 0 else { return }
             var sum: Float = 0; for i in 0..<n { sum += ch[i] * ch[i] }
@@ -362,6 +377,13 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                 if lo < hi { for i in lo..<hi { m = max(m, abs(ch[i])) } }
                 peaks[b] = m
             }
+            // Publish at ~20 Hz, not per buffer (~86/s), so the test does
+            // not hop to main every 11 ms.
+            tickBox.lock.lock()
+            tickBox.n += 1
+            let tick = tickBox.n
+            tickBox.lock.unlock()
+            guard tick % 4 == 0 else { return }
             DispatchQueue.main.async {
                 Task { @MainActor in
                     guard let self, self.micTesting, self.micTestToken == token else { return }
