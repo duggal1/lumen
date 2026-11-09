@@ -4,7 +4,7 @@ build:
 	swift build
 
 test:
-	swift test
+	swift test --parallel
 
 app:
 	bash Tools/make-app.sh
