@@ -302,6 +302,8 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     /// Noise reduction is ON by default: a raw mic passthrough was the
     /// "not noticeably cleaner" complaint. Users can still turn it off.
     public var micClean = true
+    public var noiseReductionStrength = 1.0
+    public var voiceClarity = true
     public var micMode: MicMode = .standard
     /// Studio-voice strength, 0...1 (tone, de-ess, leveler). Replaces the old
     /// `voiceProfile` + `studioAmount` pair. Legacy `studioAmount` values decode
@@ -333,7 +335,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     private enum LegacyKeys: String, CodingKey { case studioAmount }
     private enum LegacyLUFSKeys: String, CodingKey { case targetLUFS }
     enum CodingKeys: String, CodingKey {
-        case outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFSOverride, clickSounds, whooshes, keySounds, typingPackId, typingLevelDb, clickTone, sfxGainDb, musicPath
+        case noiseReductionStrength, voiceClarity, outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFSOverride, clickSounds, whooshes, keySounds, typingPackId, typingLevelDb, clickTone, sfxGainDb, musicPath
         case dereverb, normalize, studioMode
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
@@ -349,6 +351,9 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         let c = try d.container(keyedBy: CodingKeys.self)
         outputGainDb = c.opt(.outputGainDb, outputGainDb)
         micClean = c.opt(.micClean, micClean); micMode = c.opt(.micMode, micMode)
+        let reduction = c.opt(.noiseReductionStrength, noiseReductionStrength)
+        noiseReductionStrength = reduction.isFinite ? min(max(reduction, 0), 1) : 1
+        voiceClarity = c.opt(.voiceClarity, voiceClarity)
         // Legacy `studioAmount` decodes into `studio` when the new key is absent.
         if let lc = try? d.container(keyedBy: LegacyKeys.self),
            let v = try lc.decodeIfPresent(Double.self, forKey: .studioAmount) {
