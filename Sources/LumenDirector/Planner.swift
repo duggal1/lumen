@@ -110,11 +110,23 @@ enum ZoomPlanner {
             intents.append(i); lastClick = i
         }
         for burst in sorted.typingBursts() where ok(burst.t0) {
-            if let tr = typing.first(where: { $0.t0 <= burst.t1 + 0.5 && $0.t1 >= burst.t0 - 0.5 }), let s0 = tr.samples.first {
-                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: s0.x, y: s0.y, rect: tr.rect, caret: tr.samples))
-            } else if let a = sorted.last(where: { $0.kind == .down && $0.button == 0 && $0.t <= burst.t0 && burst.t0 - $0.t < 20 }) {
-                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: Double(a.x), y: Double(a.y)))   // fallback: last click
-            }   // no trace and no click => NO zoom. Never guess from the cursor.
+            let focused = sorted.filter { $0.kind == .keyDown && $0.t >= burst.t0 && $0.t <= burst.t1 }
+                .compactMap { event -> Intent? in
+                    guard event.axFrameIndex > 0, Int(event.axFrameIndex) <= ax.count else { return nil }
+                    let field = ax[Int(event.axFrameIndex) - 1]
+                    guard field.w > 0, field.h > 0, field.x.isFinite, field.y.isFinite else { return nil }
+                    let rect = CGRect(x: field.x, y: field.y, width: field.w, height: field.h)
+                    let caret = field.caret
+                    let x = caret.map { $0.x + $0.w / 2 } ?? rect.midX
+                    let y = caret.map { $0.y + $0.h / 2 } ?? rect.midY
+                    guard x >= 0, x <= W, y >= 0, y <= H else { return nil }
+                    return Intent(kind: .typing, t: event.t, tEnd: event.t, x: x, y: y, rect: rect)
+                }
+            if !focused.isEmpty {
+                intents.append(contentsOf: focused)
+            } else if let tr = typing.first(where: { $0.t0 <= burst.t1 + 0.15 && $0.t1 >= burst.t0 - 0.15 }), let first = tr.samples.first {
+                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: first.x, y: first.y, rect: tr.rect, caret: tr.samples))
+            }
         }
         if !sorted.contains(where: \.hasPosition) {            // device/imported clip: no input log
             var last = -10.0
@@ -145,7 +157,7 @@ enum ZoomPlanner {
             guard let o = cur else { return }
             let nc = clampC(c, o.scale)
             let moved = (nc - o.c) / half(o.scale)
-            if hypot(moved.x, moved.y) < 0.02 { return }                          // clamped to the same view: nothing to do
+            if hypot(moved.x, moved.y) < 0.12 { return }                          // clamped to the same view: nothing to do
             if t - o.start <= 0.2 { cur = Open(start: o.start, scale: o.scale, c: nc); return }
             close(at: t); cur = Open(start: t, scale: o.scale, c: nc)
         }
@@ -168,25 +180,28 @@ enum ZoomPlanner {
             }
         }
         func chooseScale(_ i: Intent, prevScale: Double) -> Double {
-            var s = p.baseScale
-            if let r = i.rect, r.width > 1, r.height > 1 {
-                s = i.kind == .typing ? 0.06 * H / r.height                              // text line ≈ 6 % of view height
-                                      : min(0.42 * W / r.width, 0.30 * H / r.height)     // element ≈ 42 % of view width
-            }
-            let hi = min(p.autoMaxScale, p.maxScale)
-            s = clamp(s, p.minScale, hi)
-            let prev = clamp(prevScale, p.minScale, hi)
-            if abs(log(s / prev)) < log(1.3) { s = prev }                                // no breathing between scenes
-            return s
+            let r = i.rect ?? CGRect(x: i.x - W * 0.12, y: i.y - H * 0.12, width: W * 0.24, height: H * 0.24)
+            let fit = min(W / max(r.width * 1.6, 1), H / max(r.height * 1.6, 1))
+            let hi = max(1.3, min(p.maxScale, 3.2))
+            let s = clamp(fit, max(1.3, min(p.minScale, hi)), hi)
+            return abs(log(s / prevScale)) < log(1.08) ? clamp(prevScale, 1.3, hi) : s
         }
+
         func focusCenter(_ i: Intent, _ s: Double) -> SIMD2<Double> {
-            if i.kind == .typing { return SIMD2(i.x + 0.35 * half(s).x, i.y) }
+            if i.kind == .typing, let rect = i.rect { return SIMD2(rect.midX, rect.midY) }
             return SIMD2(i.x, i.y)                                  // C3: zoom anchor == click pixel
         }
 
         for it in intents {
             absorbKeepAlive(upTo: it.t)
             if cur != nil, it.t - last <= p.zoomOutGap {
+                if let current = cur, it.kind == .typing {
+                    let scale = chooseScale(it, prevScale: current.scale)
+                    if abs(log(scale / current.scale)) > log(1.08) {
+                        close(at: it.t)
+                        cur = Open(start: it.t, scale: scale, c: clampC(focusCenter(it, scale), scale))
+                    }
+                }
                 ensureVisible(SIMD2(it.x, it.y), at: it.t, typing: it.kind == .typing)
             } else {
                 close(at: last + p.hold)
