@@ -170,7 +170,7 @@ public actor RecordingSession {
     private func armStageTimeout(_ stage: RecordingStage, seconds: Double) -> Task<Void, Never> {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
-            guard let self else { return }
+            guard !Task.isCancelled, let self else { return }
             await self.timeoutIfStillIn(stage: stage)
         }
     }
@@ -371,10 +371,11 @@ public actor RecordingSession {
             stopWatchdog()
             if isPaused { resume() }
             isPaused = false
-            await input.stop()
-            await webcam?.stop()
+            async let inputStop: Void = input.stop()
+            async let webcamStop: Void = webcam?.stop() ?? ()
+            async let engineStop: Void = engine.stop()
             for recorder in extraMicrophones { await recorder.stop() }
-            try await engine.stop()
+            _ = try await (inputStop, webcamStop, engineStop)
         } catch {
             transition(to: .failed("Stopping stalled. \(error)"))
             throw error
@@ -384,7 +385,8 @@ public actor RecordingSession {
     /// Slow finalization: wrap audio journals, finalize events, publish project.
     /// Runs at `.utility` QoS off main; UI shows "Finishing…" with real progress.
     /// Heavy analysis starts only after this returns.
-    public func finalize() async throws -> ProjectBundle {
+    public func finalize(progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> ProjectBundle {
+        progress(0)
         transition(to: .finalizing)
         // Snapshot actor state first (cheap), then run heavy IO off-actor.
         guard let engine, let b = bundle, var info = engine.info else {
@@ -420,9 +422,11 @@ public actor RecordingSession {
         do {
             try await Task.detached(priority: .utility) {
                 var working = baseTimeline
+                progress(0.1)
                 do {
                     let recordedEvents = try b.events(origin: origin)
                     let ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
+                    progress(0.4)
                     if !recordedEvents.isEmpty {
                         working.zoom = Director.planRecordingZoom(events: recordedEvents, ax: ax,
                                                                   source: infoCopy, timeline: working)
@@ -430,8 +434,10 @@ public actor RecordingSession {
                 } catch {
                     os_log("finalize: event sidecar unreadable: %@", log: .default, type: .error, String(describing: error))
                 }
+                progress(0.8)
                 try b.save(ProjectFile(meta: finalMeta, timeline: working))
                 b.clearJournal()
+                progress(1)
             }.value
         } catch {
             RecordingGate.recordingStopped()
