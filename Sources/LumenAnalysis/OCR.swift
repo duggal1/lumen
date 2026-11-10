@@ -35,6 +35,9 @@ private final class OCRJob: @unchecked Sendable {
     private let progress: @Sendable (Double) -> Void
     private let completion = OSAllocatedUnfairLock<(continuation: CheckedContinuation<[OCRDetection], Error>?, result: Result<[OCRDetection], Error>?)>(uncheckedState: (nil, nil))
     private let requestLock = OSAllocatedUnfairLock<OCRRequestHandle?>(uncheckedState: nil)
+    private var trackingRequests: [VNTrackObjectRequest] = []
+    private var trackingBuffer: CVPixelBuffer?
+    private let trackingHandler = VNSequenceRequestHandler()
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let readerLock = OSAllocatedUnfairLock<ReaderHandle?>(uncheckedState: nil)
     private let cancelled = OSAllocatedUnfairLock(initialState: false)
@@ -92,7 +95,7 @@ private final class OCRJob: @unchecked Sendable {
         reader.add(output)
         guard reader.startReading() else { throw reader.error ?? AnalysisError.readerStart }
         var nextTrack = 0.0
-        let tracker = VNSequenceRequestHandler()
+        defer { retireTrackers() }
         var next = 0.0
         var lastDetections: [OCRDetection] = []
         var detections: [OCRDetection] = []
@@ -108,13 +111,14 @@ private final class OCRJob: @unchecked Sendable {
             if time + 0.0001 < next {
                 if time >= nextTrack, !lastDetections.isEmpty {
                     nextTrack = time + 1.0 / 15
-                    lastDetections = try track(lastDetections, buffer: buffer, time: time + offset, handler: tracker)
+                    lastDetections = try track(lastDetections, buffer: buffer, time: time + offset, handler: trackingHandler)
                     detections.append(contentsOf: lastDetections)
                 }
                 continue
             }
             next = time + 1 / max(fps, 0.5)
             progress(min(max(time / max(duration, asset.duration.seconds, 0.001), 0), 0.99))
+            retireTrackers()
             lastDetections = try detect(in: buffer, at: time + offset)
             detections.append(contentsOf: lastDetections)
         }
@@ -129,19 +133,30 @@ private final class OCRJob: @unchecked Sendable {
         return deduplicate(detections)
     }
 
+    private func retireTrackers() {
+        guard !trackingRequests.isEmpty else { return }
+        for request in trackingRequests { request.isLastFrame = true }
+        if let buffer = trackingBuffer { try? trackingHandler.perform(trackingRequests, on: buffer) }
+        trackingRequests.removeAll(); trackingBuffer = nil
+    }
+
     private func track(_ detections: [OCRDetection], buffer: CVPixelBuffer, time: Double,
                        handler: VNSequenceRequestHandler) throws -> [OCRDetection] {
-        let requests = detections.map { detection in
+        trackingBuffer = buffer
+        if trackingRequests.isEmpty {
+            trackingRequests = detections.map { detection in
             let observation = VNDetectedObjectObservation(boundingBox: CGRect(x: detection.x,
                 y: 1 - detection.y - detection.h, width: detection.w, height: detection.h))
             let request = VNTrackObjectRequest(detectedObjectObservation: observation)
             request.trackingLevel = .fast
             return request
         }
-        try handler.perform(requests, on: buffer)
-        return zip(detections, requests).map { prior, request in
+        }
+        try handler.perform(trackingRequests, on: buffer)
+        return zip(detections, trackingRequests).map { prior, request in
             var result = prior; result.t = time
             if let observation = request.results?.first as? VNDetectedObjectObservation, observation.confidence >= 0.3 {
+                request.inputObservation = observation
                 let rect = observation.boundingBox
                 result.x = rect.minX; result.y = 1 - rect.maxY; result.w = rect.width; result.h = rect.height
             }
