@@ -32,8 +32,9 @@ enum CameraSolver {
 
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams, src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
         _ = loop
-        let n = max(Int(outDur * gridRate) + 1, 2), dt = 1 / gridRate
-        var tr = CameraTrack(count: n)
+        let rate = 240.0
+        let n = max(Int(outDur * rate) + 1, 2), dt = 1 / rate
+        var tr = CameraTrack(count: n, rate: rate)
         let omegaIn = max(p.omegaZoom, 1), omegaOut = omegaIn * 0.8
 
         // Output-time shots. Auto shots activate `leadIn` early; manual shots
@@ -50,8 +51,8 @@ enum CameraSolver {
         if shots.contains(where: { if case .follow = $0.focus { true } else { false } }) {
             let halfZone = clamp(p.deadZone, 0.05, 0.45) / 2.0
             let followOmega = 1 / max(clamp(p.followDelay, 0, 0.5), 0.045)
-            let rawX = (0..<n).map { Double(cursor.x[min($0, cursor.x.count - 1)]) / src.x }
-            let rawY = (0..<n).map { Double(cursor.y[min($0, cursor.y.count - 1)]) / src.y }
+            let rawX = (0..<n).map { Double(cursor.x[min(Int(Double($0) * gridRate / rate), cursor.x.count - 1)]) / src.x }
+            let rawY = (0..<n).map { Double(cursor.y[min(Int(Double($0) * gridRate / rate), cursor.y.count - 1)]) / src.y }
             fx = zeroPhaseSmooth(centredPlay(rawX, halfZone: halfZone), omega: followOmega, dt: dt)
             fy = zeroPhaseSmooth(centredPlay(rawY, halfZone: halfZone), omega: followOmega, dt: dt)
         }
@@ -88,7 +89,7 @@ enum CameraSolver {
         func deriv(_ a: [Double]) -> [Float] {
             var v = [Float](repeating: 0, count: a.count)
             if a.count > 2 {
-                for i in 1..<(a.count - 1) { v[i] = Float((a[i + 1] - a[i - 1]) * gridRate / 2) }
+                for i in 1..<(a.count - 1) { v[i] = Float((a[i + 1] - a[i - 1]) * rate / 2) }
                 v[0] = v[1]; v[a.count - 1] = v[a.count - 2]
             }
             return v
