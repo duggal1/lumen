@@ -83,13 +83,14 @@ public final class ProjectSession: @unchecked Sendable {
         request.privacyProgress = privacyProgress
         let result = await AnalysisService.shared.run(request)
         guard !Task.isCancelled else { return result }
+        let appliedRequest = request
         inputState.withLock { current in
             if result.errors["face"] == nil, meta.webcam != nil { current.face = result.face }
-            if result.errors["activity"] == nil, request.includeActivity { current.activity = result.activity }
+            if result.errors["activity"] == nil, appliedRequest.includeActivity { current.activity = result.activity }
             if result.errors["ocr"] == nil, timeline.overlays.privacy.enabled, timeline.overlays.privacy.autoDetect { current.ocr = result.ocr }
             if result.errors["speech"] == nil, let transcript = result.transcript { current.transcript = transcript }
             if result.errors["personMask"] == nil, let personMask = result.personMask { current.personMask = personMask }
-            if result.errors["typing"] == nil, request.includeTyping { current.typing = result.typing }
+            if result.errors["typing"] == nil, appliedRequest.includeTyping { current.typing = result.typing }
         }
         return result
     }
