@@ -189,6 +189,7 @@ public actor RecordingSession {
     }
 
     public func prepare(_ config: RecordingConfig, library: URL) async throws {
+        MainThreadWatchdog.shared.start()
         transition(to: .preparing)
         let timeoutTask = armStageTimeout(.preparing, seconds: 15)
         defer { timeoutTask.cancel() }
@@ -447,6 +448,7 @@ public actor RecordingSession {
         if let a = activityToken { ProcessInfo.processInfo.endActivity(a) }
         activity = nil
         RecordingGate.recordingStopped()
+        MainThreadWatchdog.shared.stop()
         return b
     }
 
