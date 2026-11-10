@@ -184,8 +184,8 @@ public actor RecordingSession {
 
     private var secondsHint: Int { 10 }
 
-    public func setLiveHooks(frame: (@Sendable (CVPixelBuffer) -> Void)?, event: (@Sendable (InputEvent) -> Void)?) {
-        engine?.setLiveFrameHook(frame); input?.setLiveEventHook(event)
+    public func setLiveHooks(frame: (@Sendable (CVPixelBuffer) -> Void)?, event: (@Sendable (InputEvent) -> Void)?, focus: (@Sendable (InputEvent, AXFrame) -> Void)? = nil) {
+        engine?.setLiveFrameHook(frame); input?.setLiveEventHook(event); input?.setLiveFocusHook(focus)
     }
 
     public func prepare(_ config: RecordingConfig, library: URL) async throws {
