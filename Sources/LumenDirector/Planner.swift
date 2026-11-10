@@ -115,8 +115,11 @@ enum ZoomPlanner {
                     guard event.axFrameIndex > 0, Int(event.axFrameIndex) <= ax.count else { return nil }
                     let field = ax[Int(event.axFrameIndex) - 1]
                     guard field.w > 0, field.h > 0, field.x.isFinite, field.y.isFinite else { return nil }
-                    let rect = CGRect(x: field.x, y: field.y, width: field.w, height: field.h)
+                    var rect = CGRect(x: field.x, y: field.y, width: field.w, height: field.h)
                     let caret = field.caret
+                    if let caret, caret.x.isFinite, caret.y.isFinite, caret.w.isFinite, caret.h.isFinite, caret.w >= 0, caret.h > 0 {
+                        rect = rect.union(CGRect(x: caret.x, y: caret.y, width: max(caret.w, 1), height: caret.h))
+                    }
                     let x = caret.map { $0.x + $0.w / 2 } ?? rect.midX
                     let y = caret.map { $0.y + $0.h / 2 } ?? rect.midY
                     guard x >= 0, x <= W, y >= 0, y <= H else { return nil }
@@ -146,7 +149,7 @@ enum ZoomPlanner {
         var shots: [ZoomSegment] = []
         var cur: Open?
         var last = 0.0                                  // last activity in the open scene
-        var prevScale = p.baseScale
+        var prevScale: Double?
         let keep = sorted.filter { ($0.kind == .scroll || $0.kind == .drag) && ok($0.t) }
         var ki = 0
 
@@ -183,12 +186,13 @@ enum ZoomPlanner {
                 if e.t - last <= p.zoomOutGap, abs(d.x) <= 1, abs(d.y) <= 1 { last = max(last, e.t) }
             }
         }
-        func chooseScale(_ i: Intent, prevScale: Double) -> Double {
+        func chooseScale(_ i: Intent, prevScale: Double?) -> Double {
             let r = i.rect ?? CGRect(x: i.x - W * 0.12, y: i.y - H * 0.12, width: W * 0.24, height: H * 0.24)
             let fit = min(W / max(r.width * 1.6, 1), H / max(r.height * 1.6, 1))
             let hi = max(1.3, min(p.maxScale, 3.2))
             let s = clamp(fit, max(1.3, min(p.minScale, hi)), hi)
-            return abs(log(s / prevScale)) < log(1.08) ? clamp(prevScale, 1.3, hi) : s
+            guard let prevScale else { return s }
+            return abs(log(s / prevScale)) < log(1.06) ? clamp(prevScale, 1.3, hi) : s
         }
 
         func focusCenter(_ i: Intent, _ s: Double) -> SIMD2<Double> {
@@ -201,7 +205,7 @@ enum ZoomPlanner {
             if cur != nil, it.t - last <= p.zoomOutGap {
                 if let current = cur, it.kind == .typing {
                     let scale = chooseScale(it, prevScale: current.scale)
-                    if abs(log(scale / current.scale)) > log(1.08) {
+                    if abs(log(scale / current.scale)) > log(1.06) {
                         close(at: it.t)
                         cur = Open(start: it.t, scale: scale, c: clampC(focusCenter(it, scale), scale))
                     }
