@@ -81,8 +81,10 @@ public func cleanVoiceURL(for project: ProjectBundle, settings: AudioPlan? = nil
         if plan.micMode == .off { plan.micMode = .standard }
         plan.micClean = true
         if plan.noiseReductionStrength <= 0 { plan.noiseReductionStrength = 1 }
-        let keyTimes = plan.declick ? ((try? project.events(origin: file.meta.mic?.startHostSeconds ?? 0)) ?? [])
-            .filter { $0.kind == .keyDown }.map(\.t) : []
+        let origin = file.meta.clock.originHostSeconds
+        let offset = (file.meta.mic?.startHostSeconds ?? origin) - origin
+        let keyTimes = plan.declick ? ((try? project.events(origin: origin)) ?? [])
+            .filter { $0.kind == .keyDown }.map { $0.t - offset }.filter { $0 >= 0 } : []
         let key = try ProcessedVoiceCache.key(samples: samples, plan: plan, keyTimes: keyTimes)
         let voiceURL = project.cacheURL.appendingPathComponent("voice-\(key)-48000.wav")
         let captionURL = project.cacheURL.appendingPathComponent("voice-\(key)-16000.wav")
