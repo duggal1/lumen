@@ -581,7 +581,7 @@ struct Inspector: View {
             VStack(spacing: 0) {
                 ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
                 SliderRow(label: "Zoom amount", v: Binding(get: { m.timeline.camera.baseScale },
-                                        set: { v in m.edit { $0.camera.baseScale = v; $0.camera.autoMaxScale = min(1.45 * v, $0.camera.maxScale) } }),
+                                        set: { v in m.edit { $0.camera.baseScale = v } }),
                           range: 1.3...3.0, fmt: { String(format: "%.1f×", $0) })
                 SliderRow(label: "Smoothness", v: m.bind(\.camera.leadIn), range: 0.3...1.0,
                           fmt: { "\(Int($0 * 1000)) ms" })
