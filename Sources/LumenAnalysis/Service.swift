@@ -33,6 +33,7 @@ enum AnalysisError: Error, LocalizedError, Sendable {
 }
 
 public struct AnalysisRequest: Sendable {
+    public var sourceDuration = 0.0
     public var privacyProgress: @Sendable (Double) -> Void = { _ in }
     public var screen: URL
     public var webcam: URL?
@@ -138,10 +139,10 @@ public actor AnalysisService {
         }
         let params = OCRParameters(salt: r.projectSalt, patterns: r.privacy.customPatterns,
                                    entropyThreshold: r.privacy.entropyThreshold, fps: 4)
-        let (detections, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "sensitive-text", version: 4,
+        let (detections, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "sensitive-text", version: 5,
                                                parameters: params) {
             try await OCRAnalyzer.analyze(url: r.screen, projectSalt: r.projectSalt, customPatterns: r.privacy.customPatterns,
-                                          entropyThreshold: r.privacy.entropyThreshold, progress: r.privacyProgress)
+                                          entropyThreshold: r.privacy.entropyThreshold, duration: r.sourceDuration, progress: r.privacyProgress)
         }
         if error == nil { r.privacyProgress(1) }
         return (detections ?? [], error)
