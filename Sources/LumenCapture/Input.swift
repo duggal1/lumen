@@ -300,7 +300,6 @@ public final class InputRecorder: @unchecked Sendable {
     }
 
     private func startAXTimer() {
-        guard axTrusted.withLock({ $0 }) else { return }
         let timer = DispatchSource.makeTimerSource(queue: axQ)
         timer.schedule(deadline: .now(), repeating: 0.5)
         timer.setEventHandler { [weak self] in self?.sampleSecureFields() }
@@ -308,7 +307,9 @@ public final class InputRecorder: @unchecked Sendable {
     }
 
     private func sampleSecureFields() {
-        guard running.withLock({ $0 }) else { return }
+        let trusted = AXIsProcessTrusted()
+        axTrusted.withLock { $0 = trusted }
+        guard trusted, running.withLock({ $0 }) else { return }
         let system = AXUIElementCreateSystemWide(), now = HostClock.now()
         AXUIElementSetMessagingTimeout(system, 0.03)
         guard let value = attribute(system, kAXFocusedApplicationAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return }
