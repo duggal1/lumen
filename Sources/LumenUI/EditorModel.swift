@@ -396,6 +396,7 @@ enum TimelineSelection: Equatable {
             let voiceURL: URL
             do { voiceURL = try await cleanVoiceURL(for: b, settings: audioSettings) }
             catch {
+                guard !Task.isCancelled else { return }
                 self?.transcribeState = .failed("Voice processing failed: \(error.localizedDescription)")
                 return
             }
