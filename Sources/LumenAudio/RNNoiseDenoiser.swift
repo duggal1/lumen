@@ -13,16 +13,7 @@ public struct RNNoiseDenoiser: Denoiser {
         self.strength = strength.isFinite ? min(max(strength, 0), 1) : 1
     }
 
-    // The vendored engine lazily initializes shared FFT tables on its first frame.
-    private static let initialized: Void = {
-        guard let state = rnnoise_create(nil) else { return }
-        defer { rnnoise_destroy(state) }
-        var input = [Float](repeating: 0, count: Int(rnnoise_get_frame_size()))
-        var output = input
-        _ = rnnoise_process_frame(state, &output, &input)
-    }()
-
-    static let latencySamples = 480
+    static let latencySamples = 960
 
     public func process(_ x: [Float]) -> [Float] { analyze(x).samples }
 
@@ -31,7 +22,6 @@ public struct RNNoiseDenoiser: Denoiser {
         guard !x.isEmpty, strength > 0 else {
             return DenoisedVoice(samples: x, voiceProbability: [], frameSize: size)
         }
-        _ = Self.initialized
         guard let state = rnnoise_create(nil) else {
             return DenoisedVoice(samples: x, voiceProbability: [], frameSize: size)
         }
@@ -40,16 +30,17 @@ public struct RNNoiseDenoiser: Denoiser {
         var result = [Float](repeating: 0, count: x.count)
         var probabilities = [Float](repeating: 0, count: frames)
         var input = [Float](repeating: 0, count: size), output = input
-        // Flush one full extra frame to recover the actual final samples.
-        for frame in 0...frames {
+        let latencyFrames = Self.latencySamples / size
+        // Flush the pretrained model lookahead and overlap-add delay with real zero frames.
+        for frame in 0..<(frames + latencyFrames) {
             for k in 0..<size {
                 let i = frame * size + k
                 input[k] = i < x.count && x[i].isFinite ? x[i] * 32768 : 0
             }
             let probability = rnnoise_process_frame(state, &output, &input)
-            if frame < frames { probabilities[frame] = min(max(probability, 0), 1) }
-            guard frame > 0 else { continue }
-            let start = (frame - 1) * size
+            guard frame >= latencyFrames else { continue }
+            probabilities[frame - latencyFrames] = min(max(probability, 0), 1)
+            let start = (frame - latencyFrames) * size
             for k in 0..<min(size, x.count - start) { result[start + k] = output[k] / 32768 }
         }
         let attack = Float(exp(-1 / (0.005 * AudioIO.fs)))
