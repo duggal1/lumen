@@ -3,9 +3,11 @@ import Testing
 import LumenProject
 import LumenRender
 
-@Test func zoomBackdropBlurIsOnByDefaultAndSourceSafe() throws {
+/// One knob: the background blur is a continuous radius in canvas pixels, and
+/// it ships at zero. The mip level behind the zoom follows it.
+@Test func backdropBlurIsContinuousAndShipsSharp() throws {
     let style = Style()
-    #expect(style.zoomBackgroundBlur == true)
+    #expect(style.wallpaperBlur == 0, "a wallpaper ships sharp")
     #expect(BackdropBlur.mipLevel(enabled: false, cameraScale: 4) == 0)
     #expect(BackdropBlur.mipLevel(enabled: true, cameraScale: 1) == 0)
     #expect(BackdropBlur.mipLevel(enabled: true, cameraScale: 1.8) > 0)
@@ -13,9 +15,9 @@ import LumenRender
     #expect(BackdropBlur.mipLevel(enabled: true, cameraScale: .infinity) == 0)
 
     var active = style
-    active.zoomBackgroundBlur = true
+    active.wallpaperBlur = 24
     let restored = try JSONDecoder().decode(Style.self, from: JSONEncoder().encode(active))
-    #expect(restored.zoomBackgroundBlur == true)
+    #expect(restored.wallpaperBlur == 24)
 }
 
 @Test func backdropBlurStrengthIsMonotonicAsZoomIncreases() {

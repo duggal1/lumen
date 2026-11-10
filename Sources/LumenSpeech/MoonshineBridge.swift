@@ -16,18 +16,15 @@ public enum SpeechError: Error, Sendable, CustomStringConvertible {
     }
 }
 
+/// One model, no picker. Medium is the only build that transcribes a room
+/// well enough to caption; Tiny traded accuracy for speed nobody asked for.
 public enum MoonshineSize: String, Codable, CaseIterable, Sendable {
-    case tiny, small, medium
+    case medium
     public static let defaultsKey = "lumen.moonshine.size"
-    public var title: String { switch self { case .tiny: "Tiny"; case .small: "Small"; case .medium: "Medium" } }
-    public var detail: String {
-        switch self { case .tiny: "34M parameters · fastest · 12.0% WER"; case .small: "123M parameters · 7.8% WER"; case .medium: "Most accurate · slowest" }
-    }
+    public var title: String { "Medium" }
+    public var detail: String { "Most accurate · slowest" }
     public var folder: String { "moonshine-streaming-\(rawValue)" }
-    public static var current: MoonshineSize {
-        get { UserDefaults.standard.string(forKey: defaultsKey).flatMap(MoonshineSize.init) ?? .tiny }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
-    }
+    public static var current: MoonshineSize { .medium }
 }
 
 /// One transcript line as the runtime reported it. Text is copied out immediately (the library owns the transcript memory).
@@ -40,12 +37,7 @@ public final class MoonshineRuntime: @unchecked Sendable {
     let handle: Int32
     public let size: MoonshineSize
     public init(directory: URL, size: MoonshineSize) throws {
-        let arch: UInt32
-        switch size {
-        case .tiny: arch = UInt32(MOONSHINE_MODEL_ARCH_TINY_STREAMING)
-        case .small: arch = UInt32(MOONSHINE_MODEL_ARCH_SMALL_STREAMING)
-        case .medium: arch = UInt32(MOONSHINE_MODEL_ARCH_MEDIUM_STREAMING)
-        }
+        let arch = UInt32(MOONSHINE_MODEL_ARCH_MEDIUM_STREAMING)
         let h = directory.path.withCString {
             moonshine_load_transcriber_from_files($0, arch, nil, 0, Int32(MOONSHINE_HEADER_VERSION))
         }

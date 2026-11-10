@@ -6,5 +6,5 @@ import Testing
     let s = Style()
     #expect(s.background == .image)
     #expect(s.backgroundImagePath == "serene-lake.jpg")
-    #expect(s.zoomBackgroundBlur == true)
+    #expect(s.wallpaperBlur == 0, "a wallpaper ships sharp")
 }

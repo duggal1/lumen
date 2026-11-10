@@ -39,7 +39,6 @@ import LumenExport
     timeline.audio.whooshes = false
     timeline.captions.enabled = true
     timeline.captions.style.size = 0.13
-    timeline.captions.style.animation = .none
     let micSamples = (0..<48_000).map { _ in Float(0) }
     try AudioIO.writeCAF(micSamples, micSamples, to: bundle.micURL)
     var meta = ProjectMeta(name: "Repro", source: source, clock: RecordingClock())

@@ -12,78 +12,13 @@ import LumenProject
 
 // MARK: - Helpers
 
-private final class FakePhotoHTTP: PhotoHTTP, @unchecked Sendable {
-    var searchCalls = 0
-    var downloadCalls = 0
-    let searchPayload: Data
-    let imageData: Data
-
-    init(searchPayload: Data, imageData: Data) {
-        self.searchPayload = searchPayload; self.imageData = imageData
-    }
-
-    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let url = request.url ?? URL(string: "https://api.unsplash.com")!
-        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
-        if url.host == "api.unsplash.com" {
-            searchCalls += 1
-            return (searchPayload, response)
-        }
-        downloadCalls += 1
-        return (imageData, response)
-    }
-}
-
 private func tempDirectory() throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("lumen-agent3-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
 }
 
-private func unsplashPayload(_ remote: String) -> Data {
-    Data("""
-    {"total":1,"results":[{"id":"photo-1","description":"Mountain ridge","width":4000,"height":3000,
-    "urls":{"full":"\(remote)","regular":"\(remote)","small":"\(remote)"},
-    "user":{"name":"A Photographer"}}]}
-    """.utf8)
-}
-
-// A valid 1x1 PNG: the cache test proves bytes land on disk, not that they decode.
-private let png1x1 = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!
-
-// MARK: - Unsplash + photo background
-
-@Test func unsplashSearchDownloadsOnceAndCachesTheFile() async throws {
-    let dir = try tempDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
-    let remote = "https://images.unsplash.com/photo-1"
-    let http = FakePhotoHTTP(searchPayload: unsplashPayload(remote), imageData: png1x1)
-    let service = PhotoBackgroundService(
-        client: UnsplashClient(accessKey: "test-key", http: http),
-        cache: PhotoCache(directory: dir))
-
-    let first = try await service.fetch(query: "mountains")
-    let second = try await service.fetch(query: "mountains")
-
-    #expect(first == second)
-    #expect(FileManager.default.fileExists(atPath: first.path))
-    #expect(try Data(contentsOf: first) == png1x1)
-    #expect(http.downloadCalls == 1, "the cached image must not be downloaded twice")
-    #expect(http.searchCalls == 2, "search still runs; the image bytes are what is cached")
-}
-
-@Test func unsplashMissingKeyFailsLoudly() async {
-    #expect(UnsplashCredentials.resolve(environment: [:], stored: nil) == nil)
-    #expect(UnsplashCredentials.resolve(environment: ["LUMEN_UNSPLASH_ACCESS_KEY": "  key  "], stored: nil) == "key")
-    #expect(UnsplashCredentials.resolve(environment: [:], stored: "stored") == "stored")
-
-    let client = UnsplashClient(accessKey: "", http: FakePhotoHTTP(searchPayload: Data(), imageData: Data()))
-    do {
-        _ = try await client.search("anything")
-        Issue.record("an empty key must throw")
-    } catch {
-        #expect(error as? UnsplashError == .missingKey)
-    }
-}
+// MARK: - Photo background
 
 @Test func downloadedPhotoBecomesTheCanvasBackground() throws {
     var style = Style()

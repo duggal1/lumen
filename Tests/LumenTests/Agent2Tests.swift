@@ -103,7 +103,7 @@ private func srcInfo(duration: Double = 12) -> SourceInfo {
 
 @Test func fileTranscriberFailsCleanlyOnMissingFile() async {
     let missing = FileManager.default.temporaryDirectory.appendingPathComponent("lumen-no-such-mic-\(UUID().uuidString).caf")
-    let result = await FileTranscriber.run(url: missing, size: .tiny)
+    let result = await FileTranscriber.run(url: missing, size: .medium)
     guard case .failure = result else { Issue.record("missing mic file must fail, not crash"); return }
 }
 
@@ -115,7 +115,7 @@ private func srcInfo(duration: Double = 12) -> SourceInfo {
     // With no model installed this is a clean .failure; with a model it is a
     // silent transcript. Either way the streaming path runs without crashing
     // and any words it returns are well-formed.
-    switch await FileTranscriber.run(url: url, size: .tiny) {
+    switch await FileTranscriber.run(url: url, size: .medium) {
     case .success(let transcript):
         #expect(transcript.words.allSatisfy { $0.end >= $0.start && $0.confidence >= 0 && $0.confidence <= 1 })
     case .failure:
@@ -126,12 +126,12 @@ private func srcInfo(duration: Double = 12) -> SourceInfo {
 @Test func moonshineTranscribesRealSpeechEndToEnd() async throws {
     // Real recorded speech fixture (TTS: "Hello world from Lumen. The recorder is ready.")
     // Skipped on machines without the model; the CLI transcribe path is the
-    // documented manual harness (lumen-cli transcribe <project> --size tiny).
-    guard ModelStore.isInstalled(.tiny) else { return }
+    // documented manual harness (lumen-cli transcribe <project> --size medium).
+    guard ModelStore.isInstalled(.medium) else { return }
     guard let url = Bundle.module.url(forResource: "speech", withExtension: "wav", subdirectory: "Fixtures") else {
         Issue.record("speech.wav fixture missing"); return
     }
-    switch await FileTranscriber.run(url: url, size: .tiny) {
+    switch await FileTranscriber.run(url: url, size: .medium) {
     case .success(let transcript):
         let text = transcript.words.map(\.text).joined(separator: " ").lowercased()
         #expect(transcript.words.count >= 5)
@@ -184,7 +184,6 @@ private func srcInfo(duration: Double = 12) -> SourceInfo {
     let highlighted = plan()
     #expect(highlighted.count == 1)
     #expect(highlighted[0].text.contains("Hello") && highlighted[0].text.contains("world."))
-    timeline.captions.style.wordHighlight = false
     #expect(plan().map(\.text) == highlighted.map(\.text), "the toggle changes rendering, not caption content")
 }
 

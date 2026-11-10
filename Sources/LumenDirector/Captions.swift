@@ -5,33 +5,58 @@ import LumenProject
 enum CaptionPlanner {
     private struct TimedWord { var text: String; var start: Double; var end: Double }
 
+    /// A caption never uses more than 60 % of the picture width and never more
+    /// than two lines. The character budget follows from the type size: a line
+    /// is 60 % of the width and a glyph is roughly half the type size.
     static func perLine(_ plan: CaptionPlan, aspect: Double) -> Int {
-        if let count = plan.maxCharsPerLine { return max(count, 8) }
-        let u = clamp((aspect - 9.0 / 16) / (16.0 / 9 - 9.0 / 16), 0, 1)
-        return Int((24 + 18 * u).rounded())
+        let size = max(plan.style.size, 0.02)
+        let chars = (0.60 * aspect) / (0.5 * size)
+        return max(8, min(42, Int(chars.rounded())))
     }
 
     static func plan(words: [WordToken], tm: TimeMap, p: CaptionPlan, aspect: Double,
                      kindAt: (Double) -> LayoutKind, cornerAt: (Double) -> WebcamLayout.Corner?) -> [CaptionChunk] {
         guard p.enabled else { return [] }
         let timed = mappedWords(words, timeMap: tm, plan: p)
-        let groups = chunkWords(timed, perLine: perLine(p, aspect: aspect), maxLines: p.maxLines)
+        let groups = chunkWords(timed, perLine: perLine(p, aspect: aspect), maxLines: 2)
         return makeChunks(groups, perLine: perLine(p, aspect: aspect), plan: p, aspect: aspect,
                           kindAt: kindAt, cornerAt: cornerAt)
     }
 
     private static func mappedWords(_ words: [WordToken], timeMap tm: TimeMap, plan: CaptionPlan) -> [TimedWord] {
         let deleted = Set(plan.deletedWords)
-        return words.enumerated().compactMap { index, word in
+        var out: [TimedWord] = []
+        var sentenceStart = true
+        for (index, word) in words.enumerated() {
             guard !deleted.contains(index), word.end > word.start,
                   word.start >= tm.trimStart, word.end <= tm.trimEnd,
-                  !tm.cuts.contains(where: { $0.start < word.end && $0.end > word.start }) else { return nil }
-            let text = (plan.textEdits[String(index)] ?? word.text).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return nil }
+                  !tm.cuts.contains(where: { $0.start < word.end && $0.end > word.start }) else { continue }
+            let edited = plan.textEdits[String(index)]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = edited ?? word.text
+            guard !text.isEmpty else { continue }
             let start = tm.output(atSource: word.start), end = tm.output(atSource: word.end)
-            guard end > start else { return nil }
-            return TimedWord(text: text, start: start, end: end)
+            guard end > start else { continue }
+            // A manual edit is the user's own words: never re-case it.
+            out.append(TimedWord(text: edited ?? sentenceCase(text, atSentenceStart: sentenceStart),
+                                 start: start, end: end))
+            if let last = text.last, ".?!".contains(last) { sentenceStart = true } else { sentenceStart = false }
         }
+        return out
+    }
+
+    /// Sentence case, and nothing else: the first word of a sentence starts
+    /// with a capital, every other word is lower case, and "I" is always "I".
+    /// A word with an inner capital ("iPhone") keeps it.
+    static func sentenceCase(_ word: String, atSentenceStart: Bool) -> String {
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return word }
+        if trimmed.lowercased() == "i" { return "I" }
+        let letters = trimmed.unicodeScalars.map { CharacterSet.letters.contains($0) }
+        guard letters.allSatisfy({ $0 }) else { return trimmed }
+        let inner = trimmed.dropFirst().contains(where: { $0.isUppercase })
+        let body = inner ? trimmed : trimmed.lowercased()
+        guard atSentenceStart else { return body }
+        return String(body.prefix(1).uppercased()) + String(body.dropFirst())
     }
 
     private static func chunkWords(_ words: [TimedWord], perLine: Int, maxLines: Int) -> [[TimedWord]] {
@@ -65,33 +90,57 @@ enum CaptionPlanner {
             let end = max(group[group.count - 1].end, min(desiredEnd, start + 4.0))
             guard end > start else { continue }
             let lines = wrap(group, perLine: perLine)
-            let position = yPosition(plan.style.position, aspect: aspect, kind: kindAt(start), corner: cornerAt(start))
+            let position = yPosition(aspect: aspect, kind: kindAt(start), corner: cornerAt(start))
             out.append(CaptionChunk(start: start, end: end, lines: lines, y: position))
         }
         return out
     }
 
     private static func wrap(_ words: [TimedWord], perLine: Int) -> [[CaptionWord]] {
-        var lines: [[CaptionWord]] = [[]], count = 0
+        var lines: [[CaptionWord]] = [[]]
         for word in words {
-            let addition = word.text.count + (lines[lines.count - 1].isEmpty ? 0 : 1)
-            if count + addition > perLine, !lines[lines.count - 1].isEmpty { lines.append([]); count = 0 }
-            lines[lines.count - 1].append(CaptionWord(text: word.text, start: word.start, end: word.end))
-            count += word.text.count + (lines[lines.count - 1].count == 1 ? 0 : 1)
+            var current = lines[lines.count - 1]
+            let addition = word.text.count + (current.isEmpty ? 0 : 1)
+            if width(current) + addition > perLine, !current.isEmpty {
+                let cut = phraseBoundary(current)
+                lines[lines.count - 1] = Array(current.prefix(cut))
+                current = Array(current.suffix(from: cut))
+                lines.append(current)
+            }
+            current.append(CaptionWord(text: word.text, start: word.start, end: word.end))
+            lines[lines.count - 1] = current
         }
         return lines
+    }
+
+    private static func width(_ line: [CaptionWord]) -> Int {
+        line.reduce(0) { $0 + $1.text.count } + max(line.count - 1, 0)
+    }
+
+    /// Break before the last clause boundary that still fills the line, so a
+    /// caption never splits a phrase when a softer break exists.
+    private static func phraseBoundary(_ line: [CaptionWord]) -> Int {
+        var best: Int?
+        for (i, word) in line.enumerated() {
+            guard i > 0 else { continue }
+            let last = word.text.last.map { String($0) } ?? ""
+            let joiners = ["and", "but", "or", "so", "because", "that", "which", "when", "if"]
+            if ",;:—–".contains(last) || joiners.contains(word.text.lowercased()) { best = i }
+        }
+        guard let cut = best else { return max(line.count - 1, 1) }
+        let head = line.prefix(cut).reduce(0) { $0 + $1.text.count }
+        return head * 2 >= width(line) ? cut : max(line.count - 1, 1)
     }
 
     private static func characterCount(_ words: [TimedWord]) -> Int {
         words.reduce(0) { $0 + $1.text.count } + max(words.count - 1, 0)
     }
 
-    private static func yPosition(_ preference: CaptionPosition, aspect: Double, kind: LayoutKind,
-                                  corner: WebcamLayout.Corner?) -> Double {
-        if preference == .top { return 0.12 }
-        if preference == .bottom { return aspect < 1 ? 0.79 : 0.88 }
-        if aspect < 1 { return 0.79 }
+    /// The caption sits low enough to read as a lower third but never on the
+    /// dock: roughly 10 % of the frame stays clear under it.
+    private static func yPosition(aspect: Double, kind: LayoutKind, corner: WebcamLayout.Corner?) -> Double {
+        if aspect < 1 { return 0.84 }
         if kind == .cameraOverlay, corner == .bottomLeft || corner == .bottomRight { return 0.16 }
-        return 0.88
+        return 0.90
     }
 }

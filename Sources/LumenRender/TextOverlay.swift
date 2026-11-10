@@ -31,6 +31,9 @@ struct TextOverlaySprite {
 private struct TextPart {
     let value: String
     let color: RGBA
+    /// Baseline offset in raster pixels: a word rises into place as it is
+    /// spoken instead of popping in at its final position.
+    var rise: CGFloat = 0
 }
 
 private struct Raster {
@@ -46,15 +49,18 @@ func settle(_ t: Double, omega: Double) -> Double {
 
 struct CaptionPose { var opacity, lift, scale, blur: Double }
 
-/// Pure function of time (offline export is deterministic): blur-in/out for
-/// the whole block. Opacity eases; lift, scale and blur follow the spring.
-func captionPose(at t: Double, shownAt: Double, hiddenAt: Double, frameHeight: Double) -> CaptionPose {
-    let k = settle(t - shownAt, omega: 20) * (1 - settle(t - hiddenAt, omega: 26))
-    let e = k * k * (3 - 2 * k)
-    return CaptionPose(opacity: e,
-                       lift: frameHeight * 0.006 * (1 - k),
-                       scale: 0.985 + 0.015 * k,
-                       blur: Double(frameHeight * 0.005) * (1 - k))
+/// The caption is animated by the playhead, never by wall-clock time, so a
+/// scrub lands on the exact frame. Word in: opacity 0→1, blur 8→0, 6 pt rise,
+/// scale 0.985→1 over 380 ms with an ease-out quart. Group out: blur 0→6 and
+/// opacity→0 over 220 ms.
+func captionPose(at t: Double, shownAt: Double, hiddenAt: Double, unit: Double) -> CaptionPose {
+    let inT = max(0, min(1, (t - shownAt) / 0.38))
+    let e = 1 - pow(1 - inT, 4)                                  // ease-out quart
+    let outT = max(0, min(1, (t - (hiddenAt - 0.22)) / 0.22))
+    return CaptionPose(opacity: e * (1 - outT),
+                       lift: 6 * unit * (1 - e),                 // positive: below the anchor
+                       scale: 0.985 + 0.015 * e,
+                       blur: (8 * (1 - e) + 6 * outT) * unit)
 }
 
 final class TextOverlayCache {
@@ -66,61 +72,46 @@ final class TextOverlayCache {
                  canvas: SIMD2<Int>, videoRect: SIMD4<Double>,
                  device: any MTLDevice) -> TextOverlaySprite? {
         guard !chunk.lines.isEmpty else { return nil }
-        // Spoken word is full white; the rest at ~60% white. Adjacent words
-        // crossfade over 80 ms instead of snapping colour on the exact frame.
-        // The blend is quantized to 1/16 so the raster cache stays bounded.
-        let fade = 0.08
+        let unit = Double(videoRect.w) / 1080.0                  // one design point at 1080 tall
+        let stagger = 0.028
+        let wordIn = 0.38
+        var index = 0
         let lines = chunk.lines.map { line in
             line.map { word -> TextPart in
-                guard style.wordHighlight else { return TextPart(value: word.text, color: style.color) }
-                let inT = max(0, min(1, (time - word.start) / fade))
-                let outT = max(0, min(1, (word.end - time) / fade))
-                let on = (min(inT, outT) * 16).rounded() / 16
-                var dim = style.color
-                dim.a *= 0.6
-                return TextPart(value: word.text, color: mix(dim, style.highlightColor, on))
+                defer { index += 1 }
+                let start = chunk.start + Double(index) * stagger
+                let t = max(0, min(1, (time - start) / wordIn))
+                let e = 1 - pow(1 - t, 4)                       // ease-out quart
+                // The spoken word is full white, the rest sit at 60 %. This is
+                // brightness only: a weight change would reflow the line.
+                let edge = max(0, min(1, min((time - word.start) / 0.08, (word.end - time) / 0.08)))
+                let dim = RGBA(r: style.color.r, g: style.color.g, b: style.color.b, a: style.color.a * 0.6)
+                var color = mix(dim, style.color, edge)
+                color.a *= Float(e)
+                // Quantized so the raster cache holds a bounded number of
+                // variants while a caption animates.
+                let step = 1.0 / 32.0
+                color.a = Float((Double(color.a) / step).rounded() * step)
+                let rise = ((1 - e) * 6 * unit).rounded()
+                return TextPart(value: word.text, color: color, rise: CGFloat(rise))
             }
         }
         // Scale with the actual video, not the outer canvas/padding. Both
         // Studio and export share this rasterization and its layout bounds.
         let fontSize = CGFloat(videoRect.w) * CGFloat(max(style.size, 0.015))
-        let safeWidth = max(1, Int(videoRect.z * 0.88))
-        guard let raster = texture(lines: lines, fontSize: fontSize, bold: style.bold, typeface: style.font,
+        // A caption never uses more than 60 % of the picture width.
+        let safeWidth = max(1, Int(videoRect.z * 0.60))
+        guard let raster = texture(lines: lines, fontSize: fontSize, typeface: style.font,
                                    canvas: canvas, maxWidth: safeWidth, device: device) else { return nil }
-        let opacity: Float
-        var lift = 0.0, scale = 1.0
-        var blur: Float = 0
-        switch style.animation {
-        case .fade:
-            opacity = Float(max(0, min(1, (time - chunk.start) / 0.18,
-                                   (chunk.end - time) / 0.18)))
-        case .blur:
-            let pose = captionPose(at: time, shownAt: chunk.start, hiddenAt: chunk.end,
-                                   frameHeight: Double(videoRect.w))
-            opacity = Float(pose.opacity)
-            lift = pose.lift
-            scale = pose.scale
-            blur = Float(pose.blur)
-        case .pop:
-            let pose = captionPose(at: time, shownAt: chunk.start, hiddenAt: chunk.end,
-                                   frameHeight: Double(videoRect.w))
-            opacity = Float(pose.opacity)
-            scale = 0.82 + 0.18 * pose.scale
-        case .slide:
-            let pose = captionPose(at: time, shownAt: chunk.start, hiddenAt: chunk.end,
-                                   frameHeight: Double(videoRect.w))
-            opacity = Float(pose.opacity)
-            lift = -Double(videoRect.w) * 0.035 * (1 - pose.opacity)
-        case .none:
-            opacity = 1
-        }
-        let halfH = Double(raster.texture.height) / 2 * scale
-        let desiredY = videoRect.y + videoRect.w * chunk.y - lift
+        let pose = captionPose(at: time, shownAt: chunk.start, hiddenAt: chunk.end, unit: unit)
+        let halfH = Double(raster.texture.height) / 2 * pose.scale
+        let desiredY = videoRect.y + videoRect.w * chunk.y + pose.lift
         let y = min(max(desiredY, videoRect.y + halfH + 8), videoRect.y + videoRect.w - halfH - 8)
         let card = style.pill.map { TextCard(radius: Float(raster.padding), tint: $0.simd) }
         return TextOverlaySprite(texture: raster.texture,
                                  center: SIMD2(Float(videoRect.x + videoRect.z / 2), Float(y)),
-                                 opacity: opacity, scale: Float(scale), blur: blur, card: card)
+                                 opacity: Float(pose.opacity), scale: Float(pose.scale),
+                                 blur: Float(pose.blur), card: card)
     }
 
     func manual(_ frame: TextFrame, canvas: SIMD2<Int>, device: any MTLDevice) -> TextOverlaySprite? {
@@ -129,7 +120,7 @@ final class TextOverlayCache {
             [TextPart(value: $0, color: frame.color)]
         }
         guard let raster = texture(lines: lines, fontSize: CGFloat(canvas.y) * CGFloat(max(frame.size, 0.015)),
-                                   bold: true, canvas: canvas, device: device) else { return nil }
+                                   canvas: canvas, device: device) else { return nil }
         return TextOverlaySprite(texture: raster.texture,
                                  center: SIMD2(frame.center.x * Float(canvas.x), frame.center.y * Float(canvas.y)),
                                  opacity: frame.opacity)
@@ -141,31 +132,27 @@ final class TextOverlayCache {
                     b: a.b + (b.b - a.b) * f, a: a.a + (b.a - a.a) * f)
     }
 
-    /// The system font is the real SF Pro; `postScript` names fall back to
-    /// Helvetica on machines that do not ship them.
-    private func coreFont(_ typeface: CaptionFont, bold: Bool, size: CGFloat) -> CTFont {
-        let weight: NSFont.Weight = bold ? .bold : .regular
-        switch typeface {
-        case .sfPro:
-            if let f = CTFontCreateUIFontForLanguage(bold ? .emphasizedSystem : .system, size, nil) { return f }
-        case .sfRounded:
-            let base = NSFont.systemFont(ofSize: size, weight: weight)
-            if let desc = base.fontDescriptor.withDesign(.rounded) {
-                return CTFontCreateWithFontDescriptor(desc as CTFontDescriptor, size, nil)
-            }
-            if let f = CTFontCreateUIFontForLanguage(bold ? .emphasizedSystem : .system, size, nil) { return f }
-        case .newYork:
-            let base = NSFont.systemFont(ofSize: size, weight: weight)
-            if let desc = base.fontDescriptor.withDesign(.serif) {
-                return CTFontCreateWithFontDescriptor(desc as CTFontDescriptor, size, nil)
-            }
-        case .menlo:
-            return CTFontCreateWithName((bold ? "Menlo-Bold" : "Menlo") as CFString, size, nil)
+    /// Two faces, one weight. 450 sits exactly between regular and medium, so
+    /// a caption reads evenly and the spoken word never changes weight.
+    private func coreFont(_ typeface: CaptionFont, size: CGFloat) -> CTFont {
+        let base = NSFont.systemFont(ofSize: size, weight: .medium)
+        let desc = typeface == .serif ? (base.fontDescriptor.withDesign(.serif) ?? base.fontDescriptor)
+                                      : base.fontDescriptor
+        var font = CTFontCreateWithFontDescriptor(desc as CTFontDescriptor, size, nil)
+        let key = "NSCTFontWeightAttribute"
+        let weighted = CTFontDescriptorCreateCopyWithAttributes(desc as CTFontDescriptor,
+                                                              [key: 4.5] as CFDictionary)
+        let probe = CTFontCreateWithFontDescriptor(weighted, size, nil)
+        // CoreText only honours a fractional weight when the face is variable;
+        // otherwise keep the medium we already have.
+        if let read = CTFontCopyAttribute(probe, key as CFString) as? NSNumber,
+           abs(read.doubleValue - 4.5) < 0.25 {
+            font = probe
         }
-        return CTFontCreateWithName((bold ? "HelveticaNeue-Bold" : "HelveticaNeue") as CFString, size, nil)
+        return font
     }
 
-    private func texture(lines: [[TextPart]], fontSize wanted: CGFloat, bold: Bool, typeface: CaptionFont = .sfPro,
+    private func texture(lines: [[TextPart]], fontSize wanted: CGFloat, typeface: CaptionFont = .sans,
                          canvas: SIMD2<Int>, maxWidth: Int? = nil,
                          device: any MTLDevice) -> Raster? {
         let maxCharacters = lines.map { $0.reduce(0) { $0 + $1.value.count + 1 } }.max() ?? 1
@@ -176,20 +163,22 @@ final class TextOverlayCache {
                 "\(p.value)@\(p.color.r),\(p.color.g),\(p.color.b),\(p.color.a)"
             }.joined(separator: "/")
         }.joined(separator: "\n")
-        let key = "\(canvas.x)x\(canvas.y):\(fontSize):\(bold):\(typeface.rawValue):\(identifier)"
+        let key = "\(canvas.x)x\(canvas.y):\(fontSize):\(typeface.rawValue):\(identifier)"
         if let cached = textures[key] { return cached }
 
-        let font = coreFont(typeface, bold: bold, size: fontSize)
+        let font = coreFont(typeface, size: fontSize)
         let coreLines: [CTLine] = lines.map { parts in
             let attr = NSMutableAttributedString(string: "")
             for (index, part) in parts.enumerated() {
                 let color = CGColor(red: CGFloat(part.color.r), green: CGFloat(part.color.g),
                                     blue: CGFloat(part.color.b), alpha: CGFloat(part.color.a))
                 let prefix = index == 0 ? "" : " "
-                attr.append(NSAttributedString(string: prefix + part.value, attributes: [
+                var attributes: [NSAttributedString.Key: Any] = [
                     NSAttributedString.Key(kCTFontAttributeName as String): font,
                     NSAttributedString.Key(kCTForegroundColorAttributeName as String): color
-                ]))
+                ]
+                if part.rise != 0 { attributes[.baselineOffset] = part.rise }
+                attr.append(NSAttributedString(string: prefix + part.value, attributes: attributes))
             }
             return CTLineCreateWithAttributedString(attr)
         }

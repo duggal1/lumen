@@ -36,7 +36,24 @@ static float rectMask(float2 px, float4 rect, float r) {
 // ---- Backdrop (cached): dither / wallpaper / gradient / mesh / solid + two-layer shadow
 struct BackdropU { float4 content; float2 canvas; float angle; int count; int kind;
                    float radius; float shadow; float scale; float cell; float density; int hasWall; float time; float4 pointer;
-                   float imgBlur; float imgAlpha; float imgContrast; float imgBright; };
+                   float wallBlur; float imgAlpha; float imgContrast; float imgBright; };
+
+// Continuous wallpaper blur: a 5x5 tent kernel, radius in canvas pixels.
+// The backdrop is cached, so 25 taps cost nothing per frame.
+float3 blurredWall(texture2d<float> tex, float2 uv, float2 texSize, float radiusPx) {
+    if (radiusPx <= 0.5) { return tex.sample(linClamp, uv).rgb; }
+    float2 step = (radiusPx * 0.5) / max(texSize.x, texSize.y);
+    float3 sum = float3(0.0);
+    float wsum = 0.0;
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            float w = (3.0 - abs(float(x))) * (3.0 - abs(float(y)));
+            sum += tex.sample(linClamp, clamp(uv + float2(float(x) * step.x, float(y) * step.y), 0.0, 1.0)).rgb * w;
+            wsum += w;
+        }
+    }
+    return sum / wsum;
+}
 
 constant float kBayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
 
@@ -104,19 +121,19 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
         float alt = fmod(g.x + g.y, 2.0);
         c = mix(cols[0].rgb, cols[1].rgb, alt * 0.14);
     } else if (u.kind == 4 && u.hasWall == 1) {
+        // macOS wallpaper, filled like cover.
         float2 ts = float2(wall.get_width(), wall.get_height());
         float s = max(u.canvas.x / ts.x, u.canvas.y / ts.y);
         float2 off = (u.canvas - ts * s) * 0.5;
-        c = wall.sample(linClamp, (in.px - off) / (ts * s)).rgb;
+        c = blurredWall(wall, (in.px - off) / (ts * s), ts * s, u.wallBlur);
     } else if (u.kind == 8 && u.hasWall == 1) {
-        // User photo / Unsplash backdrop, filled like cover (no letterboxing).
-        // imgBlur is mip level (0 sharp .. 4 soft frosted); imgAlpha 0..1,
-        // imgContrast 0..2 around 0.18 grey, imgBright 0..2 additive.
+        // User photo, filled like cover (no letterboxing).
+        // wallBlur is a radius in canvas pixels (0 sharp .. 60 soft);
+        // imgAlpha 0..1, imgContrast 0..2 around 0.18 grey, imgBright 0..2 additive.
         float2 ts = float2(wall.get_width(), wall.get_height());
         float s = max(u.canvas.x / ts.x, u.canvas.y / ts.y);
         float2 off = (u.canvas - ts * s) * 0.5;
-        float lvl = clamp(u.imgBlur, 0.0, 4.0);
-        c = wall.sample(linMip, (in.px - off) / (ts * s), lvl).rgb;
+        c = blurredWall(wall, (in.px - off) / (ts * s), ts * s, u.wallBlur);
         c = clamp((c - 0.18) * u.imgContrast + 0.18 + (u.imgBright - 1.0) * 0.25, 0.0, 1.0);
         c *= u.imgAlpha;
     } else if (u.kind == 0 && u.count > 1) {

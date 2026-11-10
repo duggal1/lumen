@@ -26,12 +26,6 @@ struct Inspector: View {
     private static func layoutIcon(_ k: LayoutKind) -> String {
         switch k { case .screenOnly: "display"; case .cameraOverlay: "rectangle.3.group"; case .split: "rectangle.split.2x1"; case .cameraFullscreen: "video"; case .cameraCutout: "person" }
     }
-    private static func captionPositionIcon(_ p: CaptionPosition) -> String {
-        switch p { case .auto: "sparkles"; case .bottom: "arrow.down"; case .top: "arrow.up" }
-    }
-    private static func captionAnimationIcon(_ a: CaptionAnimation) -> String {
-        switch a { case .none: "minus"; case .fade: "eye"; case .blur: "wind"; case .pop: "sparkles"; case .slide: "arrow.right" }
-    }
     private static func micModeIcon(_ m: MicMode) -> String {
         switch m { case .standard: "mic"; case .loud: "mic.fill"; case .podcast: "waveform.and.mic"; case .off: "mic.slash" }
     }
@@ -141,11 +135,19 @@ struct Inspector: View {
         }
     }
 
+    /// Two sources, two tabs: the macOS wallpapers on this machine and the
+    /// paintings. Solid colours, gradients, mesh and remote photos are gone —
+    /// they were never wallpapers.
+    enum WallpaperSource: String, CaseIterable, Identifiable {
+        case macOS = "macOS"
+        case painting = "Painting"
+        var id: String { rawValue }
+    }
+
     struct WallpaperChoice: Identifiable {
         var id: String { url.path }
         var displayName: String
         var url: URL
-        var isPainting: Bool
     }
 
     private static let wallpaperExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "webp"]
@@ -222,37 +224,37 @@ struct Inspector: View {
         return tokens.map(titleWord).joined(separator: " ")
     }
 
-    private static func wallpaperChoices() -> [WallpaperChoice] {
-        var out: [WallpaperChoice] = []
+    private static func wallpaperChoices() -> [WallpaperSource: [WallpaperChoice]] {
+        var out: [WallpaperSource: [WallpaperChoice]] = [.macOS: [], .painting: []]
         var seen = Set<String>()
-        func add(_ url: URL, isPainting: Bool) {
+        func add(_ url: URL, to source: WallpaperSource) {
             let name = humanizedName(for: url)
             let key = name.lowercased()
             guard !seen.contains(key) else { return }
             seen.insert(key)
-            out.append(WallpaperChoice(displayName: name, url: url, isPainting: isPainting))
+            out[source, default: []].append(WallpaperChoice(displayName: name, url: url))
         }
-        func collect(_ root: URL) {
+        func collect(_ root: URL, into source: WallpaperSource) {
             guard let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else { return }
             while let f = en.nextObject() as? URL {
                 let ext = f.pathExtension.lowercased()
                 guard wallpaperExtensions.contains(ext) else { continue }
                 guard (try? f.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
-                let rel = f.path.replacingOccurrences(of: root.path + "/", with: "")
-                add(f, isPainting: rel.contains("paintings"))
+                guard Self.isUsableWallpaper(f) else { continue }
+                add(f, to: source)
             }
         }
         // Bundled gallery (packaged app + source assets for `swift run`).
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let roots: [URL?] = [
             Bundle.main.resourceURL?.appendingPathComponent("Wallpapers"),
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("App/public/assets/wallpapers"),
-            URL(fileURLWithPath: "/Users/harshitduggal/workspace/Lumen/studio/wallpapers/paintings"),
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("wallpapers/paintings"),
+            cwd.appendingPathComponent("App/public/assets/wallpapers"),
+            cwd.appendingPathComponent("wallpapers"),
         ]
-        for r in roots.compactMap({ $0 }) {
-            if FileManager.default.fileExists(atPath: r.path) { collect(r) }
+        for r in roots.compactMap({ $0 }) where FileManager.default.fileExists(atPath: r.path) {
+            collect(r.appendingPathComponent("macos"), into: .macOS)
+            collect(r.appendingPathComponent("paintings"), into: .painting)
+            collect(r, into: .macOS)
         }
         // Every macOS wallpaper on this Mac (14/15/26 incl. Dynamic).
         let sysDir = URL(fileURLWithPath: "/System/Library/Desktop Pictures")
@@ -262,22 +264,44 @@ struct Inspector: View {
                 let ext = f.pathExtension.lowercased()
                 guard ["heic", "jpg", "jpeg", "png", "tiff", "webp"].contains(ext) else { continue }
                 guard (try? f.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
-                add(f, isPainting: false)
+                guard Self.isUsableWallpaper(f) else { continue }
+                add(f, to: .macOS)
             }
         }
-        return out.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        for key in out.keys {
+            out[key]?.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        }
+        return out
     }
 
+    /// Solid colours and gradients are not wallpapers, and a thumbnail-sized
+    /// file is not a wallpaper either. Both used to reach the grid.
+    private static func isUsableWallpaper(_ url: URL) -> Bool {
+        let name = url.lastPathComponent.lowercased()
+        let junk = ["grid", "chroma", "hello", "solid", "gradient", "colorful", "aurora", "bubble", "shade", "radial"]
+        if junk.contains(where: { name.contains($0) }) { return false }
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? CGFloat else { return true }
+        return width >= 2560
+    }
+
+    @State private var wallpaperSource: WallpaperSource = .macOS
     @State private var wallpaperSelectTask: Task<Void, Never>?
 
     private var wallpaperList: some View {
-        WallpaperGrid(model: model, choices: Self.wallpaperChoices()) { choice in
-            wallpaperSelectTask?.cancel()
-            wallpaperSelectTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(150))
-                guard !Task.isCancelled else { return }
-                model.edit { $0.style.setPhotoBackground(choice.url.path) }
-                model.edit { $0.style.background = .image }
+        VStack(spacing: 12) {
+            LSegmented(sel: $wallpaperSource,
+                       items: WallpaperSource.allCases.map { ($0, $0.rawValue) })
+                .frame(width: 190)
+            WallpaperGrid(model: model, choices: Self.wallpaperChoices()[wallpaperSource] ?? []) { choice in
+                wallpaperSelectTask?.cancel()
+                wallpaperSelectTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(150))
+                    guard !Task.isCancelled else { return }
+                    model.edit { $0.style.setPhotoBackground(choice.url.path) }
+                    model.edit { $0.style.background = .image }
+                }
             }
         }
         .padding(.top, 8)
@@ -321,11 +345,11 @@ struct Inspector: View {
                 if m.timeline.style.background == .image || m.timeline.style.background == .wallpaper {
                     wallpaperList
                         .padding(.top, 8)
-                    if m.timeline.style.background == .image {
-                        PhotoBackgroundRow(model: m)
-                    }
                 }
-                ToggleRow(label: "Blur behind zoom", on: m.bind(\.style.zoomBackgroundBlur))
+                // One blur knob, continuous, in pixels. No toggle, no preset:
+                // a wallpaper is either sharp or it is not.
+                SliderRow(label: "Blur", v: m.bind(\.style.wallpaperBlur), range: 0...60,
+                          fmt: { "\(Int($0))" })
             }.card(padding: 16)
 
             VStack(spacing: 0) {
@@ -349,7 +373,6 @@ struct Inspector: View {
             }.card(padding: 16)
 
             VStack(spacing: 0) {
-                SliderRow(label: "Blur", v: m.bind(\.style.imageBlur), range: 0...4, fmt: { "\(Int($0))" })
                 SliderRow(label: "Opacity", v: m.bind(\.style.imageOpacity), range: 0...1, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Contrast", v: m.bind(\.style.imageContrast), range: 0...2, fmt: { "\(Int($0 * 100))%" })
                 SliderRow(label: "Brightness", v: m.bind(\.style.imageBrightness), range: 0...2, fmt: { "\(Int($0 * 100))%" })
@@ -634,73 +657,20 @@ struct Inspector: View {
         }
     }
 
-    private func highlightColor(_ m: EditorModel) -> Binding<Color> {
-        Binding(get: {
-            let c = m.timeline.captions.style.highlightColor
-            return Color(.sRGB, red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
-        }, set: { color in
-            guard let c = NSColor(color).usingColorSpace(.sRGB) else { return }
-            m.edit(coalesce: true) { timeline in
-                timeline.captions.style.highlightColor = RGBA(r: Float(c.redComponent), g: Float(c.greenComponent), b: Float(c.blueComponent))
-            }
-        })
-    }
-
     private var captions: some View {
         let m = model
         return VStack(spacing: 16) {
+            // One source of truth: on, two faces, one size. Everything else
+            // (animation, lines, highlight colour, position, language) was a
+            // decision the caption should make for itself.
             VStack(spacing: 0) {
                 ToggleRow(label: "Captions", on: m.bind(\.captions.enabled))
                 Row(label: "Font") {
-                    LDropdown(sel: m.bind(\.captions.style.font), options: CaptionFont.allCases.map {
-                        ($0, $0.title, "textformat")
-                    }).frame(width: 130)
+                    LSegmented(sel: m.bind(\.captions.style.font), items: [(.sans, "Sans"), (.serif, "Serif")])
+                        .frame(width: 170)
                 }
-                Row(label: "Animation") {
-                    LDropdown(sel: m.bind(\.captions.style.animation), options: CaptionAnimation.allCases.map {
-                        ($0, $0.rawValue.capitalized, Self.captionAnimationIcon($0))
-                    }).frame(width: 130)
-                }
-                Row(label: "Highlight") {
-                    ColorPicker("Highlight", selection: highlightColor(m), supportsOpacity: false).labelsHidden()
-                }
-                DisclosureGroup("Advanced") {
-                    Row(label: "Position") {
-                        LDropdown(sel: m.bind(\.captions.style.position), options: CaptionPosition.allCases.map {
-                            ($0, $0.rawValue.capitalized, Self.captionPositionIcon($0))
-                        }).frame(width: 130)
-                    }
-                    Row(label: "Language") {
-                        TextField("en-US", text: locale).textFieldStyle(.plain).font(AppType.body)
-                            .padding(.horizontal, 12).frame(width: 130, height: 32)
-                            .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well))
-                            .accessibilityLabel("Caption language")
-                    }
-                }
-            }.card(padding: 16)
-            VStack(spacing: 0) {
-                SliderRow(label: "Size", v: m.bind(\.captions.style.size), range: 0.02...0.08, fmt: { "\(Int($0 * 100))%" })
-                SliderRow(label: "Lines", v: maxLines, range: 1...3, fmt: { "\(Int($0))" })
-                ToggleRow(label: "Word highlight", on: m.bind(\.captions.style.wordHighlight))
-            }.card(padding: 16)
-            VStack(spacing: 0) {
-                Row(label: "Manual titles") {
-                    LButton(title: "Add title", icon: "textformat", kind: .quiet) { m.addManualTitle() }
-                }
-                ForEach(m.timeline.overlays.texts) { title in
-                    Row(label: "Text") {
-                        TextField("Title", text: Binding(
-                            get: { m.timeline.overlays.texts.first(where: { $0.id == title.id })?.text ?? title.text },
-                            set: { m.dispatch(.editText(title.id, $0)) }
-                        ))
-                        .textFieldStyle(.plain)
-                        .font(AppType.body)
-                        .accessibilityLabel("Manual overlay text")
-                        LButton(title: "Remove", icon: "trash", kind: .quiet) {
-                            m.dispatch(.deleteText(title.id))
-                        }
-                    }
-                }
+                SliderRow(label: "Size", v: m.bind(\.captions.style.size), range: 0.03...0.09,
+                          fmt: { "\(Int($0 * 100))%" })
             }.card(padding: 16)
             VStack(spacing: 0) {
                 Row(label: "Spotlights") {
@@ -850,16 +820,6 @@ struct Inspector: View {
     private func layoutBinding<V>(_ kind: LayoutKind, _ keyPath: WritableKeyPath<LayoutSettings, V>) -> Binding<V> {
         Binding(get: { model.timeline.layoutSettings[kind][keyPath: keyPath] },
                 set: { value in model.edit(coalesce: true) { $0.layoutSettings[kind][keyPath: keyPath] = value } })
-    }
-
-    private var maxLines: Binding<Double> {
-        Binding(get: { Double(model.timeline.captions.maxLines) },
-                set: { value in model.edit(coalesce: true) { $0.captions.maxLines = min(max(Int(value.rounded()), 1), 3) } })
-    }
-
-    private var locale: Binding<String> {
-        Binding(get: { model.timeline.captions.locale },
-                set: { value in model.edit(coalesce: true) { $0.captions.locale = value } })
     }
 
     private var audio: some View {

@@ -142,8 +142,6 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
     try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
     f.timeline.captions.enabled = true
     f.timeline.captions.style.size = 0.13
-    f.timeline.captions.style.animation = .none
-    f.timeline.captions.style.wordHighlight = false
     let chunk = CaptionChunk(start: 0, end: 1, lines: [
         [CaptionWord(text: "Ry 123", start: 0, end: 1)],
         [CaptionWord(text: "Gy 456", start: 0, end: 1)],
@@ -208,8 +206,6 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
     try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
     f.timeline.captions.enabled = true
     f.timeline.captions.style.size = 0.13
-    f.timeline.captions.style.animation = .none
-    f.timeline.captions.style.wordHighlight = false
     let chunk = CaptionChunk(start: 0, end: 1, lines: [
         [CaptionWord(text: "WWWWWW", start: 0, end: 1)],
         [CaptionWord(text: "......", start: 0, end: 1)],

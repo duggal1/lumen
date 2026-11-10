@@ -160,14 +160,12 @@ import LumenExport
     var captioned = derived
     captioned.captions.enabled = true
     captioned.captions.style.size = 0.13
-    captioned.captions.style.animation = .none
     captioned.derived?.captions = [CaptionChunk(start: 0, end: 1,
         lines: [[CaptionWord(text: "VISIBLE CAPTION", start: 0, end: 0.2)]], y: 0.5)]
     let captionFrame = try await FrameImage.render(renderer: renderer, session: session, timeline: captioned,
                                                    t: 0.25, canvas: SIMD2(320, 180))
     #expect(pixels(captionFrame) != pixels(a))
     var noWordHighlight = captioned
-    noWordHighlight.captions.style.wordHighlight = false
     let plainCaption = try await FrameImage.render(renderer: renderer, session: session, timeline: noWordHighlight,
                                                    t: 0.25, canvas: SIMD2(320, 180))
     #expect(pixels(plainCaption) != pixels(captionFrame))

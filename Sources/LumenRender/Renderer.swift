@@ -66,7 +66,7 @@ public struct Geometry: Sendable {
 private struct QuadU { var rect: SIMD4<Float>; var canvas: SIMD2<Float> }
 private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; var angle: Float; var count: Int32; var kind: Int32
                            var radius: Float; var shadow: Float; var scale: Float; var cell: Float; var density: Float; var hasWall: Int32
-                           var time: Float; var pointer: SIMD4<Float>; var imgBlur: Float; var imgAlpha: Float; var imgContrast: Float; var imgBright: Float }
+                           var time: Float; var pointer: SIMD4<Float>; var wallBlur: Float; var imgAlpha: Float; var imgContrast: Float; var imgBright: Float }
 private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float; var tilt: SIMD2<Float>; var radii: SIMD4<Float> }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float> }
@@ -376,7 +376,7 @@ public final class Renderer: @unchecked Sendable {
         let cs = r.canvas
         guard output.width == cs.x, output.height == cs.y, cs.x > 0, cs.y > 0 else { return false }
         let tl = r.timeline
-        ensureTargets(cs, backdropBlur: tl.style.zoomBackgroundBlur)
+        ensureTargets(cs, backdropBlur: tl.style.wallpaperBlur > 0)
         if wait { sem.wait() } else if sem.wait(timeout: .now()) != .success { return false }
         let s = slot; slot = (slot + 1) % 3
         let g = Geometry(canvas: cs, src: SIMD2(Double(r.screen.texture.width), Double(r.screen.texture.height)), style: tl.style)
@@ -444,13 +444,13 @@ public final class Renderer: @unchecked Sendable {
                                   cell: Float(max(2, st.ditherCell * g.ui)), density: Float(st.ditherDensity),
                                   hasWall: (st.background == .wallpaper && wallTex != nil) || hasStyleImage ? 1 : 0,
                                   time: Float(backgroundTime), pointer: pointer,
-                                  imgBlur: Float(st.imageBlur), imgAlpha: Float(st.imageOpacity),
+                                  wallBlur: Float(st.wallpaperBlur), imgAlpha: Float(st.imageOpacity),
                                   imgContrast: Float(st.imageContrast), imgBright: Float(st.imageBrightness)))
                 cols.withUnsafeBytes { e.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()
             }
-            if tl.style.zoomBackgroundBlur, let blit = cb.makeBlitCommandEncoder() {
+            if tl.style.wallpaperBlur > 0, let blit = cb.makeBlitCommandEncoder() {
                 // Generate the full mip pyramid only after the backdrop
                 // itself changed. Screen content never enters these mipmaps.
                 blit.generateMipmaps(for: bd)
@@ -493,7 +493,7 @@ public final class Renderer: @unchecked Sendable {
             let zoom = r.live?.cameraScale ?? tl.evaluate(at: r.t).cameraScale
             frag(e, ResU(levels: fmt == .bgr10a2Unorm ? 1023 : 255,
                          seed: UInt32(truncatingIfNeeded: Int(r.t * 1000)),
-                         blur: BackdropBlur.mipLevel(enabled: tl.style.zoomBackgroundBlur,
+                         blur: BackdropBlur.mipLevel(enabled: tl.style.wallpaperBlur > 0,
                                                      cameraScale: zoom),
                          alpha: r.transparent || r.cursorOnly ? 0 : 1))
             e.setFragmentTexture(K > 1 ? accum[s] : work[s], index: 0); e.setFragmentTexture(bd, index: 1)

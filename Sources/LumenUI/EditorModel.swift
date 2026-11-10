@@ -376,10 +376,10 @@ enum TimelineSelection: Equatable {
     }
 
     func setTranscript(_ t: Transcript?) {
+        // A transcript arriving never switches captions on. The toggle is the
+        // only writer; this used to force `enabled = true` and that is why the
+        // switch kept turning itself back on.
         transcript = t; sentences = t.map { Sentences.split($0.words) } ?? []
-        if t != nil, !timeline.captions.enabled {
-            edit { $0.captions.enabled = true }
-        }
     }
     func seekSource(_ s: Double) { seek(timeline.timeMap.output(atSource: s)) }
 

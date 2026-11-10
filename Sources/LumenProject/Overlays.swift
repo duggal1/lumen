@@ -161,65 +161,57 @@ public struct LayoutSet: Codable, Equatable, Sendable {
     }
 }
 
-public enum CaptionAnimation: String, Codable, CaseIterable, Sendable { case none, fade, blur, pop, slide }
+/// Two faces, nothing else: a serif for the editorial read, a sans for the
+/// neutral one. Both render at weight 450 — the old per-word bold made the
+/// line reflow every time the spoken word changed.
 public enum CaptionFont: String, Codable, CaseIterable, Sendable {
-    case sfPro, sfRounded, newYork, menlo
-    public var title: String {
-        switch self {
-        case .sfPro: "SF Pro"
-        case .sfRounded: "SF Rounded"
-        case .newYork: "New York"
-        case .menlo: "SF Mono"
-        }
-    }
-    public var postScript: String {
-        switch self {
-        case .sfPro: "SF Pro Text"; case .sfRounded: "SF Pro Rounded"; case .newYork: "New York"; case .menlo: "Menlo"
-        }
-    }
-    public var postScriptBold: String {
-        switch self {
-        case .sfPro: "SF Pro Text Bold"; case .sfRounded: "SF Pro Rounded Bold"
-        case .newYork: "New York Bold"; case .menlo: "Menlo-Bold"
+    case serif, sans
+    public var title: String { switch self { case .serif: "Serif"; case .sans: "Sans" } }
+    public var postScript: String { switch self { case .serif: "New York"; case .sans: "SF Pro Text" } }
+    /// Legacy project files stored the old four-way choice. They map onto the
+    /// two faces that remain; nothing is lost but the picker.
+    public init(from d: Decoder) throws {
+        let raw = try d.singleValueContainer().decode(String.self)
+        switch raw {
+        case "newYork": self = .serif
+        case "sfPro", "sfRounded", "menlo": self = .sans
+        default: self = raw == "serif" ? .serif : .sans
         }
     }
 }
-public enum CaptionPosition: String, Codable, CaseIterable, Sendable { case auto, bottom, top }
 public struct CaptionStyle: Codable, Equatable, Sendable {
     public var size = 0.060                                         // fraction of canvas height
-    public var bold = true
     public var color = RGBA(0xFFFFFF)
     /// Dark card so white text keeps 4.5:1+ contrast on bright pages;
     /// a light pill on a white page fails regardless of blur.
     public var pill: RGBA? = RGBA(0x0A0A0A, a: 0.62)
-    public var outline = false
-    public var animation: CaptionAnimation = .blur
-    public var wordHighlight = true
-    /// Spoken word is full white; the rest sit at ~60% white (see TextOverlay).
-    public var highlightColor = RGBA(0xFFFFFF)
-    public var position: CaptionPosition = .auto
-    public var font: CaptionFont = .sfPro
-    enum CodingKeys: String, CodingKey { case size, bold, color, pill, outline, animation, wordHighlight, highlightColor, position, font }
+    public var font: CaptionFont = .sans
+    enum CodingKeys: String, CodingKey { case size, color, pill, font }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
-        size = c.opt(.size, size); bold = c.opt(.bold, bold); color = c.opt(.color, color)
+        size = c.opt(.size, size); color = c.opt(.color, color)
         pill = c.contains(.pill) ? ((try? c.decodeIfPresent(RGBA.self, forKey: .pill)) ?? nil) : pill
-        outline = c.opt(.outline, outline); animation = c.opt(.animation, animation)
-        wordHighlight = c.opt(.wordHighlight, wordHighlight); highlightColor = c.opt(.highlightColor, highlightColor)
-        position = c.opt(.position, position); font = c.opt(.font, font)
+        font = c.opt(.font, font)
     }
 }
 public struct CaptionPlan: Codable, Equatable, Sendable {
-    public var enabled = true
+    /// Captions are opt-in. A transcript arriving must never switch them on
+    /// behind the user's back, so nothing but the toggle writes this.
+    public var enabled = false
     public var style = CaptionStyle()
-    public var maxLines = 2
-    public var maxCharsPerLine: Int?                                // nil = aspect-adaptive
     public var locale = "en-US"
     public var vocabulary: [String] = []
     public var deletedWords: [Int] = []                             // transcript word indices removed by transcript editing
     public var textEdits: [String: String] = [:]                    // word index -> corrected text (captions only)
+    enum CodingKeys: String, CodingKey { case enabled, style, locale, vocabulary, deletedWords, textEdits }
     public init() {}
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        enabled = c.opt(.enabled, enabled); style = c.opt(.style, style); locale = c.opt(.locale, locale)
+        vocabulary = c.opt(.vocabulary, vocabulary); deletedWords = c.opt(.deletedWords, deletedWords)
+        textEdits = c.opt(.textEdits, textEdits)
+    }
 }
 
 /// Privacy analyzer settings and user decisions keyed by stable automatic-mask ids.

@@ -271,10 +271,10 @@ struct Smoothness: AsyncParsableCommand {
 
 struct Transcribe: AsyncParsableCommand {
     @Argument var project: String
-    @Option var size = "tiny"
+    @Option var size = "medium"
     @Flag var save = false
     func run() async throws {
-        guard let s = MoonshineSize(rawValue: size) else { throw ValidationError("size must be tiny, small or medium") }
+        guard let s = MoonshineSize(rawValue: size) else { throw ValidationError("size must be medium") }
         guard MoonshineRuntime.isAvailable, ModelStore.isInstalled(s) else { throw ValidationError("Moonshine \(s.rawValue) is not installed.") }
         let b = ProjectBundle(url: URL(fileURLWithPath: project))
         let f = try AVAudioFile(forReading: b.micURL), audioSec = Double(f.length) / f.processingFormat.sampleRate

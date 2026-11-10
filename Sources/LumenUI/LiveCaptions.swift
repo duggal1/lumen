@@ -55,8 +55,7 @@ enum ModelPicker {
 
 struct TranscriptTab: View {
     let model: EditorModel
-    @AppStorage(MoonshineSize.defaultsKey) private var size: MoonshineSize = .tiny
-    @State private var installed = Set<MoonshineSize>()
+    private let size = MoonshineSize.current
     @State private var error: String?
     @State private var downloadProgress: Double?
 
@@ -66,7 +65,7 @@ struct TranscriptTab: View {
             // flat black fill, so the transcript reads like a system surface.
             VStack(spacing: 0) {
                 Row(label: "Model") {
-                    LDropdown(sel: $size, options: MoonshineSize.allCases.map { ($0, $0.title + (installed.contains($0) ? "" : " · not installed"), "waveform") }).frame(width: 170)
+                    Text(size.title).font(AppType.body).foregroundStyle(Tok.text)
                 }
                 Row(label: "Model files") {
                     HStack(spacing: 8) {
@@ -113,7 +112,7 @@ struct TranscriptTab: View {
         .environment(\.layoutDirection, .leftToRight)
         .onAppear { refresh() }
     }
-    private func refresh() { installed = Set(MoonshineSize.allCases.filter(ModelStore.isInstalled)) }
+    private func refresh() {}
     private func importModel() {
         guard let u = ModelPicker.pick() else { return }
         do { try ModelStore.importFolder(u, as: size); error = nil } catch { self.error = "\(error)" }
