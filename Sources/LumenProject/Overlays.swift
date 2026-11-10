@@ -11,7 +11,17 @@ public struct CutRange: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-public enum MaskMode: String, Codable, CaseIterable, Sendable { case blur, pixelate, solid, blend }
+public enum MaskMode: String, Codable, CaseIterable, Sendable {
+    case blur, pixelate, solid
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        if value == "blend" { self = .pixelate }
+        else if let mode = Self(rawValue: value) { self = mode }
+        else { throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown mask mode: \(value)") }
+    }
+}
 /// Rect in SOURCE pixels at SOURCE time t.
 public struct MaskKey: Codable, Equatable, Sendable {
     public var t: Double, x: Double, y: Double, w: Double, h: Double
