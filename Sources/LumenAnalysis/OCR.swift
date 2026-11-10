@@ -1,20 +1,22 @@
 import Foundation
 import AVFoundation
 import Vision
+import CoreImage
 import os
 import LumenCore
 import LumenProject
 
 public enum OCRAnalyzer {
     public static func analyze(url: URL, offset: Double = 0, projectSalt: UInt64, customPatterns: [String] = [],
-                              entropyThreshold: Double = 3.5, fps: Double = 4) async throws -> [OCRDetection] {
+                              entropyThreshold: Double = 3.5, fps: Double = 4,
+                              progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> [OCRDetection] {
         guard ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else { return [] }
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { return [] }
         let job = OCRJob(asset: asset, track: track, offset: offset, salt: projectSalt, patterns: customPatterns,
-                         entropyThreshold: entropyThreshold, fps: fps)
+                         entropyThreshold: entropyThreshold, fps: fps, progress: progress)
         return try await withTaskCancellationHandler {
-            try await Task.detached(priority: .utility) { try job.run() }.value
+            try await job.value()
         } onCancel: { job.cancel() }
     }
 }
@@ -27,17 +29,51 @@ private final class OCRJob: @unchecked Sendable {
     private let patterns: [String]
     private let entropyThreshold: Double
     private let fps: Double
+    private let progress: @Sendable (Double) -> Void
+    private let completion = OSAllocatedUnfairLock<(continuation: CheckedContinuation<[OCRDetection], Error>?, result: Result<[OCRDetection], Error>?)>(uncheckedState: (nil, nil))
+    private let requestLock = OSAllocatedUnfairLock<VNRecognizeTextRequest?>(uncheckedState: nil)
+    private let context = CIContext(options: [.cacheIntermediates: false])
     private let readerLock = OSAllocatedUnfairLock<ReaderHandle?>(uncheckedState: nil)
     private let cancelled = OSAllocatedUnfairLock(initialState: false)
 
-    init(asset: AVAsset, track: AVAssetTrack, offset: Double, salt: UInt64, patterns: [String], entropyThreshold: Double, fps: Double) {
+    init(asset: AVAsset, track: AVAssetTrack, offset: Double, salt: UInt64, patterns: [String], entropyThreshold: Double, fps: Double, progress: @escaping @Sendable (Double) -> Void) {
         self.asset = asset; self.track = track; self.offset = offset; self.salt = salt; self.patterns = patterns
-        self.entropyThreshold = entropyThreshold; self.fps = fps
+        self.entropyThreshold = entropyThreshold; self.fps = fps; self.progress = progress
     }
 
     func cancel() {
         cancelled.withLock { $0 = true }
         readerLock.withLock { $0?.reader.cancelReading() }
+        requestLock.withLock { $0?.cancel() }
+        resolve(.failure(CancellationError()))
+    }
+
+    func value() async throws -> [OCRDetection] {
+        try await withCheckedThrowingContinuation { continuation in
+            let prior = completion.withLock { state -> Result<[OCRDetection], Error>? in
+                if let result = state.result { return result }
+                state.continuation = continuation; return nil
+            }
+            if let prior { continuation.resume(with: prior); return }
+            DispatchQueue.global(qos: .utility).async { [self] in
+                do { resolve(.success(try run())) } catch { resolve(.failure(error)) }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 120) { [weak self] in
+                guard let self, self.completion.withLock({ $0.result == nil }) else { return }
+                self.resolve(.failure(NSError(domain: "Lumen.Privacy", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Text scanning exceeded two minutes. Retry the scan or use manual masks."])))
+                self.cancel()
+            }
+        }
+    }
+
+    private func resolve(_ result: Result<[OCRDetection], Error>) {
+        let continuation = completion.withLock { state -> CheckedContinuation<[OCRDetection], Error>? in
+            guard state.result == nil else { return nil }
+            state.result = result
+            let continuation = state.continuation; state.continuation = nil; return continuation
+        }
+        continuation?.resume(with: result)
     }
 
     func run() throws -> [OCRDetection] {
@@ -52,8 +88,9 @@ private final class OCRJob: @unchecked Sendable {
         guard reader.canAdd(output) else { throw AnalysisError.readerConfiguration }
         reader.add(output)
         guard reader.startReading() else { throw reader.error ?? AnalysisError.readerStart }
-        var next = 0.0, lastRecognized = -Double.infinity
+        var next = 0.0
         var priorGrid: [UInt8]?
+        var lastDetections: [OCRDetection] = []
         var detections: [OCRDetection] = []
         while let sample = output.copyNextSampleBuffer() {
             if cancelled.withLock({ $0 }) { reader.cancelReading(); throw CancellationError() }
@@ -61,46 +98,86 @@ private final class OCRJob: @unchecked Sendable {
             guard time + 0.0001 >= next, let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             next = time + 1 / max(fps, 0.5)
             let grid = try lumaGrid(buffer)
-            let changed = priorGrid.map { changeRatio($0, grid) >= 0.001 } ?? true
+            let changed = priorGrid.map { changeRatio($0, grid) > 0 } ?? true
             priorGrid = grid
-            guard changed || time - lastRecognized >= 2 else { continue }
-            lastRecognized = time
+            progress(min(max(time / max(asset.duration.seconds, 0.001), 0), 0.99))
+            if !changed, !lastDetections.isEmpty {
+                detections.append(contentsOf: lastDetections.map { detection in
+                    var held = detection; held.t = time + offset; return held
+                })
+                continue
+            }
             // Confidence gate: sub-0.3 candidates are jitter, not text. The
             // bridge in MaskTracks holds masks through single dropouts.
-            detections.append(contentsOf: try detect(in: buffer, at: time + offset)
-                .filter { $0.confidence >= 0.3 })
+            lastDetections = try detect(in: buffer, at: time + offset)
+            detections.append(contentsOf: lastDetections)
         }
         if reader.status == .failed { throw reader.error ?? AnalysisError.readerFailed }
+        progress(1)
         return deduplicate(detections)
     }
 
     private func detect(in buffer: CVPixelBuffer, at time: Double) throws -> [OCRDetection] {
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = false
-        request.minimumTextHeight = 0.006
-        try VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:]).perform([request])
+        let image = CIImage(cvPixelBuffer: buffer)
+        guard let full = context.createCGImage(image, from: image.extent) else { throw AnalysisError.pixelBuffer }
+        let width = full.width, height = full.height, tile = 1536, step = 1408
+        var observations: [(VNRecognizedTextObservation, CGRect)] = []
+        for y in stride(from: 0, to: height, by: step) {
+            for x in stride(from: 0, to: width, by: step) {
+                if cancelled.withLock({ $0 }) { throw CancellationError() }
+                let rect = CGRect(x: x, y: y, width: min(tile, width - x), height: min(tile, height - y))
+                guard let crop = full.cropping(to: rect) else { continue }
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = false
+                request.minimumTextHeight = 0
+                requestLock.withLock { $0 = request }
+                try VNImageRequestHandler(cgImage: crop, options: [:]).perform([request])
+                requestLock.withLock { $0 = nil }
+                for observation in request.results ?? [] {
+                    let box = observation.boundingBox
+                    let mapped = CGRect(x: (rect.minX + box.minX * rect.width) / Double(width),
+                        y: (rect.minY + (1 - box.maxY) * rect.height) / Double(height),
+                        width: box.width * rect.width / Double(width), height: box.height * rect.height / Double(height))
+                    observations.append((observation, mapped))
+                }
+            }
+        }
         var output: [OCRDetection] = []
-        for observation in request.results ?? [] {
-            guard let candidate = observation.topCandidates(1).first else { continue }
+        let confidence = Float(min(max((entropyThreshold - 3) * 0.2 + 0.15, 0.1), 0.5))
+        for (observation, mappedBox) in observations {
+            guard let candidate = observation.topCandidates(1).first, candidate.confidence >= confidence else { continue }
             for hit in SensitivePatterns.scan(candidate.string, custom: patterns, entropyThreshold: entropyThreshold) {
                 let value = String(candidate.string[hit.range]).trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !value.isEmpty else { continue }
                 let start = Double(candidate.string.distance(from: candidate.string.startIndex, to: hit.range.lowerBound))
                 let end = Double(candidate.string.distance(from: candidate.string.startIndex, to: hit.range.upperBound))
-                let count = Double(max(candidate.string.count, 1)), box = observation.boundingBox
+                let count = Double(max(candidate.string.count, 1)), box = mappedBox
                 let left = max(Double(box.minX) + Double(box.width) * start / count - Double(box.width) * 0.04, 0)
                 let right = min(Double(box.minX) + Double(box.width) * end / count + Double(box.width) * 0.04, 1)
-                output.append(OCRDetection(t: time, x: left, y: 1 - Double(box.maxY), w: max(right - left, 0.001),
+                output.append(OCRDetection(t: time, x: left, y: Double(box.minY), w: max(right - left, 0.001),
                                            h: Double(box.height), category: hit.category,
                                            hash: fnv1a64(value.lowercased(), salt: salt), confidence: candidate.confidence))
             }
+        }
+        for (label, box) in observations {
+            guard let text = label.topCandidates(1).first?.string,
+                  text.range(of: "password|passcode|cvv|card number|ssn", options: .regularExpression.union(.caseInsensitive)) != nil else { continue }
+            let neighbors = observations.map(\.1).filter { candidate in
+                candidate != box && ((candidate.minX >= box.maxX && abs(candidate.midY - box.midY) < box.height * 2)
+                    || (candidate.minY >= box.maxY && candidate.minY - box.maxY < 0.08 && abs(candidate.midX - box.midX) < 0.25))
+            }
+            let nearest = neighbors.min { hypot($0.midX - box.midX, $0.midY - box.midY) < hypot($1.midX - box.midX, $1.midY - box.midY) }
+            let field = nearest ?? CGRect(x: box.minX, y: box.maxY, width: max(box.width, 0.18), height: max(box.height * 2, 0.025))
+            let region = box.union(field).intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+            output.append(OCRDetection(t: time, x: region.minX, y: region.minY, w: region.width, h: region.height,
+                category: .envSecret, hash: fnv1a64(text.lowercased(), salt: salt), confidence: 1))
         }
         return output
     }
 
     private func lumaGrid(_ buffer: CVPixelBuffer) throws -> [UInt8] {
-        let cols = 32, rows = 18
+        let cols = 256, rows = 144
         guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { throw AnalysisError.pixelBuffer }
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { throw AnalysisError.pixelBuffer }
