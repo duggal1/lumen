@@ -122,6 +122,8 @@ public final class InputRecorder: @unchecked Sendable {
     private let focusQuery = OSAllocatedUnfairLock(initialState: (last: -Double.infinity, index: UInt32(0), pending: false))
     private let axTrusted = OSAllocatedUnfairLock(initialState: false)
     private let axQ = DispatchQueue(label: "lumen.ax", qos: .utility)
+    private var axTimer: DispatchSourceTimer?
+    private var enhancedApps: Set<pid_t> = []
     private var tap: CFMachPort?
     private var fh: FileHandle?
     private var timer: DispatchSourceTimer?
@@ -158,6 +160,7 @@ public final class InputRecorder: @unchecked Sendable {
         }
         th.qualityOfService = .userInteractive; th.start()
         startFlushTimer()
+        startAXTimer()
         Task { @MainActor [weak self] in           // cursor shape poll @ 10 Hz (was 30 Hz: per-tick main churn)
             while let self, self.running.withLock({ $0 }) {
                 let cursorShape = self.catalog.classify()
@@ -179,6 +182,7 @@ public final class InputRecorder: @unchecked Sendable {
         if let t = tap { CGEvent.tapEnable(tap: t, enable: false) }
         loop.withLock { if let l = $0 { CFRunLoopStop(l) } }
         timer?.cancel()
+        axTimer?.cancel(); axTimer = nil
         await withCheckedContinuation { continuation in
             writeQ.async { [self] in
                 flush(); try? fh?.close()
@@ -260,11 +264,7 @@ public final class InputRecorder: @unchecked Sendable {
                 defer { focusQuery.withLock { $0.pending = false } }
                 let system = AXUIElementCreateSystemWide()
                 AXUIElementSetMessagingTimeout(system, 0.05)
-                guard let value = attribute(system, kAXFocusedUIElementAttribute),
-                      CFGetTypeID(value) == AXUIElementGetTypeID() else { return }
-                let element = value as! AXUIElement
-                AXUIElementSetMessagingTimeout(element, 0.05)
-                guard let frame = frame(element) else { return }
+                guard let frame = focusedFrame(system) else { return }
                 axFrames.withLock { $0[Int(reservation.0) - 1] = frame }
                 var focused = event
                 let caret = frame.caret
@@ -275,6 +275,58 @@ public final class InputRecorder: @unchecked Sendable {
             }
         }
         return reservation.0
+    }
+
+    private func focusedFrame(_ system: AXUIElement) -> AXFrame? {
+        if let value = attribute(system, kAXFocusedUIElementAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() {
+            let element = value as! AXUIElement
+            AXUIElementSetMessagingTimeout(element, 0.05)
+            if let result = frame(element) { return result }
+        }
+        guard let value = attribute(system, kAXFocusedApplicationAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        let app = value as! AXUIElement
+        AXUIElementSetMessagingTimeout(app, 0.05)
+        var pid: pid_t = 0
+        AXUIElementGetPid(app, &pid)
+        if enhancedApps.insert(pid).inserted {
+            AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        }
+        guard let focused = attribute(app, kAXFocusedUIElementAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
+        return frame(focused as! AXUIElement)
+    }
+
+    private func startAXTimer() {
+        guard axTrusted.withLock({ $0 }) else { return }
+        let timer = DispatchSource.makeTimerSource(queue: axQ)
+        timer.schedule(deadline: .now(), repeating: 0.5)
+        timer.setEventHandler { [weak self] in self?.sampleSecureFields() }
+        timer.resume(); axTimer = timer
+    }
+
+    private func sampleSecureFields() {
+        guard running.withLock({ $0 }) else { return }
+        let system = AXUIElementCreateSystemWide(), now = HostClock.now()
+        AXUIElementSetMessagingTimeout(system, 0.03)
+        guard let value = attribute(system, kAXFocusedApplicationAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return }
+        let app = value as! AXUIElement
+        AXUIElementSetMessagingTimeout(app, 0.03)
+        guard let window = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(window) == AXUIElementGetTypeID() else { return }
+        var pending = [window as! AXUIElement], visited = 0
+        while let element = pending.popLast(), visited < 256, HostClock.now() - now < 0.12 {
+            visited += 1
+            AXUIElementSetMessagingTimeout(element, 0.03)
+            let labels = [kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, "AXPlaceholderValue"]
+                .compactMap { attribute(element, $0) as? String }.joined(separator: " ")
+            if labels.range(of: "secure|email|password|passcode|card|cvv|cvc|ssn", options: .regularExpression.union(.caseInsensitive)) != nil,
+               var field = frame(element), field.secure {
+                field.sampledAt = now
+                axFrames.withLock { $0.append(field) }
+            }
+            if let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
+                pending.append(contentsOf: children.prefix(max(256 - visited - pending.count, 0)))
+            }
+        }
     }
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
