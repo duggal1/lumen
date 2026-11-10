@@ -102,7 +102,7 @@ struct LibrarySurface: View {
         case .countdown:
             EmptyView()
         case .finishing:
-            HStack(spacing: Space.s2) { PixelWait(); Text("Saving…").font(AppType.body).foregroundStyle(Tok.text2) }
+            HStack(spacing: Space.s2) { PixelWait(); Text(app.recordingStatus).font(AppType.body).foregroundStyle(Tok.text2) }
         }
     }
 
