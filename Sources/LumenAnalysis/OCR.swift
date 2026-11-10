@@ -94,7 +94,6 @@ private final class OCRJob: @unchecked Sendable {
         var nextTrack = 0.0
         let tracker = VNSequenceRequestHandler()
         var next = 0.0
-        var priorGrid: [UInt8]?
         var lastDetections: [OCRDetection] = []
         var detections: [OCRDetection] = []
         while let sample = output.copyNextSampleBuffer() {
@@ -115,18 +114,7 @@ private final class OCRJob: @unchecked Sendable {
                 continue
             }
             next = time + 1 / max(fps, 0.5)
-            let grid = try lumaGrid(buffer)
-            let changed = priorGrid.map { changeRatio($0, grid) > 0 } ?? true
-            priorGrid = grid
             progress(min(max(time / max(duration, asset.duration.seconds, 0.001), 0), 0.99))
-            if !changed, !lastDetections.isEmpty {
-                detections.append(contentsOf: lastDetections.map { detection in
-                    var held = detection; held.t = time + offset; return held
-                })
-                continue
-            }
-            // Confidence gate: sub-0.3 candidates are jitter, not text. The
-            // bridge in MaskTracks holds masks through single dropouts.
             lastDetections = try detect(in: buffer, at: time + offset)
             detections.append(contentsOf: lastDetections)
         }
@@ -153,7 +141,7 @@ private final class OCRJob: @unchecked Sendable {
         try handler.perform(requests, on: buffer)
         return zip(detections, requests).map { prior, request in
             var result = prior; result.t = time
-            if let observation = request.results?.first, observation.confidence >= 0.3 {
+            if let observation = request.results?.first as? VNDetectedObjectObservation, observation.confidence >= 0.3 {
                 let rect = observation.boundingBox
                 result.x = rect.minX; result.y = 1 - rect.maxY; result.w = rect.width; result.h = rect.height
             }
@@ -219,30 +207,6 @@ private final class OCRJob: @unchecked Sendable {
                 category: .envSecret, hash: fnv1a64(text.lowercased(), salt: salt), confidence: 1))
         }
         return output
-    }
-
-    private func lumaGrid(_ buffer: CVPixelBuffer) throws -> [UInt8] {
-        let cols = 256, rows = 144
-        guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { throw AnalysisError.pixelBuffer }
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { throw AnalysisError.pixelBuffer }
-        let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer), stride = CVPixelBufferGetBytesPerRow(buffer)
-        var grid = [UInt8](repeating: 0, count: cols * rows)
-        for y in 0..<rows {
-            let py = min(y * height / rows, height - 1)
-            for x in 0..<cols {
-                let px = min(x * width / cols, width - 1), i = py * stride + px * 4
-                grid[y * cols + x] = UInt8((29 * Int(base[i]) + 150 * Int(base[i + 1]) + 77 * Int(base[i + 2])) >> 8)
-            }
-        }
-        return grid
-    }
-
-    private func changeRatio(_ old: [UInt8], _ new: [UInt8]) -> Double {
-        let changed = zip(old, new).reduce(into: 0) { count, pair in
-            if abs(Int(pair.0) - Int(pair.1)) >= 18 { count += 1 }
-        }
-        return Double(changed) / Double(max(old.count, 1))
     }
 
     private func deduplicate(_ detections: [OCRDetection]) -> [OCRDetection] {
