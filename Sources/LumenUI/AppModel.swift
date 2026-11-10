@@ -445,6 +445,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         error = nil
         guard Permissions.screen else { Permissions.requestScreen(); error = "Screen Recording is off. Grant it, then relaunch Lumen."; return }
         guard Permissions.input else { Permissions.requestInput(); error = "Input Monitoring is off. Grant it, then relaunch Lumen."; return }
+        if !Permissions.accessibility { Permissions.requestAccessibility() }
         if mic || webcam { await Permissions.requestMedia() }
         var cfg: RecordingConfig
         switch kind {
