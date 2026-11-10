@@ -321,7 +321,8 @@ public final class InputRecorder: @unchecked Sendable {
             if labels.range(of: "secure|email|password|passcode|card|cvv|cvc|ssn", options: .regularExpression.union(.caseInsensitive)) != nil,
                var field = frame(element), field.secure {
                 field.sampledAt = now
-                axFrames.withLock { $0.append(field) }
+                let snapshot = field
+                axFrames.withLock { $0.append(snapshot) }
             }
             if let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
                 pending.append(contentsOf: children.prefix(max(256 - visited - pending.count, 0)))
