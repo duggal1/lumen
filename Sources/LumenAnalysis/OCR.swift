@@ -145,12 +145,12 @@ private final class OCRJob: @unchecked Sendable {
         trackingBuffer = buffer
         if trackingRequests.isEmpty {
             trackingRequests = detections.map { detection in
-            let observation = VNDetectedObjectObservation(boundingBox: CGRect(x: detection.x,
-                y: 1 - detection.y - detection.h, width: detection.w, height: detection.h))
-            let request = VNTrackObjectRequest(detectedObjectObservation: observation)
-            request.trackingLevel = .fast
-            return request
-        }
+                let observation = VNDetectedObjectObservation(boundingBox: CGRect(x: detection.x,
+                    y: 1 - detection.y - detection.h, width: detection.w, height: detection.h))
+                let request = VNTrackObjectRequest(detectedObjectObservation: observation)
+                request.trackingLevel = .fast
+                return request
+            }
         }
         try handler.perform(trackingRequests, on: buffer)
         return zip(detections, trackingRequests).map { prior, request in
