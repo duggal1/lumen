@@ -10,9 +10,11 @@ public struct CursorTrack: Sendable, Equatable {
     }
 }
 public struct CameraTrack: Sendable, Equatable {
+    public var rate: Double
     public var nx: [Float], ny: [Float], lz: [Float], vx: [Float], vy: [Float], vz: [Float]
     public var yaw: [Float], pitch: [Float]             // degrees
-    public init(count: Int) {
+    public init(count: Int, rate: Double = gridRate) {
+        self.rate = rate
         nx = .init(repeating: 0.5, count: count); ny = nx; lz = .init(repeating: 0, count: count); vx = lz; vy = lz; vz = lz; yaw = lz; pitch = lz
     }
 }
