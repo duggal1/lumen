@@ -17,13 +17,13 @@ final class VoiceMicrophoneRecorder {
                                                      mElement: kAudioObjectPropertyElementMain)
             var uid: CFString = deviceID as CFString
             var device = AudioDeviceID(kAudioObjectUnknown)
-            var translation = AudioValueTranslation()
             let status = withUnsafeMutablePointer(to: &uid) { uidPointer in
                 withUnsafeMutablePointer(to: &device) { devicePointer in
-                    translation.mInputData = UnsafeMutableRawPointer(uidPointer)
-                    translation.mInputDataSize = UInt32(MemoryLayout<CFString>.size)
-                    translation.mOutputData = UnsafeMutableRawPointer(devicePointer)
-                    translation.mOutputDataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+                    var translation = AudioValueTranslation(
+                        mInputData: UnsafeMutableRawPointer(uidPointer),
+                        mInputDataSize: UInt32(MemoryLayout<CFString>.size),
+                        mOutputData: UnsafeMutableRawPointer(devicePointer),
+                        mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size))
                     var size = UInt32(MemoryLayout<AudioValueTranslation>.size)
                     return AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &translation)
                 }
