@@ -13,7 +13,7 @@ concurrency:
 jobs:
   macos:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - name: Environment
@@ -27,7 +27,7 @@ jobs:
       - name: Build debug
         run: swift build
       - name: Run unit and integration tests
-        run: swift test
+        run: swift test --no-parallel
       - name: Build release and package app
         run: bash Tools/make-app.sh
       - name: Verify packaged audio and signature
