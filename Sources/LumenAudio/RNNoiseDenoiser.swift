@@ -46,7 +46,7 @@ public struct RNNoiseDenoiser: Denoiser {
         let attack = Float(exp(-1 / (0.005 * AudioIO.fs)))
         let release = Float(exp(-1 / (0.080 * AudioIO.fs)))
         let wet = Float(strength)
-        let floor = Float(pow(10, -18 * strength / 20))
+        let floor = Float(pow(10, -(12 + 6 * strength) / 20))
         var gain: Float = 1
         for i in result.indices {
             let probability = probabilities[i / size]
