@@ -33,6 +33,7 @@ enum AnalysisError: Error, LocalizedError, Sendable {
 }
 
 public struct AnalysisRequest: Sendable {
+    public var privacyProgress: @Sendable (Double) -> Void = { _ in }
     public var screen: URL
     public var webcam: URL?
     public var mic: URL?
@@ -136,12 +137,13 @@ public actor AnalysisService {
             return ([], "Automatic text scanning is disabled by LUMEN_NO_OCR.")
         }
         let params = OCRParameters(salt: r.projectSalt, patterns: r.privacy.customPatterns,
-                                   entropyThreshold: r.privacy.entropyThreshold, fps: 2)
-        let (detections, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "sensitive-text", version: 1,
+                                   entropyThreshold: r.privacy.entropyThreshold, fps: 4)
+        let (detections, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "sensitive-text", version: 3,
                                                parameters: params) {
             try await OCRAnalyzer.analyze(url: r.screen, projectSalt: r.projectSalt, customPatterns: r.privacy.customPatterns,
-                                          entropyThreshold: r.privacy.entropyThreshold)
+                                          entropyThreshold: r.privacy.entropyThreshold, progress: r.privacyProgress)
         }
+        if error == nil { r.privacyProgress(1) }
         return (detections ?? [], error)
     }
 
