@@ -61,7 +61,8 @@ import LumenExport
     let mixer = AudioMixer(mic: voice, micOffset: 0, system: nil, systemOffset: 0)
     let a = try #require(mixer.mix(tl)), b = try #require(mixer.mix(tl))
     #expect(a.l == b.l && a.r == b.r)
-    #expect(abs(a.lufs + 14) <= 0.5)
+    // The default mic mode normalizes to -16 LUFS (spec: podcast chain target).
+    #expect(abs(a.lufs + 16) <= 0.5, "voice must land at -16 LUFS, got \(a.lufs)")
     #expect(a.truePeakDb <= -1)
 }
 
@@ -165,10 +166,13 @@ import LumenExport
     let captionFrame = try await FrameImage.render(renderer: renderer, session: session, timeline: captioned,
                                                    t: 0.25, canvas: SIMD2(320, 180))
     #expect(pixels(captionFrame) != pixels(a))
-    var noWordHighlight = captioned
-    let plainCaption = try await FrameImage.render(renderer: renderer, session: session, timeline: noWordHighlight,
-                                                   t: 0.25, canvas: SIMD2(320, 180))
-    #expect(pixels(plainCaption) != pixels(captionFrame))
+    // The spoken word is brighter than the rest. Brightness only: the line
+    // never changes weight, so the pixels of the spoken word differ from the
+    // same caption rendered outside the word's time range.
+    let spokenFrame = try await FrameImage.render(renderer: renderer, session: session, timeline: captioned,
+                                                   t: 0.1, canvas: SIMD2(320, 180))
+    #expect(pixels(spokenFrame) != pixels(captionFrame),
+            "the spoken word must render brighter than the words around it")
     var titled = derived
     titled.overlays.texts = [TextBlock(start: 0, end: 1, text: "TITLE", x: 0.5, y: 0.5, size: 0.14)]
     let titleFrame = try await FrameImage.render(renderer: renderer, session: session, timeline: titled,

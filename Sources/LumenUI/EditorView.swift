@@ -90,6 +90,15 @@ struct EditorView: View {
                         .layoutPriority(1)
                 }
             }
+            // A recording without an event sidecar can never produce an
+            // automatic zoom. Say so instead of showing an empty timeline.
+            if model.session.input.events.isEmpty {
+                Label("No input events were recorded. Automatic zoom cannot be generated for this clip.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(AppType.caption).foregroundStyle(Tok.accentText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+            }
             HStack(spacing: 0) {
                 VStack(spacing: 8) {
                     GeometryReader { area in

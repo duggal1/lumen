@@ -281,6 +281,12 @@ kernel void pixelateMask(texture2d<float, access::read> source [[texture(0)]],
         float4 r = masks[i].rect;
         if (all(p >= r.xy) && all(p < r.xy + r.zw)) {
             float block = max(masks[i].block.x, 8.0);
+            if (masks[i].block.y > 0.5) {
+                // Solid: an opaque fill. Nothing of the original pixels can
+                // survive it, so the region reads as a block, not as content.
+                color = float4(0.09, 0.09, 0.09, 1.0);
+                break;
+            }
             float2 origin = floor(p / block) * block;
             color = float4(0.0);
             for (uint y = 0; y < 4; ++y) {

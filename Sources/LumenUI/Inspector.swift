@@ -672,6 +672,27 @@ struct Inspector: View {
                 SliderRow(label: "Size", v: m.bind(\.captions.style.size), range: 0.03...0.09,
                           fmt: { "\(Int($0 * 100))%" })
             }.card(padding: 16)
+            // Manual titles are their own overlays, not caption settings: the
+            // text block is authored here and rendered by the same Metal pass.
+            VStack(spacing: 0) {
+                Row(label: "Manual titles") {
+                    LButton(title: "Add title", icon: "textformat", kind: .quiet) { m.addManualTitle() }
+                }
+                ForEach(m.timeline.overlays.texts) { title in
+                    Row(label: "Text") {
+                        TextField("Title", text: Binding(
+                            get: { m.timeline.overlays.texts.first(where: { $0.id == title.id })?.text ?? title.text },
+                            set: { m.dispatch(.editText(title.id, $0)) }
+                        ))
+                        .textFieldStyle(.plain)
+                        .font(AppType.body)
+                        .accessibilityLabel("Manual overlay text")
+                        LButton(title: "Remove", icon: "trash", kind: .quiet) {
+                            m.dispatch(.deleteText(title.id))
+                        }
+                    }
+                }
+            }.card(padding: 16)
             VStack(spacing: 0) {
                 Row(label: "Spotlights") {
                     LButton(title: "Add highlight", icon: "highlighter", kind: .quiet) { m.addManualHighlight() }

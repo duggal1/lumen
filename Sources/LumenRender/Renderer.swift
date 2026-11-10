@@ -820,8 +820,11 @@ public final class Renderer: @unchecked Sendable {
         guard let target = maskedSources[slot] else { return nil }
         let regions = masks.map { mask in
             let block = max(pixelSize, PrivacyMaskGeometry.cell(boxHeight: mask.rect.w))
+            // The kernel needs the mode: a solid mask paints an opaque fill,
+            // every other mode pixelates the region in source space.
+            let mode: Float = mask.mode == .solid ? 1 : 0
             return SourceMaskGPU(rect: PrivacyMaskGeometry.mosaicRegion(mask.rect, cell: block),
-                                 block: SIMD4(block, 0, 0, 0))
+                                 block: SIMD4(block, mode, 0, 0))
         }
         guard let buffer = regions.withUnsafeBytes({ bytes in
             bytes.baseAddress.flatMap { device.makeBuffer(bytes: $0, length: bytes.count) }
