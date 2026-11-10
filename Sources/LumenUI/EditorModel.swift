@@ -390,9 +390,16 @@ enum TimelineSelection: Equatable {
             return
         }
         let b = session.bundle, off = session.micOffset, size = MoonshineSize.current
+        let audioSettings = timeline.audio
         transcribeState = .running(0); transcribeTask?.cancel()
         transcribeTask = Task { [weak self] in
-            let res = await FileTranscriber.run(url: b.micURL, size: size) { p in Task { @MainActor in self?.transcribeState = .running(p) } }
+            let voiceURL: URL
+            do { voiceURL = try await cleanVoiceURL(for: b, settings: audioSettings) }
+            catch {
+                self?.transcribeState = .failed("Voice processing failed: \(error.localizedDescription)")
+                return
+            }
+            let res = await FileTranscriber.run(url: voiceURL, size: size) { p in Task { @MainActor in self?.transcribeState = .running(p) } }
             guard let self, !Task.isCancelled else { return }
             switch res {
             case .success(let tr):
