@@ -27,7 +27,10 @@ public enum DeepFilterNet {
         defer { try? FileManager.default.removeItem(at: directory) }
         let input = directory.appendingPathComponent("voice.wav")
         let output = directory.appendingPathComponent("output")
-        try AudioIO.writeMonoWAV(samples, to: input)
+        // Pinned DF3: 480-sample STFT delay + two 480-sample lookahead frames.
+        // Its CLI trims the delay but does not flush or process partial frames.
+        let padding = 1440 + (480 - samples.count % 480) % 480
+        try AudioIO.writeMonoWAV(samples, paddingSamples: padding, to: input)
         let process = Process()
         process.executableURL = executable
         process.arguments = ["--compensate-delay", "--output-dir", output.path, input.path]
