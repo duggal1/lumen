@@ -1,0 +1,20 @@
+# Third-party and generated sources are not project code. Without these
+# overrides GitHub Linguist counts the vendored RNNoise C sources -- including
+# the 78 MB generated weights blob in Sources/CRNNoise/src/rnnoise_data.c --
+# and reports this repository as "C" instead of Swift.
+#
+# See https://github.com/github-linguist/linguist/blob/main/docs/overrides.md
+
+# Vendored RNNoise (Mozilla/Jean-Marc Valin). Sources/CRNNoise/src/rnnoise_data.c
+# holds the pretrained LPCNet weights as C float arrays and is ~99% of the
+# repository's C bytes.
+Sources/CRNNoise/** linguist-vendored
+
+# Vendored Moonshine C API surface.
+Sources/CMoonshine/** linguist-vendored
+
+# Prebuilt Moonshine dylib.
+Vendor/** linguist-vendored
+
+# Vendored DeepFilterNet runtime binary and license files.
+Sources/LumenAudio/Resources/DeepFilterNet/** linguist-vendored
