@@ -136,3 +136,56 @@ public enum AudioIO {
         }
     }
 }
+extension AudioIO {
+    public static func writeMonoWAV(_ samples: [Float], sampleRate: Double = fs, paddingSamples: Int = 0, to url: URL) throws {
+        guard sampleRate.isFinite, sampleRate > 0,
+              let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                                         channels: 1, interleaved: false),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 65_536),
+              let data = buffer.floatChannelData else { throw AudioIOError.unreadable("mono format") }
+        var settings = format.settings
+        settings[AVLinearPCMIsNonInterleaved] = false
+        let file = try AVAudioFile(forWriting: url, settings: settings,
+                                  commonFormat: .pcmFormatFloat32, interleaved: false)
+        let total = samples.count + max(paddingSamples, 0)
+        for offset in stride(from: 0, to: total, by: Int(buffer.frameCapacity)) {
+            let count = min(Int(buffer.frameCapacity), total - offset)
+            let available = min(count, max(samples.count - offset, 0))
+            buffer.frameLength = AVAudioFrameCount(count)
+            samples.withUnsafeBufferPointer { source in
+                if available > 0, let base = source.baseAddress { data[0].update(from: base + offset, count: available) }
+            }
+            if available < count { data[0].advanced(by: available).update(repeating: 0, count: count - available) }
+            try file.write(from: buffer)
+        }
+    }
+
+    static func resampleMono(_ samples: [Float], from inputRate: Double, to outputRate: Double) throws -> [Float] {
+        guard !samples.isEmpty else { return [] }
+        guard let inputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputRate,
+                                              channels: 1, interleaved: false),
+              let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: outputRate,
+                                               channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: inputFormat, to: outputFormat),
+              let input = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(samples.count)),
+              let output = AVAudioPCMBuffer(pcmFormat: outputFormat,
+                  frameCapacity: AVAudioFrameCount(ceil(Double(samples.count) * outputRate / inputRate)) + 4096),
+              let inputData = input.floatChannelData, let outputData = output.floatChannelData
+        else { throw AudioIOError.unreadable("resampler") }
+        input.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { source in
+            if let base = source.baseAddress { inputData[0].update(from: base, count: samples.count) }
+        }
+        let box = OnceBox(input)
+        var error: NSError?
+        let status = converter.convert(to: output, error: &error) { _, state in
+            guard let value = box.buffer else { state.pointee = .endOfStream; return nil }
+            box.buffer = nil; state.pointee = .haveData; return value
+        }
+        guard status != .error, error == nil else { throw error ?? AudioIOError.unreadable("conversion") }
+        let expected = Int((Double(samples.count) * outputRate / inputRate).rounded())
+        var result = Array(UnsafeBufferPointer(start: outputData[0], count: min(Int(output.frameLength), expected)))
+        if result.count < expected { result.append(contentsOf: repeatElement(0, count: expected - result.count)) }
+        return result
+    }
+}

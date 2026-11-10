@@ -36,12 +36,10 @@ public struct RecordedMicrophone: Sendable {
 }
 
 /// Offline mix of the whole timeline. Preview plays this buffer; export encodes it. One code path = they always match.
-/// Voice stage A (HP + WPE) is cached on disk for the primary mic; the residual
-/// suppressor and studio chain are cached per setting in memory.
+/// Processed microphone Float32 WAVs are cached by source content and exact settings.
 public final class AudioMixer: @unchecked Sendable {
     private struct MusicCache { var path: String; var track: MusicTrack?; var lufs: Double }
-    private struct StageA { var hp: [Float]; var wpe: [Float]? }
-    private struct VoiceKey: Hashable { var mic: Int; var clean: Bool; var room: Int; var studio: Int; var mode: MicMode }
+    private struct VoiceKey: Hashable { var mic: Int; var settings: String }
 
     /// Voice sits at -16 LUFS before the master stage. Music reference is 6 dB hotter so the default
     /// `musicGainDb` (-18) lands the bed ~12 dB under the voice at rest (plan 10.3).
@@ -55,11 +53,14 @@ public final class AudioMixer: @unchecked Sendable {
     private let keyTimes: [Double]
     private let bank = SFXBank()
     private let lock = NSLock()
-    private var stages: [Int: StageA] = [:]
     private var voice: [VoiceKey: [Float]] = [:]
     private var music: MusicCache?
     private var imported: [String: MusicTrack] = [:]
-    public var denoiser: any Denoiser = defaultDenoiser
+    private var customDenoiser: (any Denoiser)?
+    public var denoiser: any Denoiser {
+        get { lock.lock(); defer { lock.unlock() }; return customDenoiser ?? defaultDenoiser }
+        set { lock.lock(); defer { lock.unlock() }; customDenoiser = newValue; voice.removeAll() }
+    }
 
     public init(mic: [Float]?, micOffset: Double, system: [Float]?, systemOffset: Double,
                 systemRight: [Float]? = nil,
@@ -72,112 +73,27 @@ public final class AudioMixer: @unchecked Sendable {
         if let cacheDir { try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true) }
     }
 
-    static func fingerprint(_ x: [Float]) -> UInt64 {
-        var h: UInt64 = 0xcbf29ce484222325 ^ UInt64(x.count), i = 0
-        while i < x.count { h = (h ^ UInt64(x[i].bitPattern)) &* 0x100000001b3; i += 997 }
-        return h
-    }
-
-    /// WPE is the expensive stage, so it is written next to the project and reused on reopen.
-    /// Only the primary mic is persisted on disk; extra mics run WPE in memory.
-    // Called only by voiceChain while holding `lock`. Re-acquiring NSLock here
-    // deadlocks every microphone mix, including the CI audio tests.
-    private func stageA(_ m: [Float], index: Int, needWPE: Bool) -> StageA {
-        if let s = stages[index], !needWPE || s.wpe != nil { return s }
-        let hp = Cascade.apply(m, Cascade.hp4(80, fs: AudioIO.fs))
-        guard needWPE else {
-            let s = StageA(hp: hp, wpe: nil)
-            stages[index] = s
-            return s
-        }
-        let url = index == 0 ? cacheDir?.appendingPathComponent("voice-wpe-v1.f32") : nil
-        let sig = Self.fingerprint(m)
-        if let url, let d = try? Data(contentsOf: url), d.count == 8 + m.count * 4,
-           d.withUnsafeBytes({ $0.loadUnaligned(fromByteOffset: 0, as: UInt64.self) }) == sig {
-            var out = [Float](repeating: 0, count: m.count)
-            out.withUnsafeMutableBytes { dst in
-                d.withUnsafeBytes { src in dst.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[8...])) }
-            }
-            let s = StageA(hp: hp, wpe: out)
-            stages[index] = s
-            return s
-        }
-        let w = WPE().process(hp)
-        if let url {
-            var data = Data()
-            withUnsafeBytes(of: sig) { data.append(contentsOf: $0) }
-            w.withUnsafeBufferPointer { data.append(Data(buffer: $0)) }
-            try? data.write(to: url, options: .atomic)
-        }
-        let s = StageA(hp: hp, wpe: w)
-        stages[index] = s
-        return s
-    }
-
-    /// Every microphone is enhanced independently, never mixed before denoising/compression.
-    /// The room tail is removed before EQ and compression, which would otherwise lift it after every phrase.
+    /// Each microphone is processed independently; system audio never enters this chain.
     private func voiceChain(_ plan: AudioPlan, micIndex: Int, samples: [Float]) -> [Float]? {
-        lock.lock(); defer { lock.unlock() }
         guard plan.micMode != .off else { return nil }
-        let key = VoiceKey(mic: micIndex, clean: plan.micClean,
-                           room: Int(max(0, min(plan.dereverb, 1)) * 20),
-                           studio: Int(max(0, min(plan.studio, 1)) * 20),
-                           mode: plan.micMode)
-        if let v = voice[key] { return v }
-        let regions = VAD.regions(samples)
-        // WPE models speech reverberation. On unvoiced material (e.g. loopback
-        // tones), it can mistake the sustained signal for a room tail and erase it.
-        let useWPE = plan.dereverb > 0.01 && !regions.isEmpty
-        let st = stageA(samples, index: micIndex, needWPE: useWPE)
-        // Keep the raw high-passed voice as the dry reference. Never cascade
-        // residual suppression and neural denoising, which erases syllables.
-        var x = st.hp
-        if useWPE, let dereverbed = st.wpe, dereverbed.count == x.count {
-            let wet = Float(min(max(plan.dereverb, 0), 1) * 0.30)
-            for i in x.indices { x[i] = x[i] * (1 - wet) + dereverbed[i] * wet }
-            // ResidualSuppressor was dead code (defined, never called).
-            // `late` = what WPE removed is the best reverb-tail estimate;
-            // suppressing against it is what makes the tail actually quieter
-            // instead of just spectrally reshaped.
-            let late = zip(st.hp, dereverbed).map { $0 - $1 }
-            let suppressed = ResidualSuppressor(noise: 0.9,
-                                                reverb: min(max(plan.dereverb, 0), 1),
-                                                rt60: RoomEstimate.rt60(st.hp, vad: regions))
-                .process(x: x, late: late)
-            if suppressed.count == x.count {
-                for i in x.indices { x[i] = x[i] * 0.5 + suppressed[i] * 0.5 }
-            }
+        lock.lock(); defer { lock.unlock() }
+        let keys = micIndex == 0 && plan.declick ? keyTimes : []
+        let signature = try? ProcessedVoiceCache.key(samples: samples, plan: plan, keyTimes: keys)
+        let key = VoiceKey(mic: micIndex, settings: signature ?? UUID().uuidString)
+        if let cached = voice[key] { return cached }
+        let diskURL: URL? = customDenoiser == nil ? signature.flatMap { signature in
+            cacheDir?.appendingPathComponent("voice-\(signature)-48000.wav")
+        } : nil
+        let processed: [Float]
+        if let diskURL, let cached = ProcessedVoiceCache.read(diskURL, count: samples.count, rate: AudioIO.fs) {
+            processed = cached
+        } else {
+            processed = ProcessedVoiceCache.render(samples, plan: plan, keyTimes: keys, denoiser: customDenoiser)
+            if let diskURL { try? ProcessedVoiceCache.write(processed, rate: AudioIO.fs, to: diskURL) }
         }
-        if plan.micClean {
-            let cleaned = denoiser.process(x)
-            if cleaned.count == x.count {
-                let wet: Float = 0.35
-                for i in x.indices { x[i] = x[i] * (1 - wet) + cleaned[i] * wet }
-            }
-        }
-        // Keystroke declick AFTER denoise, BEFORE EQ (PLAN 13.1).
-        if plan.declick, !keyTimes.isEmpty {
-            // keyTimes are source-time; this chain runs on mic-file time.
-            // Caller rebases by micOffset; for extra mics the offset differs,
-            // so only the primary mic (index 0) gets key-aligned declick today.
-            // Extra mics keep spectral gating only — documented, not silent.
-            if micIndex == 0 {
-                let declicked = Declick.process(x, keyTimes: keyTimes, vad: regions,
-                                                fs: AudioIO.fs, depthDb: plan.declickDepthDb)
-                if declicked.count == x.count { x = declicked }
-            }
-        }
-        x = VoiceStudio.finish(x, vad: regions, plan: plan, denoiser: nil)
-        let lu = Loudness.integrated([x])
-        if lu > -69 {
-            let g = Float(pow(10, clamp(Self.voiceRefLUFS - lu, -24, 24) / 20))
-            x = vDSP.multiply(g, x)
-        }
-        // Cap the cache: keep the most recent few settings, drop the rest.
-        let cap = max(3, extraMicrophones.count + 1)
-        if voice.count >= cap { voice.removeAll() }
-        voice[key] = x
-        return x
+        if voice.count >= max(3, extraMicrophones.count + 1) { voice.removeAll() }
+        voice[key] = processed
+        return processed
     }
 
     private func voiceChain(_ plan: AudioPlan) -> [Float]? {

@@ -126,139 +126,26 @@ enum Leveler {
 }
 
 enum VoiceStudio {
-    /// Soft downward expander: ducks non-voiced 10ms frames toward the
-    /// floor with 100ms VAD look-ahead so tails breathe. Standard -18dB,
-    /// Optimized -30dB. Pure gain stage, no clipping, finite output.
-    enum Expander {
-        static func apply(_ x: [Float], vad: [ClosedRange<Double>], fs: Double, depthDb: Double) -> [Float] {
-            let hop = max(Int(0.01 * fs), 1), n = x.count / hop
-            guard n > 10, depthDb < -1, !vad.isEmpty else { return x }
-            let lookAhead = Int(0.1 * fs / Double(hop))
-            var gainDb = [Double](repeating: 0, count: n)
-            for f in 0..<n {
-                let t = (Double(f) + 0.5) * 0.01
-                var voiced = false
-                for lo in max(0, f - lookAhead)..<min(n, f + lookAhead + 1) {
-                    let lt = (Double(lo) + 0.5) * 0.01
-                    if vad.contains(where: { $0.lowerBound <= lt && lt <= $0.upperBound }) { voiced = true; break }
-                }
-                if !voiced { gainDb[f] = depthDb }
-            }
-            // Smooth: attack 5ms (drop fast), release 150ms (rise gentle).
-            let ga = Float(exp(-1 / (0.005 * fs))), gr = Float(exp(-1 / (0.15 * fs)))
-            var out = x, g: Float = 1
-            var k = 0
-            for i in 0..<x.count {
-                let target = Float(pow(10, gainDb[min(k, n - 1)] / 20))
-                g = target < g ? target + ga * (g - target) : target + gr * (g - target)
-                out[i] = x[i] * g
-                if (i + 1) % hop == 0 { k += 1 }
-            }
-            return out
-        }
-    }
-
-    /// Measure HF (3-6kHz) vs LF to decide if bandwidth extension is needed.
-    static func hfSparse(_ x: [Float], fs: Double) -> Bool {
-        var hp = Biquad.highpass(3000, fs: fs)
-        var lp = Biquad.lowpass(6000, fs: fs)
-        var hfE = 0.0, totE = 0.0
-        for v in x {
-            let d = Double(v)
-            hfE += pow(lp.run(hp.run(d)), 2)
-            totE += d * d
-        }
-        return totE > 1e-9 && hfE / totE < 0.02
-    }
-
-    /// Bandwidth extension: soft-saturate HF band only when HF is sparse.
-    static func extendHF(_ x: [Float], fs: Double) -> [Float] {
-        guard hfSparse(x, fs: fs) else { return x }
-        var hp = Biquad.highpass(3000, fs: fs)
-        var out = x
-        for i in 0..<x.count {
-            let hf = hp.run(Double(x[i]))
-            let ext = Float(tanh(hf * 0.6) * 0.25)
-            out[i] = x[i] + ext
-        }
-        return out
-    }
-
-    /// Split-band compression helper for Optimized multiband.
-    static func splitCompress(_ y: [Float], fs: Double) -> [Float] {
-        var lp = Biquad.lowpass(250, fs: fs), hp = Biquad.highpass(250, fs: fs)
-        var lo = [Float](repeating: 0, count: y.count), hi = lo
-        for i in 0..<y.count {
-            let d = Double(y[i])
-            lo[i] = Float(lp.run(d))
-            hi[i] = Float(hp.run(d))
-        }
-        var cLow = Compressor(); cLow.thresholdDb = -20; cLow.ratio = 2.0; cLow.attack = 0.015; cLow.release = 0.2
-        var cHigh = Compressor(); cHigh.thresholdDb = -16; cHigh.ratio = 2.2; cHigh.attack = 0.008; cHigh.release = 0.15
-        let loC = cLow.process(lo, fs: fs), hiC = cHigh.process(hi, fs: fs)
-        var out = y
-        for i in 0..<y.count { out[i] = loC[i] + hiC[i] }
-        return out
-    }
-    /// Keep SplitCompress name used by Optimized path (multiband).
-    static func splitBandCompress(_ y: [Float], fs: Double) -> [Float] { splitCompress(y, fs: fs) }
-
-    /// Everything after the cleaner: neural denoise (if present), tone, de-ess, level, compress.
-    static func finish(_ x: [Float], vad: [ClosedRange<Double>], plan a: AudioPlan, denoiser: (any Denoiser)?) -> [Float] {
-        let fs = AudioIO.fs, s = a.studio, opt = a.studioMode == .optimized
-        var y = x
-        if let d = denoiser, a.micClean { y = d.process(y) }
-        // Standard chain start: HP + hum notch. Optimized adds deeper cut.
-        var head: [Biquad] = [.highpass(opt ? 80 : 100, fs: fs), .peaking(120, q: 12, db: opt ? -24 : -14, fs: fs)]
-        if a.micMode == .podcast { head.append(.lowShelf(150, db: 1.0, fs: fs)) }
-        y = Cascade.apply(y, head)
-        // Soft downward expander BEFORE EQ/level/comp (so comp cannot lift floor).
-        y = Expander.apply(y, vad: vad, fs: fs, depthDb: opt ? -30 : -18)
-        var eq: [Biquad] = []
-        if a.micMode == .podcast { eq.append(.highpass(100, fs: fs)); eq.append(.lowShelf(150, db: 1.0, fs: fs)) }
-        if s > 0.01 || opt {
-            let strength = opt ? max(s, 0.5) : s
-            eq.append(.peaking(280, q: 0.9, db: -2.5 * strength, fs: fs))            // mud
-            eq.append(.peaking(520, q: 1.2, db: -1.5 * strength, fs: fs))            // small-room box
-            eq.append(.lowShelf(170, db: 1.8 * strength, fs: fs))                     // body (warmth when opt)
-            eq.append(.peaking(3200, q: 0.8, db: 2.5 * strength, fs: fs))            // presence
-            eq.append(.highShelf(10500, db: 3.0 * strength, fs: fs))                  // air
-            if opt {
-                eq.append(.lowShelf(150, db: 1.5, fs: fs))                            // proximity warmth 120-180
-                eq.append(.peaking(350, q: 0.9, db: -2.0, fs: fs))                    // mud cut 300-400
-            }
-        }
-        y = Cascade.apply(y, eq)
-        if opt { y = extendHF(y, fs: fs) }
-        if s > 0.01 || opt {
-            let amt = opt ? max(s * 0.5, 0.25) : s * 0.5
-            y = DeEsser.process(y, fs: fs, amount: amt)
-            y = Leveler.process(y, vad: vad, fs: fs, range: 1.5 + 2.5 * (opt ? max(s, 0.5) : s))
-        }
-        var comp = Compressor()
-        comp.thresholdDb = -17
-        comp.ratio = a.micMode == .loud ? 2.5 : 1.35 + 0.65 * s
-        comp.attack = 0.012; comp.release = 0.25
-        let dry = y
-        let compressed: [Float]
-        if opt {
-            // Multiband + 25% parallel compression (parallel cold path).
-            let multi = splitBandCompress(dry, fs: fs)
-            compressed = zip(multi, dry).map { Float(0.75 * Double($0) + 0.25 * Double($1)) }
-        } else {
-            compressed = comp.process(dry, fs: fs)
-        }
-        var out = compressed
-        if opt {
-            // Light second expander after compression (half depth).
-            out = Expander.apply(out, vad: vad, fs: fs, depthDb: -15)
-            // 15% Standard blend guard if over-processed delta >12dB.
-            let peakDiff = abs(Double(out.reduce(Float(0)) { max($0, abs($1)) }) - Double(dry.reduce(Float(0)) { max($0, abs($1)) }))
-            if peakDiff > 0.5 {
-                let std = comp.process(dry, fs: fs)
-                out = zip(out, std).map { Float(0.85 * Double($0) + 0.15 * Double($1)) }
-            }
-        }
-        return out
+    static func finish(_ x: [Float], vad: [ClosedRange<Double>], plan: AudioPlan,
+                       denoiser: (any Denoiser)?) -> [Float] {
+        let fs = AudioIO.fs
+        var voice = x
+        if plan.micClean, let denoiser { voice = denoiser.process(voice) }
+        let strength = min(max(plan.studio * 4, 0), 1)
+        voice = Cascade.apply(voice, [.highpass(80, fs: fs)])
+        guard plan.voiceClarity, plan.studio > 0 else { return voice }
+        voice = Cascade.apply(voice, [
+            .peaking(250, q: 0.9, db: -2 * strength, fs: fs),
+            .peaking(3500, q: 0.8, db: 2.5 * strength, fs: fs),
+            .highShelf(10_000, db: 1.5 * strength, fs: fs)
+        ])
+        voice = DeEsser.process(voice, fs: fs, amount: 0.25)
+        voice = Leveler.process(voice, vad: vad, fs: fs, range: 3)
+        var compressor = Compressor()
+        compressor.thresholdDb = -20
+        compressor.ratio = 3
+        compressor.attack = 0.008
+        compressor.release = 0.120
+        return compressor.process(voice, fs: fs)
     }
 }
