@@ -368,17 +368,27 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
     // that the row still reads as many blocks: about one cell per 24 px.
     let cell = PrivacyMaskGeometry.cell(boxHeight: 34 + 12)
     #expect(cell <= 26, "mosaic cell \(cell) is too coarse for a single-line field")
-    var runs = 1
+    // How many distinct tones a row shows depends on the encoder that produced
+    // the fixture frame, so the assertion is geometric: every colour change
+    // must fall on a cell boundary of the source-space grid (multiples of the
+    // cell, anchored at source x = 0). That is what makes the cells crisp
+    // squares that never swim, and it holds for any content.
+    var edges: [Int] = []
     var last: RGBA8?
     pixels(masked) { base, row, _ in
         for x in 360..<640 {
             let c = sample(base, row, x, 317)
             if let l = last, abs(Int(l.r) - Int(c.r)) > 2 || abs(Int(l.g) - Int(c.g)) > 2
-                || abs(Int(l.b) - Int(c.b)) > 2 { runs += 1 }
+                || abs(Int(l.b) - Int(c.b)) > 2 { edges.append(x) }
             last = c
         }
     }
-    #expect(runs >= 6, "mosaic is too coarse: \(runs) runs across 280 px")
+    #expect(edges.count >= 3, "mosaic has no cell structure: \(edges.count) edges")
+    for x in edges {
+        let phase = (Double(x) / Double(cell)).truncatingRemainder(dividingBy: 1)
+        let off = min(phase, 1 - phase) * Double(cell)
+        #expect(off <= 2, "cell edge at x=\(x) is not on the source grid (cell \(cell))")
+    }
 }
 
 @Test func mosaicCoversItsFieldWithCrispSourceCells() async throws {
