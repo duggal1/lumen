@@ -149,14 +149,14 @@ enum ZoomPlanner {
             if t - o.start <= 0.2 { cur = Open(start: o.start, scale: o.scale, c: nc); return }
             close(at: t); cur = Open(start: t, scale: o.scale, c: nc)
         }
-        func ensureVisible(_ pt: SIMD2<Double>, at t: Double, typing: Bool, rect: CGRect?) {
+        func ensureVisible(_ pt: SIMD2<Double>, at t: Double, typing: Bool) {
             guard let o = cur else { return }
             let h = half(o.scale), d = (pt - o.c) / h                              // -1...1 spans the view
             let outside = typing ? (d.x > 0.60 || d.x < -0.85 || abs(d.y) > p.safeZone)   // text grows rightwards
                                  : (abs(d.x) > p.safeZone || abs(d.y) > p.safeZone)
             guard outside else { return }
             let c = typing ? SIMD2(pt.x + 0.35 * h.x, pt.y)                         // caret lands ~18 % from the left edge
-                           : (rect.map { $0.width < 1.6 * h.x ? SIMD2($0.midX, $0.midY) : pt } ?? pt)
+                           : pt                                                    // click anchor is the exact pixel
             retarget(c, at: t)
         }
         func absorbKeepAlive(upTo t: Double) {
@@ -173,26 +173,27 @@ enum ZoomPlanner {
                 s = i.kind == .typing ? 0.06 * H / r.height                              // text line ≈ 6 % of view height
                                       : min(0.42 * W / r.width, 0.30 * H / r.height)     // element ≈ 42 % of view width
             }
-            s = clamp(s, p.minScale, min(p.autoMaxScale, p.maxScale))
-            if abs(log(s / prevScale)) < log(1.3) { s = clamp(prevScale, p.minScale, min(p.autoMaxScale, p.maxScale)) }                      // no breathing between scenes
+            let hi = min(p.autoMaxScale, p.maxScale)
+            s = clamp(s, p.minScale, hi)
+            let prev = clamp(prevScale, p.minScale, hi)
+            if abs(log(s / prev)) < log(1.3) { s = prev }                                // no breathing between scenes
             return s
         }
         func focusCenter(_ i: Intent, _ s: Double) -> SIMD2<Double> {
             if i.kind == .typing { return SIMD2(i.x + 0.35 * half(s).x, i.y) }
-            // The actual click pixel is authoritative; AX bounds only inform scale.
-            return SIMD2(i.x, i.y)
+            return SIMD2(i.x, i.y)                                  // C3: zoom anchor == click pixel
         }
 
         for it in intents {
             absorbKeepAlive(upTo: it.t)
             if cur != nil, it.t - last <= p.zoomOutGap {
-                ensureVisible(SIMD2(it.x, it.y), at: it.t, typing: it.kind == .typing, rect: it.rect)
+                ensureVisible(SIMD2(it.x, it.y), at: it.t, typing: it.kind == .typing)
             } else {
                 close(at: last + p.hold)
                 let s = chooseScale(it, prevScale: prevScale); prevScale = s
                 cur = Open(start: it.t, scale: s, c: clampC(focusCenter(it, s), s))
             }
-            for smp in it.caret where smp.t >= it.t { ensureVisible(SIMD2(smp.x, smp.y), at: smp.t, typing: true, rect: nil) }
+            for smp in it.caret where smp.t >= it.t { ensureVisible(SIMD2(smp.x, smp.y), at: smp.t, typing: true) }
             last = max(last, it.tEnd, it.caret.last?.t ?? 0)
         }
         absorbKeepAlive(upTo: .infinity)
