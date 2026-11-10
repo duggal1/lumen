@@ -131,12 +131,13 @@ enum VoiceStudio {
         let fs = AudioIO.fs
         var voice = x
         if plan.micClean, let denoiser { voice = denoiser.process(voice) }
+        let strength = min(max(plan.studio * 4, 0), 1)
         voice = Cascade.apply(voice, [.highpass(80, fs: fs)])
-        guard plan.voiceClarity else { return voice }
+        guard plan.voiceClarity, plan.studio > 0 else { return voice }
         voice = Cascade.apply(voice, [
-            .peaking(250, q: 0.9, db: -2, fs: fs),
-            .peaking(3500, q: 0.8, db: 2.5, fs: fs),
-            .highShelf(10_000, db: 1.5, fs: fs)
+            .peaking(250, q: 0.9, db: -2 * strength, fs: fs),
+            .peaking(3500, q: 0.8, db: 2.5 * strength, fs: fs),
+            .highShelf(10_000, db: 1.5 * strength, fs: fs)
         ])
         voice = DeEsser.process(voice, fs: fs, amount: 0.25)
         voice = Leveler.process(voice, vad: vad, fs: fs, range: 3)
