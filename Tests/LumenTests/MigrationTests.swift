@@ -25,7 +25,7 @@ import LumenAudio
     _ = tlData
 }
 
-@Test func migratedFixtureMixRendersAtMinus14LUFS() throws {
+@Test func defaultMixRendersAtTheStandardTarget() throws {
     let src = SourceInfo(width: 640, height: 360, fps: 60, duration: 1, backingScale: 1, originX: 0, originY: 0)
     var tl = Timeline(duration: 1)
     tl.audio.micClean = false
@@ -34,5 +34,6 @@ import LumenAudio
     tl = Director.derive(tl, input: DirectorInput(events: [], source: src), revision: 1)
     let voice = (0..<48000).map { Float(0.2 * sin(2 * Double.pi * 440 * Double($0) / 48000)) }
     let mix = try #require(AudioMixer(mic: voice, micOffset: 0, system: nil, systemOffset: 0).mix(tl))
-    #expect(abs(mix.lufs + 14) <= 0.5, "migrated fixture loudness \(mix.lufs) != -14")
+    // The standard chain normalizes to -16 LUFS (the podcast target).
+    #expect(abs(mix.lufs + 16) <= 0.5, "default loudness \(mix.lufs) != -16")
 }

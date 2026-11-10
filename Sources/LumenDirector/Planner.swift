@@ -126,6 +126,10 @@ enum ZoomPlanner {
                 intents.append(contentsOf: focused)
             } else if let tr = typing.first(where: { $0.t0 <= burst.t1 + 0.15 && $0.t1 >= burst.t0 - 0.15 }), let first = tr.samples.first {
                 intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: first.x, y: first.y, rect: tr.rect, caret: tr.samples))
+            } else if let a = sorted.last(where: { $0.kind == .down && $0.button == 0 && $0.t <= burst.t0 && burst.t0 - $0.t < 20 }) {
+                // No accessibility frame and no pixel trace: keep the field
+                // the user clicked. The camera still follows the typing.
+                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: Double(a.x), y: Double(a.y)))
             }
         }
         if !sorted.contains(where: \.hasPosition) {            // device/imported clip: no input log

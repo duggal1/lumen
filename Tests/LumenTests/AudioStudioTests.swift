@@ -167,15 +167,16 @@ private func pinkNoise(fs: Double, n: Int, levelDb: Double) -> [Float] {
     }
     let a = AudioMixer(mic: samples, micOffset: 0, system: nil, systemOffset: 0, cacheDir: dir)
     _ = try #require(a.mix(tl))
-    let url = dir.appendingPathComponent("voice-wpe-v1.f32")
+    // The processed voice is cached on disk under a content-addressed name.
+    let cached = try #require(try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        .first { $0.hasPrefix("voice-") && $0.hasSuffix(".wav") }, "the processed voice must be cached")
+    let url = dir.appendingPathComponent(cached)
     #expect(FileManager.default.fileExists(atPath: url.path))
-    let data = try Data(contentsOf: url)
-    #expect(data.count == 8 + samples.count * 4)
     let before = try FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? Int
     let b = AudioMixer(mic: samples, micOffset: 0, system: nil, systemOffset: 0, cacheDir: dir)
     _ = try #require(b.mix(tl))
     let after = try FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? Int
-    #expect(before == after, "stage A cache was rewritten instead of reused")
+    #expect(before == after, "the cached voice must be reused, not rewritten")
 }
 
 @Test func deriveCacheMatchesColdDerive() throws {

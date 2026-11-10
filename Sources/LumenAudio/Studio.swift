@@ -126,11 +126,48 @@ enum Leveler {
 }
 
 enum VoiceStudio {
+    /// Soft downward expander: ducks non-voiced 10 ms frames toward the
+    /// floor with 100 ms VAD look-ahead so tails breathe. It runs BEFORE the
+    /// EQ and the compressor, otherwise compression lifts the floor again.
+    /// Standard -24 dB, Optimized -34 dB. Pure gain, no clipping, finite.
+    enum Expander {
+        static func apply(_ x: [Float], vad: [ClosedRange<Double>], fs: Double, depthDb: Double) -> [Float] {
+            let hop = max(Int(0.01 * fs), 1), n = x.count / hop
+            guard n > 10, depthDb < -1, !vad.isEmpty else { return x }
+            let lookAhead = Int(0.1 * fs / Double(hop))
+            var gainDb = [Double](repeating: 0, count: n)
+            for f in 0..<n {
+                let t = (Double(f) + 0.5) * 0.01
+                var voiced = false
+                for lo in max(0, f - lookAhead)..<min(n, f + lookAhead + 1) {
+                    let lt = (Double(lo) + 0.5) * 0.01
+                    if vad.contains(where: { $0.lowerBound <= lt && lt <= $0.upperBound }) { voiced = true; break }
+                }
+                if !voiced { gainDb[f] = depthDb }
+            }
+            // Smooth: attack 5 ms (drop fast), release 150 ms (rise gentle).
+            let ga = Float(exp(-1 / (0.005 * fs))), gr = Float(exp(-1 / (0.15 * fs)))
+            var out = x, g: Float = 1
+            var k = 0
+            for i in 0..<x.count {
+                let target = Float(pow(10, gainDb[min(k, n - 1)] / 20))
+                g = target < g ? target + ga * (g - target) : target + gr * (g - target)
+                out[i] = x[i] * g
+                if (i + 1) % hop == 0 { k += 1 }
+            }
+            return out
+        }
+    }
+
     static func finish(_ x: [Float], vad: [ClosedRange<Double>], plan: AudioPlan,
                        denoiser: (any Denoiser)?) -> [Float] {
         let fs = AudioIO.fs
         var voice = x
         if plan.micClean, let denoiser { voice = denoiser.process(voice) }
+        // The expander drops the floor between words before anything lifts it
+        // again. The optimized mode is the deeper one.
+        voice = Expander.apply(voice, vad: vad, fs: fs,
+                                depthDb: plan.studioMode == .optimized ? -35 : -25)
         let strength = min(max(plan.studio * 4, 0), 1)
         voice = Cascade.apply(voice, [.highpass(80, fs: fs)])
         guard plan.voiceClarity, plan.studio > 0 else { return voice }

@@ -205,7 +205,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
     public var maxScale = 3.5
     public var minScale = 1.25
     public var minTrigger = 1.25
-    public var leadIn = 0.6, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
+    public var leadIn = 0.45, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
     public var omegaPan = 5.0, omegaZoom = 7.0, lookahead = 0.20, deadZone = 0.28, followDelay = 0.12
     // Zoom v3: auto range 1.25-2.6 around base 1.8; 3.5 max stays for manual.
     public var baseScale = 1.8
