@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import AVFoundation
+import LumenAudio
 import LumenCapture
 import LumenProject
 
@@ -379,6 +380,9 @@ struct LibrarySurface: View {
         VStack(alignment: .leading, spacing: 16) {
             compactToggle("Microphone", icon: "mic", Bindable(app).mic)
             if app.mic {
+                LButton(title: "Voice Isolation…", icon: "mic.badge.plus") {
+                    MicrophoneModes.showVoiceIsolationControls()
+                }
                 ForEach(app.availableAudioInputs, id: \.id) { device in
                     HStack(spacing: Space.s4) {
                         Label(device.name, systemImage: inputIcon(device.name))
