@@ -61,12 +61,12 @@ public final class ProjectSession: @unchecked Sendable {
     }
 
     @discardableResult
-    public func analyze(_ timeline: Timeline) async -> AnalysisResult {
+    public func analyze(_ timeline: Timeline, privacyProgress: @escaping @Sendable (Double) -> Void = { _ in }) async -> AnalysisResult {
         let origin = meta.clock.originHostSeconds
         let micOffset = (meta.mic?.startHostSeconds ?? origin) - origin
         let webcamOffset = (meta.webcam?.startHostSeconds ?? origin) - origin
         let snapshot = input
-        let request = AnalysisRequest(screen: bundle.screenURL, webcam: meta.webcam == nil ? nil : bundle.webcamURL,
+        var request = AnalysisRequest(screen: bundle.screenURL, webcam: meta.webcam == nil ? nil : bundle.webcamURL,
                                       mic: meta.mic == nil ? nil : bundle.micURL, cacheDirectory: bundle.cacheURL,
                                       webcamOffset: webcamOffset, micOffset: micOffset, projectSalt: meta.analysisSalt,
                                       privacy: timeline.overlays.privacy, locale: timeline.captions.locale,
@@ -79,6 +79,7 @@ public final class ProjectSession: @unchecked Sendable {
                                           || (timeline.webcam?.backdrop != nil && timeline.webcam?.backdrop != .original),
                                       includeTyping: !snapshot.events.isEmpty,
                                       events: snapshot.events)
+        request.privacyProgress = privacyProgress
         let result = await AnalysisService.shared.run(request)
         guard !Task.isCancelled else { return result }
         inputState.withLock { current in
