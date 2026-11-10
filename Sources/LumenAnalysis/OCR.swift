@@ -8,13 +8,13 @@ import LumenProject
 
 public enum OCRAnalyzer {
     public static func analyze(url: URL, offset: Double = 0, projectSalt: UInt64, customPatterns: [String] = [],
-                              entropyThreshold: Double = 3.5, fps: Double = 4, duration: Double = 0,
+                              entropyThreshold: Double = 3.5, fps: Double = 4, duration: Double = 0, firstFrameOnly: Bool = false,
                               progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> [OCRDetection] {
         guard ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else { return [] }
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { return [] }
         let job = OCRJob(asset: asset, track: track, offset: offset, salt: projectSalt, patterns: customPatterns,
-                         entropyThreshold: entropyThreshold, fps: fps, duration: duration, progress: progress)
+                         entropyThreshold: entropyThreshold, fps: fps, duration: duration, firstFrameOnly: firstFrameOnly, progress: progress)
         return try await withTaskCancellationHandler {
             try await job.value()
         } onCancel: { job.cancel() }
@@ -32,6 +32,7 @@ private final class OCRJob: @unchecked Sendable {
     private let entropyThreshold: Double
     private let fps: Double
     private let duration: Double
+    private let firstFrameOnly: Bool
     private let progress: @Sendable (Double) -> Void
     private let completion = OSAllocatedUnfairLock<(continuation: CheckedContinuation<[OCRDetection], Error>?, result: Result<[OCRDetection], Error>?)>(uncheckedState: (nil, nil))
     private let requestLock = OSAllocatedUnfairLock<OCRRequestHandle?>(uncheckedState: nil)
@@ -42,9 +43,9 @@ private final class OCRJob: @unchecked Sendable {
     private let readerLock = OSAllocatedUnfairLock<ReaderHandle?>(uncheckedState: nil)
     private let cancelled = OSAllocatedUnfairLock(initialState: false)
 
-    init(asset: AVAsset, track: AVAssetTrack, offset: Double, salt: UInt64, patterns: [String], entropyThreshold: Double, fps: Double, duration: Double, progress: @escaping @Sendable (Double) -> Void) {
+    init(asset: AVAsset, track: AVAssetTrack, offset: Double, salt: UInt64, patterns: [String], entropyThreshold: Double, fps: Double, duration: Double, firstFrameOnly: Bool, progress: @escaping @Sendable (Double) -> Void) {
         self.asset = asset; self.track = track; self.offset = offset; self.salt = salt; self.patterns = patterns
-        self.entropyThreshold = entropyThreshold; self.fps = fps; self.duration = duration; self.progress = progress
+        self.entropyThreshold = entropyThreshold; self.fps = fps; self.duration = duration; self.firstFrameOnly = firstFrameOnly; self.progress = progress
     }
 
     func cancel() {
@@ -121,6 +122,7 @@ private final class OCRJob: @unchecked Sendable {
             retireTrackers()
             lastDetections = try detect(in: buffer, at: time + offset)
             detections.append(contentsOf: lastDetections)
+            if firstFrameOnly { reader.cancelReading(); break }
         }
         if reader.status == .failed { throw reader.error ?? AnalysisError.readerFailed }
         if let previous = lastDetections.first {
