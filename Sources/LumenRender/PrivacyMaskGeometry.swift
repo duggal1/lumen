@@ -18,20 +18,23 @@ public enum PrivacyMaskGeometry {
         return SIMD4(Float(a.x), Float(a.y), Float(b.x - a.x), Float(b.y - a.y))
     }
 
-    /// Cell edge in source pixels. Roughly one text height: large enough that
-    /// no glyph survives, small enough that the result still reads as a mosaic
-    /// rather than a slab. Secrets use a larger cell because a short secret
-    /// (four digits) leaves too much shape in a small one.
-    public static func cell(textHeight: Float, isSecret: Bool) -> Float {
-        max(8, max(textHeight, 1) * (isSecret ? 1.25 : 0.9))
+    /// Cell edge in source pixels.
+    ///
+    /// The identity mosaic and the secret mosaic must look like the same
+    /// mosaic — a secret differs only in where its colour comes from, never in
+    /// its size — so both use the same grid. Tuned by eye on a realistic
+    /// single-line field: roughly half the masked box height, so a row still
+    /// reads as many crisp cells instead of a slab and every glyph is
+    /// averaged away rather than outlined.
+    public static func cell(boxHeight: Float) -> Float {
+        max(8, max(boxHeight, 1) * 0.55)
     }
 
     /// Snap the treated rect outward to whole cells. The quad edge must land
     /// on a cell boundary: a partial cell leaves an unmasked sliver as soon
     /// as the camera zooms, and a soft edge would blend the glyphs back in.
-    public static func mosaicRegion(_ rect: SIMD4<Float>, textHeight: Float,
-                                    isSecret: Bool) -> SIMD4<Float> {
-        let c = cell(textHeight: textHeight, isSecret: isSecret)
+    public static func mosaicRegion(_ rect: SIMD4<Float>, cell: Float) -> SIMD4<Float> {
+        let c = max(cell, 1)
         let x0 = (rect.x / c).rounded(.down) * c
         let y0 = (rect.y / c).rounded(.down) * c
         let x1 = ((rect.x + rect.z) / c).rounded(.up) * c

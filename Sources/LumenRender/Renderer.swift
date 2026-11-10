@@ -596,12 +596,12 @@ public final class Renderer: @unchecked Sendable {
                 let secretCats: Set<String> = ["card", "apiKey", "jwt", "privateKey", "envSecret", "entropy"]
                 let isSecret = secretCats.contains(mask.category ?? "")
                 let textH = Float(max(mask.rect.w, 1))
-                let cell = PrivacyMaskGeometry.cell(textHeight: textH, isSecret: isSecret)
+                let cell = PrivacyMaskGeometry.cell(boxHeight: textH)
                 // The quad edge is a cell boundary: snap the treated region
                 // outward so no partial cell or unmasked sliver survives the
                 // camera projection. The grid itself stays anchored to source
                 // pixels in the shader, so cells never swim when content moves.
-                let region = PrivacyMaskGeometry.mosaicRegion(mask.rect, textHeight: textH, isSecret: isSecret)
+                let region = PrivacyMaskGeometry.mosaicRegion(mask.rect, cell: cell)
                 guard let projected = PrivacyMaskGeometry.canvasRect(region, geometry: g,
                                                                       camera: cam, scale: sc),
                       projected.z > 0.2, projected.w > 0.2 else { continue }

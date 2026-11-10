@@ -338,6 +338,49 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
     #expect(Double(step) < 0.5 * Double(peak), "ripple edge is hard: step \(step) of peak \(peak)")
 }
 
+@Test func mosaicReadsAsACrispMosaicOnARealisticField() async throws {
+    // A realistic identity field: a row of text-like glyph blocks inside a
+    // light panel. The mosaic must read as a mosaic — many small crisp cells —
+    // not as one slab and not as a soft blur.
+    var f = try await makeFixture(w: 1280, h: 720) { ctx, _, h in
+        ctx.setFillColor(CGColor(gray: 0.97, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 1280, height: h))
+        ctx.setFillColor(CGColor(gray: 0.22, alpha: 1))
+        let top = CGFloat(300), fieldH: CGFloat = 34
+        let y = CGFloat(h) - top - fieldH
+        var x = CGFloat(360)
+        while x < 640 {
+            let w = CGFloat(9 + (Int(x) % 3) * 5)
+            ctx.fill(CGRect(x: x, y: y, width: w, height: fieldH))
+            x += w + CGFloat(7 + (Int(x) % 4) * 3)
+        }
+    }
+    try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+    let region = Mask(start: 0, end: 1, mode: .blur,
+                      keys: [MaskKey(t: 0, x: 360, y: 300, w: 280, h: 34)],
+                      origin: .auto, approved: true, category: "email", padding: 6)
+    f.timeline.overlays.masks = [region]
+    let masked = try await FrameImage.render(renderer: f.renderer, session: f.session, timeline: f.timeline,
+                                             t: 0.25, canvas: SIMD2(1280, 720))
+    try FrameImage.writePNG(masked, to: out.appendingPathComponent("mosaic-email.png"))
+
+    // The field must be covered by cells, and the cells must be small enough
+    // that the row still reads as many blocks: about one cell per 24 px.
+    let cell = PrivacyMaskGeometry.cell(boxHeight: 34 + 12)
+    #expect(cell <= 26, "mosaic cell \(cell) is too coarse for a single-line field")
+    var runs = 1
+    var last: RGBA8?
+    pixels(masked) { base, row, _ in
+        for x in 360..<640 {
+            let c = sample(base, row, x, 317)
+            if let l = last, abs(Int(l.r) - Int(c.r)) > 2 || abs(Int(l.g) - Int(c.g)) > 2
+                || abs(Int(l.b) - Int(c.b)) > 2 { runs += 1 }
+            last = c
+        }
+    }
+    #expect(runs >= 6, "mosaic is too coarse: \(runs) runs across 280 px")
+}
+
 @Test func mosaicCoversItsFieldWithCrispSourceCells() async throws {
     var f = try await makeFixture { ctx, _, h in
         // A left-to-right ramp inside the mask field. Identity mosaic must
@@ -375,7 +418,7 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
     // change outside it, and the field itself must be fully covered.
     let pad: Float = 6
     let padded = SIMD4<Float>(380 - pad, 40 - pad, 220 + 2 * pad, 40 + 2 * pad)
-    let treated = PrivacyMaskGeometry.mosaicRegion(padded, textHeight: padded.w, isSecret: false)
+    let treated = PrivacyMaskGeometry.mosaicRegion(padded, cell: PrivacyMaskGeometry.cell(boxHeight: padded.w))
     diff(clean, masked) { x, y, d in
         let inField = x >= 380 && x < 600 && y >= 40 && y < 80
         let near = Float(x) >= treated.x && Float(x) < treated.x + treated.z
@@ -386,8 +429,11 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
     #expect(inside > 10_000, "mask did not cover the field: \(inside)")
 
     // Each source-space cell is one flat colour. A row across the field may
-    // only change at cell edges: 220 / 36 px is about seven cells. The
-    // 8-bit write dithers flat cells by 1 LSB, so equal means within 2.
+    // only change at cell edges, so the number of runs is bounded by the
+    // number of cells the row crosses. The 8-bit write dithers flat cells by
+    // 1 LSB, so equal means within 2.
+    let cell = PrivacyMaskGeometry.cell(boxHeight: padded.w)
+    let cells = Int((216.0 / Double(cell)).rounded(.up))
     func isNew(_ a: RGBA8, _ b: RGBA8) -> Bool {
         abs(Int(a.r) - Int(b.r)) > 2 || abs(Int(a.g) - Int(b.g)) > 2 || abs(Int(a.b) - Int(b.b)) > 2
     }
@@ -400,7 +446,7 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
             last = c
         }
     }
-    #expect(runs <= 9, "identity mosaic is not made of crisp cells: \(runs) runs")
+    #expect(runs <= cells + 1, "identity mosaic is not made of crisp cells: \(runs) runs over \(cells) cells")
 
     var secretRuns = 1
     var lastSecret: RGBA8?
@@ -411,5 +457,5 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
             lastSecret = c
         }
     }
-    #expect(secretRuns <= 7, "secret mosaic is not made of crisp cells: \(secretRuns) runs")
+    #expect(secretRuns <= cells + 1, "secret mosaic is not made of crisp cells: \(secretRuns) runs over \(cells) cells")
 }
