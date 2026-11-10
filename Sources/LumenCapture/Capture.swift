@@ -49,7 +49,7 @@ public struct RecordingConfig: Sendable {
     public var mic = true
     public var micDeviceID: String?
     /// Extra independent sources, e.g. BlackHole alongside a real microphone.
-    /// The primary mic remains on ScreenCaptureKit's low-overhead audio path.
+    /// The primary mic uses Apple voice processing independently of system audio.
     public var additionalMicDeviceIDs: [String] = []
     public var systemAudio = false
     public var webcamDeviceID: String?
@@ -296,6 +296,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private let videoQ = DispatchQueue(label: "lumen.capture.video", qos: .userInteractive)
     private let audioQ = DispatchQueue(label: "lumen.capture.audio", qos: .userInitiated)
     private var stream: SCStream?
+    private var voiceMicrophone: VoiceMicrophoneRecorder?
     private var writer: AVAssetWriter?
     private var vin: AVAssetWriterInput?
     private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
@@ -409,7 +410,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         sc.scalesToFit = false
         sc.captureResolution = .best
         if cfg.systemAudio { sc.capturesAudio = true; sc.excludesCurrentProcessAudio = true }
-        if cfg.mic { sc.captureMicrophone = true; if let id = cfg.micDeviceID { sc.microphoneCaptureDeviceID = id } }
+        if cfg.mic { voiceMicrophone = try VoiceMicrophoneRecorder(deviceID: cfg.micDeviceID) }
 
         let w = try AVAssetWriter(outputURL: bundle.screenURL, fileType: .mov)
         // Fragmented so a crash/force-quit still leaves a playable file.
@@ -444,11 +445,18 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         let s = SCStream(filter: filter, configuration: sc, delegate: self)
         try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQ)
         if cfg.systemAudio { try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQ) }
-        if cfg.mic { try s.addStreamOutput(self, type: .microphone, sampleHandlerQueue: audioQ) }
+
         stream = s
     }
 
-    public func start() async throws { try await stream?.startCapture() }
+    public func start() async throws {
+        try voiceMicrophone?.start { [weak self] sample in
+            guard let self, !self.paused.withLock({ $0 }) else { return }
+            self.mic?.append(sample)
+        }
+        do { try await stream?.startCapture() }
+        catch { voiceMicrophone?.stop(); throw error }
+    }
 
     /// Correct shutdown order: stop capture, drain the SCK sample queue,
     /// mark the video input finished, then await finishWriting off main.
@@ -457,6 +465,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         let sp = OSSignposter(logger: Logger(subsystem: "com.lumen.studio", category: "capture"))
         let state = sp.beginInterval("engine.stop")
         defer { sp.endInterval("engine.stop", state) }
+        voiceMicrophone?.stop()
         try await stream?.stopCapture()
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             videoQ.async {
