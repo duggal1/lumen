@@ -27,7 +27,7 @@ let package = Package(
         lib("LumenCapture", ["LumenCore", "LumenProject", "LumenDirector"]),
         lib("LumenRender", ["LumenCore", "LumenProject", "LumenDirector"], resources: [.process("Shaders")]),
         .target(name: "CRNNoise", path: "Sources/CRNNoise", publicHeadersPath: "include"),
-        lib("LumenAudio", ["LumenCore", "LumenProject", "LumenDirector", "CRNNoise"]),
+        lib("LumenAudio", ["LumenCore", "LumenProject", "LumenDirector", "CRNNoise"], resources: [.copy("Resources/DeepFilterNet")]),
         .target(name: "CMoonshine", path: "Sources/CMoonshine", publicHeadersPath: "include",
                 linkerSettings: [.unsafeFlags(["-L\(moonshineDir)/lib",
                                                "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
