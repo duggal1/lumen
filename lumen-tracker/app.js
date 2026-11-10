@@ -747,4 +747,13 @@
 
   render();
   sync();
+  // Refresh while the dashboard is visible. Never overlap requests or keep
+  // polling a background tab; refresh immediately when the user returns.
+  const LIVE_SYNC_MS = 30_000;
+  setInterval(() => {
+    if (document.visibilityState === "visible" && !state.syncing) sync();
+  }, LIVE_SYNC_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !state.syncing) sync();
+  });
 })();
