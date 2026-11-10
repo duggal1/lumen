@@ -39,3 +39,6 @@ Sources/CRNNoise/src/rnnoise_data.c
 Tools/Verify/drive
 Tools/Verify/locate
 Tools/Verify/lumen-shot
+
+# --- Local plan notes (never in the public repo) ---
+plans/
