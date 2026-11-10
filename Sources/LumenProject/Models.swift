@@ -646,6 +646,7 @@ public struct AXFrame: Codable, Sendable {
         public init(x: Double, y: Double, w: Double, h: Double) { self.x = x; self.y = y; self.w = w; self.h = h }
     }
     public var caret: Rect? = nil
+    public var sampledAt: Double? = nil
     public var x: Double
     public var y: Double
     public var w: Double
@@ -662,7 +663,7 @@ public struct AXFrame: Codable, Sendable {
         self.secure = secure
         self.label = label
     }
-    enum CodingKeys: String, CodingKey { case x, y, w, h, secure, label, caret }
+    enum CodingKeys: String, CodingKey { case x, y, w, h, secure, label, caret, sampledAt }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         x = (try? c.decodeIfPresent(Double.self, forKey: .x)) ?? 0
@@ -670,6 +671,7 @@ public struct AXFrame: Codable, Sendable {
         w = (try? c.decodeIfPresent(Double.self, forKey: .w)) ?? 0
         h = (try? c.decodeIfPresent(Double.self, forKey: .h)) ?? 0
         caret = try c.decodeIfPresent(Rect.self, forKey: .caret)
+        sampledAt = try c.decodeIfPresent(Double.self, forKey: .sampledAt)
         secure = c.opt(.secure, false); label = (try? c.decodeIfPresent(String.self, forKey: .label)) ?? nil
     }
 }
