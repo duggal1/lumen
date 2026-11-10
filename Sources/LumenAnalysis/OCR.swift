@@ -21,6 +21,8 @@ public enum OCRAnalyzer {
     }
 }
 
+private struct OCRRequestHandle: @unchecked Sendable { let request: VNRecognizeTextRequest }
+
 private final class OCRJob: @unchecked Sendable {
     private let asset: AVAsset
     private let track: AVAssetTrack
@@ -31,7 +33,7 @@ private final class OCRJob: @unchecked Sendable {
     private let fps: Double
     private let progress: @Sendable (Double) -> Void
     private let completion = OSAllocatedUnfairLock<(continuation: CheckedContinuation<[OCRDetection], Error>?, result: Result<[OCRDetection], Error>?)>(uncheckedState: (nil, nil))
-    private let requestLock = OSAllocatedUnfairLock<VNRecognizeTextRequest?>(uncheckedState: nil)
+    private let requestLock = OSAllocatedUnfairLock<OCRRequestHandle?>(uncheckedState: nil)
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let readerLock = OSAllocatedUnfairLock<ReaderHandle?>(uncheckedState: nil)
     private let cancelled = OSAllocatedUnfairLock(initialState: false)
@@ -44,7 +46,7 @@ private final class OCRJob: @unchecked Sendable {
     func cancel() {
         cancelled.withLock { $0 = true }
         readerLock.withLock { $0?.reader.cancelReading() }
-        requestLock.withLock { $0?.cancel() }
+        requestLock.withLock { $0?.request.cancel() }
         resolve(.failure(CancellationError()))
     }
 
@@ -131,7 +133,8 @@ private final class OCRJob: @unchecked Sendable {
                 request.recognitionLevel = .accurate
                 request.usesLanguageCorrection = false
                 request.minimumTextHeight = 0
-                requestLock.withLock { $0 = request }
+                let requestHandle = OCRRequestHandle(request: request)
+                requestLock.withLock { $0 = requestHandle }
                 try VNImageRequestHandler(cgImage: crop, options: [:]).perform([request])
                 requestLock.withLock { $0 = nil }
                 for observation in request.results ?? [] {
