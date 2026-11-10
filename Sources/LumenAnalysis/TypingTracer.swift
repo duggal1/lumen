@@ -9,7 +9,7 @@ public enum TypingTracer {
 
     public static func trace(burst: (t0: Double, t1: Double), ts: [Double], grids: [LumaTiles],
                              anchor: SIMD2<Double>?, srcH: Double) -> TypingTrace? {
-        guard ts.count == grids.count, ts.count >= 3, let base = grids.first else { return nil }
+        guard ts.count == grids.count, ts.count >= 2, let base = grids.first else { return nil }
         let cols = base.cols, rows = base.rows, tile = Double(base.tile)
         let maxLineRows = max(Int(0.08 * srcH / tile), 2)
         func changed(_ g: LumaTiles) -> [Bool] { (0..<(cols * rows)).map { abs(Int(g.mean[$0]) - Int(base.mean[$0])) >= 8 } }
