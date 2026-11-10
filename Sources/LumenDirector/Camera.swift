@@ -35,14 +35,21 @@ enum CameraSolver {
         let rate = 240.0
         let n = max(Int(outDur * rate) + 1, 2), dt = 1 / rate
         var tr = CameraTrack(count: n, rate: rate)
-        let omegaIn = max(p.omegaZoom, 1), omegaOut = omegaIn * 0.8
+        // The camera has to have ARRIVED by the click, not merely started.
+        // A critically damped spring reaches 95 % at omega * t = 7.75, so the
+        // spring constant is derived from the lead: zoom and pan both settle
+        // exactly when the scene starts. The spec omegas (zoom 7, pan 5) are
+        // the reference values and scale the result.
+        let settle = 7.75 / max(p.leadIn, 0.2)
+        let omegaIn = settle * (p.omegaZoom / 7.0), omegaOut = omegaIn * 0.8
+        let omegaPan = settle * (p.omegaPan / 5.0)
 
-        // Output-time shots. Auto shots activate `leadIn` early; manual shots
+        // Output-time shots. Auto shots activate the lead early; manual shots
         // exactly where the user put them.
         let shots: [Shot] = zoom.compactMap { z in
             let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
             guard b - a > 0.1, z.scale > 1.001, a < outDur else { return nil }
-            return Shot(on: a - (z.origin == .auto ? 0.25 : 0), off: b, lz: log(min(z.scale, 16)),
+            return Shot(on: a - (z.origin == .auto ? p.leadIn : 0), off: b, lz: log(min(z.scale, 16)),
                         focus: z.focus, ease: z.easing?.omegaScale ?? 1)
         }.sorted { $0.on < $1.on }
 
@@ -82,7 +89,7 @@ enum CameraSolver {
             var tlz = 0.0, tc = SIMD2(0.5, 0.5)
             if si >= 0, t < shots[si].off { tlz = shots[si].lz; tc = targetCenter(shots[si], i) }
             else if lastLz != 0 { omega = omegaOut; lastLz = 0 }          // rest: zoom back out, slowly
-            cx.step(to: tc.x, omega: max(p.omegaPan, 1), dt: dt); cy.step(to: tc.y, omega: max(p.omegaPan, 1), dt: dt); cz.step(to: tlz, omega: omega, dt: dt)
+            cx.step(to: tc.x, omega: omegaPan, dt: dt); cy.step(to: tc.y, omega: omegaPan, dt: dt); cz.step(to: tlz, omega: omega, dt: dt)
             let h = 0.5 / exp(cz.x)
             X[i] = clamp(cx.x, h, 1 - h); Y[i] = clamp(cy.x, h, 1 - h); Z[i] = cz.x   // safety clamp only
         }

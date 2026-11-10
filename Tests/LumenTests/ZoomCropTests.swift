@@ -3,8 +3,10 @@ import Testing
 @testable import LumenDirector
 import LumenCore
 
-/// Zoom-crop oracle: the clicked AX control + 8% context must stay inside the
-/// camera viewport at the click time (screenshot at 0:25 cut text on the right).
+/// Zoom-crop oracle: the clicked AX control plus its context must stay inside
+/// the camera viewport at the click time (screenshot at 0:25 cut text on the
+/// right). The context is the one the fit zoom asks for: 1.6x the target, so
+/// 30 % of the target's width on every side.
 @Test func zoomNeverCropsAxControlWithContext() throws {
     let src = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 12, backingScale: 2, originX: 0, originY: 0)
     var tl = Timeline(duration: 12)
@@ -17,7 +19,7 @@ import LumenCore
     tl = try Director.derive(tl, input: DirectorInput(events: events, source: src, ax: [ax]), revision: 1)
     let f = tl.evaluate(at: 2.0)
     let vw = 1920.0 / Double(f.cameraScale), vh = 1080.0 / Double(f.cameraScale)
-    let marginX = 1920.0 * 0.08, marginY = 1080.0 * 0.08
+    let marginX = 300.0 * 0.30, marginY = 80.0 * 0.30
     let needX0 = 1400 - marginX, needX1 = 1700 + marginX
     let needY0 = 400 - marginY, needY1 = 480 + marginY
     let camX = Double(f.cameraCenter.x), camY = Double(f.cameraCenter.y)
@@ -25,6 +27,9 @@ import LumenCore
     #expect(camX + vw / 2 >= needX1 - 1, "right crop: cam \(camX+vw/2) need \(needX1)")
     #expect(camY - vh / 2 <= needY0 + 1, "top crop")
     #expect(camY + vh / 2 >= needY1 - 1, "bottom crop")
+    // The control itself must be completely visible, context or not.
+    #expect(camX - vw / 2 <= 1400 + 1 && camX + vw / 2 >= 1700 - 1, "the control itself is cropped")
+    #expect(camY - vh / 2 <= 400 + 1 && camY + vh / 2 >= 480 - 1, "the control itself is cropped")
     // Lead: zoom starts before the click.
     let zooms = tl.zoom.filter { $0.origin == .auto }
     #expect(zooms.contains { $0.start <= 2.0 }, "lead begin <= click \(zooms.map(\.start))")

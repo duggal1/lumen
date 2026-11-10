@@ -401,6 +401,8 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         sc.queueDepth = 3
         // Explicitly match the offline audio mixer and export rate.
         // Device-native microphone samples remain raw until the offline mix.
+        // System audio rides the same 48 kHz timeline as the mixer and the
+        // encoder; only the microphone hardware keeps its own native rate.
         sc.sampleRate = 48_000
         sc.channelCount = 2
         sc.showsCursor = false

@@ -79,8 +79,8 @@ private func script(_ clickScale: Double = 1) -> [InputEvent] {
         let dur = Double(r.end - r.start) / Double(gridRate)
         #expect(dur >= 2.0 || r.end == lz.count, "rest \(dur)")
     }
-    // A3: every auto segment in [1.25, 2.6].
-    #expect(out.zoom.allSatisfy { $0.scale >= 1.25 && $0.scale <= 2.6 }, "\(out.zoom.map(\.scale))")
+    // A3: every auto segment inside the fit-zoom clamp [1.3, 3.2].
+    #expect(out.zoom.allSatisfy { $0.scale >= 1.3 && $0.scale <= 3.2 }, "\(out.zoom.map(\.scale))")
     // A5/A4: first scene arrives 95% at its start click.
     let target = log(Double(out.zoom[0].scale))
     #expect(log(Double(out.evaluate(at: out.zoom[0].start).cameraScale)) >= 0.93 * target)

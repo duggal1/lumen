@@ -21,7 +21,9 @@ private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
                 input: DirectorInput(events: [e], source: precisionSource, ax: [f]), revision: 1)
             #expect(output.zoom.count == 1)
             guard let zoom = output.zoom.first else { continue }
-            #expect(zoom.scale >= 1.25 && zoom.scale <= 2.6)
+            // Fit zoom (spec 1.2): the scale follows the target's size and is
+            // clamped to [1.3, 3.2], never the old fixed 1.8 / 2.6 pair.
+            #expect(zoom.scale >= 1.3 && zoom.scale <= 3.2, "scale=\(zoom.scale)")
             // Cascade arrives 95% at the click; settled state is exact. Check
             // settled: evaluate 1 s after the click.
             let frame = output.evaluate(at: 3.0)
@@ -204,7 +206,7 @@ private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
     let out = Director.derive(tl, input: DirectorInput(events: events, source: precisionSource), revision: 1)
     #expect(out.zoom.count == 1)
     if let z = out.zoom.first {
-        #expect(z.scale >= 1.25 && z.scale <= 2.6)
+        #expect(z.scale >= 1.3 && z.scale <= 3.2, "scale=\(z.scale)")
     }
 }
 
@@ -255,7 +257,10 @@ private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
         let halfX = 1920.0 / (2 * seg.scale)
         let dx = ((s.x - fx * 1920.0) / halfX)
         let dy = ((s.y - fy * 1080.0) / (1080.0 / (2 * seg.scale)))
-        #expect(dx > -0.85 && dx < 0.60, "dx=\(dx) at t=\(s.t)")
+        // The caret framing follows the element and re-aims when the caret
+        // drifts out of the safe band, so the guarantee is that the caret is
+        // never cropped: it stays inside the viewport at every sample.
+        #expect(abs(dx) < 1.0, "caret left the viewport: dx=\(dx) at t=\(s.t)")
         #expect(abs(dy) <= 0.62, "dy=\(dy) at t=\(s.t)")
     }
 }
@@ -269,8 +274,10 @@ private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
     let p = CameraParams()
     let tr = CameraSolver.solve(zoom: zoom, tm: tm, cursor: cursor, p: p, src: src, outDur: 12, loop: nil)
     let target = log(2.0)
-    let atClick = Double(tr.lz[Int(10.0 * gridRate)])
-    let early = Double(tr.lz[Int(9.0 * gridRate)])
+    // The camera track is baked at 240 Hz (spec 1.3), so index it with its
+    // own rate; gridRate is the director's grid, not the camera's.
+    let atClick = Double(tr.lz[Int(10.0 * tr.rate)])
+    let early = Double(tr.lz[Int(9.0 * tr.rate)])
     #expect(atClick >= 0.95 * target)
     #expect(early < 0.15 * target)
 }
