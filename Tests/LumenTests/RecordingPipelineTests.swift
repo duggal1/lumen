@@ -59,3 +59,17 @@ import LumenAudio
     #expect(mixed.l != mixed.r)
     #expect(mixed.truePeakDb <= -1)
 }
+
+@Test func oppositePhaseStereoMicDoesNotCancelRecordedVoice() throws {
+    let fs = AudioIO.fs
+    let left = (0..<Int(fs)).map { Float(0.15 * sin(Double($0) * 2 * .pi * 220 / fs)) }
+    let right = left.map { -$0 }
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("lumen-mic-phase-\(UUID().uuidString).caf")
+    defer { try? FileManager.default.removeItem(at: url) }
+    try AudioIO.writeCAF(left, right, to: url)
+    let mono = try AudioIO.readMono(url)
+    #expect(mono.count == left.count)
+    let rms = sqrt(mono.reduce(0.0) { $0 + Double($1 * $1) } / Double(mono.count))
+    #expect(rms > 0.09, "Opposed microphone channels were destructively summed")
+}
