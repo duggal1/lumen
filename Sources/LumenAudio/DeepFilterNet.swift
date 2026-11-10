@@ -22,6 +22,7 @@ public enum DeepFilterNet {
     public static func process(_ samples: [Float]) throws -> [Float] {
         guard !samples.isEmpty else { return [] }
         guard isAvailable, let executable else { throw DeepFilterNetError.unavailable }
+        let started = ContinuousClock.now
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("lumen-voice-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -54,6 +55,9 @@ public enum DeepFilterNet {
         guard rate == AudioIO.fs, channels.count == 1, let voice = channels.first,
               voice.count >= samples.count, voice.count - samples.count < 480,
               voice.allSatisfy(\.isFinite) else { throw DeepFilterNetError.invalidOutput }
+        guard started.duration(to: .now) < .seconds(Double(samples.count) / AudioIO.fs) else {
+            throw DeepFilterNetError.timedOut
+        }
         return Array(voice.prefix(samples.count))
     }
 }
@@ -64,12 +68,23 @@ struct TrainedVoiceDenoiser: Denoiser {
 
     func process(_ x: [Float]) -> [Float] {
         let neural = RNNoiseDenoiser(strength: strength).analyze(x)
-        guard highQuality, strength > 0 else { return neural.samples }
+        guard highQuality, strength > 0 else {
+            let quiet = neural.voiceProbability.filter { $0 < 0.2 }
+            guard !quiet.isEmpty else { return neural.samples }
+            let residual = RNNoiseDenoiser(strength: strength).analyze(neural.samples)
+            var output = neural.samples
+            for i in output.indices {
+                let probability = neural.voiceProbability[i / neural.frameSize]
+                let wet = min(max((0.2 - probability) / 0.2, 0), 1)
+                output[i] += (residual.samples[i] - output[i]) * wet
+            }
+            return output
+        }
         do {
             let enhanced = try DeepFilterNet.process(x)
             // Reuse RNNoise's speech decisions without processing the enhanced voice twice.
             let size = neural.frameSize
-            let floor = Float(pow(10, -18 * strength / 20))
+            let floor = Float(pow(10, -(12 + 6 * min(max(strength, 0), 1)) / 20))
             let attack = Float(exp(-1 / (0.005 * AudioIO.fs)))
             let release = Float(exp(-1 / (0.080 * AudioIO.fs)))
             var output = enhanced, gain: Float = 1
