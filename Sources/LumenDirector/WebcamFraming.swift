@@ -35,7 +35,7 @@ enum WebcamFraming {
                     tg += (nx - tg) * ((st - f[k].t) / gap)
                 }
             }
-            let ci = min(Int(t * gridRate), camera.lz.count - 1)
+            let ci = min(Int(t * camera.rate), camera.lz.count - 1)
             let e = clamp(Double(camera.lz[ci]) / 0.79, 0, 1)
             tg.z = max(tg.z * (1 - 0.4 * lay.faceZoom * e), 0.28)
             a.step(target: tg, omega: w, dt: dt)
