@@ -34,7 +34,7 @@ enum WebcamPlacement {
         /// rather than comparing source pixels with a canvas-space bubble.
         func canvasPoint(_ x: Double, _ y: Double, at t: Double, opacity: Double = 1) -> SIMD3<Double>? {
             guard !cam.nx.isEmpty, !cam.lz.isEmpty else { return nil }
-            let ci = min(max(Int(t * gridRate), 0), min(cam.nx.count, cam.lz.count) - 1)
+            let ci = min(max(Int(t * cam.rate), 0), min(cam.nx.count, cam.lz.count) - 1)
             let z = exp(Double(cam.lz[ci])), vw = src.x / z, vh = src.y / z
             let cx = Double(cam.nx[ci]) * src.x, cy = Double(cam.ny[ci]) * src.y
             let nx = (x - (cx - vw / 2)) / vw, ny = (y - (cy - vh / 2)) / vh
