@@ -459,7 +459,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             videoQ.async {
                 if self.pendingVideo != nil { self.dropped.withLock { $0 += 1 }; self.pendingVideo = nil }
-                if self.started { self.vin?.stopRequestingMediaData(); self.vin?.markAsFinished() }
+                if self.started { self.vin?.markAsFinished() }
                 c.resume()
             }
         }
@@ -502,7 +502,8 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         guard let vin, vin.isReadyForMoreMediaData, let pending = pendingVideo else { return }
         pendingVideo = nil
         if adaptor?.append(pending.buffer, withPresentationTime: pending.pts) == true {
-            ptsRange.withLock { $0.last = pending.pts.seconds }
+            let seconds = pending.pts.seconds
+            ptsRange.withLock { $0.last = seconds }
             liveFrameHook.withLock { $0 }?(pending.buffer)
         } else { dropped.withLock { $0 += 1 } }
     }
