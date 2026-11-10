@@ -24,7 +24,7 @@ public struct LiveCamera: Sendable {
         press = Spring3(x: SIMD3(1, 0, 0))
     }
     private func norm(_ p: SIMD2<Double>) -> SIMD2<Double> { SIMD2(p.x / src.x, p.y / src.y) }
-    public mutating func ingest(_ e: InputEvent) {
+    public mutating func ingest(_ e: InputEvent, focus: AXFrame? = nil) {
         if e.hasPosition {
             let p = SIMD2(Double(e.x), Double(e.y))
             if rawT == 0 { cur1.x = SIMD3(p.x, p.y, 0); cur2.x = cur1.x }
@@ -46,10 +46,12 @@ public struct LiveCamera: Sendable {
         case .up: down = false; lastActivity = e.t
         case .keyDown:
             guard e.axFrameIndex > 0 else { return }
-            typing = true; zoomed = true; lastActivity = e.t; lzShot = log(maxScale)
-            let center = norm(SIMD2(Double(e.x), Double(e.y))), half = 0.5 / maxScale
+            let scale = focus.map { clamp(min(src.x / max($0.w * 1.6, 1), src.y / max($0.h * 1.6, 1)), 1.3, 3.2) } ?? maxScale
+            typing = true; zoomed = true; lastActivity = e.t; lzShot = log(scale)
+            let point = focus.map { SIMD2($0.x + $0.w / 2, $0.y + $0.h / 2) } ?? SIMD2(Double(e.x), Double(e.y))
+            let center = norm(point), half = 0.5 / scale
             let next = SIMD2(clamp(center.x, half, 1 - half), clamp(center.y, half, 1 - half))
-            if hypot(next.x - tgt.x, next.y - tgt.y) > 0.06 / maxScale { tgt = next }
+            if hypot(next.x - tgt.x, next.y - tgt.y) > 0.06 / scale { tgt = next }
         case .drag, .scroll: lastActivity = e.t
         default: break
         }
