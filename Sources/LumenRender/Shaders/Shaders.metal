@@ -377,8 +377,7 @@ fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]],
     } else if (u.mode == 0) {
         // Liquid-glass ripple. A travelling wave refracts the already-composited
         // frame (masks included — never the raw source) with a soft specular
-        // crest, over a faint interior bloom that decays to zero at the front.
-        // No hard ring, no flat fill, no full-disc tint.
+        // crest. No hard ring, no flat fill, no full-disc tint.
         float x = 6.5 * p;
         float e = 1.0 - exp(-x) * (1.0 + x);                 // 0 → ~0.99, no overshoot
         float R = u.radius * (0.18 + 0.82 * e);
