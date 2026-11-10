@@ -496,7 +496,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             }
             try await prepareTask.value
             await session.markCountdown()
-            if let hub = livePreviewController?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }) }
+            if let hub = livePreviewController?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }, focus: { hub.focus($0, $1) }) }
             try await session.start()
             phase = .recording
             hud?.showControls()
