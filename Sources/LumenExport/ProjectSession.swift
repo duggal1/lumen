@@ -96,7 +96,8 @@ public final class ProjectSession: @unchecked Sendable {
     public static func open(_ b: ProjectBundle, device: MTLDevice) async throws -> (ProjectSession, Timeline) {
         let file = try b.load(), meta = file.meta, origin = meta.clock.originHostSeconds
         let events = (try? b.events(origin: origin)) ?? []
-        let ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
+        var ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
+        for i in ax.indices { if let time = ax[i].sampledAt { ax[i].sampledAt = time - origin } }
         var mic: [Float]?, sys: [Float]?, sysRight: [Float]?
         var micOff = 0.0, sysOff = 0.0
         if let m = meta.mic { mic = try? AudioIO.readMono(b.micURL); micOff = m.startHostSeconds - origin }
