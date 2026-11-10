@@ -150,7 +150,7 @@ public enum Director {
                 let outTime = tm.output(atSource: event.t)
                 let frame = t.evaluate(at: outTime)
                 // Per-click: target lz, arrival at click, click in viewport (normalised).
-                let idx = min(max(Int(outTime * gridRate), 0), (cam?.lz.count ?? 1) - 1)
+                let idx = min(max(Int(outTime * (cam?.rate ?? gridRate)), 0), (cam?.lz.count ?? 1) - 1)
                 let lzNow = (cam?.lz.isEmpty == false) ? Double(cam!.lz[idx]) : log(Double(frame.cameraScale))
                 let targetScale = t.zoom.first { abs($0.start - event.t) < 0.01 }?.scale
                                     ?? t.zoom.first { event.t >= $0.start && event.t <= $0.end }?.scale ?? 1
@@ -210,8 +210,8 @@ public struct FrameState: Sendable {
     let p0 = g(i - 1), p1 = g(i), p2 = g(i + 1), p3 = g(i + 2)
     return p1 + 0.5 * u * (p2 - p0 + u * (2 * p0 - 5 * p1 + 4 * p2 - p3 + u * (3 * (p1 - p2) + p3 - p0)))
 }
-@inline(__always) private func hm(_ p: [Float], _ v: [Float], _ f: Double) -> Float {
-    let i = min(max(Int(f), 0), p.count - 2), s = Float(f - Double(i)), h = Float(1 / gridRate)
+@inline(__always) private func hm(_ p: [Float], _ v: [Float], _ f: Double, rate: Double) -> Float {
+    let i = min(max(Int(f), 0), p.count - 2), s = Float(f - Double(i)), h = Float(1 / rate)
     let s2 = s * s, s3 = s2 * s
     return (2 * s3 - 3 * s2 + 1) * p[i] + (s3 - 2 * s2 + s) * h * v[i] + (-2 * s3 + 3 * s2) * p[i + 1] + (s3 - s2) * h * v[i + 1]
 }
@@ -239,9 +239,10 @@ extension Timeline {
         }
         let t = clamp(t0, 0, d.outputDuration), f = t * gridRate
         let c = d.camera, u = d.cursor
-        let cam = SIMD2<Float>(hm(c.nx, c.vx, f) * Float(d.sourceSize.x), hm(c.ny, c.vy, f) * Float(d.sourceSize.y))
-        let scale = exp(hm(c.lz, c.vz, f))
-        let tilt = SIMD2<Float>(cr(c.yaw, f), cr(c.pitch, f))
+        let cameraFrame = t * c.rate
+        let cam = SIMD2<Float>(hm(c.nx, c.vx, cameraFrame, rate: c.rate) * Float(d.sourceSize.x), hm(c.ny, c.vy, cameraFrame, rate: c.rate) * Float(d.sourceSize.y))
+        let scale = exp(hm(c.lz, c.vz, cameraFrame, rate: c.rate))
+        let tilt = SIMD2<Float>(cr(c.yaw, cameraFrame), cr(c.pitch, cameraFrame))
         let pos = SIMD2<Float>(cr(u.x, f), cr(u.y, f))
         let vel = SIMD2<Float>(cr(u.x, f + 1) - cr(u.x, f - 1), cr(u.y, f + 1) - cr(u.y, f - 1)) * Float(gridRate / 2)
         let cs = CursorSample(position: pos, velocity: vel, opacity: cf(cr(u.opacity, f), 0, 1), press: cr(u.press, f),
