@@ -10,7 +10,9 @@ final class Part23Tests: XCTestCase {
         let apiKey = "sk-ant-api03-" + String(repeating: "A", count: 36)
         let hits = SensitivePatterns.scan("token \(apiKey) me@example.com")
 
-        XCTAssertEqual(hits.map(\.category), [.apiKey, .email])
+        // Both patterns must fire, exactly once each. The order the scanner
+        // returns them in is an implementation detail, not a contract.
+        XCTAssertEqual(Set(hits.map(\.category)), [.apiKey, .email])
         XCTAssertEqual(hits.count, 2)
     }
 

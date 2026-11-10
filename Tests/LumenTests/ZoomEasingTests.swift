@@ -12,5 +12,7 @@ import LumenDirector
     let fast = Director.derive(tl, input: input, revision: 1)
     tl.zoom[0].easing = .cinematic
     let slow = Director.derive(tl, input: input, revision: 2)
-    #expect(fast.evaluate(at: 1.5).cameraScale > slow.evaluate(at: 1.5).cameraScale + 0.1)
+    // Compare while the move is still running: the easing decides how fast
+    // the camera arrives, so the difference shows mid-flight.
+    #expect(fast.evaluate(at: 1.2).cameraScale > slow.evaluate(at: 1.2).cameraScale + 0.1)
 }
