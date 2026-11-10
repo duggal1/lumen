@@ -2,16 +2,6 @@ import Foundation
 import LumenCore
 import LumenProject
 
-/// Causal camera. The owner serializes event ingestion and display updates.
-/// The offline CameraSolver is a cascade; the live preview keeps its own
-/// causal clamp here so the two paths never share a helper by accident.
-private func liveSoftClamp(_ v: Double, _ lo: Double, _ hi: Double, _ s: Double) -> Double {
-    func f(_ d: Double) -> Double { d >= s ? d : s * exp(d / s - 1) }
-    let mid = (lo + hi) / 2
-    let a = lo + f(v - lo), c = hi - f(hi - a)
-    return lerp(mid, c, smoothstep((hi - lo) / (2 * s)))
-}
-
 public struct LiveCamera: Sendable {
     public var maxScale = 2.2, hold = 1.6, omegaZoom = 8.0, omegaPan = 7.0, lookahead = 0.15, deadZone = 0.28
     public var cursor = CursorStyle()
@@ -21,7 +11,8 @@ public struct LiveCamera: Sendable {
     private var shape: UInt16 = 0
     private var down = false, zoomed = false
     private var lastActivity = -1e9, lastMove = -1e9, opacity = 1.0, lzShot = 0.0
-    private var cur1: Spring3, cur2: Spring3, zoom1: Spring3, zoom2: Spring3, press: Spring3
+    private var cur1: Spring3, cur2: Spring3, zoom1: Spring3, press: Spring3
+    private var typing = false
     private var tgt = SIMD2<Double>(0.5, 0.5)
     private var fx1 = SIMD2<Double>(0.5, 0.5), fv1 = SIMD2<Double>.zero, fx2 = SIMD2<Double>(0.5, 0.5), fv2 = SIMD2<Double>.zero
     private var rings: [(t: Double, x: Float, y: Float)] = []
@@ -29,11 +20,11 @@ public struct LiveCamera: Sendable {
     public init(source: SIMD2<Double>) {
         src = source; raw = source / 2
         cur1 = Spring3(x: SIMD3(source.x / 2, source.y / 2, 0)); cur2 = cur1
-        zoom1 = Spring3(x: .zero); zoom2 = zoom1
+        zoom1 = Spring3(x: .zero)
         press = Spring3(x: SIMD3(1, 0, 0))
     }
     private func norm(_ p: SIMD2<Double>) -> SIMD2<Double> { SIMD2(p.x / src.x, p.y / src.y) }
-    public mutating func ingest(_ e: InputEvent) {
+    public mutating func ingest(_ e: InputEvent, focus: AXFrame? = nil) {
         if e.hasPosition {
             let p = SIMD2(Double(e.x), Double(e.y))
             if rawT == 0 { cur1.x = SIMD3(p.x, p.y, 0); cur2.x = cur1.x }
@@ -43,16 +34,25 @@ public struct LiveCamera: Sendable {
         }
         switch e.kind {
         case .down:
+            typing = false
             down = true; lastActivity = e.t; rings.append((e.t, e.x, e.y))
             if !zoomed {
-                let atRest = zoom2.x.x < 0.03
+                let atRest = zoom1.x.x < 0.03
                 zoomed = true; lzShot = log(maxScale)
                 let c = norm(SIMD2(Double(e.x), Double(e.y))), hw = 0.5 / maxScale
                 tgt = SIMD2(clamp(c.x, hw, 1 - hw), clamp(c.y, hw, 1 - hw))
                 if atRest { fx1 = tgt; fx2 = tgt; fv1 = .zero; fv2 = .zero }
             }
         case .up: down = false; lastActivity = e.t
-        case .drag, .scroll, .keyDown: lastActivity = e.t
+        case .keyDown:
+            guard e.axFrameIndex > 0 else { return }
+            let scale = focus.map { clamp(min(src.x / max($0.w * 1.6, 1), src.y / max($0.h * 1.6, 1)), 1.3, 3.2) } ?? maxScale
+            typing = true; zoomed = true; lastActivity = e.t; lzShot = log(scale)
+            let point = focus.map { SIMD2($0.x + $0.w / 2, $0.y + $0.h / 2) } ?? SIMD2(Double(e.x), Double(e.y))
+            let center = norm(point), half = 0.5 / scale
+            let next = SIMD2(clamp(center.x, half, 1 - half), clamp(center.y, half, 1 - half))
+            if hypot(next.x - tgt.x, next.y - tgt.y) > 0.06 / scale { tgt = next }
+        case .drag, .scroll: lastActivity = e.t
         default: break
         }
     }
@@ -75,10 +75,9 @@ public struct LiveCamera: Sendable {
         rings.removeAll { tt - $0.t > max(cursor.clickDuration, 0.05) }
         if zoomed && !down && tt - lastActivity > hold { zoomed = false }
         let wz = SIMD3<Double>(repeating: omegaZoom)
-        zoom1.step(target: SIMD3(zoomed ? 1 : 0, 0, 0), omega: wz, dt: dt)
-        zoom2.step(target: zoom1.x, omega: wz, dt: dt)
+        zoom1.step(target: SIMD3(zoomed ? lzShot : 0, 0, 0), omega: wz, dt: dt)
         let sc = exp(lzShot), hw = 0.5 / sc
-        if zoomed {
+        if zoomed && !typing {
             let pred = norm(raw + vel * lookahead), half = deadZone / sc
             for k in 0..<2 {
                 let d = pred[k] - tgt[k]
@@ -87,17 +86,12 @@ public struct LiveCamera: Sendable {
             }
         }
         for k in 0..<2 {
-            scaledSpring(&fx1[k], &fv1[k], target: tgt[k], omega: omegaPan, dt: dt, scale: sc)
-            scaledSpring(&fx2[k], &fv2[k], target: fx1[k], omega: omegaPan, dt: dt, scale: sc)
+            springStep(&fx2[k], &fv2[k], target: zoomed ? tgt[k] : 0.5, omega: omegaPan, dt: dt)
         }
     }
     private func state(at now: Double) -> FrameState {
-        let z = clamp(zoom2.x.x, 0, 1), lz = lzShot * z
-        let wS = exp(-lzShot), w = exp(-lz)
-        let q = abs(wS - 1) > 1e-5 ? (w - 1) / (wS - 1) : z
-        let hw = 0.5 / exp(lzShot), soft = 8 / src.x
-        let f = SIMD2(liveSoftClamp(fx2.x, hw, 1 - hw, soft), liveSoftClamp(fx2.y, hw, 1 - hw, soft))
-        let c = SIMD2(0.5, 0.5) + (f - SIMD2(0.5, 0.5)) * q
+        let lz = max(zoom1.x.x, 0), half = 0.5 / exp(lz)
+        let c = SIMD2(clamp(fx2.x, half, 1 - half), clamp(fx2.y, half, 1 - half))
         let cs = CursorSample(position: SIMD2(Float(cur2.x.x), Float(cur2.x.y)), velocity: SIMD2(Float(cur2.v.x), Float(cur2.v.y)),
                               opacity: Float(smoothstep(opacity)), press: Float(press.x.x), shape: shape)
         var fx: [ClickRing] = []

@@ -88,7 +88,7 @@ private final class TypingJob: @unchecked Sendable {
             if wi >= wanted.count { break }
         }
         if reader.status == .failed { throw reader.error ?? AnalysisError.readerFailed }
-        guard grids.count >= 3 else { return nil }
+        guard grids.count >= 2 else { return nil }
         return TypingTracer.trace(burst: burst, ts: ts, grids: grids, anchor: anchor, srcH: height)
     }
 

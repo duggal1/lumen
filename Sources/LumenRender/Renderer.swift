@@ -70,19 +70,7 @@ private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; 
 private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float; var tilt: SIMD2<Float>; var radii: SIMD4<Float> }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float> }
-private struct PrivacyU {
-    var content: SIMD4<Float>
-    var sourceRect: SIMD4<Float>
-    var sourceSize: SIMD2<Float>
-    var safeSample: SIMD2<Float>
-    var radius: Float
-    var mode: Int32
-    var block: Float
-    var pad: Float
-    var cell: Float
-    var sampledMix: Float
-    var levels: Float
-}
+private struct SourceMaskGPU { var rect: SIMD4<Float>; var block: SIMD4<Float> }
 private struct WebU {
     var crop: SIMD4<Float>; var bubble: SIMD4<Float>
     var radius: Float; var shape: Float; var mirror: Float; var border: Float
@@ -170,7 +158,9 @@ public final class Renderer: @unchecked Sendable {
     public let presentStats = PresentStats()
     private let queue: MTLCommandQueue
     private let lib: MTLLibrary
-    private let pBackdrop, pContent, pCursor, pRing, pWeb, pPrivacy, pAccum: MTLRenderPipelineState
+    private let pBackdrop, pContent, pCursor, pRing, pWeb, pAccum: MTLRenderPipelineState
+    private let pSourceMask: MTLComputePipelineState
+    private var maskedSources: [MTLTexture?] = [nil, nil, nil]
     private let pTextSprite: MTLRenderPipelineState
     private let pCaptionCard: MTLRenderPipelineState
     private let pBlur: MTLRenderPipelineState
@@ -219,7 +209,8 @@ public final class Renderer: @unchecked Sendable {
         pContent = try Self.pipe(d, l, "contentFS", f, 1)
         pCursor = try Self.pipe(d, l, "cursorFS", f, 1)
         pRing = try Self.pipe(d, l, "ringFS", f, 1)
-        pPrivacy = try Self.pipe(d, l, "privacyFS", f, 1)
+        guard let maskFunction = l.makeFunction(name: "pixelateMask") else { throw RenderError.pipeline("pixelateMask") }
+        pSourceMask = try d.makeComputePipelineState(function: maskFunction)
         pWeb = try Self.pipe(d, l, "webFS", f, 1)
         pAccum = try Self.pipe(d, l, "accumFS", f, 2)
         pTextSprite = try Self.pipe(d, l, "textSpriteFS", f, 1)
@@ -474,7 +465,11 @@ public final class Renderer: @unchecked Sendable {
             let off = ((Double(i) + 0.5) / Double(K) - 0.5) * tl.camera.shutter * dt
             var st = r.live ?? tl.evaluate(at: r.t + off)
             if r.live == nil, tl.derived == nil { st.cameraCenter = SIMD2<Float>(Float(g.src.x / 2), Float(g.src.y / 2)) }
-            scene(cb, into: work[s], slot: s, st: st, r: r, g: g, src: srcTex, web: webTex, matte: matte)
+            guard let protectedSource = maskedSource(srcTex, masks: st.emphasis.masks,
+                                                       pixelSize: Float(tl.overlays.privacy.pixelSize), slot: s, cb: cb) else {
+                sem.signal(); return false
+            }
+            scene(cb, into: work[s], slot: s, st: st, r: r, g: g, src: protectedSource, web: webTex, matte: matte)
             if K > 1 {
                 let pd = MTLRenderPassDescriptor()
                 pd.colorAttachments[0].texture = accum[s]; pd.colorAttachments[0].loadAction = i == 0 ? .clear : .load
@@ -551,7 +546,7 @@ public final class Renderer: @unchecked Sendable {
         // fragment path below remains the fallback. The backdrop resolve
         // still composites this work texture over the cached backdrop.
         var computeContent = false
-        if drawingContent, tl.camera.upscaleEnabled, st.cameraTilt == .zero, let cp = contentPass, let up = upscaler {
+        if drawingContent, st.emphasis.masks.isEmpty, tl.camera.upscaleEnabled, st.cameraTilt == .zero, let cp = contentPass, let up = upscaler {
             let layout = ContentLayout(canvas: SIMD2<Int32>(Int32(g.canvas.x), Int32(g.canvas.y)),
                                        contentRect: content, radii: SIMD4<Float>(g.radii),
                                        srcSize: SIMD2<Float>(g.src))
@@ -582,47 +577,6 @@ public final class Renderer: @unchecked Sendable {
                              radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0,
                              tilt: st.cameraTilt, radii: SIMD4<Float>(g.radii)))
             enc.setFragmentTexture(src, index: 0); draw()
-        }
-
-        // Every privacy mask is anchored to SOURCE pixels and transformed by
-        // the exact same zoom camera as content. Mask before drawing cursor
-        // and webcam, never by stamping a static canvas rectangle afterward.
-        if drawingContent, !st.emphasis.masks.isEmpty {
-            enc.setRenderPipelineState(pPrivacy)
-            let sourceSize = SIMD2<Float>(Float(g.src.x), Float(g.src.y))
-            for mask in st.emphasis.masks {
-                // Mosaic is the default treatment: blur/pixelate request the
-                // same anchored-cell mosaic (they read as weak by hand).
-                let secretCats: Set<String> = ["card", "apiKey", "jwt", "privateKey", "envSecret", "entropy"]
-                let isSecret = secretCats.contains(mask.category ?? "")
-                let textH = Float(max(mask.rect.w, 1))
-                let cell = PrivacyMaskGeometry.cell(boxHeight: textH)
-                // The quad edge is a cell boundary: snap the treated region
-                // outward so no partial cell or unmasked sliver survives the
-                // camera projection. The grid itself stays anchored to source
-                // pixels in the shader, so cells never swim when content moves.
-                let region = PrivacyMaskGeometry.mosaicRegion(mask.rect, cell: cell)
-                guard let projected = PrivacyMaskGeometry.canvasRect(region, geometry: g,
-                                                                      camera: cam, scale: sc),
-                      projected.z > 0.2, projected.w > 0.2 else { continue }
-                let safe = PrivacyMaskGeometry.outsideSample(region, sourceSize: sourceSize)
-                let requested: Int32 = switch mask.mode {
-                case .solid: 2
-                case .blend: 3
-                case .blur, .pixelate: isSecret ? 5 : 4
-                }
-                // If no region outside the mask exists, Blend falls back to
-                // an opaque solid instead of sampling protected pixels.
-                let mode: Int32 = requested == 3 && safe == nil ? 2 : requested
-                quad(enc, projected, canvasF)
-                frag(enc, PrivacyU(content: content, sourceRect: region,
-                                 sourceSize: sourceSize, safeSample: safe ?? .zero,
-                                 radius: Float(g.radius), mode: mode, block: 20, pad: 0,
-                                 cell: cell, sampledMix: isSecret ? 0 : 1,
-                                 levels: isSecret ? 0 : 5))
-                enc.setFragmentTexture(src, index: 0)
-                draw()
-            }
         }
 
         // Highlight geometry follows the exact source-pixel camera transform.
@@ -852,6 +806,35 @@ public final class Renderer: @unchecked Sendable {
         } else {
             enc.endEncoding()
         }
+    }
+
+    private func maskedSource(_ source: MTLTexture, masks: [MaskFrame], pixelSize: Float,
+                              slot: Int, cb: MTLCommandBuffer) -> MTLTexture? {
+        guard !masks.isEmpty else { return source }
+        if maskedSources[slot]?.width != source.width || maskedSources[slot]?.height != source.height {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+                width: source.width, height: source.height, mipmapped: false)
+            descriptor.usage = [.shaderRead, .shaderWrite]; descriptor.storageMode = .private
+            maskedSources[slot] = device.makeTexture(descriptor: descriptor)
+        }
+        guard let target = maskedSources[slot] else { return nil }
+        let regions = masks.map { mask in
+            let block = max(pixelSize, PrivacyMaskGeometry.cell(boxHeight: mask.rect.w))
+            return SourceMaskGPU(rect: PrivacyMaskGeometry.mosaicRegion(mask.rect, cell: block),
+                                 block: SIMD4(block, 0, 0, 0))
+        }
+        guard let buffer = regions.withUnsafeBytes({ bytes in
+            bytes.baseAddress.flatMap { device.makeBuffer(bytes: $0, length: bytes.count) }
+        }), let encoder = cb.makeComputeCommandEncoder() else { return nil }
+        var count = UInt32(regions.count)
+        encoder.setComputePipelineState(pSourceMask)
+        encoder.setTexture(source, index: 0); encoder.setTexture(target, index: 1)
+        encoder.setBuffer(buffer, offset: 0, index: 0)
+        encoder.setBytes(&count, length: MemoryLayout<UInt32>.size, index: 1)
+        encoder.dispatchThreads(MTLSize(width: source.width, height: source.height, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+        encoder.endEncoding()
+        return target
     }
 
     /// Separable Gaussian of the finished scene, rendered at quarter resolution.

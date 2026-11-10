@@ -61,12 +61,12 @@ public final class ProjectSession: @unchecked Sendable {
     }
 
     @discardableResult
-    public func analyze(_ timeline: Timeline) async -> AnalysisResult {
+    public func analyze(_ timeline: Timeline, privacyProgress: @escaping @Sendable (Double) -> Void = { _ in }) async -> AnalysisResult {
         let origin = meta.clock.originHostSeconds
         let micOffset = (meta.mic?.startHostSeconds ?? origin) - origin
         let webcamOffset = (meta.webcam?.startHostSeconds ?? origin) - origin
         let snapshot = input
-        let request = AnalysisRequest(screen: bundle.screenURL, webcam: meta.webcam == nil ? nil : bundle.webcamURL,
+        var request = AnalysisRequest(screen: bundle.screenURL, webcam: meta.webcam == nil ? nil : bundle.webcamURL,
                                       mic: meta.mic == nil ? nil : bundle.micURL, cacheDirectory: bundle.cacheURL,
                                       webcamOffset: webcamOffset, micOffset: micOffset, projectSalt: meta.analysisSalt,
                                       privacy: timeline.overlays.privacy, locale: timeline.captions.locale,
@@ -79,15 +79,18 @@ public final class ProjectSession: @unchecked Sendable {
                                           || (timeline.webcam?.backdrop != nil && timeline.webcam?.backdrop != .original),
                                       includeTyping: !snapshot.events.isEmpty,
                                       events: snapshot.events)
+        request.sourceDuration = meta.source.duration
+        request.privacyProgress = privacyProgress
         let result = await AnalysisService.shared.run(request)
         guard !Task.isCancelled else { return result }
+        let appliedRequest = request
         inputState.withLock { current in
             if result.errors["face"] == nil, meta.webcam != nil { current.face = result.face }
-            if result.errors["activity"] == nil, request.includeActivity { current.activity = result.activity }
+            if result.errors["activity"] == nil, appliedRequest.includeActivity { current.activity = result.activity }
             if result.errors["ocr"] == nil, timeline.overlays.privacy.enabled, timeline.overlays.privacy.autoDetect { current.ocr = result.ocr }
             if result.errors["speech"] == nil, let transcript = result.transcript { current.transcript = transcript }
             if result.errors["personMask"] == nil, let personMask = result.personMask { current.personMask = personMask }
-            if result.errors["typing"] == nil, request.includeTyping { current.typing = result.typing }
+            if result.errors["typing"] == nil, appliedRequest.includeTyping { current.typing = result.typing }
         }
         return result
     }
@@ -95,7 +98,8 @@ public final class ProjectSession: @unchecked Sendable {
     public static func open(_ b: ProjectBundle, device: MTLDevice) async throws -> (ProjectSession, Timeline) {
         let file = try b.load(), meta = file.meta, origin = meta.clock.originHostSeconds
         let events = (try? b.events(origin: origin)) ?? []
-        let ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
+        var ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
+        for i in ax.indices { if let time = ax[i].sampledAt { ax[i].sampledAt = time - origin } }
         var mic: [Float]?, sys: [Float]?, sysRight: [Float]?
         var micOff = 0.0, sysOff = 0.0
         if let m = meta.mic { mic = try? AudioIO.readMono(b.micURL); micOff = m.startHostSeconds - origin }

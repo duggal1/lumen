@@ -300,6 +300,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private var vin: AVAssetWriterInput?
     private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
     private var started = false
+    private var pendingVideo: (buffer: CVPixelBuffer, pts: CMTime)?
     private var meta: FrameMetaWriter?
     private let dropped = OSAllocatedUnfairLock(initialState: 0)
     private let ptsRange = OSAllocatedUnfairLock(initialState: PTSRange())
@@ -397,7 +398,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         sc.pixelFormat = kCVPixelFormatType_32BGRA
         sc.colorSpaceName = CGColorSpace.displayP3
         sc.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
-        sc.queueDepth = 8
+        sc.queueDepth = 3
         // Explicitly match the offline audio mixer and export rate.
         // Device-native microphone samples remain raw until the offline mix.
         sc.sampleRate = 48_000
@@ -456,7 +457,11 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         defer { sp.endInterval("engine.stop", state) }
         try await stream?.stopCapture()
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            videoQ.async { if self.started { self.vin?.markAsFinished() }; c.resume() }
+            videoQ.async {
+                if self.pendingVideo != nil { self.dropped.withLock { $0 += 1 }; self.pendingVideo = nil }
+                if self.started { self.vin?.markAsFinished() }
+                c.resume()
+            }
         }
         guard started, let w = writer else { writer?.cancelWriting(); throw CaptureError.writer("no frames were captured") }
         await w.finishWriting()
@@ -478,17 +483,29 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private func video(_ sb: CMSampleBuffer) {
         guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let info = arr.first, let raw = info[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete,
-              let pb = CMSampleBufferGetImageBuffer(sb), let w = writer, let vin, let adaptor else { return }
+              let pb = CMSampleBufferGetImageBuffer(sb), let w = writer, let vin, adaptor != nil else { return }
         let pts = sb.presentationTimeStamp
         if !started {
             guard w.startWriting() else { return }
             w.startSession(atSourceTime: pts); started = true
             ptsRange.withLock { $0.first = pts.seconds }
+            vin.requestMediaDataWhenReady(on: videoQ) { [weak self] in self?.drainVideo() }
         }
-        guard vin.isReadyForMoreMediaData else { dropped.withLock { $0 += 1 }; return }   // never block
-        if adaptor.append(pb, withPresentationTime: pts) { ptsRange.withLock { $0.last = pts.seconds }; liveFrameHook.withLock { $0 }?(pb) }
+        if pendingVideo != nil { dropped.withLock { $0 += 1 } }
+        pendingVideo = (pb, pts)
+        drainVideo()
         var rect = CGRect.zero
         if let d = info[.contentRect] as? [String: Any], let r = CGRect(dictionaryRepresentation: d as CFDictionary) { rect = r }
         meta?.write(pts: pts.seconds, status: raw, rect: rect)
     }
+    private func drainVideo() {
+        guard let vin, vin.isReadyForMoreMediaData, let pending = pendingVideo else { return }
+        pendingVideo = nil
+        if adaptor?.append(pending.buffer, withPresentationTime: pending.pts) == true {
+            let seconds = pending.pts.seconds
+            ptsRange.withLock { $0.last = seconds }
+            liveFrameHook.withLock { $0 }?(pending.buffer)
+        } else { dropped.withLock { $0 += 1 } }
+    }
+
 }

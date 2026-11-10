@@ -250,94 +250,33 @@ fragment float4 loupeFS(VO in [[stage_in]], constant LoupeU &u [[buffer(0)]], te
     return float4(edge * alpha, alpha + shadowA * (1.0 - inside));
 }
 
-// ---- Privacy masks: source-space rectangles composited after screen content.
-// Mode 3 (Blend) never samples pixels inside the protected region; mode 2
-// (Solid) never samples the source. Modes 4/5 are the mosaic: crisp square
-// cells anchored to the source-space grid (never swims), rendered from the
-// raw source through the same camera transform as content.
-struct PrivacyU {
-    float4 content;
-    float4 sourceRect;
-    float2 sourceSize;
-    float2 safeSample;
-    float radius;
-    int mode;
-    float block;
-    float pad;
-    float cell;
-    float sampledMix;
-    float levels;
-};
-
-static inline float hash12(float2 p) {
-    float3 p3 = fract(float3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-fragment float4 privacyFS(VO in [[stage_in]], constant PrivacyU &u [[buffer(0)]],
-                          texture2d<float> src [[texture(0)]]) {
-    float alpha = rectMask(in.px, u.content, u.radius);
-    if (alpha <= 0.0) return float4(0.0);
-    float2 p = u.sourceRect.xy + in.q * u.sourceRect.zw;
-    float2 sourceUV = p / u.sourceSize;
-    float3 rgb;
-    if (u.mode == 2) {
-        // Deliberately opaque. Never let the original characters show through.
-        rgb = float3(0.09);
-    } else if (u.mode == 3) {
-        // Sample only outside the masked source rectangle. The CPU falls back
-        // to solid when every neighboring pixel could contain masked data.
-        rgb = src.sample(linClamp, u.safeSample / u.sourceSize, level(0.0)).rgb;
-    } else if (u.mode == 4 || u.mode == 5) {
-        // Mosaic: grid anchored to SOURCE space via floor(p/cell) so cells
-        // never swim. Identity (4) samples the region with luminance
-        // quantization; secret (5) samples no region pixels at all — colors
-        // come from the outside background plus per-cell hash.
-        //
-        // The region is snapped outward to whole cells on the CPU, so the
-        // quad's edge is a cell boundary. Return a hard alpha: a soft edge
-        // would blend the original glyphs back in at the border.
-        float cell = max(u.cell, 1.0);
-        float2 idx = floor(p / cell);
-        float n = hash12(idx * 1.37 + 91.0);
-        float3 base = src.sample(linClamp, clamp(u.safeSample / u.sourceSize, 0.0, 1.0), level(0.0)).rgb;
-        float3 synth = base * (0.74 + 0.30 * n);
-        float3 sampled = float3(0.0);
-        if (u.sampledMix > 0.0) {
-            float2 o = idx * cell;
-            for (int y = 0; y < 4; ++y) {
-                for (int x = 0; x < 4; ++x) {
-                    sampled += src.sample(linClamp, clamp((o + (float2(x, y) + 0.5) * (cell * 0.25)) / u.sourceSize, 0.0, 1.0), level(0.0)).rgb;
+struct SourceMask { float4 rect; float4 block; };
+kernel void pixelateMask(texture2d<float, access::read> source [[texture(0)]],
+                         texture2d<float, access::write> target [[texture(1)]],
+                         constant SourceMask *masks [[buffer(0)]],
+                         constant uint &count [[buffer(1)]],
+                         uint2 gid [[thread_position_in_grid]]) {
+    uint2 size(source.get_width(), source.get_height());
+    if (any(gid >= size)) return;
+    float2 p = float2(gid);
+    float4 color = source.read(gid);
+    for (uint i = 0; i < count; ++i) {
+        float4 r = masks[i].rect;
+        if (all(p >= r.xy) && all(p < r.xy + r.zw)) {
+            float block = max(masks[i].block.x, 8.0);
+            float2 origin = floor(p / block) * block;
+            color = float4(0.0);
+            for (uint y = 0; y < 4; ++y) {
+                for (uint x = 0; x < 4; ++x) {
+                    float2 point = origin + (float2(x, y) + 0.5) * block / 4.0;
+                    color += source.read(uint2(clamp(point, float2(0), float2(size - 1))));
                 }
             }
-            sampled *= (1.0 / 16.0);
-            if (u.levels > 0.0) {
-                // Quantize luminance, not each channel: per-channel posterize
-                // shifts hue and turns skin/paper into coloured confetti.
-                float l = dot(sampled, float3(0.2126, 0.7152, 0.0722));
-                float q = floor(l * u.levels + 0.5) / u.levels;
-                sampled *= q / max(l, 1e-4);
-            }
+            color *= 1.0 / 16.0;
+            break;
         }
-        rgb = clamp(mix(synth, sampled, u.sampledMix), 0.0, 1.0);
-        return float4(rgb, 1.0);
-    } else if (u.mode == 1) {
-        float pitch = max(u.block, 24.0);
-        float2 tile = floor(p / pitch) * pitch + 0.5 * pitch;
-        rgb = src.sample(linClamp, clamp(tile / u.sourceSize, 0.0, 1.0), level(0.0)).rgb;
-    } else {
-        // Visual obfuscation only. Blur is not presented as secure redaction.
-        float2 r = float2(max(u.block, 16.0)) / u.sourceSize;
-        rgb = float3(0);
-        for (int y = -2; y <= 2; ++y) {
-            for (int x = -2; x <= 2; ++x) {
-                rgb += src.sample(linClamp, clamp(sourceUV + float2(x, y) * r, 0.0, 1.0), level(0.0)).rgb;
-            }
-        }
-        rgb *= 1.0 / 25.0;
     }
-    return float4(rgb * alpha, alpha);
+    target.write(color, gid);
 }
 
 // ---- Cursor sprite (premultiplied atlas, mip-mapped)

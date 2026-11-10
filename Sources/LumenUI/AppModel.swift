@@ -41,10 +41,11 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         case .recording:
             let t = String(format: "%d:%02d", Int(stats?.elapsed ?? 0) / 60, Int(stats?.elapsed ?? 0) % 60)
             return (paused ? "Paused " : "Recording ") + t
-        case .finishing: return "Saving recording"
+        case .finishing: return "Saving recording \(Int(finalizeProgress * 100))%"
         }
     }
 
+    public var finalizeProgress = 0.0
     public var phase = Phase.idle
     /// Mirrors `RecordingSession.isPaused` for the HUD.
     public var paused = false
@@ -444,6 +445,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         error = nil
         guard Permissions.screen else { Permissions.requestScreen(); error = "Screen Recording is off. Grant it, then relaunch Lumen."; return }
         guard Permissions.input else { Permissions.requestInput(); error = "Input Monitoring is off. Grant it, then relaunch Lumen."; return }
+        if !Permissions.accessibility { Permissions.requestAccessibility() }
         if mic || webcam { await Permissions.requestMedia() }
         var cfg: RecordingConfig
         switch kind {
@@ -495,7 +497,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             }
             try await prepareTask.value
             await session.markCountdown()
-            if let hub = livePreviewController?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }) }
+            if let hub = livePreviewController?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }, focus: { hub.focus($0, $1) }) }
             try await session.start()
             phase = .recording
             hud?.showControls()
@@ -506,13 +508,17 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     }
 
     func stop() async {
+        guard phase == .recording else { return }
+        finalizeProgress = 0
         phase = .finishing; poll?.cancel()
         // HUD dismisses within 200 ms of the click (spec §3.2): close it now,
         // finalize in the background with "Finishing…" progress in Library.
         hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
         do {
             try await session.stopCapture()
-            let b = try await session.finalize()
+            let b = try await session.finalize { [weak self] value in
+                Task { @MainActor [weak self] in self?.finalizeProgress = value }
+            }
             paused = false
             phase = .idle; refresh()
             let finished = b.url

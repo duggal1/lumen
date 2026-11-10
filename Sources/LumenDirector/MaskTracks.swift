@@ -48,30 +48,26 @@ enum MaskTracks {
     /// Covers show-password toggles where OCR alone sees plain text.
     static func secureFields(events: [InputEvent], ax: [AXFrame], plan: PrivacyPlan, src: SourceInfo) -> [Mask] {
         guard plan.enabled, plan.autoDetect, !ax.isEmpty else { return [] }
-        let downs = events.filter { $0.kind == .down }.sorted { $0.t < $1.t }
-        let keys = events.filter { $0.kind == .keyDown }.sorted { $0.t < $1.t }
-        guard let srcDuration = src.duration > 0 ? src.duration : nil else { return [] }
-        var out: [Mask] = []
-        for (di, down) in downs.enumerated() {
-            guard down.axFrameIndex > 0, Int(down.axFrameIndex) <= ax.count else { continue }
-            let f = ax[Int(down.axFrameIndex) - 1]
-            guard f.secure, f.w > 1, f.h > 1 else { continue }
-            let nextDown = di + 1 < downs.count ? downs[di + 1].t : srcDuration
-            let burstKeys = keys.filter { $0.t >= down.t && $0.t <= nextDown }
-            let lastKey = burstKeys.map(\.t).max() ?? down.t
-            let start = max(down.t - lead, 0), end = min(lastKey + tail, srcDuration)
-            guard end > start else { continue }
-            let label = (f.label ?? "").lowercased()
-            let cat = label.contains("card") || label.contains("cvc") || label.contains("cc") ? "card" : "password"
-            let xSeed = UInt64(max(f.x * 10_000, 0).rounded())
-            let ySeed = UInt64(max(f.y * 10_000, 0).rounded())
-            let id = stableUUID(UInt64(max(down.t * 100, 0).rounded()) ^ xSeed, ySeed)
-            let dec = plan.decisions[id.uuidString]
-            if dec == false { continue }
-            out.append(Mask(id: id, start: start, end: end, mode: plan.mode,
-                            keys: [MaskKey(t: down.t, x: f.x, y: f.y, w: f.w, h: f.h)],
-                            origin: .auto, approved: dec != false, category: cat, padding: plan.padding))
+        let focused = events.filter { ($0.kind == .down || $0.kind == .keyDown) && $0.axFrameIndex > 0 }
+            .sorted { $0.t < $1.t }
+        guard src.duration > 0 else { return [] }
+        var detections: [OCRDetection] = ax.compactMap { field in
+            guard field.secure, let time = field.sampledAt, field.w > 1, field.h > 1 else { return nil }
+            return OCRDetection(t: time, x: field.x / Double(src.width), y: field.y / Double(src.height),
+                w: field.w / Double(src.width), h: field.h / Double(src.height), category: .envSecret,
+                hash: fnv1a64("\(field.x):\(field.y):\(field.w):\(field.h)"), confidence: 1)
         }
+        for event in focused {
+            guard Int(event.axFrameIndex) <= ax.count else { continue }
+            let field = ax[Int(event.axFrameIndex) - 1]
+            guard field.secure, field.w > 1, field.h > 1 else { continue }
+            let hash = fnv1a64("\(field.x):\(field.y):\(field.w):\(field.h)")
+            detections.append(OCRDetection(t: event.t, x: field.x / Double(src.width), y: field.y / Double(src.height),
+                w: field.w / Double(src.width), h: field.h / Double(src.height), category: .envSecret,
+                hash: hash, confidence: 1))
+        }
+        var out = build(detections, plan: plan, src: src)
+        for i in out.indices { out[i].approved = plan.decisions[out[i].id.uuidString] != false }
         return out.sorted { ($0.start, $0.id.uuidString) < ($1.start, $1.id.uuidString) }
     }
     private static func same(_ a: MaskKey, _ b: MaskKey) -> Bool {

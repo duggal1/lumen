@@ -33,6 +33,8 @@ enum AnalysisError: Error, LocalizedError, Sendable {
 }
 
 public struct AnalysisRequest: Sendable {
+    public var sourceDuration = 0.0
+    public var privacyProgress: @Sendable (Double) -> Void = { _ in }
     public var screen: URL
     public var webcam: URL?
     public var mic: URL?
@@ -136,12 +138,13 @@ public actor AnalysisService {
             return ([], "Automatic text scanning is disabled by LUMEN_NO_OCR.")
         }
         let params = OCRParameters(salt: r.projectSalt, patterns: r.privacy.customPatterns,
-                                   entropyThreshold: r.privacy.entropyThreshold, fps: 2)
-        let (detections, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "sensitive-text", version: 1,
+                                   entropyThreshold: r.privacy.entropyThreshold, fps: 4)
+        let (detections, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "sensitive-text", version: 5,
                                                parameters: params) {
             try await OCRAnalyzer.analyze(url: r.screen, projectSalt: r.projectSalt, customPatterns: r.privacy.customPatterns,
-                                          entropyThreshold: r.privacy.entropyThreshold)
+                                          entropyThreshold: r.privacy.entropyThreshold, duration: r.sourceDuration, progress: r.privacyProgress)
         }
+        if error == nil { r.privacyProgress(1) }
         return (detections ?? [], error)
     }
 
@@ -176,13 +179,10 @@ public actor AnalysisService {
         guard r.includeTyping, !r.events.isEmpty else { return ([], nil) }
         let bursts = r.events.typingBursts()
         guard !bursts.isEmpty else { return ([], nil) }
-        let clicks = r.events.filter { $0.kind == .down && $0.button == 0 }
-        let anchors: [SIMD2<Double>?] = bursts.map { b in
-            clicks.last(where: { $0.t <= b.t0 && b.t0 - $0.t < 20 }).map { SIMD2(Double($0.x), Double($0.y)) }
-        }
+        let anchors: [SIMD2<Double>?] = bursts.map { _ in nil }
         let params = TypingParameters(bursts: bursts.map { [$0.t0, $0.t1] },
                                       anchors: anchors.map { $0.map { [$0.x, $0.y] } ?? [-1, -1] })
-        let (traces, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "typing", version: 2,
+        let (traces, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "typing", version: 3,
                                            parameters: params) {
             try await TypingAnalyzer.analyze(url: r.screen, bursts: bursts, anchors: anchors)
         }

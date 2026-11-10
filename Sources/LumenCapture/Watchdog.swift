@@ -85,19 +85,23 @@ public final class MainThreadWatchdog: @unchecked Sendable {
 
     private func loop() {
         while running.withLock({ $0 }) {
-            let enqueued = HostClock.now()
-            let current = stage.withLock { $0 }
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                let ran = HostClock.now()
-                let latency = (ran - enqueued) * 1000
-                if latency > 50 {
-                    self.record(latencyMs: latency, stage: current)
-                    os_log("main stall %.1f ms in stage %@", log: .default, type: .fault, latency, current)
-                    self.flush()
-                }
+            let enqueued = HostClock.now(), current = currentStage
+            let reply = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async { reply.signal() }
+            if reply.wait(timeout: .now() + 0.25) == .timedOut {
+                record(latencyMs: (HostClock.now() - enqueued) * 1000, stage: current)
+                try? FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let stack = outputURL.deletingLastPathComponent().appendingPathComponent("stall-\(Int(Date().timeIntervalSince1970)).txt")
+                let sample = Process()
+                sample.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+                sample.arguments = [String(ProcessInfo.processInfo.processIdentifier), "1", "1", "-file", stack.path]
+                sample.standardOutput = FileHandle.nullDevice; sample.standardError = FileHandle.nullDevice
+                try? sample.run()
+                os_log("main stalled in %@; stack sample: %@", log: .default, type: .fault, current, stack.path)
+                flush()
+                while running.withLock({ $0 }), reply.wait(timeout: .now() + 0.05) == .timedOut {}
             }
-            Thread.sleep(forTimeInterval: 0.010)
+            Thread.sleep(forTimeInterval: 0.05)
         }
     }
 }

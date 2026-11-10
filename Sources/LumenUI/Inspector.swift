@@ -785,15 +785,11 @@ struct Inspector: View {
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Detect sensitive data", on: m.bind(\.overlays.privacy.autoDetect))
-                Row(label: "Mask style") {
-                    LDropdown(sel: m.bind(\.overlays.privacy.mode), options: MaskMode.allCases.map {
-                        ($0, $0.rawValue.capitalized, Self.maskModeIcon($0))
-                    }).frame(width: 130)
-                }
+                SliderRow(label: "Pixel size", v: m.bind(\.overlays.privacy.pixelSize), range: 8...64, fmt: { "\(Int($0)) px" })
                 SliderRow(label: "Padding", v: m.bind(\.overlays.privacy.padding), range: 0...24, fmt: { "\(Int($0)) px" })
                 SliderRow(label: "Sensitivity", v: m.bind(\.overlays.privacy.entropyThreshold), range: 3...4.5, fmt: { String(format: "%.1f", $0) })
                 if m.privacyScanning {
-                    Text("Scanning for sensitive text. Export is disabled until the scan is applied.")
+                    Text("Scanning sensitive text: \(Int(m.privacyScanProgress * 100))%. Export waits for the masks to be applied.")
                         .font(AppType.caption).foregroundStyle(Tok.text2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if let error = m.privacyScanError {
@@ -820,18 +816,6 @@ struct Inspector: View {
                 ForEach(m.timeline.overlays.masks.filter { $0.origin == .manual }) { mask in
                     Row(label: String(format: "%.1fs", mask.start)) {
                         HStack(spacing: Space.s2) {
-                            LDropdown(
-                                sel: Binding(
-                                    get: { m.timeline.overlays.masks.first(where: { $0.id == mask.id })?.mode ?? mask.mode },
-                                    set: { value in
-                                        m.edit { tl in
-                                            if let i = tl.overlays.masks.firstIndex(where: { $0.id == mask.id }) {
-                                                tl.overlays.masks[i].mode = value
-                                            }
-                                        }
-                                    }),
-                                options: MaskMode.allCases.map { ($0, $0.rawValue.capitalized, "eye.slash") })
-                                .frame(width: 104)
                             LButton(title: "Remove", icon: "trash", kind: .quiet) {
                                 m.edit { $0.overlays.masks.removeAll { $0.id == mask.id } }
                             }

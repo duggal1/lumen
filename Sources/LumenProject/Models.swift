@@ -205,7 +205,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
     public var minScale = 1.25
     public var minTrigger = 1.25
     public var leadIn = 0.6, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
-    public var omegaPan = 7.0, omegaZoom = 6.0, lookahead = 0.20, deadZone = 0.28, followDelay = 0.12
+    public var omegaPan = 5.0, omegaZoom = 7.0, lookahead = 0.20, deadZone = 0.28, followDelay = 0.12
     // Zoom v3: auto range 1.25-2.6 around base 1.8; 3.5 max stays for manual.
     public var baseScale = 1.8
     public var autoMaxScale = 2.6
@@ -646,6 +646,12 @@ public struct ProjectFile: Codable, Sendable {
     public init(meta: ProjectMeta, timeline: Timeline) { self.meta = meta; self.timeline = timeline }
 }
 public struct AXFrame: Codable, Sendable {
+    public struct Rect: Codable, Sendable {
+        public var x: Double, y: Double, w: Double, h: Double
+        public init(x: Double, y: Double, w: Double, h: Double) { self.x = x; self.y = y; self.w = w; self.h = h }
+    }
+    public var caret: Rect? = nil
+    public var sampledAt: Double? = nil
     public var x: Double
     public var y: Double
     public var w: Double
@@ -662,13 +668,15 @@ public struct AXFrame: Codable, Sendable {
         self.secure = secure
         self.label = label
     }
-    enum CodingKeys: String, CodingKey { case x, y, w, h, secure, label }
+    enum CodingKeys: String, CodingKey { case x, y, w, h, secure, label, caret, sampledAt }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         x = (try? c.decodeIfPresent(Double.self, forKey: .x)) ?? 0
         y = (try? c.decodeIfPresent(Double.self, forKey: .y)) ?? 0
         w = (try? c.decodeIfPresent(Double.self, forKey: .w)) ?? 0
         h = (try? c.decodeIfPresent(Double.self, forKey: .h)) ?? 0
+        caret = try c.decodeIfPresent(Rect.self, forKey: .caret)
+        sampledAt = try c.decodeIfPresent(Double.self, forKey: .sampledAt)
         secure = c.opt(.secure, false); label = (try? c.decodeIfPresent(String.self, forKey: .label)) ?? nil
     }
 }

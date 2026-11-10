@@ -4,14 +4,11 @@ import LumenProject
 
 enum CameraSolver {
     private struct Shot { var on: Double, off: Double, lz: Double, focus: Focus, ease: Double }
-    /// Two equal critically-damped springs in series (a cascade) = 4 equal
-    /// real poles. Monotonic (no overshoot), and 95 % arrival at ω·t ≈ 7.75.
-    private struct Cascade {
-        var a: Double, av = 0.0, b: Double, bv = 0.0
-        init(_ x: Double) { a = x; b = x }
+    private struct Spring {
+        var x: Double, v = 0.0
+        init(_ x: Double) { self.x = x }
         mutating func step(to target: Double, omega: Double, dt: Double) {
-            springStep(&a, &av, target: target, omega: omega, dt: dt)
-            springStep(&b, &bv, target: a, omega: omega, dt: dt)
+            springStep(&x, &v, target: target, omega: omega, dt: dt)
         }
     }
 
@@ -35,16 +32,17 @@ enum CameraSolver {
 
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams, src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
         _ = loop
-        let n = max(Int(outDur * gridRate) + 1, 2), dt = 1 / gridRate
-        var tr = CameraTrack(count: n)
-        let omegaIn = 7.75 / max(p.leadIn, 0.2), omegaOut = omegaIn * 0.62
+        let rate = 240.0
+        let n = max(Int(outDur * rate) + 1, 2), dt = 1 / rate
+        var tr = CameraTrack(count: n, rate: rate)
+        let omegaIn = max(p.omegaZoom, 1), omegaOut = omegaIn * 0.8
 
         // Output-time shots. Auto shots activate `leadIn` early; manual shots
         // exactly where the user put them.
         let shots: [Shot] = zoom.compactMap { z in
             let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
             guard b - a > 0.1, z.scale > 1.001, a < outDur else { return nil }
-            return Shot(on: a - (z.origin == .auto ? p.leadIn : 0), off: b, lz: log(min(z.scale, 16)),
+            return Shot(on: a - (z.origin == .auto ? 0.25 : 0), off: b, lz: log(min(z.scale, 16)),
                         focus: z.focus, ease: z.easing?.omegaScale ?? 1)
         }.sorted { $0.on < $1.on }
 
@@ -53,8 +51,8 @@ enum CameraSolver {
         if shots.contains(where: { if case .follow = $0.focus { true } else { false } }) {
             let halfZone = clamp(p.deadZone, 0.05, 0.45) / 2.0
             let followOmega = 1 / max(clamp(p.followDelay, 0, 0.5), 0.045)
-            let rawX = (0..<n).map { Double(cursor.x[min($0, cursor.x.count - 1)]) / src.x }
-            let rawY = (0..<n).map { Double(cursor.y[min($0, cursor.y.count - 1)]) / src.y }
+            let rawX = (0..<n).map { Double(cursor.x[min(Int(Double($0) * gridRate / rate), cursor.x.count - 1)]) / src.x }
+            let rawY = (0..<n).map { Double(cursor.y[min(Int(Double($0) * gridRate / rate), cursor.y.count - 1)]) / src.y }
             fx = zeroPhaseSmooth(centredPlay(rawX, halfZone: halfZone), omega: followOmega, dt: dt)
             fy = zeroPhaseSmooth(centredPlay(rawY, halfZone: halfZone), omega: followOmega, dt: dt)
         }
@@ -70,7 +68,7 @@ enum CameraSolver {
             return SIMD2(clamp(c.x, h, 1 - h), clamp(c.y, h, 1 - h))      // pre-clamped to the TARGET view
         }
 
-        var cz = Cascade(0), cx = Cascade(0.5), cy = Cascade(0.5)
+        var cz = Spring(0), cx = Spring(0.5), cy = Spring(0.5)
         var si = -1, omega = omegaIn, lastLz = 0.0
         var X = [Double](repeating: 0.5, count: n), Y = X, Z = [Double](repeating: 0, count: n)
         for i in 0..<n {
@@ -84,14 +82,14 @@ enum CameraSolver {
             var tlz = 0.0, tc = SIMD2(0.5, 0.5)
             if si >= 0, t < shots[si].off { tlz = shots[si].lz; tc = targetCenter(shots[si], i) }
             else if lastLz != 0 { omega = omegaOut; lastLz = 0 }          // rest: zoom back out, slowly
-            cx.step(to: tc.x, omega: omega, dt: dt); cy.step(to: tc.y, omega: omega, dt: dt); cz.step(to: tlz, omega: omega, dt: dt)
-            let h = 0.5 / exp(cz.b)
-            X[i] = clamp(cx.b, h, 1 - h); Y[i] = clamp(cy.b, h, 1 - h); Z[i] = cz.b   // safety clamp only
+            cx.step(to: tc.x, omega: max(p.omegaPan, 1), dt: dt); cy.step(to: tc.y, omega: max(p.omegaPan, 1), dt: dt); cz.step(to: tlz, omega: omega, dt: dt)
+            let h = 0.5 / exp(cz.x)
+            X[i] = clamp(cx.x, h, 1 - h); Y[i] = clamp(cy.x, h, 1 - h); Z[i] = cz.x   // safety clamp only
         }
         func deriv(_ a: [Double]) -> [Float] {
             var v = [Float](repeating: 0, count: a.count)
             if a.count > 2 {
-                for i in 1..<(a.count - 1) { v[i] = Float((a[i + 1] - a[i - 1]) * gridRate / 2) }
+                for i in 1..<(a.count - 1) { v[i] = Float((a[i + 1] - a[i - 1]) * rate / 2) }
                 v[0] = v[1]; v[a.count - 1] = v[a.count - 2]
             }
             return v

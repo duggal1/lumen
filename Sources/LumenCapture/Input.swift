@@ -61,10 +61,10 @@ extension StockCursor {
         }
         return id
     }
-    public func writeJSON(to url: URL) {
+    public func encodedSnapshot() -> Data? {
         struct C: Codable { var id: UInt16; var png: Data; var hotX: Double; var hotY: Double }
         let arr = customs.map { C(id: $0.id, png: $0.png, hotX: $0.hotX, hotY: $0.hotY) }
-        try? JSONEncoder().encode(arr).write(to: url)
+        return try? JSONEncoder().encode(arr)
     }
 }
 
@@ -113,14 +113,19 @@ public enum ClockCalibration {
 /// Listen-only CGEventTap on its own high-QoS thread. Coordinates converted to source pixels once, here.
 public final class InputRecorder: @unchecked Sendable {
     private let ring = EventRing(capacity: 1 << 16)
+    private let liveFocusHook = OSAllocatedUnfairLock<(@Sendable (InputEvent, AXFrame) -> Void)?>(initialState: nil)
+    public func setLiveFocusHook(_ hook: (@Sendable (InputEvent, AXFrame) -> Void)?) { liveFocusHook.withLock { $0 = hook } }
     private let liveEventHook = OSAllocatedUnfairLock<(@Sendable (InputEvent) -> Void)?>(initialState: nil)
     public func setLiveEventHook(_ hook: (@Sendable (InputEvent) -> Void)?) { liveEventHook.withLock { $0 = hook } }
     private let url: URL, origin: CGPoint, scale: Double, clock: RecordingClock, axURL: URL
     private let shape = OSAllocatedUnfairLock<UInt16>(initialState: 0)
     private let loop = OSAllocatedUnfairLock<CFRunLoop?>(uncheckedState: nil)
     private let axFrames = OSAllocatedUnfairLock<[AXFrame]>(initialState: [])
+    private let focusQuery = OSAllocatedUnfairLock(initialState: (last: -Double.infinity, index: UInt32(0), pending: false))
     private let axTrusted = OSAllocatedUnfairLock(initialState: false)
     private let axQ = DispatchQueue(label: "lumen.ax", qos: .utility)
+    private var axTimer: DispatchSourceTimer?
+    private var enhancedApps: Set<pid_t> = []
     private var tap: CFMachPort?
     private var fh: FileHandle?
     private var timer: DispatchSourceTimer?
@@ -157,6 +162,7 @@ public final class InputRecorder: @unchecked Sendable {
         }
         th.qualityOfService = .userInteractive; th.start()
         startFlushTimer()
+        startAXTimer()
         Task { @MainActor [weak self] in           // cursor shape poll @ 10 Hz (was 30 Hz: per-tick main churn)
             while let self, self.running.withLock({ $0 }) {
                 let cursorShape = self.catalog.classify()
@@ -178,6 +184,7 @@ public final class InputRecorder: @unchecked Sendable {
         if let t = tap { CGEvent.tapEnable(tap: t, enable: false) }
         loop.withLock { if let l = $0 { CFRunLoopStop(l) } }
         timer?.cancel()
+        axTimer?.cancel(); axTimer = nil
         await withCheckedContinuation { continuation in
             writeQ.async { [self] in
                 flush(); try? fh?.close()
@@ -187,8 +194,11 @@ public final class InputRecorder: @unchecked Sendable {
         await withCheckedContinuation { continuation in
             axQ.async { continuation.resume() }
         }
-        catalog.writeJSON(to: url.deletingLastPathComponent().appendingPathComponent("cursors.json"))
-        if let d = try? JSONEncoder().encode(axFrames.withLock { $0 }) { try? d.write(to: axURL) }
+        let cursors = catalog.encodedSnapshot()
+        await Task.detached(priority: .userInitiated) { [self] in
+            try? cursors?.write(to: url.deletingLastPathComponent().appendingPathComponent("cursors.json"), options: .atomic)
+            if let d = try? JSONEncoder().encode(axFrames.withLock({ $0 })) { try? d.write(to: axURL, options: .atomic) }
+        }.value
     }
 
     private func flush() {
@@ -224,13 +234,13 @@ public final class InputRecorder: @unchecked Sendable {
             let fixed = e.getIntegerValueField(CGEventField(rawValue: 93)!)   // FixedPtDeltaAxis1, 1/16 line
             ev.scrollDelta = lines != 0 ? Float(lines) : Float(fixed) / 16.0
         case .keyDown:
-            guard e.getIntegerValueField(.keyboardEventAutorepeat) == 0 else { return }
             ev.kind = .keyDown; ev.keyCode = UInt16(truncatingIfNeeded: e.getIntegerValueField(.keyboardEventKeycode))   // key codes only, never characters
         case .keyUp: ev.kind = .keyUp; ev.keyCode = UInt16(truncatingIfNeeded: e.getIntegerValueField(.keyboardEventKeycode))
         case .flagsChanged: ev.kind = .flagsChanged
         default: return
         }
-        liveEventHook.withLock { $0 }?(ev)
+        if type == .keyDown { ev.axFrameIndex = reserveFocus(event: ev) }
+        if type != .keyDown { liveEventHook.withLock { $0 }?(ev) }
         ring.push(ev)
     }
 
@@ -243,27 +253,125 @@ public final class InputRecorder: @unchecked Sendable {
         return UInt32(idx)
     }
 
+    private func reserveFocus(event: InputEvent) -> UInt32 {
+        guard axTrusted.withLock({ $0 }) else { return 0 }
+        let reservation = focusQuery.withLock { state -> (UInt32, Bool) in
+            if state.pending || event.t - state.last < 1.0 / 30 { return (state.index, false) }
+            state.last = event.t; state.pending = true
+            state.index = axFrames.withLock { $0.append(AXFrame(x: 0, y: 0, w: 0, h: 0)); return UInt32($0.count) }
+            return (state.index, true)
+        }
+        if reservation.1 {
+            axQ.asyncAfter(deadline: .now() + 0.015) { [self] in
+                defer { focusQuery.withLock { $0.pending = false } }
+                let system = AXUIElementCreateSystemWide()
+                AXUIElementSetMessagingTimeout(system, 0.05)
+                guard let frame = focusedFrame(system) else { return }
+                axFrames.withLock { $0[Int(reservation.0) - 1] = frame }
+                var focused = event
+                let caret = frame.caret
+                focused.x = Float(caret.map { $0.x + $0.w / 2 } ?? (frame.x + frame.w / 2))
+                focused.y = Float(caret.map { $0.y + $0.h / 2 } ?? (frame.y + frame.h / 2))
+                focused.axFrameIndex = reservation.0
+                if let hook = liveFocusHook.withLock({ $0 }) { hook(focused, frame) }
+                else { liveEventHook.withLock { $0 }?(focused) }
+            }
+        }
+        return reservation.0
+    }
+
+    private func focusedFrame(_ system: AXUIElement) -> AXFrame? {
+        if let value = attribute(system, kAXFocusedUIElementAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() {
+            let element = value as! AXUIElement
+            AXUIElementSetMessagingTimeout(element, 0.05)
+            if let result = frame(element) { return result }
+        }
+        guard let value = attribute(system, kAXFocusedApplicationAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        let app = value as! AXUIElement
+        AXUIElementSetMessagingTimeout(app, 0.05)
+        var pid: pid_t = 0
+        AXUIElementGetPid(app, &pid)
+        if enhancedApps.insert(pid).inserted {
+            AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        }
+        guard let focused = attribute(app, kAXFocusedUIElementAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
+        return frame(focused as! AXUIElement)
+    }
+
+    private func startAXTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: axQ)
+        timer.schedule(deadline: .now(), repeating: 0.5)
+        timer.setEventHandler { [weak self] in self?.sampleSecureFields() }
+        timer.resume(); axTimer = timer
+    }
+
+    private func sampleSecureFields() {
+        let trusted = AXIsProcessTrusted()
+        axTrusted.withLock { $0 = trusted }
+        guard trusted, running.withLock({ $0 }) else { return }
+        let system = AXUIElementCreateSystemWide(), now = HostClock.now()
+        AXUIElementSetMessagingTimeout(system, 0.03)
+        guard let value = attribute(system, kAXFocusedApplicationAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return }
+        let app = value as! AXUIElement
+        AXUIElementSetMessagingTimeout(app, 0.03)
+        guard let window = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(window) == AXUIElementGetTypeID() else { return }
+        var pending = [window as! AXUIElement], visited = 0
+        while let element = pending.popLast(), visited < 256, HostClock.now() - now < 0.12 {
+            visited += 1
+            AXUIElementSetMessagingTimeout(element, 0.03)
+            let labels = [kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, "AXPlaceholderValue"]
+                .compactMap { attribute(element, $0) as? String }.joined(separator: " ")
+            if labels.range(of: "secure|email|password|passcode|card|cvv|cvc|ssn", options: .regularExpression.union(.caseInsensitive)) != nil,
+               var field = frame(element), field.secure {
+                field.sampledAt = now
+                let snapshot = field
+                axFrames.withLock { $0.append(snapshot) }
+            }
+            if let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
+                pending.append(contentsOf: children.prefix(max(256 - visited - pending.count, 0)))
+            }
+        }
+    }
+
+    private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        return value
+    }
+
     private func queryAX(_ p: CGPoint) -> AXFrame? {
-        let sys = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(sys, 0.1)
-        var el: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(sys, Float(p.x), Float(p.y), &el) == .success, let el else { return nil }
-        var pv: CFTypeRef?, sv: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pv) == .success,
-              AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sv) == .success else { return nil }
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.05)
+        var element: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(system, Float(p.x), Float(p.y), &element) == .success,
+              let element else { return nil }
+        AXUIElementSetMessagingTimeout(element, 0.05)
+        return frame(element)
+    }
+
+    private func frame(_ element: AXUIElement) -> AXFrame? {
+        guard let pv = attribute(element, kAXPositionAttribute), let sv = attribute(element, kAXSizeAttribute),
+              CFGetTypeID(pv) == AXValueGetTypeID(), CFGetTypeID(sv) == AXValueGetTypeID() else { return nil }
         var pos = CGPoint.zero, size = CGSize.zero
-        guard AXValueGetValue(pv as! AXValue, .cgPoint, &pos), AXValueGetValue(sv as! AXValue, .cgSize, &size) else { return nil }
-        // Field semantics: secure role/subrole or a password/card label.
-        var role: String?, subrole: String?, title: String?
-        var rv: CFTypeRef?
-        if AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &rv) == .success, let rv { role = (rv as! NSString).utf8String.map { String(cString: $0) } }
-        if AXUIElementCopyAttributeValue(el, kAXSubroleAttribute as CFString, &rv) == .success, let rv { subrole = (rv as! NSString).utf8String.map { String(cString: $0) } }
-        if AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &rv) == .success, let rv { title = (rv as! NSString).utf8String.map { String(cString: $0) } }
-        let hay = "\(role ?? "") \(subrole ?? "") \(title ?? "")".lowercased()
-        let secure = hay.contains("secure") || hay.contains("password") || hay.contains("passwd") || hay.contains("card") || hay.contains("cc-") || hay.contains("cvc")
-        return AXFrame(x: (pos.x - origin.x) * scale, y: (pos.y - origin.y) * scale,
-                       w: size.width * scale, h: size.height * scale,
-                       secure: secure, label: title)
+        guard AXValueGetValue(pv as! AXValue, .cgPoint, &pos), AXValueGetValue(sv as! AXValue, .cgSize, &size),
+              size.width > 0, size.height > 0 else { return nil }
+        let names = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, "AXPlaceholderValue"]
+        let label = names.compactMap { attribute(element, $0) as? String }.joined(separator: " ")
+        let secure = label.range(of: "secure|email|password|passcode|card|cvv|cvc|ssn", options: .regularExpression.union(.caseInsensitive)) != nil
+        var result = AXFrame(x: (pos.x - origin.x) * scale, y: (pos.y - origin.y) * scale,
+                             w: size.width * scale, h: size.height * scale, secure: secure, label: label)
+        if let range = attribute(element, kAXSelectedTextRangeAttribute) {
+            var bounds: CFTypeRef?
+            if AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, range, &bounds) == .success,
+               let bounds, CFGetTypeID(bounds) == AXValueGetTypeID() {
+                var rect = CGRect.zero
+                if AXValueGetValue(bounds as! AXValue, .cgRect, &rect), rect.height > 0 {
+                    result.caret = AXFrame.Rect(x: (rect.minX - origin.x) * scale, y: (rect.minY - origin.y) * scale,
+                                               w: max(rect.width * scale, 1), h: rect.height * scale)
+                }
+            }
+        }
+        return result
     }
 }
-
