@@ -157,6 +157,13 @@ public enum SensitivePatterns {
             guard let re = try? Regex(pat) else { continue }
             for m in line.matches(of: re) { add(m.range, .custom) }
         }
+        for pattern in ["[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}", "[•●]{4,}"] {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+                for match in regex.matches(in: line, range: NSRange(line.startIndex..., in: line)) {
+                    if let range = Range(match.range, in: line) { add(range, pattern.contains("@") ? .email : .envSecret) }
+                }
+            }
+        }
         for h in numberHits(line) { add(h.range, h.category) }
 
         var prevKey = false
