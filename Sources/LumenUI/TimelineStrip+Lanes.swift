@@ -153,7 +153,7 @@ extension TimelineStrip {
                 }
             }
             drawBase(c, size, lat, dust: !tl.clips.isEmpty, holes: runs.map(\.hole))
-            if tl.clips.isEmpty { drawEmpty(c, "No clips. Import a clip or split at the playhead.") }
+            if tl.clips.isEmpty { drawEmpty(c, "No imported clips. Your recording is on the recording lane.") }
             for r in runs where !r.selected { drawRun(c, lat, r) }
             for r in runs where r.selected { drawRun(c, lat, r) }
         }
