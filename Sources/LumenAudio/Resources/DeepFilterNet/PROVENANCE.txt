@@ -1,0 +1,6 @@
+DeepFilterNet 0.5.6, pretrained DeepFilterNet3, upstream Apple Silicon release.
+Source: https://github.com/Rikorose/DeepFilterNet/tree/v0.5.6
+Artifact: https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/deep-filter-0.5.6-aarch64-apple-darwin
+SHA256: 4601e7f4e4c03e59a4c5b5000216ef3add3e808799cfccd95e14e83ea4611081
+License selected: MIT (included). Model weights are compiled into the executable.
+Native system dependencies only: libSystem and libiconv. No Python, network or model downloads at runtime.

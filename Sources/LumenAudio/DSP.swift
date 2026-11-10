@@ -64,12 +64,19 @@ public enum Loudness {
             taps[ph][k] = Float(s * (0.5 + 0.5 * cos(Double.pi * x / 6)))
         } }
         var peak: Float = 0
-        for c in ch {
-            let n = c.count; var i = 6
-            while i < n - 7 {
-                let a = abs(c[i]); peak = max(peak, a)
-                if a > 0.3 { for ph in 1..<4 { var y: Float = 0; for k in 0..<12 { y += c[i + k - 5] * taps[ph][k] }; peak = max(peak, abs(y)) } }
-                i += 1
+        for channel in ch {
+            for sample in channel { peak = max(peak, abs(sample)) }
+            for i in channel.indices {
+                let lower = max(i - 5, 0), upper = min(i + 6, channel.count - 1)
+                guard channel[lower...upper].contains(where: { abs($0) > 0.3 }) else { continue }
+                for phase in 1..<4 {
+                    var value: Float = 0
+                    for k in 0..<12 {
+                        let index = i + k - 5
+                        if channel.indices.contains(index) { value += channel[index] * taps[phase][k] }
+                    }
+                    peak = max(peak, abs(value))
+                }
             }
         }
         return 20 * log10(Double(max(peak, 1e-9)))
@@ -186,7 +193,7 @@ public enum VAD {
 
 public protocol Denoiser: Sendable { func process(_ x: [Float]) -> [Float] }
 
-/// Fallback when RNNoise isn't vendored: a downward expander driven by 10 ms RMS against a percentile noise floor.
+/// Standalone downward expander for diagnostics; the microphone chain uses pretrained engines.
 public struct SpectralGate: Denoiser {
     public init() {}
     public func process(_ x: [Float]) -> [Float] {
@@ -207,47 +214,3 @@ public struct SpectralGate: Denoiser {
         return out
     }
 }
-
-#if canImport(CRNNoise)
-import CRNNoise
-public struct RNNoiseDenoiser: Denoiser {
-    public init() {}
-    /// RNNoise algorithmic latency in samples at 48 kHz (one 480-sample frame).
-    static let latencySamples = 480
-    public func process(_ x: [Float]) -> [Float] {
-        guard let st = rnnoise_create(nil) else { return x }
-        defer { rnnoise_destroy(st) }
-        var out = x, inb = [Float](repeating: 0, count: 480), ob = inb, i = 0
-        while i + 480 <= x.count {
-            for k in 0..<480 { inb[k] = x[i + k] * 32768 }
-            _ = rnnoise_process_frame(st, &ob, &inb)
-            for k in 0..<480 { out[i + k] = ob[k] / 32768 }
-            i += 480
-        }
-        // Flush final partial frame with zero padding (never drop the tail).
-        if i < x.count {
-            let tail = x.count - i
-            inb = [Float](repeating: 0, count: 480)
-            for k in 0..<tail { inb[k] = x[i + k] * 32768 }
-            _ = rnnoise_process_frame(st, &ob, &inb)
-            for k in 0..<tail { out[i + k] = ob[k] / 32768 }
-        }
-        // Compensate algorithmic latency: the denoised path is delayed by one
-        // frame. Shift left so voice stays aligned to the timeline; pad the
-        // end by repeating the last sample (dry path is primary, so a flat
-        // 10 ms tail is inaudible).
-        let lat = Self.latencySamples
-        if x.count > lat {
-            var aligned = [Float](repeating: 0, count: x.count)
-            for j in 0..<(x.count - lat) { aligned[j] = out[j + lat] }
-            let lastVal = out[x.count - 1]
-            for j in (x.count - lat)..<x.count { aligned[j] = lastVal }
-            out = aligned
-        }
-        return out
-    }
-}
-public let defaultDenoiser: any Denoiser = RNNoiseDenoiser()
-#else
-public let defaultDenoiser: any Denoiser = SpectralGate()
-#endif
