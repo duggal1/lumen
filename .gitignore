@@ -32,3 +32,4 @@ Resources/TypingPacks/
 # Built Verify binaries (from Tools/Verify/*.swift)
 Tools/Verify/drive
 Tools/Verify/locate
+Tools/Verify/lumen-shot
