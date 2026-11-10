@@ -4,13 +4,30 @@
 # remain tracked until deliberately migrated; ignore rules do not untrack them.
 App/public/assets/*.mp3
 App/public/assets/music/**/*.mp3
-validation/
 wallpapers/
 App/public/assets/wallpapers/macos/
 
-# /goal proof artifacts: local evidence only. Keep the directory itself.
-.proof/*
-!.proof/.gitkeep
+# --- Agent / proof scaffolding: local only, never in the public repo ---
+.opencode/
+.proof/
+goal.yaml
+GOAL.md
+AGENTS.md
+RULES.md
+GIT-SKILLS.md
+
+# --- Local verification artifacts (recordings, renders, screenshots) ---
+validation/
+repro-out/
+LUMEN-DESIGN-FIX screenshots/
+screenshot.png
+Docs/**/*.png
+
+# --- Bundled media that is not shipped with the app ---
+Resources/TypingPacks/
+
+# --- OS noise ---
+.DS_Store
 
 # Built Verify binaries (from Tools/Verify/*.swift)
 Tools/Verify/drive

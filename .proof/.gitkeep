@@ -1,3 +1,0 @@
-# Keep .proof/ tracked so tools/budget and tools/prove have a home.
-# Everything else in .proof/ (criteria.md, progress.md, budget.json,
-# per-run <ts>/ dirs) is local evidence and gitignored.
