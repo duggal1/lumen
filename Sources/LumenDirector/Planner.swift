@@ -174,12 +174,12 @@ enum ZoomPlanner {
                                       : min(0.42 * W / r.width, 0.30 * H / r.height)     // element ≈ 42 % of view width
             }
             s = clamp(s, p.minScale, min(p.autoMaxScale, p.maxScale))
-            if abs(log(s / prevScale)) < log(1.3) { s = prevScale }                      // no breathing between scenes
+            if abs(log(s / prevScale)) < log(1.3) { s = clamp(prevScale, p.minScale, min(p.autoMaxScale, p.maxScale)) }                      // no breathing between scenes
             return s
         }
         func focusCenter(_ i: Intent, _ s: Double) -> SIMD2<Double> {
             if i.kind == .typing { return SIMD2(i.x + 0.35 * half(s).x, i.y) }
-            if let r = i.rect, r.width < 1.6 * half(s).x { return SIMD2(r.midX, r.midY) }
+            // The actual click pixel is authoritative; AX bounds only inform scale.
             return SIMD2(i.x, i.y)
         }
 
