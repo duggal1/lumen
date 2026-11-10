@@ -79,6 +79,7 @@ public final class ProjectSession: @unchecked Sendable {
                                           || (timeline.webcam?.backdrop != nil && timeline.webcam?.backdrop != .original),
                                       includeTyping: !snapshot.events.isEmpty,
                                       events: snapshot.events)
+        request.sourceDuration = meta.source.duration
         request.privacyProgress = privacyProgress
         let result = await AnalysisService.shared.run(request)
         guard !Task.isCancelled else { return result }
