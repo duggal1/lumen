@@ -273,7 +273,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
 
 public enum MicMode: String, Codable, CaseIterable, Sendable {
     case standard, loud, podcast, off
-    public var targetLUFS: Double { switch self { case .standard: -14; case .loud: -12; case .podcast: -16; case .off: -14 } }
+    public var targetLUFS: Double { switch self { case .standard: -16; case .loud: -12; case .podcast: -16; case .off: -14 } }
 }
 public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
     public enum Role: String, Codable, Sendable { case mic, system, voiceover, music, sfx }
@@ -344,7 +344,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         if let o = override { return o }
         guard let l = legacy else { return nil }
         let oldDefault: Double = mode == .loud ? -12 : -16
-        if abs(l - oldDefault) < 1e-9 || abs(l - mode.targetLUFS) < 1e-9 { return nil }
+        if abs(l - oldDefault) < 1e-9 || abs(l - mode.targetLUFS) < 1e-9 || (mode == .standard && abs(l + 14) < 1e-9) { return nil }
         return l
     }
     public init(from d: Decoder) throws {
