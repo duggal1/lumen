@@ -64,12 +64,19 @@ public enum Loudness {
             taps[ph][k] = Float(s * (0.5 + 0.5 * cos(Double.pi * x / 6)))
         } }
         var peak: Float = 0
-        for c in ch {
-            let n = c.count; var i = 6
-            while i < n - 7 {
-                let a = abs(c[i]); peak = max(peak, a)
-                if a > 0.3 { for ph in 1..<4 { var y: Float = 0; for k in 0..<12 { y += c[i + k - 5] * taps[ph][k] }; peak = max(peak, abs(y)) } }
-                i += 1
+        for channel in ch {
+            for sample in channel { peak = max(peak, abs(sample)) }
+            for i in channel.indices {
+                let lower = max(i - 5, 0), upper = min(i + 6, channel.count - 1)
+                guard channel[lower...upper].contains(where: { abs($0) > 0.3 }) else { continue }
+                for phase in 1..<4 {
+                    var value: Float = 0
+                    for k in 0..<12 {
+                        let index = i + k - 5
+                        if channel.indices.contains(index) { value += channel[index] * taps[phase][k] }
+                    }
+                    peak = max(peak, abs(value))
+                }
             }
         }
         return 20 * log10(Double(max(peak, 1e-9)))
