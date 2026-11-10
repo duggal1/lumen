@@ -294,11 +294,15 @@ fragment float4 privacyFS(VO in [[stage_in]], constant PrivacyU &u [[buffer(0)]]
         // never swim. Identity (4) samples the region with luminance
         // quantization; secret (5) samples no region pixels at all — colors
         // come from the outside background plus per-cell hash.
+        //
+        // The region is snapped outward to whole cells on the CPU, so the
+        // quad's edge is a cell boundary. Return a hard alpha: a soft edge
+        // would blend the original glyphs back in at the border.
         float cell = max(u.cell, 1.0);
         float2 idx = floor(p / cell);
         float n = hash12(idx * 1.37 + 91.0);
         float3 base = src.sample(linClamp, clamp(u.safeSample / u.sourceSize, 0.0, 1.0), level(0.0)).rgb;
-        float3 synth = base * (0.82 + 0.36 * n);
+        float3 synth = base * (0.74 + 0.30 * n);
         float3 sampled = float3(0.0);
         if (u.sampledMix > 0.0) {
             float2 o = idx * cell;
@@ -308,9 +312,16 @@ fragment float4 privacyFS(VO in [[stage_in]], constant PrivacyU &u [[buffer(0)]]
                 }
             }
             sampled *= (1.0 / 16.0);
-            if (u.levels > 0.0) sampled = floor(sampled * u.levels + 0.5) / u.levels;
+            if (u.levels > 0.0) {
+                // Quantize luminance, not each channel: per-channel posterize
+                // shifts hue and turns skin/paper into coloured confetti.
+                float l = dot(sampled, float3(0.2126, 0.7152, 0.0722));
+                float q = floor(l * u.levels + 0.5) / u.levels;
+                sampled *= q / max(l, 1e-4);
+            }
         }
-        rgb = mix(synth, sampled, u.sampledMix) * 0.9;
+        rgb = clamp(mix(synth, sampled, u.sampledMix), 0.0, 1.0);
+        return float4(rgb, 1.0);
     } else if (u.mode == 1) {
         float pitch = max(u.block, 24.0);
         float2 tile = floor(p / pitch) * pitch + 0.5 * pitch;
@@ -364,35 +375,36 @@ fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]],
         float a = ink * pow(1.0 - p, 1.2) * u.color.a * rectMask(in.px, u.content, u.cr);
         return float4(mix(float3(1.0), u.color.rgb, 0.25) * a + float3(0.15) * glow * pow(1.0 - p, 2.0) * u.color.a, a);
     } else if (u.mode == 0) {
-        // Liquid-glass ripple: the expanding front bends the video beneath it,
-        // then a soft specular crest catches the light. No hard-edged ring.
-        float2 toCenter = in.px - u.center;
-        float dist = length(toCenter);
-        float2 dir = dist > 1e-3 ? toCenter / dist : float2(0.0);
-        float front = max(r, 1.0);
-        // Lens band: widest at the front, decaying with progress.
-        float x = (dist - front) / max(front * 0.30, 1.0);
-        float band = exp(-x * x) * pow(1.0 - p, 1.1);
-        float inside = smoothstep(front * 1.05, 0.0, dist);
-        float pinch = inside * 0.045 * pow(1.0 - p, 1.4);
-        // Map canvas px back to source px through the camera.
-        float2 view = u.srcSize / max(u.scale, 1.0);
-        float2 n = (in.px - u.content.xy) / max(u.content.zw, 1.0);
-        float2 centerN = (u.center - u.content.xy) / max(u.content.zw, 1.0);
-        float2 srcPx = u.cam - view * 0.5 + n * view;
-        float2 centerSrc = u.cam - view * 0.5 + centerN * view;
-        float srcPerCanvas = u.srcSize.x / max(u.content.z, 1.0);
-        float2 refractedPx = centerSrc + (srcPx - centerSrc) * (1.0 - pinch);
-        refractedPx += dir * (band * 13.0 * srcPerCanvas);
-        float3 refracted = src.sample(linClamp, clamp(refractedPx / u.srcSize, 0.0, 1.0), level(0.0)).rgb;
-        // Soft crest + glass bloom; tint is optional and never a flat fill.
-        float crest = exp(-pow((dist - front) / max(front * 0.11, 1.0), 2.0));
-        float bloom = smoothstep(front * 0.92, 0.0, dist) * 0.20;
-        float tintMix = clamp(u.color.a, 0.0, 1.0);
-        float3 glass = mix(refracted, float3(1.0), crest * 0.42);
-        glass = mix(glass, u.color.rgb, tintMix * crest * 0.35);
-        float a = clamp(crest * 0.72 + bloom, 0.0, 1.0) * pow(1.0 - p, 1.25) * rectMask(in.px, u.content, u.cr);
-        return float4(glass * a, a);
+        // Liquid-glass ripple. A travelling wave refracts the already-composited
+        // frame (masks included — never the raw source) with a soft specular
+        // crest, over a faint interior bloom that decays to zero at the front.
+        // No hard ring, no flat fill, no full-disc tint.
+        float x = 6.5 * p;
+        float e = 1.0 - exp(-x) * (1.0 + x);                 // 0 → ~0.99, no overshoot
+        float R = u.radius * (0.18 + 0.82 * e);
+        float fade = pow(1.0 - p, 1.25);
+        float2 d = in.px - u.center;
+        float r = max(length(d), 1e-3);
+        float2 dir = d / r;
+        // The band widens with the front so the wave stays soft as it grows.
+        float bandW = max(R * 0.34, 6.0);
+        float xr = (r - R) / bandW;
+        float band = exp(-xr * xr);
+        float wave = sin(5.2 * (r - R) / bandW);
+        float2 q = in.px - dir * (band * wave * 16.0 * fade);
+        float3 base = src.sample(linClamp, clamp(q / u.srcSize, 0.0, 1.0), level(0.0)).rgb;
+        float crest = exp(-pow((r - R) / (bandW * 0.55), 2.0));
+        float shade = exp(-pow((r - R - bandW * 0.75) / (bandW * 0.5), 2.0));
+        // A lens edge reads as glass only if it has both a highlight and a
+        // slight shade just behind it; a single bright ring reads as paint.
+        // No interior fill: the wave itself is the effect.
+        float3 col = base + float3(0.16) * (crest * 0.8) - float3(0.05) * shade;
+        col = mix(col, u.color.rgb, clamp(u.color.a, 0.0, 1.0) * band * 0.5);
+        // Where the wave displaces pixels, this pass must own them outright;
+        // where it does not, alpha falls to zero and the scene shows through.
+        float a = clamp(band * 2.0, 0.0, 1.0) * fade;
+        a *= rectMask(in.px, u.content, u.cr);
+        return float4(col * a, a);
     }
     float a = ink * pow(1.0 - p, 1.5) * u.color.a * rectMask(in.px, u.content, u.cr);
     return float4(u.color.rgb * a, a);
@@ -506,21 +518,43 @@ fragment float4 textSpriteFS(VO in [[stage_in]], constant TextSpriteU &u [[buffe
     return c * clamp(u.opacity, 0.0, 1.0);
 }
 
+// ---- Separable Gaussian: the caption card's frosted material.
+// Two passes (H then V) at quarter resolution. A true kernel, not a mip pick:
+// mip sampling box-filters and reads as blocky at card sizes.
+struct BlurU { float2 dir; float sigma; float pad0; float pad1; };
+fragment float4 gaussFS(VO in [[stage_in]], constant BlurU &u [[buffer(0)]],
+                        texture2d<float> src [[texture(0)]]) {
+    // Six symmetric taps spaced at half a sigma reach 3 sigma, which captures
+    // 99.7% of the kernel at a fixed cost. Weights are therefore fixed; only
+    // the spacing carries the radius, so any sigma costs the same.
+    float2 step = u.dir * max(u.sigma, 0.4) * 0.5;
+    float4 sum = src.sample(linClamp, in.q);
+    float wsum = 1.0;
+    for (int i = 1; i <= 6; ++i) {
+        float fi = float(i) * 0.5;
+        float w = exp(-0.5 * fi * fi);
+        sum += (src.sample(linClamp, in.q + step * float(i))
+              + src.sample(linClamp, in.q - step * float(i))) * w;
+        wsum += 2.0 * w;
+    }
+    return sum / wsum;
+}
+
 // ---- Caption card: a real frosted material, not a baked grey pill.
-// Samples a blurred copy of the already-composited scene, boosts saturation,
-// then adapts a dark tint until white text keeps >= 4.5:1 contrast. The CPU
-// draws this before the sharp text; preview and export share the shader.
-struct CaptionCardU { float4 rect; float4 tint; float2 canvas; float radius; float lod; };
+// Samples the Gaussian-blurred scene, boosts saturation, then adapts a dark
+// tint until white text keeps >= 4.5:1 contrast. The CPU draws this before the
+// sharp text; preview and export share the shader.
+struct CaptionCardU { float4 rect; float4 tint; float2 canvas; float radius; float opacity; };
 fragment float4 captionCardFS(VO in [[stage_in]], constant CaptionCardU &u [[buffer(0)]],
                               texture2d<float> scene [[texture(0)]]) {
-    float a = rectMask(in.px, u.rect, u.radius);
+    float a = rectMask(in.px, u.rect, u.radius) * clamp(u.opacity, 0.0, 1.0);
     if (a <= 0.001) return float4(0.0);
     float2 uv = in.px / u.canvas;
-    float3 b = scene.sample(linMip, uv, level(max(u.lod, 0.0))).rgb;
+    float3 b = scene.sample(linClamp, clamp(uv, 0.0, 1.0)).rgb;
     float luma = dot(b, float3(0.2126, 0.7152, 0.0722));
     // Frosted glass lifts colour before the dark tint lands on it.
-    float3 sat = clamp(mix(float3(luma), b, 1.65), 0.0, 1.0);
-    float3 face = mix(u.tint.rgb, sat, 0.10);
+    float3 sat = clamp(mix(float3(luma), b, 1.70), 0.0, 1.0);
+    float3 face = mix(u.tint.rgb, sat, 0.12);
     float faceL = dot(face, float3(0.2126, 0.7152, 0.0722));
     // Solve overlay alpha so the resulting backdrop luminance stays <= 0.14
     // (target 0.14, threshold 0.18 for 4.5:1 with white).
@@ -530,7 +564,7 @@ fragment float4 captionCardFS(VO in [[stage_in]], constant CaptionCardU &u [[buf
     float2 h = u.rect.zw * 0.5;
     float d = sdSquircle(in.px - (u.rect.xy + h), h, u.radius);
     float rim = exp(-pow(d / 1.6, 2.0)) * step(d, 0.0);
-    face = clamp(face + float3(0.10) * rim, 0.0, 1.0);
+    face = clamp(face + float3(0.09) * rim, 0.0, 1.0);
     // Composite the blurred backdrop and the tint inside the card, then make
     // the card opaque. A translucent card would reveal the sharp scene and
     // defeat the blur; only the rounded edge uses the mask alpha.

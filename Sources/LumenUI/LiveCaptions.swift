@@ -82,7 +82,7 @@ struct TranscriptTab: View {
                 }
             }
             .padding(20)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
+            .glassSurface()
             .environment(\.layoutDirection, .leftToRight)
             VStack(alignment: .leading, spacing: 12) {
                 Text(size.detail).font(AppType.caption).foregroundStyle(Tok.text2)
@@ -107,7 +107,7 @@ struct TranscriptTab: View {
                 if model.transcript != nil { TranscriptList(model: model) }
             }
             .padding(20)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Radius.card))
+            .glassSurface()
             .environment(\.layoutDirection, .leftToRight)
         }
         .environment(\.layoutDirection, .leftToRight)

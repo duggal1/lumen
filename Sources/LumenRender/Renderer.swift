@@ -97,8 +97,9 @@ private struct TextSpriteU {
     init(opacity: Float, blur: Float = 0) { self.opacity = opacity; self.blur = blur; pad0 = 0; pad1 = 0 }
 }
 private struct CaptionCardU {
-    var rect: SIMD4<Float>; var tint: SIMD4<Float>; var canvas: SIMD2<Float>; var radius: Float; var lod: Float
+    var rect: SIMD4<Float>; var tint: SIMD4<Float>; var canvas: SIMD2<Float>; var radius: Float; var opacity: Float
 }
+private struct BlurU { var dir: SIMD2<Float>; var sigma: Float; var pad0: Float; var pad1: Float }
 private struct LoupeU {
     var glass: SIMD4<Float>    // centre x,y, radius, border
     var source: SIMD4<Float>   // target x,y, width,height
@@ -172,6 +173,7 @@ public final class Renderer: @unchecked Sendable {
     private let pBackdrop, pContent, pCursor, pRing, pWeb, pPrivacy, pAccum: MTLRenderPipelineState
     private let pTextSprite: MTLRenderPipelineState
     private let pCaptionCard: MTLRenderPipelineState
+    private let pBlur: MTLRenderPipelineState
     private let pHighlight: MTLRenderPipelineState
     private let pLoupe: MTLRenderPipelineState
     private let textCache = TextOverlayCache()
@@ -186,6 +188,9 @@ public final class Renderer: @unchecked Sendable {
     /// is actually on screen. The caption pass may not sample the render
     /// target it is writing, so the scene is copied before the card is drawn.
     private var captionSrc: [MTLTexture?] = [nil, nil, nil]
+    /// Quarter-resolution ping-pong pair for the card's separable Gaussian.
+    private var blurA: [MTLTexture?] = [nil, nil, nil]
+    private var blurB: [MTLTexture?] = [nil, nil, nil]
     private var backdrop: MTLTexture?
     private var backdropKey: BackdropKey?
     private var backdropMipmapped = false
@@ -219,6 +224,7 @@ public final class Renderer: @unchecked Sendable {
         pAccum = try Self.pipe(d, l, "accumFS", f, 2)
         pTextSprite = try Self.pipe(d, l, "textSpriteFS", f, 1)
         pCaptionCard = try Self.pipe(d, l, "captionCardFS", f, 1)
+        pBlur = try Self.pipe(d, l, "gaussFS", f, 0)
         pHighlight = try Self.pipe(d, l, "highlightFS", f, 1)
         pLoupe = try Self.pipe(d, l, "loupeFS", f, 1)
         var c: CVMetalTextureCache?
@@ -328,7 +334,7 @@ public final class Renderer: @unchecked Sendable {
             return device.makeTexture(descriptor: d)!
         }
         work = (0..<3).map { _ in mk() }; accum = (0..<3).map { _ in mk() }
-        captionSrc = [nil, nil, nil]
+        captionSrc = [nil, nil, nil]; blurA = [nil, nil, nil]; blurB = [nil, nil, nil]
         // Allocate mip storage only when the user enables blur. Ordinary video
         // exports keep their previous memory footprint and renderer stages.
         backdrop = mk(mipmapped: backdropBlur)
@@ -565,34 +571,41 @@ public final class Renderer: @unchecked Sendable {
         pd.colorAttachments[0].texture = tex; pd.colorAttachments[0].loadAction = computeContent ? .load : .clear; pd.colorAttachments[0].storeAction = .store
         pd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return }
-        func draw() { e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
+        // After a scene copy the encoder is reopened; `enc` is the live one.
+        var enc = e
+        func draw() { enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
 
         // content (fragment fallback when the upscaler did not engage)
         if drawingContent, !computeContent {
-            e.setRenderPipelineState(pContent); quad(e, content, canvasF)
-            frag(e, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam), scale: Float(sc),
+            enc.setRenderPipelineState(pContent); quad(enc, content, canvasF)
+            frag(enc, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam), scale: Float(sc),
                              radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0,
                              tilt: st.cameraTilt, radii: SIMD4<Float>(g.radii)))
-            e.setFragmentTexture(src, index: 0); draw()
+            enc.setFragmentTexture(src, index: 0); draw()
         }
 
         // Every privacy mask is anchored to SOURCE pixels and transformed by
         // the exact same zoom camera as content. Mask before drawing cursor
         // and webcam, never by stamping a static canvas rectangle afterward.
         if drawingContent, !st.emphasis.masks.isEmpty {
-            e.setRenderPipelineState(pPrivacy)
+            enc.setRenderPipelineState(pPrivacy)
             let sourceSize = SIMD2<Float>(Float(g.src.x), Float(g.src.y))
             for mask in st.emphasis.masks {
-                guard let projected = PrivacyMaskGeometry.canvasRect(mask.rect, geometry: g,
-                                                                      camera: cam, scale: sc),
-                      projected.z > 0.2, projected.w > 0.2 else { continue }
-                let safe = PrivacyMaskGeometry.outsideSample(mask.rect, sourceSize: sourceSize)
                 // Mosaic is the default treatment: blur/pixelate request the
                 // same anchored-cell mosaic (they read as weak by hand).
                 let secretCats: Set<String> = ["card", "apiKey", "jwt", "privateKey", "envSecret", "entropy"]
                 let isSecret = secretCats.contains(mask.category ?? "")
                 let textH = Float(max(mask.rect.w, 1))
-                let cell: Float = max(8, textH * (isSecret ? 1.25 : 0.9))
+                let cell = PrivacyMaskGeometry.cell(textHeight: textH, isSecret: isSecret)
+                // The quad edge is a cell boundary: snap the treated region
+                // outward so no partial cell or unmasked sliver survives the
+                // camera projection. The grid itself stays anchored to source
+                // pixels in the shader, so cells never swim when content moves.
+                let region = PrivacyMaskGeometry.mosaicRegion(mask.rect, textHeight: textH, isSecret: isSecret)
+                guard let projected = PrivacyMaskGeometry.canvasRect(region, geometry: g,
+                                                                      camera: cam, scale: sc),
+                      projected.z > 0.2, projected.w > 0.2 else { continue }
+                let safe = PrivacyMaskGeometry.outsideSample(region, sourceSize: sourceSize)
                 let requested: Int32 = switch mask.mode {
                 case .solid: 2
                 case .blend: 3
@@ -601,13 +614,13 @@ public final class Renderer: @unchecked Sendable {
                 // If no region outside the mask exists, Blend falls back to
                 // an opaque solid instead of sampling protected pixels.
                 let mode: Int32 = requested == 3 && safe == nil ? 2 : requested
-                quad(e, projected, canvasF)
-                frag(e, PrivacyU(content: content, sourceRect: mask.rect,
+                quad(enc, projected, canvasF)
+                frag(enc, PrivacyU(content: content, sourceRect: region,
                                  sourceSize: sourceSize, safeSample: safe ?? .zero,
                                  radius: Float(g.radius), mode: mode, block: 20, pad: 0,
                                  cell: cell, sampledMix: isSecret ? 0 : 1,
                                  levels: isSecret ? 0 : 5))
-                e.setFragmentTexture(src, index: 0)
+                enc.setFragmentTexture(src, index: 0)
                 draw()
             }
         }
@@ -615,7 +628,7 @@ public final class Renderer: @unchecked Sendable {
         // Highlight geometry follows the exact source-pixel camera transform.
         // Dimmer is drawn AFTER privacy redaction and never resamples raw pixels.
         if drawingContent, !st.emphasis.highlights.isEmpty {
-            e.setRenderPipelineState(pHighlight)
+            enc.setRenderPipelineState(pHighlight)
             for mark in st.emphasis.highlights where mark.opacity > 0.001 {
                 let start = g.toCanvas(SIMD2(Double(mark.rect.x), Double(mark.rect.y)), cam: cam, scale: sc)
                 let end = g.toCanvas(SIMD2(Double(mark.rect.x + mark.rect.z),
@@ -627,8 +640,8 @@ public final class Renderer: @unchecked Sendable {
                 case .outline: 1
                 case .glow: 2
                 }
-                quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
-                frag(e, HighlightU(rect: bounds, content: content, opacity: mark.opacity,
+                quad(enc, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
+                frag(enc, HighlightU(rect: bounds, content: content, opacity: mark.opacity,
                                     strength: mark.dim, mode: mode))
                 draw()
             }
@@ -637,7 +650,7 @@ public final class Renderer: @unchecked Sendable {
         // Glass loupes: a magnified window over the source. Drawn before the
         // cursor so the pointer stays visible above the glass.
         if drawingContent, !st.emphasis.loupes.isEmpty {
-            e.setRenderPipelineState(pLoupe)
+            enc.setRenderPipelineState(pLoupe)
             let sourceSize = SIMD2<Float>(Float(g.src.x), Float(g.src.y))
             for glass in st.emphasis.loupes where glass.opacity > 0.001 {
                 // A loupe magnifies RAW source pixels — skip it where an
@@ -650,37 +663,58 @@ public final class Renderer: @unchecked Sendable {
                 if coveredByMask { continue }
                 let R = Float(max(glass.radius, 0.02)) * canvasF.x
                 let center = SIMD2<Float>(glass.glass.x * canvasF.x, glass.glass.y * canvasF.y)
-                quad(e, SIMD4<Float>(center.x - R * 1.35, center.y - R * 1.35, R * 2.7, R * 2.7), canvasF)
-                frag(e, LoupeU(glass: SIMD4<Float>(center.x, center.y, R, R * glass.border * 2),
+                quad(enc, SIMD4<Float>(center.x - R * 1.35, center.y - R * 1.35, R * 2.7, R * 2.7), canvasF)
+                frag(enc, LoupeU(glass: SIMD4<Float>(center.x, center.y, R, R * glass.border * 2),
                                source: SIMD4<Float>(glass.target.x, glass.target.y, sourceSize.x, sourceSize.y),
                                zoom: SIMD2<Float>(Float(sc), Float(max(glass.magnification, 1))),
                                opacity: glass.opacity, round: glass.round ? 1 : 0,
                                radius: R * 0.32))
-                e.setFragmentTexture(src, index: 0)
+                enc.setFragmentTexture(src, index: 0)
                 draw()
             }
         }
 
-        // click rings
-        if tl.cursor.clickRing != nil {
-            e.setRenderPipelineState(pRing)
+        // Click ripple. It must refract the composited frame, not the raw
+        // source: the raw texture still contains masked pixels, so sampling it
+        // would displace a secret out from under its mosaic. Copy the scene
+        // once per frame (only while a click is on screen) and sample that.
+        if tl.cursor.clickRing != nil, !st.clickFX.isEmpty {
+            var ringSource: MTLTexture?
+            if tl.cursor.clickEffect != .none, let cap = sceneCopyTexture(slot: slot, canvas: r.canvas) {
+                enc.endEncoding()
+                if let blit = cb.makeBlitCommandEncoder() {
+                    blit.copy(from: tex, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                              sourceSize: MTLSize(width: tex.width, height: tex.height, depth: 1),
+                              to: cap, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+                    blit.endEncoding()
+                }
+                let rp = MTLRenderPassDescriptor()
+                rp.colorAttachments[0].texture = tex
+                rp.colorAttachments[0].loadAction = .load
+                rp.colorAttachments[0].storeAction = .store
+                if let reopened = cb.makeRenderCommandEncoder(descriptor: rp) {
+                    enc = reopened; ringSource = cap
+                }
+            }
+            enc.setRenderPipelineState(pRing)
             let ringSize = min(max(tl.cursor.clickSize, 0.5), 2.0)
             let R = 70 * g.ui * pow(sc, 0.5) * ringSize
             let ringAlpha = Float(min(max(tl.cursor.clickIntensity, 0), 1.5))
             let ringColor = SIMD4<Float>(tl.cursor.clickColor.r, tl.cursor.clickColor.g, tl.cursor.clickColor.b, tl.cursor.clickColor.a * ringAlpha)
             for ring in st.clickFX {
                 let c = g.toCanvas(SIMD2<Double>(Double(ring.position.x), Double(ring.position.y)), cam: cam, scale: sc)
-                quad(e, SIMD4<Float>(Float(c.x - R), Float(c.y - R), Float(2 * R), Float(2 * R)), canvasF)
+                quad(enc, SIMD4<Float>(Float(c.x - R), Float(c.y - R), Float(2 * R), Float(2 * R)), canvasF)
                 let mode: Int32 = switch tl.cursor.clickEffect {
                 case .none, .ripple: 0
                 case .pulse: 1
                 case .burst: 2
                 case .glass: 3
                 }
-                frag(e, RingU(content: content, color: ringColor, center: SIMD2<Float>(c), radius: Float(R),
+                frag(enc, RingU(content: content, color: ringColor, center: SIMD2<Float>(c), radius: Float(R),
                               progress: ring.progress, cr: Float(g.radius), mode: mode,
-                              cam: SIMD2<Float>(cam), scale: Float(sc), srcSize: SIMD2<Float>(g.src)))
-                e.setFragmentTexture(src, index: 0)
+                              cam: SIMD2<Float>(cam), scale: Float(sc),
+                              srcSize: ringSource != nil ? canvasF : SIMD2<Float>(g.src)))
+                enc.setFragmentTexture(ringSource ?? src, index: 0)
                 draw()
             }
         }
@@ -690,10 +724,10 @@ public final class Renderer: @unchecked Sendable {
         if cs.opacity > 0.01, let atlas, let ent = atlas.entry(cs.shape) {
             let S = 32 * r.backingScale * tl.cursor.size * pxPerSrc * pow(sc, 1 - tl.cursor.effectiveCompensation) * Double(cs.press)
             let c = g.toCanvas(SIMD2<Double>(Double(cs.position.x), Double(cs.position.y)), cam: cam, scale: sc)
-            e.setRenderPipelineState(pCursor)
-            quad(e, SIMD4<Float>(Float(c.x - ent.hot.x * S), Float(c.y - ent.hot.y * S), Float(S), Float(S)), canvasF)
-            frag(e, CursorU(content: content, radius: Float(g.radius), opacity: cs.opacity, layer: UInt32(ent.layer), p: 0))
-            e.setFragmentTexture(atlas.texture, index: 0); draw()
+            enc.setRenderPipelineState(pCursor)
+            quad(enc, SIMD4<Float>(Float(c.x - ent.hot.x * S), Float(c.y - ent.hot.y * S), Float(S), Float(S)), canvasF)
+            frag(enc, CursorU(content: content, radius: Float(g.radius), opacity: cs.opacity, layer: UInt32(ent.layer), p: 0))
+            enc.setFragmentTexture(atlas.texture, index: 0); draw()
         }
 
         // Webcam placement is solved by the Director at output time. Never
@@ -724,24 +758,24 @@ public final class Renderer: @unchecked Sendable {
                 if matte == nil { maskMode = 0 } // Never simulate a missing AI mask.
                 let color = tl.style.colors.first?.simd ?? SIMD4<Float>(0.1, 0.1, 0.1, 1)
                 let detail: Float = wl.enhancement == .crisp ? Float(min(max(wl.detailAmount, 0), 1)) : 0
-                e.setRenderPipelineState(pWeb)
-                quad(e, SIMD4<Float>(Float(x - margin), Float(y - margin),
+                enc.setRenderPipelineState(pWeb)
+                quad(enc, SIMD4<Float>(Float(x - margin), Float(y - margin),
                                     Float(width + 2 * margin), Float(height + 2 * margin)), canvasF)
-                frag(e, WebU(crop: crop, bubble: region, radius: Float(min(width, height) * Double(st.layout.cameraRadius)),
+                frag(enc, WebU(crop: crop, bubble: region, radius: Float(min(width, height) * Double(st.layout.cameraRadius)),
                              shape: st.layout.cameraRadius > 0.4 ? 0 : 1, mirror: settings.mirror ? 1 : 0,
                              border: settings.border && maskMode == 0 ? 1 : 0,
                              shadow: settings.shadow && maskMode == 0 ? 1 : 0,
                              bw: Float(3 * g.ui), minif: Float(Double(crop.z) * ww / max(width, 1)),
                              margin: Float(margin), opacity: opacity, maskMode: maskMode,
                              matteMix: matte?.fraction ?? 0, detail: detail, canvasColor: color))
-                e.setFragmentTexture(web, index: 0)
+                enc.setFragmentTexture(web, index: 0)
                 if let matte {
-                    e.setFragmentTexture(matte.previous, index: 1)
-                    e.setFragmentTexture(matte.next, index: 2)
+                    enc.setFragmentTexture(matte.previous, index: 1)
+                    enc.setFragmentTexture(matte.next, index: 2)
                 }
                 if maskMode == 2 {
                     let background = wl.backdrop == .image ? cameraBackground : wallTex
-                    if let background { e.setFragmentTexture(background, index: 3) }
+                    if let background { enc.setFragmentTexture(background, index: 3) }
                 }
                 draw()
             }
@@ -766,41 +800,38 @@ public final class Renderer: @unchecked Sendable {
         if !sprites.isEmpty {
             // A caption card needs the scene behind it, and Metal cannot read
             // the texture it is writing. Copy the finished scene once (only
-            // when a card is visible), blur it via mipmaps, then reopen the
-            // pass for card + sharp text. Export and preview share this path.
-            let wantsCard = sprites.contains { $0.card != nil && $0.opacity > 0.001 }
+            // when a card is visible), blur it with a separable Gaussian at
+            // quarter resolution, then reopen the pass for card + sharp text.
+            // Export and preview share this path.
+            let cards = sprites.filter { $0.card != nil && $0.opacity > 0.001 }
             var cardTexture: MTLTexture?
-            var reopened: MTLRenderCommandEncoder?
-            if wantsCard, let cap = captionSourceTexture(slot: slot, canvas: r.canvas) {
-                e.endEncoding()
-                if let blit = cb.makeBlitCommandEncoder() {
-                    blit.copy(from: tex, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                              sourceSize: MTLSize(width: tex.width, height: tex.height, depth: 1),
-                              to: cap, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-                    blit.generateMipmaps(for: cap)
-                    blit.endEncoding()
-                    cardTexture = cap
-                }
+            var encoder = enc
+            if let tallest = cards.map({ Float($0.texture.height) * $0.scale }).max() {
+                // The blur reads the finished scene directly. It only needs the
+                // pass ended first; no full-resolution copy is required because
+                // the blur writes to a different (quarter-resolution) target.
+                enc.endEncoding()
+                // Thin material: a soft frost, not a fog. Tuned by eye against
+                // busy pages; the card's tint carries the contrast, not the blur.
+                let sigma = min(max(tallest * 0.12, 8), 32)
+                cardTexture = blurScene(cb, from: tex, slot: slot, canvas: r.canvas, sigma: sigma)
                 let pd = MTLRenderPassDescriptor()
                 pd.colorAttachments[0].texture = tex
                 pd.colorAttachments[0].loadAction = .load
                 pd.colorAttachments[0].storeAction = .store
-                reopened = cb.makeRenderCommandEncoder(descriptor: pd)
+                guard let reopened = cb.makeRenderCommandEncoder(descriptor: pd) else { return }
+                encoder = reopened
             }
-            let encoder = reopened ?? e
-            let split = cardTexture != nil
-            if let cardTexture, split {
+            if let cardTexture {
                 encoder.setRenderPipelineState(pCaptionCard)
-                for sprite in sprites where sprite.opacity > 0.001 {
+                for sprite in cards {
                     guard let card = sprite.card else { continue }
                     let w = Float(sprite.texture.width) * sprite.scale
                     let h = Float(sprite.texture.height) * sprite.scale
                     let rect = SIMD4<Float>(sprite.center.x - w / 2, sprite.center.y - h / 2, w, h)
-                    let blurPx = max(4, h * 0.12 + sprite.blur * 2)
-                    let lod = Float(log2(Double(max(blurPx / 2, 1))))
                     quad(encoder, rect, canvasF)
                     frag(encoder, CaptionCardU(rect: rect, tint: card.tint, canvas: canvasF,
-                                               radius: card.radius * sprite.scale, lod: lod))
+                                               radius: card.radius * sprite.scale, opacity: sprite.opacity))
                     encoder.setFragmentTexture(cardTexture, index: 0)
                     encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 }
@@ -816,17 +847,57 @@ public final class Renderer: @unchecked Sendable {
             }
             encoder.endEncoding()
         } else {
-            e.endEncoding()
+            enc.endEncoding()
         }
     }
 
-    /// Mip-mapped copy of the scene used only by the caption card material.
+    /// Separable Gaussian of the finished scene, rendered at quarter resolution.
+    /// Two passes (horizontal then vertical); returns the blurred texture, or
+    /// nil when the targets cannot be allocated. `sigma` is in canvas pixels.
+    private func blurScene(_ cb: MTLCommandBuffer, from source: MTLTexture, slot: Int,
+                           canvas: SIMD2<Int>, sigma: Float) -> MTLTexture? {
+        guard let a = blurTarget(0, slot: slot, canvas: canvas),
+              let b = blurTarget(1, slot: slot, canvas: canvas) else { return nil }
+        let quarter = SIMD2<Float>(Float(a.width), Float(a.height))
+        let pd = MTLRenderPassDescriptor()
+        pd.colorAttachments[0].loadAction = .clear
+        pd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        pd.colorAttachments[0].storeAction = .store
+        for (target, input, dir) in [(a, source, SIMD2<Float>(1, 0)), (b, a, SIMD2<Float>(0, 1))] {
+            pd.colorAttachments[0].texture = target
+            guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return nil }
+            e.setRenderPipelineState(pBlur)
+            quad(e, SIMD4<Float>(0, 0, quarter.x, quarter.y), quarter)
+            frag(e, BlurU(dir: dir, sigma: max(sigma * 0.25, 0.4), pad0: 0, pad1: 0))
+            e.setFragmentTexture(input, index: 0)
+            e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            e.endEncoding()
+        }
+        return b
+    }
+
+    /// Per-in-flight-slot quarter-resolution target for the caption material.
     /// Lazily allocated: recordings without captions pay nothing.
-    private func captionSourceTexture(slot: Int, canvas: SIMD2<Int>) -> MTLTexture? {
+    private func blurTarget(_ index: Int, slot: Int, canvas: SIMD2<Int>) -> MTLTexture? {
+        let i = min(max(slot, 0), 2)
+        let w = max(1, canvas.x / 4), h = max(1, canvas.y / 4)
+        var list = index == 0 ? blurA : blurB
+        if let t = list[i], t.width == w, t.height == h { return t }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: w, height: h, mipmapped: false)
+        d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
+        list[i] = device.makeTexture(descriptor: d)
+        if index == 0 { blurA = list } else { blurB = list }
+        return list[i]
+    }
+
+    /// Copy of the composited scene, per in-flight slot. Metal cannot sample
+    /// the texture it is writing, so the ripple refracts this copy. The caption
+    /// material blurs the scene directly instead (it writes to another target).
+    private func sceneCopyTexture(slot: Int, canvas: SIMD2<Int>) -> MTLTexture? {
         let index = min(max(slot, 0), 2)
         if let t = captionSrc[index], t.width == canvas.x, t.height == canvas.y { return t }
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: canvas.x, height: canvas.y,
-                                                           mipmapped: true)
+                                                           mipmapped: false)
         d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
         captionSrc[index] = device.makeTexture(descriptor: d)
         return captionSrc[index]

@@ -300,6 +300,44 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
     #expect(lateTotal < total, "ripple does not settle: early \(total) late \(lateTotal)")
 }
 
+@Test func rippleIsSoftEdgedGlassNotAHardRing() async throws {
+    var f = try await makeFixture(w: 1280, h: 720) { ctx, w, h in
+        ctx.setFillColor(CGColor(gray: 0.5, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        // Text-like bars, close to the click but clear of the profile row, so
+        // the proof image shows the lens bending real detail.
+        ctx.setFillColor(CGColor(gray: 0.08, alpha: 1))
+        for i in 0..<3 {
+            let top = CGFloat(132 + i * 18)
+            ctx.fill(CGRect(x: 260, y: CGFloat(h) - top - 10, width: 260 - CGFloat(i) * 40, height: 10))
+        }
+    }
+    try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+    if var d = f.timeline.derived {
+        for i in d.cursor.opacity.indices { d.cursor.opacity[i] = 0 }
+        f.timeline.derived = d
+    }
+    f.timeline.cursor.clickEffect = .none
+    let base = try await FrameImage.render(renderer: f.renderer, session: f.session, timeline: f.timeline,
+                                           t: 0.42, canvas: SIMD2(1280, 720))
+    f.timeline.cursor.clickEffect = .ripple
+    f.timeline.cursor.clickDuration = 0.65
+    f.timeline.cursor.clickColor = RGBA(0xFFFFFF, a: 0)
+    let frame = try await FrameImage.render(renderer: f.renderer, session: f.session, timeline: f.timeline,
+                                            t: 0.42, canvas: SIMD2(1280, 720))
+    try FrameImage.writePNG(frame, to: out.appendingPathComponent("ripple-glass.png"))
+
+    // A glass bloom may brighten and bend, but it must never draw a hairline.
+    // Along a radial line the profile has to rise and fall over several pixels.
+    var profile = [Int](repeating: 0, count: 1280)
+    diff(base, frame) { x, y, d in if y == 200 { profile[x] = d } }
+    let peak = profile.max() ?? 0
+    var step = 0
+    for x in 301..<500 { step = max(step, abs(profile[x] - profile[x - 1])) }
+    #expect(peak > 10, "ripple has no visible crest: \(peak)")
+    #expect(Double(step) < 0.5 * Double(peak), "ripple edge is hard: step \(step) of peak \(peak)")
+}
+
 @Test func mosaicCoversItsFieldWithCrispSourceCells() async throws {
     var f = try await makeFixture { ctx, _, h in
         // A left-to-right ramp inside the mask field. Identity mosaic must
@@ -332,11 +370,16 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
     try FrameImage.writePNG(clean, to: out.appendingPathComponent("mosaic-clean.png"))
 
     var outside = 0, inside = 0
+    // The treated region is the padded field snapped outward to whole mosaic
+    // cells, so the quad edge always lands on a cell boundary. Nothing may
+    // change outside it, and the field itself must be fully covered.
+    let pad: Float = 6
+    let padded = SIMD4<Float>(380 - pad, 40 - pad, 220 + 2 * pad, 40 + 2 * pad)
+    let treated = PrivacyMaskGeometry.mosaicRegion(padded, textHeight: padded.w, isSecret: false)
     diff(clean, masked) { x, y, d in
         let inField = x >= 380 && x < 600 && y >= 40 && y < 80
-        // The padded rect is 6 px beyond the key on each side (374..606,
-        // 34..86). Allow 10 px so the padded edge itself is not "outside".
-        let near = x >= 370 && x < 610 && y >= 30 && y < 90
+        let near = Float(x) >= treated.x && Float(x) < treated.x + treated.z
+            && Float(y) >= treated.y && Float(y) < treated.y + treated.w
         if inField { inside += d } else if !near { outside += d }
     }
     #expect(outside == 0, "mask changed pixels outside its field: \(outside)")

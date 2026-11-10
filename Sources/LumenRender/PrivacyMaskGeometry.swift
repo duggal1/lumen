@@ -18,6 +18,27 @@ public enum PrivacyMaskGeometry {
         return SIMD4(Float(a.x), Float(a.y), Float(b.x - a.x), Float(b.y - a.y))
     }
 
+    /// Cell edge in source pixels. Roughly one text height: large enough that
+    /// no glyph survives, small enough that the result still reads as a mosaic
+    /// rather than a slab. Secrets use a larger cell because a short secret
+    /// (four digits) leaves too much shape in a small one.
+    public static func cell(textHeight: Float, isSecret: Bool) -> Float {
+        max(8, max(textHeight, 1) * (isSecret ? 1.25 : 0.9))
+    }
+
+    /// Snap the treated rect outward to whole cells. The quad edge must land
+    /// on a cell boundary: a partial cell leaves an unmasked sliver as soon
+    /// as the camera zooms, and a soft edge would blend the glyphs back in.
+    public static func mosaicRegion(_ rect: SIMD4<Float>, textHeight: Float,
+                                    isSecret: Bool) -> SIMD4<Float> {
+        let c = cell(textHeight: textHeight, isSecret: isSecret)
+        let x0 = (rect.x / c).rounded(.down) * c
+        let y0 = (rect.y / c).rounded(.down) * c
+        let x1 = ((rect.x + rect.z) / c).rounded(.up) * c
+        let y1 = ((rect.y + rect.w) / c).rounded(.up) * c
+        return SIMD4(x0, y0, max(x1 - x0, c), max(y1 - y0, c))
+    }
+
     /// A single pixel of UI paint from OUTSIDE the protected source rect is
     /// safe to extend across that rect. Never sample sensitive pixels for the
     /// default Blend mode. Solid fill is used if no safe neighbor exists.
