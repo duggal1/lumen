@@ -90,6 +90,8 @@ private final class OCRJob: @unchecked Sendable {
         guard reader.canAdd(output) else { throw AnalysisError.readerConfiguration }
         reader.add(output)
         guard reader.startReading() else { throw reader.error ?? AnalysisError.readerStart }
+        var nextTrack = 0.0
+        let tracker = VNSequenceRequestHandler()
         var next = 0.0
         var priorGrid: [UInt8]?
         var lastDetections: [OCRDetection] = []
@@ -97,7 +99,15 @@ private final class OCRJob: @unchecked Sendable {
         while let sample = output.copyNextSampleBuffer() {
             if cancelled.withLock({ $0 }) { reader.cancelReading(); throw CancellationError() }
             let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-            guard time + 0.0001 >= next, let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
+            guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
+            if time + 0.0001 < next {
+                if time >= nextTrack, !lastDetections.isEmpty {
+                    nextTrack = time + 1.0 / 15
+                    lastDetections = try track(lastDetections, buffer: buffer, time: time + offset, handler: tracker)
+                    detections.append(contentsOf: lastDetections)
+                }
+                continue
+            }
             next = time + 1 / max(fps, 0.5)
             let grid = try lumaGrid(buffer)
             let changed = priorGrid.map { changeRatio($0, grid) > 0 } ?? true
@@ -117,6 +127,26 @@ private final class OCRJob: @unchecked Sendable {
         if reader.status == .failed { throw reader.error ?? AnalysisError.readerFailed }
         progress(1)
         return deduplicate(detections)
+    }
+
+    private func track(_ detections: [OCRDetection], buffer: CVPixelBuffer, time: Double,
+                       handler: VNSequenceRequestHandler) throws -> [OCRDetection] {
+        let requests = detections.map { detection in
+            let observation = VNDetectedObjectObservation(boundingBox: CGRect(x: detection.x,
+                y: 1 - detection.y - detection.h, width: detection.w, height: detection.h))
+            let request = VNTrackObjectRequest(detectedObjectObservation: observation)
+            request.trackingLevel = .fast
+            return request
+        }
+        try handler.perform(requests, on: buffer)
+        return zip(detections, requests).map { prior, request in
+            var result = prior; result.t = time
+            if let observation = request.results?.first, observation.confidence >= 0.3 {
+                let rect = observation.boundingBox
+                result.x = rect.minX; result.y = 1 - rect.maxY; result.w = rect.width; result.h = rect.height
+            }
+            return result
+        }
     }
 
     private func detect(in buffer: CVPixelBuffer, at time: Double) throws -> [OCRDetection] {
