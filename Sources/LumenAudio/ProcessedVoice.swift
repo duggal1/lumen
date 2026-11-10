@@ -8,7 +8,25 @@ import LumenProject
 public enum CleanVoiceError: Error { case missingMicrophone }
 
 struct ProcessedVoiceCache {
-    static let revision = "trained-voice-v3-rnnoise-df056"
+    static let revision = "trained-voice-v4-rnnoise-df056"
+
+    private struct Settings: Encodable {
+        let noiseStrength: Double
+        let highQuality: Bool
+        let room: Double
+        let clarity: Bool
+        let studio: Double
+        let declickDepth: Double
+
+        init(_ plan: AudioPlan, hasKeys: Bool) {
+            noiseStrength = plan.micClean ? (plan.noiseReductionStrength.isFinite ? clamp(plan.noiseReductionStrength, 0, 1) : 1) : 0
+            highQuality = noiseStrength > 0 && plan.studioMode == .optimized
+            room = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
+            clarity = plan.voiceClarity && plan.studio > 0
+            studio = clarity ? min(max(plan.studio * 4, 0), 1) : 0
+            declickDepth = plan.declick && hasKeys ? plan.declickDepthDb : 0
+        }
+    }
 
     static func key(samples: [Float], plan: AudioPlan, keyTimes: [Double]) throws -> String {
         let encoder = JSONEncoder()
@@ -17,7 +35,7 @@ struct ProcessedVoiceCache {
         hash.update(data: Data(revision.utf8))
         samples.withUnsafeBytes { hash.update(bufferPointer: $0) }
         keyTimes.withUnsafeBytes { hash.update(bufferPointer: $0) }
-        hash.update(data: try encoder.encode(plan))
+        hash.update(data: try encoder.encode(Settings(plan, hasKeys: !keyTimes.isEmpty)))
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
