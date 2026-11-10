@@ -51,7 +51,12 @@ enum MaskTracks {
         let focused = events.filter { ($0.kind == .down || $0.kind == .keyDown) && $0.axFrameIndex > 0 }
             .sorted { $0.t < $1.t }
         guard src.duration > 0 else { return [] }
-        var detections: [OCRDetection] = []
+        var detections: [OCRDetection] = ax.compactMap { field in
+            guard field.secure, let time = field.sampledAt, field.w > 1, field.h > 1 else { return nil }
+            return OCRDetection(t: time, x: field.x / Double(src.width), y: field.y / Double(src.height),
+                w: field.w / Double(src.width), h: field.h / Double(src.height), category: .envSecret,
+                hash: fnv1a64("\(field.x):\(field.y):\(field.w):\(field.h)"), confidence: 1)
+        }
         for event in focused {
             guard Int(event.axFrameIndex) <= ax.count else { continue }
             let field = ax[Int(event.axFrameIndex) - 1]
