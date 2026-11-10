@@ -104,6 +104,8 @@ enum TimelineSelection: Equatable {
     var notice: String?
     /// Protect against exporting a video whose automatic redaction analysis
     /// has not yet been applied to the final derived timeline.
+    var privacyScanProgress = 0.0
+    private var privacyDeadline: Task<Void, Never>?
     var privacyScanning = false
     var privacyScanError: String?
     private var privacyAnalysisComplete = true
@@ -199,14 +201,29 @@ enum TimelineSelection: Equatable {
 
     private func analyzeInBackground(_ snapshot: Timeline) {
         analysisTask?.cancel()
+        privacyDeadline?.cancel()
+        privacyScanProgress = 0
         let scansPrivacy = snapshot.overlays.privacy.enabled && snapshot.overlays.privacy.autoDetect
         privacyScanning = scansPrivacy
         privacyAnalysisComplete = !scansPrivacy
         privacyScanError = nil
         let session = session
+        if scansPrivacy {
+            privacyDeadline = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(150)) } catch { return }
+                guard let self else { return }
+                self.analysisTask?.cancel()
+                self.privacyAnalysisComplete = true
+                self.privacyScanning = false
+                self.privacyScanError = "Scanning timed out. Change detection settings to retry, or use manual masks."
+            }
+        }
         analysisTask = Task { [weak self] in
-            let result = await session.analyze(snapshot)
+            let result = await session.analyze(snapshot, privacyProgress: { [weak self] value in
+                Task { @MainActor [weak self] in self?.privacyScanProgress = value }
+            })
             guard !Task.isCancelled, let self else { return }
+            self.privacyDeadline?.cancel()
             if scansPrivacy { self.privacyScanError = result.errors["ocr"] }
             self.privacyAnalysisComplete = true
             // The result must be applied by the Director before export
