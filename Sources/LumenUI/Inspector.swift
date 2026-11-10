@@ -29,9 +29,6 @@ struct Inspector: View {
     private static func micModeIcon(_ m: MicMode) -> String {
         switch m { case .standard: "mic"; case .loud: "mic.fill"; case .podcast: "waveform.and.mic"; case .off: "mic.slash" }
     }
-    private static func maskModeIcon(_ m: MaskMode) -> String {
-        switch m { case .blur: "eye.slash"; case .pixelate: "square.grid.3x3"; case .solid: "rectangle.fill"; case .blend: "circle.lefthalf.filled" }
-    }
 
     var body: some View {
         content
@@ -847,34 +844,13 @@ struct Inspector: View {
         let m = model
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
-                ToggleRow(label: "Enhance voice", on: Binding(
-                    get: { m.timeline.audio.micMode == .podcast },
-                    set: { on in
-                        m.edit {
-                            if on {
-                                $0.audio.studioMode = .optimized
-                                $0.audio.micMode = .podcast
-                                $0.audio.studio = 0.75
-                                $0.audio.micClean = true
-                            } else {
-                                $0.audio.studioMode = .standard
-                                $0.audio.micMode = .standard
-                                $0.audio.studio = 0.25
-                                $0.audio.micClean = false
-                            }
-                        }
-                    }))
-                SliderRow(label: "Voice level", v: m.bind(\.audio.micGainDb), range: -18...12,
-                          fmt: { String(format: "%+.0f dB", $0) })
-                SliderRow(label: "System level", v: m.bind(\.audio.systemGainDb), range: -24...6,
-                          fmt: { String(format: "%+.0f dB", $0) })
-                ToggleRow(label: "Loudness normalize", on: m.bind(\.audio.normalize))
-                ToggleRow(label: "Click sounds", on: m.bind(\.audio.clickSounds))
-                if m.timeline.audio.clickSounds {
-                    SliderRow(label: "Click level", v: m.bind(\.audio.sfxGainDb), range: -24...6,
-                              fmt: { String(format: "%+.0f dB", $0) })
-                }
-                ToggleRow(label: "Zoom whooshes", on: m.bind(\.audio.whooshes))
+                SliderRow(label: "Noise reduction", v: Binding(
+                    get: { m.timeline.audio.noiseReductionStrength },
+                    set: { value in m.edit(coalesce: true) {
+                        $0.audio.noiseReductionStrength = value
+                        $0.audio.micClean = value > 0
+                    } }), range: 0...1, fmt: { "\(Int($0 * 100))%" })
+                ToggleRow(label: "Voice clarity", on: m.bind(\.audio.voiceClarity))
             }.card(padding: 16)
         }
     }
