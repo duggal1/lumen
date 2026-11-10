@@ -234,7 +234,7 @@ public final class InputRecorder: @unchecked Sendable {
         default: return
         }
         if type == .keyDown { ev.axFrameIndex = reserveFocus(event: ev) }
-        liveEventHook.withLock { $0 }?(ev)
+        if type != .keyDown { liveEventHook.withLock { $0 }?(ev) }
         ring.push(ev)
     }
 
