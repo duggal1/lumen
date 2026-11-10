@@ -23,9 +23,6 @@ LUMEN-DESIGN-FIX screenshots/
 screenshot.png
 Docs/**/*.png
 
-# --- Bundled media that is not shipped with the app ---
-Resources/TypingPacks/
-
 # --- Generated RNNoise model weights ---
 # 78 MB of pretrained LPCNet weights dumped as C float arrays. Generated from
 # the upstream xiph model archive; fetch it with Tools/vendor-rnnoise.sh.
