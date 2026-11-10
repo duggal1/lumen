@@ -1,18 +1,23 @@
-.PHONY: build test verify app probe hooks capture-e2e
+.PHONY: build test verify app probe hooks capture-e2e vendor
 
-build:
+# The pretrained RNNoise weights (~78 MB of generated C) are not tracked in
+# git. Restore them before anything that compiles the CRNNoise target.
+vendor:
+	@bash Tools/vendor-rnnoise.sh
+
+build: vendor
 	swift build
 
 # An interrupted SwiftPM test run leaves swiftpm-testing-helper parented to
 # launchd; it keeps .build/.lock and makes the next build/push look hung.
 # Reap only those orphans, then run the suite the same way CI does.
-test:
+test: vendor
 	@for pid in $$(pgrep -f 'swiftpm-testing-helper.*LumenTests' || true); do \
 		[ "$$(ps -o ppid= -p $$pid | tr -d ' ')" = "1" ] && kill -9 $$pid || true; \
 	done
 	swift test --no-parallel
 
-app:
+app: vendor
 	bash Tools/make-app.sh
 
 hooks:
