@@ -193,7 +193,7 @@ public enum VAD {
 
 public protocol Denoiser: Sendable { func process(_ x: [Float]) -> [Float] }
 
-/// Fallback when RNNoise isn't vendored: a downward expander driven by 10 ms RMS against a percentile noise floor.
+/// Standalone downward expander for diagnostics; the microphone chain uses pretrained engines.
 public struct SpectralGate: Denoiser {
     public init() {}
     public func process(_ x: [Float]) -> [Float] {
