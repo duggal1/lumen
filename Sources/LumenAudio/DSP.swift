@@ -214,4 +214,3 @@ public struct SpectralGate: Denoiser {
         return out
     }
 }
-
