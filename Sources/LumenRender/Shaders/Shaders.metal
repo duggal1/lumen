@@ -564,7 +564,7 @@ fragment float4 captionCardFS(VO in [[stage_in]], constant CaptionCardU &u [[buf
     float2 h = u.rect.zw * 0.5;
     float d = sdSquircle(in.px - (u.rect.xy + h), h, u.radius);
     float rim = exp(-pow(d / 1.6, 2.0)) * step(d, 0.0);
-    face = clamp(face + float3(0.09) * rim, 0.0, 1.0);
+    face = clamp(face + float3(0.05) * rim, 0.0, 1.0);
     // Composite the blurred backdrop and the tint inside the card, then make
     // the card opaque. A translucent card would reveal the sharp scene and
     // defeat the blur; only the rounded edge uses the mask alpha.

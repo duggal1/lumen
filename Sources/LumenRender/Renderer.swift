@@ -813,7 +813,10 @@ public final class Renderer: @unchecked Sendable {
                 enc.endEncoding()
                 // Thin material: a soft frost, not a fog. Tuned by eye against
                 // busy pages; the card's tint carries the contrast, not the blur.
-                let sigma = min(max(tallest * 0.12, 8), 32)
+                // The caption's blur-in radius rides on top, so the whole block
+                // (material included) resolves out of focus.
+                let blurIn = cards.map(\.blur).max() ?? 0
+                let sigma = min(max(tallest * 0.12 + blurIn, 8), 40)
                 cardTexture = blurScene(cb, from: tex, slot: slot, canvas: r.canvas, sigma: sigma)
                 let pd = MTLRenderPassDescriptor()
                 pd.colorAttachments[0].texture = tex
