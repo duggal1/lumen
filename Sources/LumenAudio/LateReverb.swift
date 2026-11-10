@@ -22,7 +22,7 @@ public enum LateReverb {
                 let power = real[k] * real[k] + imaginary[k] * imaginary[k]
                 tail[k] = max(tail[k] * decay, previousPower[k] * decay)
                 // Only suppress decaying bins. Fresh attacks and sustained speech pass unchanged.
-                let decaying = power < previousPower[k] * 0.85
+                let decaying = power < previousPower[k] * 0.98
                 let target: Float = decaying
                     ? sqrt(max(0.16, 1 - Float(strength) * 0.75 * tail[k] / max(power, 1e-12))) : 1
                 gain[k] += (target - gain[k]) * (target > gain[k] ? 0.8 : 0.25)
