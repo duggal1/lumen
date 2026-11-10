@@ -113,6 +113,8 @@ public enum ClockCalibration {
 /// Listen-only CGEventTap on its own high-QoS thread. Coordinates converted to source pixels once, here.
 public final class InputRecorder: @unchecked Sendable {
     private let ring = EventRing(capacity: 1 << 16)
+    private let liveFocusHook = OSAllocatedUnfairLock<(@Sendable (InputEvent, AXFrame) -> Void)?>(initialState: nil)
+    public func setLiveFocusHook(_ hook: (@Sendable (InputEvent, AXFrame) -> Void)?) { liveFocusHook.withLock { $0 = hook } }
     private let liveEventHook = OSAllocatedUnfairLock<(@Sendable (InputEvent) -> Void)?>(initialState: nil)
     public func setLiveEventHook(_ hook: (@Sendable (InputEvent) -> Void)?) { liveEventHook.withLock { $0 = hook } }
     private let url: URL, origin: CGPoint, scale: Double, clock: RecordingClock, axURL: URL
@@ -271,7 +273,8 @@ public final class InputRecorder: @unchecked Sendable {
                 focused.x = Float(caret.map { $0.x + $0.w / 2 } ?? (frame.x + frame.w / 2))
                 focused.y = Float(caret.map { $0.y + $0.h / 2 } ?? (frame.y + frame.h / 2))
                 focused.axFrameIndex = reservation.0
-                liveEventHook.withLock { $0 }?(focused)
+                if let hook = liveFocusHook.withLock({ $0 }) { hook(focused, frame) }
+                else { liveEventHook.withLock { $0 }?(focused) }
             }
         }
         return reservation.0
