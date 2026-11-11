@@ -24,6 +24,7 @@ enum CaptionPlanner {
     }
 
     private static func mappedWords(_ words: [WordToken], timeMap tm: TimeMap, plan: CaptionPlan) -> [TimedWord] {
+        let vocab = Dictionary(plan.vocabulary.map { ($0.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
         let deleted = Set(plan.deletedWords)
         var out: [TimedWord] = []
         var sentenceStart = true
@@ -37,7 +38,7 @@ enum CaptionPlanner {
             let start = tm.output(atSource: word.start), end = tm.output(atSource: word.end)
             guard end > start else { continue }
             // A manual edit is the user's own words: never re-case it.
-            out.append(TimedWord(text: edited ?? sentenceCase(text, atSentenceStart: sentenceStart),
+            out.append(TimedWord(text: edited ?? vocab[word.text.lowercased()] ?? sentenceCase(text, atSentenceStart: sentenceStart),
                                  start: start, end: end))
             if let last = text.last, ".?!".contains(last) { sentenceStart = true } else { sentenceStart = false }
         }
@@ -45,18 +46,14 @@ enum CaptionPlanner {
     }
 
     /// Sentence case, and nothing else: the first word of a sentence starts
-    /// with a capital, every other word is lower case, and "I" is always "I".
+    /// with a capital, existing name casing is preserved, and "I" is always "I".
     /// A word with an inner capital ("iPhone") keeps it.
     static func sentenceCase(_ word: String, atSentenceStart: Bool) -> String {
         let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return word }
         if trimmed.lowercased() == "i" { return "I" }
-        let letters = trimmed.unicodeScalars.map { CharacterSet.letters.contains($0) }
-        guard letters.allSatisfy({ $0 }) else { return trimmed }
-        let inner = trimmed.dropFirst().contains(where: { $0.isUppercase })
-        let body = inner ? trimmed : trimmed.lowercased()
-        guard atSentenceStart else { return body }
-        return String(body.prefix(1).uppercased()) + String(body.dropFirst())
+        guard atSentenceStart else { return trimmed }
+        return String(trimmed.prefix(1).uppercased()) + String(trimmed.dropFirst())
     }
 
     private static func chunkWords(_ words: [TimedWord], perLine: Int, maxLines: Int) -> [[TimedWord]] {
