@@ -226,22 +226,26 @@ public struct CaptionPlan: Codable, Equatable, Sendable {
 
 /// Privacy analyzer settings and user decisions keyed by stable automatic-mask ids.
 public struct PrivacyPlan: Codable, Equatable, Sendable {
+    public var privacyModel = 2
     public var enabled = true
     public var autoDetect = true
     public var autoApply: [String] = ["apiKey", "jwt", "privateKey", "envSecret", "card", "email", "phone", "entropy", "password", "custom"]
     public var customPatterns: [String] = []
     public var padding = 6.0
-    public var mode: MaskMode = .pixelate
-    public var pixelSize = 16.0
+    public var mode: MaskMode = .blur
+    public var pixelSize = 0.0
     public var entropyThreshold = 3.5
     public var decisions: [String: Bool] = [:]
-    enum CodingKeys: String, CodingKey { case enabled, autoDetect, autoApply, customPatterns, padding, mode, pixelSize, entropyThreshold, decisions }
+    enum CodingKeys: String, CodingKey { case privacyModel, enabled, autoDetect, autoApply, customPatterns, padding, mode, pixelSize, entropyThreshold, decisions }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         enabled = c.opt(.enabled, enabled); autoDetect = c.opt(.autoDetect, autoDetect); autoApply = c.opt(.autoApply, autoApply)
         customPatterns = c.opt(.customPatterns, customPatterns); padding = c.opt(.padding, padding); mode = c.opt(.mode, mode)
         pixelSize = c.opt(.pixelSize, pixelSize)
+        if c.opt(.privacyModel, 1) < 2, mode == .pixelate, pixelSize == 16 {
+            mode = .blur; pixelSize = 0
+        }
         entropyThreshold = c.opt(.entropyThreshold, entropyThreshold); decisions = c.opt(.decisions, decisions)
     }
 }
