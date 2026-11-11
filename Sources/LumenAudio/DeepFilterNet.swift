@@ -22,7 +22,6 @@ public enum DeepFilterNet {
     public static func process(_ samples: [Float]) throws -> [Float] {
         guard !samples.isEmpty else { return [] }
         guard isAvailable, let executable else { throw DeepFilterNetError.unavailable }
-        let started = ContinuousClock.now
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("lumen-voice-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -55,9 +54,6 @@ public enum DeepFilterNet {
         guard rate == AudioIO.fs, channels.count == 1, let voice = channels.first,
               voice.count >= samples.count, voice.count - samples.count < 480,
               voice.allSatisfy(\.isFinite) else { throw DeepFilterNetError.invalidOutput }
-        guard started.duration(to: .now) < .seconds(Double(samples.count) / AudioIO.fs) else {
-            throw DeepFilterNetError.timedOut
-        }
         return Array(voice.prefix(samples.count))
     }
 }
