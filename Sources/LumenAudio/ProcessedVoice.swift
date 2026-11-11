@@ -8,7 +8,7 @@ import LumenProject
 public enum CleanVoiceError: Error { case missingMicrophone }
 
 struct ProcessedVoiceCache {
-    static let revision = "trained-voice-v6-gap12-residual-df-speed"
+    static let revision = "trained-voice-v7-wpe-residual-df-complete"
 
     private struct Settings: Encodable {
         let noiseStrength: Double
@@ -65,8 +65,16 @@ struct ProcessedVoiceCache {
             voice = engine.process(voice)
         }
         let regions = VAD.regions(voice)
-        voice = LateReverb.process(voice, amount: plan.dereverb,
-                                  rt60: RoomEstimate.rt60(voice, vad: regions))
+        if plan.dereverb > 0.01 {
+            let rt60 = RoomEstimate.rt60(voice, vad: regions)
+            if Double(voice.count) / AudioIO.fs < 600 {
+                let dry = WPE().process(voice)
+                let late = zip(voice, dry).map { $0 - $1 }
+                voice = ResidualSuppressor(noise: 0.6, reverb: plan.dereverb, rt60: rt60).process(x: dry, late: late)
+            } else {
+                voice = LateReverb.process(voice, amount: plan.dereverb, rt60: rt60)
+            }
+        }
         if plan.declick, !keyTimes.isEmpty {
             voice = Declick.process(voice, keyTimes: keyTimes, vad: regions, depthDb: plan.declickDepthDb)
         }
