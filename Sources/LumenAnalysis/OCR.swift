@@ -21,6 +21,10 @@ public enum OCRAnalyzer {
     }
 }
 
+struct PartialScan: Error, Sendable { let detections: [OCRDetection] }
+private struct OCRImage: @unchecked Sendable { let image: CGImage }
+private struct OCRLine: @unchecked Sendable { let observation: VNRecognizedTextObservation; let box: CGRect; let tile: CGRect }
+
 private struct OCRRequestHandle: @unchecked Sendable { let request: VNRecognizeTextRequest }
 
 private final class OCRJob: @unchecked Sendable {
@@ -35,7 +39,8 @@ private final class OCRJob: @unchecked Sendable {
     private let firstFrameOnly: Bool
     private let progress: @Sendable (Double) -> Void
     private let completion = OSAllocatedUnfairLock<(continuation: CheckedContinuation<[OCRDetection], Error>?, result: Result<[OCRDetection], Error>?)>(uncheckedState: (nil, nil))
-    private let requestLock = OSAllocatedUnfairLock<OCRRequestHandle?>(uncheckedState: nil)
+    private let requestLock = OSAllocatedUnfairLock<[OCRRequestHandle]>(uncheckedState: [])
+    private let partial = OSAllocatedUnfairLock<[OCRDetection]>(initialState: [])
     private var trackingRequests: [VNTrackObjectRequest] = []
     private var trackingBuffer: CVPixelBuffer?
     private let trackingHandler = VNSequenceRequestHandler()
@@ -51,8 +56,9 @@ private final class OCRJob: @unchecked Sendable {
     func cancel() {
         cancelled.withLock { $0 = true }
         readerLock.withLock { $0?.reader.cancelReading() }
-        requestLock.withLock { $0?.request.cancel() }
-        resolve(.failure(CancellationError()))
+        requestLock.withLock { $0.forEach { $0.request.cancel() } }
+        let found = partial.withLock { $0 }
+        resolve(.failure(found.isEmpty ? CancellationError() : PartialScan(detections: deduplicate(found))))
     }
 
     func value() async throws -> [OCRDetection] {
@@ -63,12 +69,15 @@ private final class OCRJob: @unchecked Sendable {
             }
             if let prior { continuation.resume(with: prior); return }
             DispatchQueue.global(qos: .utility).async { [self] in
-                do { resolve(.success(try run())) } catch { resolve(.failure(error)) }
+                do { resolve(.success(try run())) }
+                catch {
+                    let found = partial.withLock { $0 }
+                    resolve(.failure(found.isEmpty ? error : PartialScan(detections: deduplicate(found))))
+                }
             }
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 120) { [weak self] in
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + max(180, duration * 2)) { [weak self] in
                 guard let self, self.completion.withLock({ $0.result == nil }) else { return }
-                self.resolve(.failure(NSError(domain: "Lumen.Privacy", code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Text scanning exceeded two minutes. Retry the scan or use manual masks."])))
+                self.resolve(.failure(PartialScan(detections: self.deduplicate(self.partial.withLock { $0 }))))
                 self.cancel()
             }
         }
@@ -100,6 +109,9 @@ private final class OCRJob: @unchecked Sendable {
         var next = 0.0
         var lastDetections: [OCRDetection] = []
         var detections: [OCRDetection] = []
+        var previousTiles: LumaTiles?
+        var previousSignatures: [UInt64]?
+        var trackingActive = false
         while let sample = output.copyNextSampleBuffer() {
             if cancelled.withLock({ $0 }) { reader.cancelReading(); throw CancellationError() }
             let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
@@ -110,7 +122,7 @@ private final class OCRJob: @unchecked Sendable {
             }
             guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             if time + 0.0001 < next {
-                if time >= nextTrack, !lastDetections.isEmpty {
+                if trackingActive, time >= nextTrack, !lastDetections.isEmpty {
                     nextTrack = time + 1.0 / 15
                     lastDetections = try track(lastDetections, buffer: buffer, time: time + offset, handler: trackingHandler)
                     detections.append(contentsOf: lastDetections)
@@ -120,8 +132,30 @@ private final class OCRJob: @unchecked Sendable {
             next = time + 1 / max(fps, 0.5)
             progress(min(max(time / max(duration, asset.duration.seconds, 0.001), 0), 0.99))
             retireTrackers()
-            lastDetections = try detect(in: buffer, at: time + offset)
+            let snapshot = try lumaSnapshot(buffer)
+            let tiles = snapshot.tiles
+            let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
+            let extent = CGRect(x: 0, y: 0, width: width, height: height)
+            let changed = DirtyRects.between(previousTiles, tiles, previousSignatures: previousSignatures, signatures: snapshot.signatures)
+                .map { $0.intersection(extent) }.filter { !$0.isEmpty }
+            let protected = lastDetections.map { detection in
+                CGRect(x: detection.x * Double(width), y: detection.y * Double(height),
+                    width: detection.w * Double(width), height: detection.h * Double(height))
+            }
+            let dirty = DirtyRects.covering(changed, protected: protected, extent: extent)
+            previousTiles = tiles
+            previousSignatures = snapshot.signatures
+            trackingActive = dirty.reduce(0) { $0 + $1.width * $1.height } > extent.width * extent.height * 0.4
+            let kept = lastDetections.filter { detection in
+                let rect = CGRect(x: detection.x * Double(width), y: detection.y * Double(height),
+                    width: detection.w * Double(width), height: detection.h * Double(height))
+                return !dirty.contains { $0.intersects(rect) }
+            }.map { detection in var value = detection; value.t = time + offset; return value }
+            let fresh = dirty.isEmpty ? [] : try detect(in: buffer, regions: dirty, at: time + offset)
+            lastDetections = kept + fresh
             detections.append(contentsOf: lastDetections)
+            let accumulated = detections
+            partial.withLock { $0 = accumulated }
             if firstFrameOnly { reader.cancelReading(); break }
         }
         if reader.status == .failed { throw reader.error ?? AnalysisError.readerFailed }
@@ -166,54 +200,63 @@ private final class OCRJob: @unchecked Sendable {
         }
     }
 
-    private func detect(in buffer: CVPixelBuffer, at time: Double) throws -> [OCRDetection] {
+    private func detect(in buffer: CVPixelBuffer, regions: [CGRect], at time: Double) throws -> [OCRDetection] {
         let image = CIImage(cvPixelBuffer: buffer)
         guard let full = context.createCGImage(image, from: image.extent) else { throw AnalysisError.pixelBuffer }
         let width = full.width, height = full.height, tile = 1536, step = 1408
-        var observations: [(VNRecognizedTextObservation, CGRect)] = []
-        for y in stride(from: 0, to: height, by: step) {
-            for x in stride(from: 0, to: width, by: step) {
-                if cancelled.withLock({ $0 }) { throw CancellationError() }
-                let rect = CGRect(x: x, y: y, width: min(tile, width - x), height: min(tile, height - y))
-                guard let crop = full.cropping(to: rect) else { continue }
-                let request = VNRecognizeTextRequest()
-                request.recognitionLevel = .accurate
-                request.usesLanguageCorrection = false
-                request.minimumTextHeight = 0
-                let requestHandle = OCRRequestHandle(request: request)
-                requestLock.withLock { $0 = requestHandle }
-                try VNImageRequestHandler(cgImage: crop, options: [:]).perform([request])
-                requestLock.withLock { $0 = nil }
-                for observation in request.results ?? [] {
-                    let box = observation.boundingBox
-                    let mapped = CGRect(x: (rect.minX + box.minX * rect.width) / Double(width),
-                        y: (rect.minY + (1 - box.maxY) * rect.height) / Double(height),
-                        width: box.width * rect.width / Double(width), height: box.height * rect.height / Double(height))
-                    observations.append((observation, mapped))
+        var tiles: [CGRect] = []
+        for region in regions {
+            for y in stride(from: Int(region.minY), to: Int(region.maxY.rounded(.up)), by: step) {
+                for x in stride(from: Int(region.minX), to: Int(region.maxX.rounded(.up)), by: step) {
+                    tiles.append(CGRect(x: x, y: y, width: min(tile, Int(region.maxX.rounded(.up)) - x),
+                        height: min(tile, Int(region.maxY.rounded(.up)) - y)))
                 }
             }
         }
+        let work = tiles, source = OCRImage(image: full)
+        let collected = OSAllocatedUnfairLock<[OCRLine]>(uncheckedState: [])
+        let failures = OSAllocatedUnfairLock<[Error]>(uncheckedState: [])
+        let workers = min(3, work.count)
+        DispatchQueue.concurrentPerform(iterations: workers) { worker in
+            for index in stride(from: worker, to: work.count, by: max(workers, 1)) {
+                if self.cancelled.withLock({ $0 }) { return }
+                let rect = work[index]
+                guard let crop = source.image.cropping(to: rect) else { continue }
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate; request.usesLanguageCorrection = false; request.minimumTextHeight = 0
+                let requestHandle = OCRRequestHandle(request: request)
+                self.requestLock.withLock { $0.append(requestHandle) }
+                defer { self.requestLock.withLock { $0.removeAll { $0.request === requestHandle.request } } }
+                do {
+                    try VNImageRequestHandler(cgImage: crop, options: [:]).perform([request])
+                    let lines = (request.results ?? []).map { observation in
+                        OCRLine(observation: observation, box: Self.normalized(observation.boundingBox, tile: rect, width: width, height: height), tile: rect)
+                    }
+                    collected.withLock { $0.append(contentsOf: lines) }
+                } catch { failures.withLock { $0.append(error) } }
+            }
+        }
+        if let error = failures.withLock({ $0.first }) { throw error }
+        let observations = collected.withLock { $0 }
         var output: [OCRDetection] = []
         let confidence = Float(min(max((entropyThreshold - 3) * 0.2 + 0.15, 0.1), 0.5))
-        for (observation, mappedBox) in observations {
+        for line in observations {
+            let observation = line.observation
             guard let candidate = observation.topCandidates(1).first, candidate.confidence >= confidence else { continue }
             for hit in SensitivePatterns.scan(candidate.string, custom: patterns, entropyThreshold: entropyThreshold) {
                 let value = String(candidate.string[hit.range]).trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !value.isEmpty else { continue }
-                let start = Double(candidate.string.distance(from: candidate.string.startIndex, to: hit.range.lowerBound))
-                let end = Double(candidate.string.distance(from: candidate.string.startIndex, to: hit.range.upperBound))
-                let count = Double(max(candidate.string.count, 1)), box = mappedBox
-                let left = max(Double(box.minX) + Double(box.width) * start / count - Double(box.width) * 0.04, 0)
-                let right = min(Double(box.minX) + Double(box.width) * end / count + Double(box.width) * 0.04, 1)
-                output.append(OCRDetection(t: time, x: left, y: Double(box.minY), w: max(right - left, 0.001),
-                                           h: Double(box.height), category: hit.category,
-                                           hash: fnv1a64(value.lowercased(), salt: salt), confidence: candidate.confidence))
+                guard let tight = try? candidate.boundingBox(for: hit.range) else { continue }
+                let box = Self.normalized(tight.boundingBox, tile: line.tile, width: width, height: height)
+                output.append(OCRDetection(t: time, x: box.minX, y: box.minY, w: box.width, h: box.height,
+                    category: hit.category, hash: fnv1a64(value.lowercased(), salt: salt), confidence: candidate.confidence))
             }
         }
-        for (label, box) in observations {
+        for line in observations {
+            let label = line.observation, box = line.box
             guard let text = label.topCandidates(1).first?.string,
                   text.range(of: "password|passcode|cvv|card number|ssn", options: .regularExpression.union(.caseInsensitive)) != nil else { continue }
-            let neighbors = observations.map(\.1).filter { candidate in
+            let neighbors = observations.map(\.box).filter { candidate in
                 candidate != box && ((candidate.minX >= box.maxX && abs(candidate.midY - box.midY) < box.height * 2)
                     || (candidate.minY >= box.maxY && candidate.minY - box.maxY < 0.08 && abs(candidate.midX - box.midX) < 0.25))
             }
@@ -224,6 +267,12 @@ private final class OCRJob: @unchecked Sendable {
                 category: .envSecret, hash: fnv1a64(text.lowercased(), salt: salt), confidence: 1))
         }
         return output
+    }
+
+    private static func normalized(_ rect: CGRect, tile: CGRect, width: Int, height: Int) -> CGRect {
+        CGRect(x: (tile.minX + rect.minX * tile.width) / Double(width),
+            y: (tile.minY + (1 - rect.maxY) * tile.height) / Double(height),
+            width: rect.width * tile.width / Double(width), height: rect.height * tile.height / Double(height))
     }
 
     private func deduplicate(_ detections: [OCRDetection]) -> [OCRDetection] {
