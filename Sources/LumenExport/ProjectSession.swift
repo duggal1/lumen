@@ -15,6 +15,7 @@ public final class ProjectSession: @unchecked Sendable {
     public let meta: ProjectMeta
     public let screen: ReaderFrameSource
     public let webcam: (any FrameSource)?
+    private let saveQueue = DispatchQueue(label: "lumen.project.save", qos: .userInitiated)
     private let inputState: OSAllocatedUnfairLock<DirectorInput>
     public var input: DirectorInput { inputState.withLock { $0 } }
     public let mixer: AudioMixer
@@ -55,19 +56,23 @@ public final class ProjectSession: @unchecked Sendable {
     }
 
     public func derive(_ tl: Timeline, revision: Int) -> Timeline { Director.derive(tl, input: input, revision: revision) }
-    public func save(_ tl: Timeline) { try? bundle.save(ProjectFile(meta: meta, timeline: tl)) }
+    public func save(_ tl: Timeline) {
+        saveQueue.async { [self] in try? bundle.save(ProjectFile(meta: meta, timeline: tl)) }
+    }
     public func updateTranscript(_ transcript: Transcript) {
         inputState.withLock { $0.transcript = transcript }
     }
 
     @discardableResult
-    public func analyze(_ timeline: Timeline, privacyProgress: @escaping @Sendable (Double) -> Void = { _ in }) async -> AnalysisResult {
+    public func analyze(_ timeline: Timeline, privacyProgress: @escaping @Sendable (Double) -> Void = { _ in },
+                        onTyping: @escaping @Sendable () -> Void = {},
+                        onPrivacy: @escaping @Sendable (String?) -> Void = { _ in }) async -> AnalysisResult {
         let origin = meta.clock.originHostSeconds
         let micOffset = (meta.mic?.startHostSeconds ?? origin) - origin
         let webcamOffset = (meta.webcam?.startHostSeconds ?? origin) - origin
         let snapshot = input
         var request = AnalysisRequest(screen: bundle.screenURL, webcam: meta.webcam == nil ? nil : bundle.webcamURL,
-                                      mic: meta.mic == nil ? nil : bundle.micURL, cacheDirectory: bundle.cacheURL,
+                                      mic: nil, cacheDirectory: bundle.cacheURL,
                                       webcamOffset: webcamOffset, micOffset: micOffset, projectSalt: meta.analysisSalt,
                                       privacy: timeline.overlays.privacy, locale: timeline.captions.locale,
                                       vocabulary: timeline.captions.vocabulary, // Caption recognition runs once with Moonshine after capture, not
@@ -79,15 +84,24 @@ public final class ProjectSession: @unchecked Sendable {
                                           || (timeline.webcam?.backdrop != nil && timeline.webcam?.backdrop != .original),
                                       includeTyping: !snapshot.events.isEmpty,
                                       events: snapshot.events)
+        request.ax = snapshot.ax
         request.sourceDuration = meta.source.duration
         request.privacyProgress = privacyProgress
-        let result = await AnalysisService.shared.run(request)
+        let result = await AnalysisService.shared.run(request, onTyping: { [self] result in
+            guard !Task.isCancelled, result.errors["typing"] == nil else { return }
+            inputState.withLock { $0.typing = result.typing }
+            onTyping()
+        }, onPrivacy: { [self] result in
+            guard !Task.isCancelled else { return }
+            inputState.withLock { $0.ocr = result.ocr }
+            onPrivacy(result.errors["ocr"])
+        })
         guard !Task.isCancelled else { return result }
         let appliedRequest = request
         inputState.withLock { current in
             if result.errors["face"] == nil, meta.webcam != nil { current.face = result.face }
             if result.errors["activity"] == nil, appliedRequest.includeActivity { current.activity = result.activity }
-            if result.errors["ocr"] == nil, timeline.overlays.privacy.enabled, timeline.overlays.privacy.autoDetect { current.ocr = result.ocr }
+            if timeline.overlays.privacy.enabled, timeline.overlays.privacy.autoDetect { current.ocr = result.ocr }
             if result.errors["speech"] == nil, let transcript = result.transcript { current.transcript = transcript }
             if result.errors["personMask"] == nil, let personMask = result.personMask { current.personMask = personMask }
             if result.errors["typing"] == nil, appliedRequest.includeTyping { current.typing = result.typing }
