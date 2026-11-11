@@ -45,7 +45,7 @@ actor DerivePipeline {
     }
 }
 
-struct LookPreset: Codable, Identifiable { var id: String { name }; var name: String; var style: Style; var cursor: CursorStyle; var camera: CameraParams; var audio: AudioPlan }
+struct LookPreset: Codable, Identifiable, Sendable { var id: String { name }; var name: String; var style: Style; var cursor: CursorStyle; var camera: CameraParams; var audio: AudioPlan }
 
 /// The transient picture of a cut being chosen. Lives only in the editor
 /// (view state): it is never written into `Timeline`, never saved and never
@@ -125,6 +125,7 @@ enum TimelineSelection: Equatable {
     private var replanTask: Task<Void, Never>?
     private var analysisTask: Task<Void, Never>?
     private var analysisGeneration = 0
+    private var transcriptGeneration = 0
     private var pendingInitialAnalysis = false
     private var exportTask: Task<Void, Never>?
     private var activeExportID = UUID()
@@ -137,14 +138,15 @@ enum TimelineSelection: Equatable {
     private var wantsPlayback = false
     private let player = PreviewAudioPlayer()
 
-    init(session: ProjectSession, renderer: Renderer, timeline: Timeline) {
+    init(session: ProjectSession, renderer: Renderer, timeline: Timeline,
+         exportSettings: ExportSettings, transcript: Transcript?) {
         self.session = session; self.renderer = renderer; self.timeline = timeline; box = TimelineBox(timeline)
-        self.exportSettings = ExportSettings.load(defaultName: AppModel.displayName(session.meta.name))
+        self.exportSettings = exportSettings
         renderer.setCustomCursors(session.cursors)
         // No eager remix at open: the full offline mix (WPE + studio chain)
         // is seconds of CPU and was competing with derive at open. It is
         // built lazily on first Play (see play()).
-        setTranscript(session.transcriptFile?.transcript.shifted(by: session.micOffset))
+        setTranscript(transcript)
         // Pre-start the audio engine off the main thread so the first Play
         // click never pays engine startup inside the transport gap.
         let p = player
@@ -152,14 +154,20 @@ enum TimelineSelection: Equatable {
     }
 
     static func open(url: URL) async throws -> EditorModel {
-        let (r, s, initial) = try await Task.detached(priority: .userInitiated) {
+        // Everything that touches disk or CPU for a project load happens in
+        // the worker: the session, the waveform, the export defaults and the
+        // transcript. The main actor only receives the finished values.
+        let (r, s, initial, settings, transcript) = try await Task.detached(priority: .userInitiated) {
             let renderer = try Renderer()
             let (session, timeline) = try await ProjectSession.open(ProjectBundle(url: url), device: renderer.device)
-            return (renderer, session, timeline)
+            let settings = ExportSettings.load(defaultName: AppModel.displayName(session.meta.name))
+            let transcript = session.transcriptFile?.transcript.shifted(by: session.micOffset)
+            return (renderer, session, timeline, settings, transcript)
         }.value
         // Open the editor from persisted intent immediately. Cursor/camera
         // derivation is CPU-heavy and must not block the Studio window.
-        let model = EditorModel(session: s, renderer: r, timeline: initial)
+        let model = EditorModel(session: s, renderer: r, timeline: initial,
+                                exportSettings: settings, transcript: transcript)
         // Editor must open fast: OCR/face/mask analysis used to start here,
         // competing with derive+mix for CPU and making open feel hung.
         // Defer it until the first derive has published (see replan), so the
@@ -404,7 +412,20 @@ enum TimelineSelection: Equatable {
         // A transcript arriving never switches captions on. The toggle is the
         // only writer; this used to force `enabled = true` and that is why the
         // switch kept turning itself back on.
-        transcript = t; sentences = t.map { Sentences.split($0.words) } ?? []
+        transcript = t
+        transcriptGeneration += 1
+        let generation = transcriptGeneration
+        guard let t else { sentences = []; return }
+        // Splitting a transcript into sentences is O(words): it never runs on
+        // the main actor, and a newer transcript always wins the race.
+        let words = t.words
+        Task.detached(priority: .userInitiated) {
+            let split = Sentences.split(words)
+            await MainActor.run {
+                guard self.transcriptGeneration == generation else { return }
+                self.sentences = split
+            }
+        }
     }
     func seekSource(_ s: Double) { seek(timeline.timeMap.output(atSource: s)) }
 
@@ -810,13 +831,18 @@ enum TimelineSelection: Equatable {
 
     // MARK: Looks, music, export
 
-    private static var presetsDir: URL {
+    private nonisolated static var presetsDir: URL {
         let u = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen/Presets")
         try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true); return u
     }
-    static func loadPresets() -> [LookPreset] {
+    nonisolated static func loadPresets() -> [LookPreset] {
         ((try? FileManager.default.contentsOfDirectory(at: presetsDir, includingPropertiesForKeys: nil)) ?? [])
             .compactMap { try? JSONDecoder().decode(LookPreset.self, from: Data(contentsOf: $0)) }.sorted { $0.name < $1.name }
+    }
+    /// The same list, read on a worker: the presets live on disk, and the
+    /// inspector asks for them the moment the editor window appears.
+    static func loadPresetsOffMain() async -> [LookPreset] {
+        await Task.detached(priority: .userInitiated) { loadPresets() }.value
     }
     func savePreset(_ name: String) {
         let p = LookPreset(name: name, style: timeline.style, cursor: timeline.cursor, camera: timeline.camera, audio: timeline.audio)

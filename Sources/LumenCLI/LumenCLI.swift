@@ -277,10 +277,27 @@ struct Transcribe: AsyncParsableCommand {
         guard let s = MoonshineSize(rawValue: size) else { throw ValidationError("size must be medium") }
         guard MoonshineRuntime.isAvailable, ModelStore.isInstalled(s) else { throw ValidationError("Moonshine \(s.rawValue) is not installed.") }
         let b = ProjectBundle(url: URL(fileURLWithPath: project))
-        let f = try AVAudioFile(forReading: b.micURL), audioSec = Double(f.length) / f.processingFormat.sampleRate
+        // Transcription runs on the CLEANED voice. The raw microphone file still holds
+        // room noise and the transcript comes out as garbage, so the denoised 16 kHz
+        // voice track is what gets transcribed.
+        let settings: AudioPlan
+        do { settings = try b.load().timeline.audio }
+        catch { throw ValidationError("Could not read the project at \(project): \(error)") }
+        FileHandle.standardError.write(Data("cleaning voice\n".utf8))
+        let voiceURL: URL
+        do {
+            voiceURL = try await cleanVoiceURL(for: b, settings: settings)
+        } catch CleanVoiceError.missingMicrophone {
+            throw ValidationError("This project has no microphone audio to transcribe.")
+        } catch {
+            throw ValidationError("Could not clean the voice track: \(error). Transcription needs the cleaned voice, not the raw microphone file.")
+        }
+        let f = try AVAudioFile(forReading: voiceURL)
+        let audioSec = Double(f.length) / f.processingFormat.sampleRate
         let t0 = HostClock.now()
-        let r = await FileTranscriber.run(url: b.micURL, size: s) { p in FileHandle.standardError.write(Data("\r\(Int(p * 100))%".utf8)) }
+        let r = await FileTranscriber.run(url: voiceURL, size: s) { p in FileHandle.standardError.write(Data("\r\(Int(p * 100))%".utf8)) }
         let wall = HostClock.now() - t0
+        FileHandle.standardError.write(Data("\n".utf8))
         switch r {
         case .failure(let e): throw ValidationError(e.description)
         case .success(let tr):

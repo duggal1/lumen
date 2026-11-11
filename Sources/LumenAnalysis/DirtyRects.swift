@@ -1,4 +1,5 @@
 import Foundation
+import CoreVideo
 import LumenProject
 
 /// Changed source-pixel regions shared by typing and sensitive-text analysis.
@@ -34,8 +35,24 @@ enum DirtyRects {
         return merged
     }
 
+    /// Source-pixel rectangles whose luma tiles changed between two frames.
+    ///
+    /// The whole frame is returned when there is no baseline (first frame) or
+    /// when the two grids have a different shape. Otherwise every tile whose
+    /// mean moved by at least `threshold` is marked, the marked set is grown by
+    /// `padTiles` in each direction, the marked tiles are merged into connected
+    /// components and each component is returned as a pixel rectangle. Nothing
+    /// changed means an empty result, which is the common case on a static screen.
+    static func between(_ previous: LumaTiles?, _ current: LumaTiles, threshold: Int = 6, padTiles: Int = 4) -> [CGRect] {
+        between(previous, current, threshold: threshold, padTiles: padTiles,
+                previousSignatures: nil, signatures: nil)
+    }
+
+    /// Same as `between(_:_:threshold:padTiles:)`, but a tile also counts as
+    /// changed when its exact pixel signature moved even though the mean luma
+    /// barely did — a single new character in a mostly uniform region.
     static func between(_ previous: LumaTiles?, _ current: LumaTiles, threshold: Int = 6, padTiles: Int = 4,
-                        previousSignatures: [UInt64]? = nil, signatures: [UInt64]? = nil) -> [CGRect] {
+                        previousSignatures: [UInt64]?, signatures: [UInt64]?) -> [CGRect] {
         guard let previous, previous.cols == current.cols, previous.rows == current.rows else {
             return [CGRect(x: 0, y: 0, width: current.cols * current.tile, height: current.rows * current.tile)]
         }
@@ -74,4 +91,43 @@ enum DirtyRects {
         }
         return regions
     }
+}
+
+/// 16 source-px tiles, stride-2 sampling, one pass over the buffer.
+/// Shared by the typing tracer and the sensitive-text scan so both measure
+/// change against the very same grid.
+func lumaTiles(_ buffer: CVPixelBuffer) throws -> LumaTiles {
+    try lumaSnapshot(buffer).tiles
+}
+
+/// The luma grid plus a per-tile pixel signature. The signature catches tiles
+/// whose content changed without moving the mean luma.
+func lumaSnapshot(_ buffer: CVPixelBuffer) throws -> (tiles: LumaTiles, signatures: [UInt64]) {
+    guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { throw AnalysisError.pixelBuffer }
+    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+    guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { throw AnalysisError.pixelBuffer }
+    let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
+    let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+    let tile = 16
+    let cols = max(1, (width + tile - 1) / tile), rows = max(1, (height + tile - 1) / tile)
+    var sum = [UInt32](repeating: 0, count: cols * rows)
+    var count = [UInt32](repeating: 0, count: cols * rows)
+    var signatures = [UInt64](repeating: 14695981039346656037, count: cols * rows)
+    for y in stride(from: 0, to: height, by: 2) {
+        let row = base + y * rowBytes
+        let ry = y / tile
+        for x in stride(from: 0, to: width, by: 2) {
+            let i = x * 4
+            let luma = (29 * Int(row[i]) + 150 * Int(row[i + 1]) + 77 * Int(row[i + 2])) >> 8
+            let index = ry * cols + x / tile
+            signatures[index] = (signatures[index] ^ UInt64(luma >> 4)) &* 1099511628211
+            sum[index] += UInt32(luma)
+            count[index] += 1
+        }
+    }
+    var mean = [UInt8](repeating: 0, count: cols * rows)
+    for i in mean.indices where count[i] > 0 {
+        mean[i] = UInt8(min(255, sum[i] / count[i]))
+    }
+    return (LumaTiles(cols: cols, rows: rows, tile: tile, mean: mean), signatures)
 }

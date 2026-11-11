@@ -8,11 +8,16 @@ final class CancelFlag: Sendable {
     var isCancelled: Bool { f.load(ordering: .acquiring) }
 }
 
-/// Streams a file through the same core as live mode, as fast as the CPU allows, in 2 s chunks. Memory is flat for any length.
+/// Streams a file through the Moonshine bridge as fast as the CPU allows, in 2 s chunks. Memory is flat for any length.
 /// Result is in the file's own time (mic-file time).
 public enum FileTranscriber {
     public static func run(url: URL, size: MoonshineSize = .current,
                            progress: (@Sendable (Double) -> Void)? = nil) async -> Result<Transcript, SpeechError> {
+        // The engine is the Moonshine bridge running the Medium model. There is no
+        // Apple Speech path: Medium is the only size, so `size` is always `.current`.
+        guard size == .current else { return .failure(.audio("Only the Moonshine Medium model is supported.")) }
+        guard MoonshineRuntime.isAvailable else { return .failure(.notInstalled) }
+        guard ModelStore.isInstalled(.current) else { return .failure(.modelMissing(ModelStore.directory(.current).path)) }
         let flag = CancelFlag()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (c: CheckedContinuation<Result<Transcript, SpeechError>, Never>) in

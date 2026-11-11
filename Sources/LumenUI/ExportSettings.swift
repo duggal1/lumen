@@ -2,13 +2,13 @@ import Foundation
 import LumenProject
 import LumenExport
 
-enum ExportContainer: String, Codable, CaseIterable { case mp4 = "MP4", mov = "MOV"
+enum ExportContainer: String, Codable, CaseIterable, Sendable { case mp4 = "MP4", mov = "MOV"
     var ext: String { rawValue.lowercased() }
 }
-enum ExportResolution: String, Codable, CaseIterable {
+enum ExportResolution: String, Codable, CaseIterable, Sendable {
     case source = "Source", ultraHD8K = "8K", ultraHD = "4K", p1440 = "1440p", p1080 = "1080p", p720 = "720p", custom = "Custom"
 }
-enum ExportRate: String, Codable, CaseIterable {
+enum ExportRate: String, Codable, CaseIterable, Sendable {
     case source = "Source", f24 = "24", f30 = "30", f60 = "60", f120 = "120", f144 = "144", f240 = "240"
     func fps(source: Double) -> Int {
         switch self {
@@ -18,17 +18,17 @@ enum ExportRate: String, Codable, CaseIterable {
         }
     }
 }
-enum ExportQuality: String, Codable, CaseIterable {
+enum ExportQuality: String, Codable, CaseIterable, Sendable {
     case low = "Low", medium = "Medium", high = "High", max = "Max"
     var bpp: Double {
         switch self { case .low: 0.03; case .medium: 0.05; case .high: 0.08; case .max: 0.12 }
     }
 }
-enum ExportKind: String, Codable, CaseIterable {
+enum ExportKind: String, Codable, CaseIterable, Sendable {
     case video = "Video", gif = "GIF"
 }
 
-struct ExportSettings: Codable, Equatable {
+struct ExportSettings: Codable, Equatable, Sendable {
     var kind: ExportKind = .video
     var container: ExportContainer = .mp4
     var codec: VideoCodec = .hevc

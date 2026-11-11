@@ -8,7 +8,7 @@ import LumenProject
 public enum CleanVoiceError: Error { case missingMicrophone }
 
 struct ProcessedVoiceCache {
-    static let revision = "trained-voice-v7-wpe-residual-df-complete"
+    static let revision = "trained-voice-v8-wpe-residual-df-complete"
 
     private struct Settings: Encodable {
         let noiseStrength: Double

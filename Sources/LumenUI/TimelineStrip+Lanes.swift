@@ -135,10 +135,13 @@ extension TimelineStrip {
 
     @ViewBuilder func clipLane(_ vp: Viewport) -> some View {
         let tl = model.timeline
+        // The recording's strips are computed once per update, not once per
+        // canvas frame: the strip redraws many times while the playhead moves.
+        let segments = tl.recordingSegments
         Canvas { c, size in
             let lat = vp.lattice
             var runs: [Run] = []
-            for segment in tl.recordingSegments {
+            for segment in segments {
                 if let run = layoutRun(lat, c0: vp.colFloor(segment.outputStart), c1: vp.colCeil(segment.outputEnd),
                                        bodyH: 24, capH: 28, capCols: 1, body: StripInk.clip, cap: StripInk.clip,
                                        labels: ["Recording"], truncate: true, selected: false) {
@@ -159,8 +162,8 @@ extension TimelineStrip {
                     runs.append(run)
                 }
             }
-            drawBase(c, size, lat, dust: !tl.clips.isEmpty || !tl.recordingSegments.isEmpty, holes: runs.map(\.hole))
-            if tl.clips.isEmpty && tl.recordingSegments.isEmpty { drawEmpty(c, "No recording or imported clips.") }
+            drawBase(c, size, lat, dust: !tl.clips.isEmpty || !segments.isEmpty, holes: runs.map(\.hole))
+            if tl.clips.isEmpty && segments.isEmpty { drawEmpty(c, "No recording or imported clips.") }
             for r in runs where !r.selected { drawRun(c, lat, r) }
             for r in runs where r.selected { drawRun(c, lat, r) }
         }
@@ -168,10 +171,23 @@ extension TimelineStrip {
         .accessibilityLabel(clipAccessibility())
     }
 
+    /// The main lane holds two kinds of content: the recording's own strips
+    /// and imported clips. Both are described, and the label is never empty
+    /// while something is on the lane.
     func clipAccessibility() -> String {
         let tl = model.timeline
-        guard !tl.clips.isEmpty || !tl.recordingSegments.isEmpty else { return "No clips" }
-        return tl.clips.map { String(format: "Clip %@ %.1f to %.1f seconds", $0.name, $0.start, $0.end) }.joined(separator: ". ")
+        let segments = tl.recordingSegments
+        var parts: [String] = []
+        if !segments.isEmpty {
+            let first = segments.first!.outputStart
+            let last = segments.last!.outputEnd
+            parts.append(String(format: "Recording %.1f to %.1f seconds", first, last))
+        }
+        for clip in tl.clips {
+            parts.append(String(format: "Clip %@ %.1f to %.1f seconds", clip.name, clip.start, clip.end))
+        }
+        guard !parts.isEmpty else { return "No clips" }
+        return parts.joined(separator: ". ")
     }
 
     // MARK: - Zoom

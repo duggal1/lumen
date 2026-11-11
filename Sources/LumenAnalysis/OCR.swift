@@ -21,8 +21,11 @@ public enum OCRAnalyzer {
     }
 }
 
-struct PartialScan: Error, Sendable { let detections: [OCRDetection] }
-private struct OCRImage: @unchecked Sendable { let image: CGImage }
+/// A scan that stopped early still knows every secret it found. The partial
+/// detections travel with the error so the caller can publish the masks it
+/// has instead of discarding them.
+public struct PartialScan: Error, Sendable { public let detections: [OCRDetection] }
+private struct OCRTile: @unchecked Sendable { let image: CGImage; let rect: CGRect }
 private struct OCRLine: @unchecked Sendable { let observation: VNRecognizedTextObservation; let box: CGRect; let tile: CGRect }
 
 private struct OCRRequestHandle: @unchecked Sendable { let request: VNRecognizeTextRequest }
@@ -201,36 +204,53 @@ private final class OCRJob: @unchecked Sendable {
     }
 
     private func detect(in buffer: CVPixelBuffer, regions: [CGRect], at time: Double) throws -> [OCRDetection] {
+        let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
         let image = CIImage(cvPixelBuffer: buffer)
-        guard let full = context.createCGImage(image, from: image.extent) else { throw AnalysisError.pixelBuffer }
-        let width = full.width, height = full.height, tile = 1536, step = 1408
-        var tiles: [CGRect] = []
+        let frame = CGRect(x: 0, y: 0, width: Double(width), height: Double(height))
+        // Only the changed regions are turned into bitmaps. Converting the whole
+        // frame on every sample is what made a long capture crawl, and Vision is
+        // only ever asked about the pixels that actually moved.
+        let tile = 1536, step = 1408
+        var work: [OCRTile] = []
         for region in regions {
-            for y in stride(from: Int(region.minY), to: Int(region.maxY.rounded(.up)), by: step) {
-                for x in stride(from: Int(region.minX), to: Int(region.maxX.rounded(.up)), by: step) {
-                    tiles.append(CGRect(x: x, y: y, width: min(tile, Int(region.maxX.rounded(.up)) - x),
-                        height: min(tile, Int(region.maxY.rounded(.up)) - y)))
+            let clipped = region.intersection(frame)
+            guard !clipped.isEmpty else { continue }
+            let x0 = clipped.minX.rounded(.down), y0 = clipped.minY.rounded(.down)
+            let x1 = clipped.maxX.rounded(.up), y1 = clipped.maxY.rounded(.up)
+            guard x1 > x0, y1 > y0 else { continue }
+            // Core Image is bottom-left origin, the captured frame is top-down.
+            let ciRect = CGRect(x: x0, y: Double(height) - y1, width: x1 - x0, height: y1 - y0)
+            let croppedCI = image.cropped(to: ciRect)
+            guard let cropped = context.createCGImage(croppedCI, from: croppedCI.extent) else { continue }
+            // Tile the region only when it is larger than the Vision sweet spot.
+            for y in stride(from: 0.0, to: y1 - y0, by: Double(step)) {
+                for x in stride(from: 0.0, to: x1 - x0, by: Double(step)) {
+                    let tw = min(Double(tile), x1 - x0 - x), th = min(Double(tile), y1 - y0 - y)
+                    guard tw > 0, th > 0 else { continue }
+                    guard let tileImage = cropped.cropping(to: CGRect(x: x, y: y, width: tw, height: th)) else { continue }
+                    work.append(OCRTile(image: tileImage, rect: CGRect(x: x0 + x, y: y0 + y, width: tw, height: th)))
                 }
             }
         }
-        let work = tiles, source = OCRImage(image: full)
+        guard !work.isEmpty else { return [] }
         let collected = OSAllocatedUnfairLock<[OCRLine]>(uncheckedState: [])
         let failures = OSAllocatedUnfairLock<[Error]>(uncheckedState: [])
         let workers = min(3, work.count)
         DispatchQueue.concurrentPerform(iterations: workers) { worker in
             for index in stride(from: worker, to: work.count, by: max(workers, 1)) {
                 if self.cancelled.withLock({ $0 }) { return }
-                let rect = work[index]
-                guard let crop = source.image.cropping(to: rect) else { continue }
+                let tile = work[index]
                 let request = VNRecognizeTextRequest()
                 request.recognitionLevel = .accurate; request.usesLanguageCorrection = false; request.minimumTextHeight = 0
                 let requestHandle = OCRRequestHandle(request: request)
                 self.requestLock.withLock { $0.append(requestHandle) }
                 defer { self.requestLock.withLock { $0.removeAll { $0.request === requestHandle.request } } }
                 do {
-                    try VNImageRequestHandler(cgImage: crop, options: [:]).perform([request])
+                    try VNImageRequestHandler(cgImage: tile.image, options: [:]).perform([request])
                     let lines = (request.results ?? []).map { observation in
-                        OCRLine(observation: observation, box: Self.normalized(observation.boundingBox, tile: rect, width: width, height: height), tile: rect)
+                        OCRLine(observation: observation,
+                                box: Self.normalized(observation.boundingBox, tile: tile.rect, width: width, height: height),
+                                tile: tile.rect)
                     }
                     collected.withLock { $0.append(contentsOf: lines) }
                 } catch { failures.withLock { $0.append(error) } }
@@ -246,9 +266,12 @@ private final class OCRJob: @unchecked Sendable {
             for hit in SensitivePatterns.scan(candidate.string, custom: patterns, entropyThreshold: entropyThreshold) {
                 let value = String(candidate.string[hit.range]).trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !value.isEmpty else { continue }
+                // Vision's exact box for the matched range, in the tile's own
+                // normalised space. When Vision cannot place it, the whole line
+                // is masked instead: a detected secret is never skipped.
                 let tight = try? candidate.boundingBox(for: hit.range)
-                let box = tight.map { Self.normalized($0.boundingBox, tile: line.tile, width: width, height: height) }
-                let safeBox = box.flatMap { $0.isEmpty ? nil : $0 } ?? line.box
+                let box = tight.flatMap { $0.boundingBox.isEmpty ? nil : Self.normalized($0.boundingBox, tile: line.tile, width: width, height: height) }
+                let safeBox = box ?? line.box
                 output.append(OCRDetection(t: time, x: safeBox.minX, y: safeBox.minY, w: safeBox.width, h: safeBox.height,
                     category: hit.category, hash: fnv1a64(value.lowercased(), salt: salt), confidence: candidate.confidence))
             }

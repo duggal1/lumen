@@ -295,6 +295,7 @@ public final class AudioMixer: @unchecked Sendable {
             for (code, buffer) in TypingPackLoader.buffers(in: directory) {
                 guard let channel = buffer.floatChannelData?[0] else { continue }
                 let raw = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+                // Mechvibes packs ship at 44.1 kHz; the timeline runs at 48 kHz.
                 let pcm = AudioIO.resample(raw, from: buffer.format.sampleRate)
                 let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
                 guard peak > 1e-4 else { continue }
@@ -302,16 +303,21 @@ public final class AudioMixer: @unchecked Sendable {
             }
             return buffers
         }()
+        let packCodes = Set(typingBuffers.keys)
         let fallbackKey = typingBuffers.keys.sorted().first
         for cue in d.cues {
             let buf: [Float]
             if cue.kind == .key {
                 guard a.keySounds else { continue }
-                let code = TypingPackLoader.macToPack[Int(cue.keyCode)]
+                // Only a key the pack really defines gets its own sample; every
+                // other key falls back to the pack's first sample, then to the
+                // recorded key tap. Typing is never silent.
+                let code = TypingPackLoader.packCode(for: Int(cue.keyCode), definedIn: packCodes)
                 let samples = code.flatMap({ typingBuffers[$0] })
                     ?? fallbackKey.flatMap({ typingBuffers[$0] }) ?? bank.render(.key).samples
                 let gap = prevKeyT.map { cue.t - $0 } ?? 1
                 let gain: Float = gap < 0.05 ? 0.7 : gap < 0.15 ? 0.85 : 1
+                // Typing has its own level; the general sfx gain does not stack on it.
                 let amplitude = Float(pow(10, (a.typingLevelDb + cue.gainDb) / 20)) * gain
                 buf = samples.map { $0 * amplitude }
                 prevKeyT = cue.t

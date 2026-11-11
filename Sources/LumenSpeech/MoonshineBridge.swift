@@ -17,10 +17,10 @@ public enum SpeechError: Error, Sendable, CustomStringConvertible {
 }
 
 /// One model, no picker. Medium is the only build that transcribes a room
-/// well enough to caption; Tiny traded accuracy for speed nobody asked for.
-public enum MoonshineSize: String, Codable, CaseIterable, Sendable {
+/// well enough to caption; the smaller builds traded accuracy for speed
+/// nobody asked for.
+public enum MoonshineSize: String, Codable, Sendable {
     case medium
-    public static let defaultsKey = "lumen.moonshine.size"
     public var title: String { "Medium" }
     public var detail: String { "Most accurate · slowest" }
     public var folder: String { "moonshine-streaming-\(rawValue)" }

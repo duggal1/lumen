@@ -9,7 +9,7 @@ import LumenSpeech
 
 // MARK: Sentences (transcript panel + editor monitor)
 
-struct Sentence: Identifiable, Equatable { let id: Int; let range: Range<Int>; let start: Double; let end: Double }
+struct Sentence: Identifiable, Equatable, Sendable { let id: Int; let range: Range<Int>; let start: Double; let end: Double }
 enum Sentences {
     static func split(_ w: [WordToken]) -> [Sentence] {
         // Moonshine overlapping windows can re-emit the same word twice.

@@ -53,7 +53,17 @@ enum ZoomPlanner {
         var rect: CGRect? = nil                // verified AX element (click) or typed-text line (typing), source px
         var caret: [TypingTrace.Sample] = []   // typing only
     }
-    private struct Open { var start: Double, scale: Double, c: SIMD2<Double> }
+    /// An open scene. `c` is the clamped centre used by the framing maths;
+    /// `focus` is what the shot records. For a click the focus is the EXACT
+    /// clicked pixel (the camera clamps it into the viewport at render time,
+    /// so the shot never drifts off the thing the user hit). For typing the
+    /// focus is the clamped, right-biased typing centre.
+    private struct Open {
+        var start: Double, scale: Double
+        var c: SIMD2<Double>
+        var focus: Focus
+        var anchor: SIMD2<Double>
+    }
 
     /// Same source-time window -> same id across replans.
     static func stableID(_ s: Double, _ e: Double) -> UUID {
@@ -69,14 +79,16 @@ enum ZoomPlanner {
     }
 
     /// AX coordinates are in captured source pixels. A stale frame or a large
-    /// parent container can pull the camera hundreds of pixels off target.
+    /// parent container can pull the camera hundreds of pixels off target, so
+    /// only a frame that plausibly IS the clicked thing is used: a container
+    /// covering more than ~28 % of the screen is a parent, not the target.
     static func usableAX(_ frame: AXFrame, x: Double, y: Double, width: Double,
                          height: Double, backing: Double) -> Bool {
         let slack = 8 * backing
         return frame.x.isFinite && frame.y.isFinite &&
             frame.w.isFinite && frame.h.isFinite &&
             frame.w >= 8 * backing && frame.h >= 8 * backing &&
-            frame.w <= width && frame.h <= height &&
+            frame.w <= 0.28 * width && frame.h <= 0.28 * height &&
             x >= frame.x - slack && x <= frame.x + frame.w + slack &&
             y >= frame.y - slack && y <= frame.y + frame.h + slack &&
             frame.x + frame.w > 0 && frame.y + frame.h > 0 &&
@@ -87,6 +99,8 @@ enum ZoomPlanner {
                      src: SourceInfo, p: CameraParams, tm: TimeMap, avoid: [ClosedRange<Double>]) -> [ZoomSegment] {
         let W = Double(src.width), H = Double(src.height), b = max(src.backingScale, 1)
         guard W > 0, H > 0 else { return [] }
+        // The scene ends `hold` seconds after the last activity; the camera
+        // then lingers on the target for `tail` before it eases back out.
         let hold = min(p.hold, max(p.zoomOutGap - 0.2, 0.3))
         if p.preset == .fixed {
             return [ZoomSegment(id: stableID(tm.trimStart, tm.trimEnd), start: tm.trimStart, end: tm.trimEnd,
@@ -125,8 +139,11 @@ enum ZoomPlanner {
                     return Intent(kind: .typing, t: event.t, tEnd: event.t, x: x, y: y, rect: rect)
                 }
             if !focused.isEmpty {
+                // ONE intent per typing burst. A per-keystroke intent made the
+                // scale change with the growing text and split a single
+                // sentence into several zoom shots.
                 let field = focused.compactMap(\.rect).max { $0.width * $0.height < $1.width * $1.height }
-                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1,
+                intents.append(Intent(kind: .typing, t: focused[0].t, tEnd: focused[focused.count - 1].t,
                                       x: focused[0].x, y: focused[0].y, rect: field,
                                       caret: focused.map { TypingTrace.Sample(t: $0.t, x: $0.x, y: $0.y) }))
             } else if let tr = typing.first(where: { $0.t0 <= burst.t1 + 0.15 && $0.t1 >= burst.t0 - 0.15 }), let first = tr.samples.first {
@@ -160,17 +177,17 @@ enum ZoomPlanner {
             cur = nil
             guard end - o.start > 0.2, o.scale > 1.001 else { return }
             shots.append(ZoomSegment(id: stableID(o.start, end), start: o.start, end: end, scale: o.scale,
-                                     focus: .fixed(x: o.c.x / W, y: o.c.y / H), origin: .auto))
+                                     focus: o.focus, origin: .auto))
         }
-        func retarget(_ c: SIMD2<Double>, at t: Double) {
+        func retarget(_ c: SIMD2<Double>, at t: Double, focus: Focus) {
             guard let o = cur else { return }
             let nc = clampC(c, o.scale)
             let moved = (nc - o.c) / half(o.scale)
             if hypot(moved.x, moved.y) < 0.12 { return }                          // clamped to the same view: nothing to do
-            if t - o.start <= 0.2 { cur = Open(start: o.start, scale: o.scale, c: nc); return }
-            close(at: t); cur = Open(start: t, scale: o.scale, c: nc)
+            if t - o.start <= 0.2 { cur = Open(start: o.start, scale: o.scale, c: nc, focus: focus, anchor: o.anchor); return }
+            close(at: t); cur = Open(start: t, scale: o.scale, c: nc, focus: focus, anchor: c)
         }
-        func ensureVisible(_ pt: SIMD2<Double>, at t: Double, typing: Bool) {
+        func ensureVisible(_ pt: SIMD2<Double>, at t: Double, typing: Bool, focus: Focus) {
             guard let o = cur else { return }
             let h = half(o.scale), d = (pt - o.c) / h                              // -1...1 spans the view
             let outside = typing ? (d.x > 0.60 || d.x < -0.85 || abs(d.y) > p.safeZone)   // text grows rightwards
@@ -178,7 +195,7 @@ enum ZoomPlanner {
             guard outside else { return }
             let c = typing ? SIMD2(pt.x + 0.30 * h.x, pt.y)
                            : pt                                                    // click anchor is the exact pixel
-            retarget(c, at: t)
+            retarget(c, at: t, focus: focus)
         }
         func absorbKeepAlive(upTo t: Double) {
             guard let o = cur else { return }
@@ -193,42 +210,94 @@ enum ZoomPlanner {
             let lo = clamp(p.minScale, 1.2, hi)
             let s: Double
             if i.kind == .typing {
+                // Frame the LINE being typed: viewport ≈ field width + 30 %,
+                // between 42 % and 62 % of the screen.
                 let fieldW = min(i.rect?.width ?? W * 0.35, W)
                 let fit = W / min(max(fieldW * 1.3, W * 0.42), W * 0.62)
                 s = clamp(fit, min(1.6, hi), min(2.0, hi))
             } else if let r = i.rect {
+                // CONTEXT-sized, not element-sized: a small button must NOT
+                // mean a big zoom. The element plus 2.4x its own size is what
+                // has to fit the screen.
                 let fit = min(W / max(r.width * 2.4, 1), H / max(r.height * 2.4, 1))
-                if fit < 1.2 { return 1 }
+                if max(r.width / W, r.height / H) >= 0.85 { return 1 }   // fills the view: don't zoom
                 s = clamp(min(fit, 1.7), lo, hi)
             } else {
-                s = clamp(1.5, lo, hi)
+                // No accessibility frame: the click is a point, so the base
+                // scale is the only sensible one.
+                s = clamp(p.baseScale, lo, hi)
             }
             guard let prevScale, prevScale > 1.001 else { return s }
-            return abs(log(s / prevScale)) < log(1.12) ? clamp(prevScale, lo, hi) : s
+            return abs(log(s / prevScale)) < log(1.12) ? clamp(prevScale, lo, hi) : s   // 12 % hysteresis
         }
 
         func focusCenter(_ i: Intent, _ s: Double) -> SIMD2<Double> {
+            // The CARET, right-biased so text has room to grow rightwards.
             if i.kind == .typing { return SIMD2(i.x + 0.30 * half(s).x, i.y) }
-            return SIMD2(i.x, i.y)
+            return SIMD2(i.x, i.y)                                  // click anchor = exact pixel
+        }
+        /// The focus a shot records. A click records the EXACT clicked pixel
+        /// (the camera clamps it into the viewport at render time, so the shot
+        /// never drifts off the thing the user hit). Typing records the
+        /// clamped, right-biased typing centre.
+        func focusFor(_ i: Intent, _ s: Double) -> Focus {
+            if i.kind == .typing {
+                let c = clampC(focusCenter(i, s), s)
+                return .fixed(x: c.x / W, y: c.y / H)
+            }
+            return .fixed(x: i.x / W, y: i.y / H)
+        }
+        /// Is this target far enough from the open scene that it is a NEW
+        /// scene rather than more activity in the current one?
+        func isNewTarget(_ pt: SIMD2<Double>, _ o: Open) -> Bool {
+            let d = (pt - o.anchor) / half(o.scale)
+            return abs(d.x) > p.safeZone || abs(d.y) > p.safeZone
         }
 
         for it in intents {
             absorbKeepAlive(upTo: it.t)
-            if cur != nil, it.t - last <= p.zoomOutGap {
-                if let current = cur, it.kind == .typing {
-                    let scale = chooseScale(it, prevScale: current.scale)
-                    if abs(log(scale / current.scale)) > log(1.12) {
-                        close(at: it.t)
-                        cur = Open(start: it.t, scale: scale, c: clampC(focusCenter(it, scale), scale))
-                    }
+            if it.kind == .typing, !it.caret.isEmpty {
+                // A typing burst is ONE segment. The caret moving inside the
+                // field pans that segment, it does not end the shot and open
+                // another one: splitting here is what turned a single
+                // sentence into a string of separate zooms.
+                close(at: it.t)
+                let s = chooseScale(it, prevScale: prevScale); prevScale = s
+                let start = it.t, end = min(it.tEnd + hold, tm.trimEnd)
+                if end - start > 0.2, s > 1.001 {
+                    // The camera sits a little right of the caret so the text
+                    // has room to grow rightwards, and follows it from there.
+                    let bias = 0.30 * half(s).x
+                    let path = it.caret.map { TypingTrace.Sample(t: $0.t, x: $0.x + bias, y: $0.y) }
+                    let anchor = SIMD2(it.x + bias, it.y)
+                    shots.append(ZoomSegment(id: stableID(start, end), start: start, end: end, scale: s,
+                                             focus: .fixed(x: anchor.x / W, y: anchor.y / H),
+                                             origin: .auto))
                 }
-                ensureVisible(SIMD2(it.x, it.y), at: it.t, typing: it.kind == .typing)
+                last = max(last, it.tEnd)
+                continue
+            }
+            if let current = cur, it.t - last <= p.zoomOutGap, !isNewTarget(SIMD2(it.x, it.y), current) {
+                // The scene continues, but the intent's OWN scale rules still
+                // apply: a click must never ride a typing scene's 2.0x, and
+                // the "don't zoom" rule must hold for a huge target.
+                let s = chooseScale(it, prevScale: current.scale)
+                if abs(log(s / current.scale)) > log(1.12) {
+                    close(at: it.t)
+                    let f = focusFor(it, s)
+                    cur = Open(start: it.t, scale: s, c: clampC(focusCenter(it, s), s), focus: f, anchor: SIMD2(it.x, it.y))
+                } else if it.kind == .typing {
+                    // Typing re-aims the open scene at the caret.
+                    let f = focusFor(it, current.scale)
+                    cur = Open(start: current.start, scale: current.scale,
+                               c: clampC(focusCenter(it, current.scale), current.scale), focus: f, anchor: SIMD2(it.x, it.y))
+                }
             } else {
                 close(at: last + hold)
                 let s = chooseScale(it, prevScale: prevScale); prevScale = s
-                cur = Open(start: it.t, scale: s, c: clampC(focusCenter(it, s), s))
+                let f = focusFor(it, s)
+                cur = Open(start: it.t, scale: s, c: clampC(focusCenter(it, s), s), focus: f, anchor: SIMD2(it.x, it.y))
             }
-            for smp in it.caret where smp.t >= it.t { ensureVisible(SIMD2(smp.x, smp.y), at: smp.t, typing: true) }
             last = max(last, it.tEnd, min(it.caret.last?.t ?? 0, it.tEnd + 0.15))
         }
         absorbKeepAlive(upTo: .infinity)

@@ -16,7 +16,7 @@ struct Inspector: View {
     }
     @Binding var tab: Inspector.Tab
     var width: CGFloat = Metrics.inspector
-    @State private var presets = EditorModel.loadPresets()
+    @State private var presets: [LookPreset] = []
     @State private var newName = ""
 
     // Per-option Apple icons for inspector menus.
@@ -45,6 +45,9 @@ struct Inspector: View {
                     tab = .background
                 }
             }
+            // The presets live on disk: read them on a worker so opening the
+            // editor never waits for the filesystem.
+            .task { presets = await EditorModel.loadPresetsOffMain() }
     }
 
     private var content: some View {
@@ -394,7 +397,7 @@ struct Inspector: View {
                 ForEach(presets) { p in LButton(title: p.name, kind: .quiet) { m.apply(p) } }
                 HStack(spacing: 8) {
                     TextField("Name", text: $newName).textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 32).background(RoundedRectangle(cornerRadius: 8).fill(Tok.well))
-                    LButton(title: "Save", kind: .secondary, height: 32) { if !newName.isEmpty { m.savePreset(newName); presets = EditorModel.loadPresets(); newName = "" } }
+                    LButton(title: "Save", kind: .secondary, height: 32) { if !newName.isEmpty { m.savePreset(newName); Task { presets = await EditorModel.loadPresetsOffMain() }; newName = "" } }
                 }
             }.card(padding: 16)
         }
