@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""Write all source code in the selected Lumen modules to allcode.md."""
+"""Write LumenAudio source code to allcode.md."""
 
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "allcode.md"
-FOLDERS = (
-    "LumenDirector",
-    "LumenCapture",
-    "LumenAnalysis",
-    "LumenProject",
-    "LumenRender",
-    "LumenAudio",
-)
+FOLDERS = ("LumenAudio",)
 CODE_EXTENSIONS = {".swift", ".c", ".h", ".m", ".mm", ".metal", ".cpp", ".hpp"}
 LANGUAGE_BY_EXTENSION = {
     ".swift": "swift",
@@ -39,7 +32,7 @@ def fence_for(source: str) -> str:
 
 
 def main() -> None:
-    sections = ["Hey, this is the folder, and this is the code file,", ""]
+    sections = ["# Audio processing source", ""]
     count = 0
 
     for folder_name in FOLDERS:
