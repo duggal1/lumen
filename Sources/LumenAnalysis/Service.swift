@@ -87,7 +87,8 @@ public actor AnalysisService {
     public init() {}
 
     public func run(_ request: AnalysisRequest, onTyping: @Sendable (AnalysisResult) -> Void = { _ in },
-                    onPrivacy: @Sendable (AnalysisResult) -> Void = { _ in }) async -> AnalysisResult {
+                    onPrivacy: @Sendable (AnalysisResult) -> Void = { _ in },
+                    onPrivacyStart: @Sendable () -> Void = {}) async -> AnalysisResult {
         // At most 2 concurrent analyzers at .utility; pause while a recording
         // is active so capture never shares the CPU with analysis.
         while RecordingGate.isRecordingActive {
@@ -96,15 +97,15 @@ public actor AnalysisService {
         }
         let typingResult = await runTyping(request)
         onTyping(typingResult)
-        // Keep the remaining analyzers bounded to two concurrent jobs.
+        onPrivacyStart()
+        async let ocrResult = ocr(request)
         async let faceResult = face(request)
         async let activityResult = activity(request)
-        let (faces, faceError) = await faceResult
-        let (activities, activityError) = await activityResult
-        async let ocrResult = ocr(request)
         async let transcriptResult = transcript(request)
         let (detections, ocrError) = await ocrResult
         onPrivacy(AnalysisResult(ocr: detections, errors: ocrError.map { ["ocr": $0] } ?? [:]))
+        let (faces, faceError) = await faceResult
+        let (activities, activityError) = await activityResult
         let (words, transcriptError) = await transcriptResult
         let (mask, maskError) = await personMask(request)
         let traces = typingResult.typing
@@ -158,7 +159,7 @@ public actor AnalysisService {
                                    entropyThreshold: r.privacy.entropyThreshold, fps: 4)
         do {
             let directory = analysisDirectory(r)
-            let key = try await AnalysisCache.key(media: r.screen, analyzer: "sensitive-text", version: 6, parameters: params)
+            let key = try await AnalysisCache.key(media: r.screen, analyzer: "sensitive-text", version: 7, parameters: params)
             if let detections = AnalysisCache.load([OCRDetection].self, key: key, directory: directory) { return (detections, nil) }
             let detections = try await OCRAnalyzer.analyze(url: r.screen, projectSalt: r.projectSalt,
                 customPatterns: r.privacy.customPatterns, entropyThreshold: r.privacy.entropyThreshold,

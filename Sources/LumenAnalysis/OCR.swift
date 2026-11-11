@@ -12,7 +12,7 @@ public enum OCRAnalyzer {
                               progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> [OCRDetection] {
         guard ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else { return [] }
         let asset = AVURLAsset(url: url)
-        guard let track = try await asset.loadTracks(withMediaType: .video).first else { return [] }
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw AnalysisError.noVideoTrack }
         let job = OCRJob(asset: asset, track: track, offset: offset, salt: projectSalt, patterns: customPatterns,
                          entropyThreshold: entropyThreshold, fps: fps, duration: duration, firstFrameOnly: firstFrameOnly, progress: progress)
         return try await withTaskCancellationHandler {
@@ -246,9 +246,10 @@ private final class OCRJob: @unchecked Sendable {
             for hit in SensitivePatterns.scan(candidate.string, custom: patterns, entropyThreshold: entropyThreshold) {
                 let value = String(candidate.string[hit.range]).trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !value.isEmpty else { continue }
-                guard let tight = try? candidate.boundingBox(for: hit.range) else { continue }
-                let box = Self.normalized(tight.boundingBox, tile: line.tile, width: width, height: height)
-                output.append(OCRDetection(t: time, x: box.minX, y: box.minY, w: box.width, h: box.height,
+                let tight = try? candidate.boundingBox(for: hit.range)
+                let box = tight.map { Self.normalized($0.boundingBox, tile: line.tile, width: width, height: height) }
+                let safeBox = box.flatMap { $0.isEmpty ? nil : $0 } ?? line.box
+                output.append(OCRDetection(t: time, x: safeBox.minX, y: safeBox.minY, w: safeBox.width, h: safeBox.height,
                     category: hit.category, hash: fnv1a64(value.lowercased(), salt: salt), confidence: candidate.confidence))
             }
         }
