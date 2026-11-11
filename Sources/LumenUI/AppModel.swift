@@ -484,7 +484,9 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             paused = false
             phase = .idle; refresh()
             let finished = b.url
-            let duration = (try? ProjectBundle(url: finished).load().meta.source.duration) ?? 0
+            let duration = await Task.detached(priority: .userInitiated) {
+                (try? ProjectBundle(url: finished).load().meta.source.duration) ?? 0
+            }.value
             Task { await EmailNotificationService.shared.recordingFinished(project: finished, duration: duration) }
             if let onFinished { onFinished(b.url); hiddenWindows.removeAll() }
             else { restoreLibraryAfterFailure() }
