@@ -124,6 +124,7 @@ enum TimelineSelection: Equatable {
     private var published = -1.0
     private var replanTask: Task<Void, Never>?
     private var analysisTask: Task<Void, Never>?
+    private var analysisGeneration = 0
     private var pendingInitialAnalysis = false
     private var exportTask: Task<Void, Never>?
     private var activeExportID = UUID()
@@ -201,6 +202,8 @@ enum TimelineSelection: Equatable {
 
     private func analyzeInBackground(_ snapshot: Timeline) {
         analysisTask?.cancel()
+        analysisGeneration += 1
+        let generation = analysisGeneration
         privacyDeadline?.cancel()
         privacyScanProgress = 0
         let scansPrivacy = snapshot.overlays.privacy.enabled && snapshot.overlays.privacy.autoDetect
@@ -210,7 +213,7 @@ enum TimelineSelection: Equatable {
         let session = session
         if scansPrivacy {
             privacyDeadline = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(150)) } catch { return }
+                do { try await Task.sleep(for: .seconds(max(190, session.meta.source.duration * 2 + 10))) } catch { return }
                 guard let self else { return }
                 self.analysisTask?.cancel()
                 self.privacyAnalysisComplete = true
@@ -220,18 +223,40 @@ enum TimelineSelection: Equatable {
         }
         analysisTask = Task { [weak self] in
             let result = await session.analyze(snapshot, privacyProgress: { [weak self] value in
-                Task { @MainActor [weak self] in self?.privacyScanProgress = value }
+                Task { @MainActor [weak self] in
+                    guard let self, self.analysisGeneration == generation else { return }
+                    self.privacyScanProgress = value
+                }
+            }, onTyping: { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self, self.analysisGeneration == generation else { return }
+                    self.replan()
+                }
+            }, onPrivacy: { [weak self] error in
+                Task { @MainActor [weak self] in
+                    guard let self, self.analysisGeneration == generation else { return }
+                    self.finishPrivacy(error: error)
+                }
             })
             guard !Task.isCancelled, let self else { return }
-            self.privacyDeadline?.cancel()
-            if scansPrivacy { self.privacyScanError = result.errors["ocr"] }
-            self.privacyAnalysisComplete = true
-            // The result must be applied by the Director before export
-            // is re-enabled. A completion of OCR alone is not sufficient.
+            _ = result
             self.replan()
             self.autoTranscribeIfNeeded()
         }
     }
+    private func finishPrivacy(error: String?) {
+        privacyDeadline?.cancel()
+        privacyScanError = error
+        privacyAnalysisComplete = true
+        privacyDeadline = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            guard let self, self.privacyScanning else { return }
+            self.privacyScanning = false
+            self.privacyScanError = self.privacyScanError ?? "Applying masks timed out. Retry scanning or review manual masks."
+        }
+        replan()
+    }
+
     func setWebcam(_ on: Bool) { edit { $0.webcam = on ? ($0.webcam ?? WebcamLayout()) : nil } }
     func undo() { if let p = undoStack.popLast() { redoStack.append(timeline); restore(p) } }
     func redo() { if let n = redoStack.popLast() { undoStack.append(timeline); restore(n) } }
@@ -274,7 +299,7 @@ enum TimelineSelection: Equatable {
             self.playhead = min(self.playhead, out.compositionDuration)
             self.published = self.playhead
             self.clock.seek(self.playhead)
-            if self.privacyAnalysisComplete { self.privacyScanning = false }
+            if self.privacyAnalysisComplete { self.privacyScanning = false; self.privacyDeadline?.cancel() }
         }
     }
 
