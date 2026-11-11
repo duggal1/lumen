@@ -191,7 +191,7 @@ public struct CursorStyle: Codable, Equatable, Sendable {
 
 public enum ZoomPreset: String, Codable, CaseIterable, Sendable {
     case subtle, balanced, dramatic, cinematic, fixed
-    public var maxScale: Double { switch self { case .subtle: 1.6; case .balanced: 2.2; case .dramatic: 3.0; case .cinematic: 2.6; case .fixed: 2.0 } }
+    public var maxScale: Double { switch self { case .subtle: 1.5; case .balanced: 2.0; case .dramatic: 2.4; case .cinematic: 2.2; case .fixed: 2.0 } }
 }
 public enum TiltMode: String, Codable, CaseIterable, Sendable { case off, lean, float, reveal }
 public enum ZoomEasing: String, Codable, CaseIterable, Sendable {
@@ -202,16 +202,16 @@ public enum ZoomEasing: String, Codable, CaseIterable, Sendable {
 public struct CameraParams: Codable, Equatable, Sendable {
     public var preset: ZoomPreset = .balanced
     public var autoZoom = true
-    public var maxScale = 3.5
+    public var maxScale = 2.0
     public var minScale = 1.25
     public var minTrigger = 1.25
-    public var leadIn = 0.25, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
-    public var omegaPan = 5.0, omegaZoom = 7.0, lookahead = 0.20, deadZone = 0.28, followDelay = 0.12
+    public var leadIn = 0.6, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
+    public var omegaPan = 7.0, omegaZoom = 9.0, lookahead = 0.20, deadZone = 0.28, followDelay = 0.12
     public var baseScale = 1.8
-    public var zoomOutGap = 3.5
-    public var hold = 1.2
+    public var zoomOutGap = 1.8
+    public var hold = 0.7
     public var safeZone = 0.62
-    public var cameraModel = 3
+    public var cameraModel = 4
     public var centerOffsetX = 0.0, centerOffsetY = 0.0         // view-normalized bias of where the cursor sits in the zoomed view
     public var sensitivity = 0.5                                // 0 = only clicks, 1 = purposeful hovers count too
     public var clickWeight = 3.0
@@ -242,12 +242,10 @@ public struct CameraParams: Codable, Equatable, Sendable {
         maxSamples = c.opt(.maxSamples, maxSamples)
         baseScale = c.opt(.baseScale, baseScale)
         zoomOutGap = c.opt(.zoomOutGap, zoomOutGap); hold = c.opt(.hold, hold); safeZone = c.opt(.safeZone, safeZone)
-        cameraModel = c.opt(.cameraModel, cameraModel)
-        // Migration: old projects keep manual segments but reset the decision
-        // layer to v3 defaults, then re-derive.
-        if cameraModel < 3 {
-            baseScale = 1.8; zoomOutGap = 3.5; hold = 1.2; safeZone = 0.62
-            leadIn = 0.25; minScale = 1.25; cameraModel = 3
+        cameraModel = c.opt(.cameraModel, 1)
+        if cameraModel < 4 {
+            maxScale = 2.0; minScale = 1.25; leadIn = 0.6; hold = 0.7; zoomOutGap = 1.8
+            omegaZoom = 9; omegaPan = 7; safeZone = 0.62; baseScale = 1.8; cameraModel = 4
         }
         upscaleMaxFactor = min(max(c.opt(.upscaleMaxFactor, upscaleMaxFactor), 2), 10)
         upscaleEnabled = c.opt(.upscaleEnabled, upscaleEnabled)
@@ -257,8 +255,8 @@ public struct CameraParams: Codable, Equatable, Sendable {
     /// Applies a preset's whole feel. Sliders edited afterwards stick (nothing re-applies the preset behind the user's back).
     public mutating func apply(preset p: ZoomPreset) {
         preset = p; maxScale = p.maxScale
-        leadIn = 0.25; tail = 0.7; omegaPan = 7; omegaZoom = 6; shutter = 0.5; tilt = .off
-        if p == .cinematic { tail = 1.1; omegaPan = 4.5; omegaZoom = 4.0; shutter = 0.6; tilt = .lean }
+        leadIn = 0.6; tail = 0.7; omegaPan = 7; omegaZoom = 9; shutter = 0.5; tilt = .off
+        if p == .cinematic { leadIn = 0.8; tail = 1.1; omegaPan = 5; omegaZoom = 6.5; shutter = 0.6; tilt = .lean }
         // Fixed camera magnification remains independent of automatic fitting.
         switch p {
         case .subtle: baseScale = 1.4
@@ -319,9 +317,10 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var targetLUFSOverride: Double?
     public var targetLUFS: Double { targetLUFSOverride ?? micMode.targetLUFS }
     public var studioMode: StudioMode = .standard
-    public var clickSounds = true, whooshes = true, keySounds = false
+    public var clickSounds = true, whooshes = true, keySounds = true
+    public var typingModel = 2
     public var typingPackId: String = "mechvibes-default"
-    public var typingLevelDb: Double = -6.0
+    public var typingLevelDb: Double = -12.0
     public var clickTone: ClickSound = .fresh
     public var sfxGainDb = -9.0
     public var musicPath: String?
@@ -335,7 +334,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     private enum LegacyLUFSKeys: String, CodingKey { case targetLUFS }
     enum CodingKeys: String, CodingKey {
         case noiseReductionStrength, voiceClarity, outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFSOverride, clickSounds, whooshes, keySounds, typingPackId, typingLevelDb, clickTone, sfxGainDb, musicPath
-        case dereverb, normalize, studioMode
+        case dereverb, normalize, studioMode, typingModel
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
     public init() {}
@@ -366,6 +365,10 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         targetLUFSOverride = AudioPlan.migrateLUFS(override: (try? c.decode(Double.self, forKey: .targetLUFSOverride)), legacy: legacyLUFS, mode: micMode); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = c.opt(.whooshes, whooshes)
         studioMode = c.opt(.studioMode, studioMode)
         keySounds = c.opt(.keySounds, keySounds); typingPackId = c.opt(.typingPackId, typingPackId); typingLevelDb = c.opt(.typingLevelDb, typingLevelDb); clickTone = c.opt(.clickTone, clickTone); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)
+        typingModel = c.opt(.typingModel, 1)
+        if typingModel < 2 {
+            keySounds = true; typingLevelDb = -12; typingPackId = "mechvibes-default"; typingModel = 2
+        }
         musicPath = try? c.decodeIfPresent(String.self, forKey: .musicPath)
         musicGainDb = c.opt(.musicGainDb, musicGainDb); duckDepthDb = c.opt(.duckDepthDb, duckDepthDb); duckAttack = c.opt(.duckAttack, duckAttack)
         duckRelease = c.opt(.duckRelease, duckRelease); muteMicInRamps = c.opt(.muteMicInRamps, muteMicInRamps)
