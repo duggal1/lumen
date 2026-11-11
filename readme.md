@@ -53,7 +53,8 @@ local signing identity to preserve permission identity across rebuilds.
 Capture, project storage, Director, Metal rendering, offline audio mixing,
 export, CLI, and SwiftUI app targets are connected. Preview and export use the
 same renderer and offline audio mix. Frame placement preserves source aspect
-inside the padded canvas. RNNoise is optional; the Swift gate is the fallback.
+inside the padded canvas. DeepFilterNet3 is the only microphone denoiser; when
+it is unavailable or fails, the microphone signal passes through unchanged.
 
 Tests cover event encoding, time-map inversion and speech protection, manual
 zoom preservation, click positioning, camera bounds, repeatable audio and
@@ -74,7 +75,7 @@ Validation harnesses are now in the tree and runnable:
 build plan. Clean-machine permission checks need hardware verification. The CLI
 `sync` command reports offsets only (it does not run the render-level sync
 harness); music uses loop/trim crossfades without beat detection; mesh
-backgrounds are static; RNNoise is not vendored. Photo backgrounds need an
+backgrounds are static. Photo backgrounds need an
 Unsplash access key and are cached under Application Support. Email
 notifications open a mailto draft, not SMTP. MCP control is localhost-only,
 opt-in, and has no authentication. The packaged build is not notarized.

@@ -44,7 +44,7 @@ Status key: **WIRED** = implemented + tested. **PARTIAL** = exists but limited/o
 | Filler/pause removal | WIRED | `TranscriptOps` filler + pause cuts, suggestions merged |
 | Timeline trim/speed ramps/multi-clip | WIRED | `TimeMap` trims/cuts/ramps, `TimelineClip` import |
 | Import video | WIRED | `importClips`, appended in output time, share package copies clips |
-| On-device noise reduction | WIRED | RNNoise vendored (`Sources/CRNNoise`, `CRNNoise` target); `defaultDenoiser` is `RNNoiseDenoiser`; `rnnoiseVendoredAndDefaultDenoiserActive` |
+| On-device noise reduction | WIRED | DeepFilterNet3 runs as the only denoiser; unavailable or failed processing passes microphone audio through |
 | Podcast mode | WIRED | `MicMode.podcast` EQ preset in `VoiceStudio` |
 | Mic modes (standard/loud/off) | WIRED | `MicMode` + LUFS targets |
 | Separate mic/system levels | WIRED | `micGainDb`/`systemGainDb`, stems per source |

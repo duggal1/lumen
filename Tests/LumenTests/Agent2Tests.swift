@@ -4,7 +4,6 @@ import Testing
 import LumenCore
 import LumenAudio
 import LumenSpeech
-import CRNNoise
 @testable import LumenProject
 @testable import LumenDirector
 @testable import LumenExport
@@ -142,23 +141,6 @@ private func srcInfo(duration: Double = 12) -> SourceInfo {
     }
 }
 
-@Test func rnnoiseVendoredAndDefaultDenoiserActive() {
-    // The build must actually link RNNoise (CRNNoise target vendored), not the
-    // SpectralGate fallback, and the default path must run. RNNoise frame size
-    // is 480 samples at 16 kHz; shorter inputs pass through untouched.
-    if let st = rnnoise_create(nil) {
-        rnnoise_destroy(st)
-    } else {
-        Issue.record("rnnoise_create returned nil with the vendored model")
-    }
-    let voice = (0..<48_000).map { Float(0.1 * sin(Double($0) * 2 * .pi * 440 / 48_000)) }
-    let out = defaultDenoiser.process(voice)
-    #expect(out.count == voice.count)
-    #expect(!out.allSatisfy { $0 == 0 }, "RNNoise must pass voice through, not mute it")
-    let short = [Float](repeating: 0, count: 100)
-    #expect(defaultDenoiser.process(short) == short, "sub-frame input passes through unchanged")
-}
-
 @Test func clipboardWritesRealFileURLToPasteboard() throws {
     let dir = try tmpDir(); defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appendingPathComponent("clip.mp4")
@@ -187,7 +169,7 @@ private func srcInfo(duration: Double = 12) -> SourceInfo {
     #expect(plan().map(\.text) == highlighted.map(\.text), "the toggle changes rendering, not caption content")
 }
 
-// MARK: - 4. Noise reduction (Swift gate is the vendored fallback; RNNoise optional)
+// MARK: - 4. Noise reduction
 
 private func energy(_ samples: [Float]) -> Double { samples.reduce(0) { $0 + Double($1) * Double($1) } }
 
@@ -203,7 +185,11 @@ private func energy(_ samples: [Float]) -> Double { samples.reduce(0) { $0 + Dou
     #expect(energy(firstHalf) > energy(Array(phrase[0..<(fs / 2)])) * 0.8, "voice is preserved")
     #expect(energy(secondHalf) < energy(Array(phrase[(fs / 2)...])) * 0.2, "quiet tail is gated down")
     let quiet = (0..<fs).map { Float(0.001 * sin(Double($0) * 2 * .pi * 440 / Double(fs))) }
-    #expect(energy(defaultDenoiser.process(quiet)) < energy(quiet) * 0.2)
+    if DeepFilterNet.isAvailable {
+        #expect(energy(defaultDenoiser.process(quiet)) < energy(quiet) * 0.2)
+    } else {
+        #expect(defaultDenoiser.process(quiet) == quiet)
+    }
 }
 
 // MARK: - 5. 8K / 120 fps honesty

@@ -855,7 +855,6 @@ struct Inspector: View {
                         $0.audio.noiseReductionStrength = value
                         $0.audio.micClean = value > 0
                     } }), range: 0...1, fmt: { "\(Int($0 * 100))%" })
-                ToggleRow(label: "Voice clarity", on: m.bind(\.audio.voiceClarity))
                 LButton(title: "Voice Isolation…", icon: "mic.badge.plus", kind: .quiet) {
                     MicrophoneModes.showVoiceIsolationControls()
                 }

@@ -1,29 +1,22 @@
 import Foundation
 import AVFoundation
 import CryptoKit
-import Accelerate
 import LumenCore
 import LumenProject
 
 public enum CleanVoiceError: Error { case missingMicrophone }
 
 struct ProcessedVoiceCache {
-    static let revision = "trained-voice-v8-wpe-residual-df-complete"
+    static let revision = "voice-v10-df3-denoise-only"
 
     private struct Settings: Encodable {
         let noiseStrength: Double
-        let highQuality: Bool
-        let room: Double
-        let clarity: Bool
-        let studio: Double
+        let engine: String
         let declickDepth: Double
 
         init(_ plan: AudioPlan, hasKeys: Bool) {
             noiseStrength = plan.micClean ? (plan.noiseReductionStrength.isFinite ? clamp(plan.noiseReductionStrength, 0, 1) : 1) : 0
-            highQuality = noiseStrength > 0 && plan.studioMode == .optimized
-            room = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
-            clarity = plan.voiceClarity && plan.studio > 0
-            studio = clarity ? min(max(plan.studio * 4, 0), 1) : 0
+            engine = noiseStrength > 0 && DeepFilterNet.isAvailable ? "df3" : "off"
             declickDepth = plan.declick && hasKeys ? plan.declickDepthDb : 0
         }
     }
@@ -56,40 +49,21 @@ struct ProcessedVoiceCache {
         try Data(contentsOf: temporary).write(to: url, options: .atomic)
     }
 
+    /// Apply noise reduction, then the separately configured keyboard declick.
     static func render(_ samples: [Float], plan: AudioPlan, keyTimes: [Double],
                        denoiser: (any Denoiser)? = nil) -> [Float] {
         let strength = plan.noiseReductionStrength.isFinite ? clamp(plan.noiseReductionStrength, 0, 1) : 1
         var voice = samples.map { $0.isFinite ? $0 : 0 }
+
         if plan.micClean, strength > 0 {
-            let engine = denoiser ?? TrainedVoiceDenoiser(strength: strength, highQuality: plan.studioMode == .optimized)
+            let engine = denoiser ?? TrainedVoiceDenoiser(strength: strength)
             voice = engine.process(voice)
         }
-        let regions = VAD.regions(voice)
-        if plan.dereverb > 0.01 {
-            let rt60 = RoomEstimate.rt60(voice, vad: regions)
-            if Double(voice.count) / AudioIO.fs < 600 {
-                let dry = WPE().process(voice)
-                let late = zip(voice, dry).map { $0 - $1 }
-                voice = ResidualSuppressor(noise: 0.6, reverb: plan.dereverb, rt60: rt60).process(x: dry, late: late)
-            } else {
-                voice = LateReverb.process(voice, amount: plan.dereverb, rt60: rt60)
-            }
-        }
+
         if plan.declick, !keyTimes.isEmpty {
-            voice = Declick.process(voice, keyTimes: keyTimes, vad: regions, depthDb: plan.declickDepthDb)
+            voice = Declick.process(voice, keyTimes: keyTimes, vad: VAD.regions(voice), depthDb: plan.declickDepthDb)
         }
-        voice = VoiceStudio.finish(voice, vad: regions, plan: plan, denoiser: nil)
-        let loudness = Loudness.integrated([voice])
-        if loudness > -69 {
-            voice = vDSP.multiply(Float(pow(10, clamp(-16 - loudness, -24, 24) / 20)), voice)
-        }
-        var channels = [voice]
-        Limiter.apply(&channels, ceiling: Float(pow(10, -1.5 / 20)))
-        let peak = Loudness.truePeakDb(channels)
-        if peak > -1 {
-            channels[0] = vDSP.multiply(Float(pow(10, (-1.05 - peak) / 20)), channels[0])
-        }
-        return channels[0]
+        return voice
     }
 }
 
