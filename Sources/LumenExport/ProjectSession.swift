@@ -95,12 +95,15 @@ public final class ProjectSession: @unchecked Sendable {
             inputState.withLock { $0.typing = result.typing }
             onTyping()
         }, onPrivacy: { [self] result in
-            guard analysisSequence.withLock({ $0 == sequence }),
-                  !Task.isCancelled || result.errors["ocr"] != nil else { return }
+            // Privacy fails closed: whatever the scan found is published even
+            // when the analysis was cancelled, because a cancelled scan still
+            // knows about every secret it detected so far. Only a newer
+            // analysis (a higher sequence) may discard it.
+            guard analysisSequence.withLock({ $0 == sequence }) else { return }
             inputState.withLock { $0.ocr = result.ocr }
             onPrivacy(result.errors["ocr"])
         }, onPrivacyStart: {
-            guard !Task.isCancelled, self.analysisSequence.withLock({ $0 == sequence }) else { return }
+            guard self.analysisSequence.withLock({ $0 == sequence }) else { return }
             onPrivacyStart()
         })
         guard !Task.isCancelled else { return result }

@@ -3,16 +3,12 @@ import Testing
 import LumenProject
 import LumenRender
 
-/// One knob: the background blur is a continuous radius in canvas pixels, and
-/// it ships at zero. The mip level behind the zoom follows it.
-@Test func backdropBlurIsContinuousAndShipsSharp() throws {
+/// One knob: the wallpaper blur is a continuous radius in canvas pixels and it
+/// ships at zero. There is no zoom-driven mip selection any more: the radius
+/// is the whole contract, it is continuous, and it round-trips.
+@Test func wallpaperBlurIsContinuousAndShipsSharp() throws {
     let style = Style()
     #expect(style.wallpaperBlur == 0, "a wallpaper ships sharp")
-    #expect(BackdropBlur.mipLevel(enabled: false, cameraScale: 4) == 0)
-    #expect(BackdropBlur.mipLevel(enabled: true, cameraScale: 1) == 0)
-    #expect(BackdropBlur.mipLevel(enabled: true, cameraScale: 1.8) > 0)
-    #expect(BackdropBlur.mipLevel(enabled: true, cameraScale: 4) <= 3.5)
-    #expect(BackdropBlur.mipLevel(enabled: true, cameraScale: .infinity) == 0)
 
     var active = style
     active.wallpaperBlur = 24
@@ -20,8 +16,15 @@ import LumenRender
     #expect(restored.wallpaperBlur == 24)
 }
 
-@Test func backdropBlurStrengthIsMonotonicAsZoomIncreases() {
-    let scales: [Float] = [1, 1.05, 1.15, 1.5, 2, 3, 6]
-    let levels = scales.map { BackdropBlur.mipLevel(enabled: true, cameraScale: $0) }
-    #expect(zip(levels, levels.dropFirst()).allSatisfy { pair in pair.0 <= pair.1 })
+/// The radius is a continuous value, not a step or a toggle: any radius in
+/// range survives a save/load cycle unchanged, and neighbouring radii stay
+/// distinct.
+@Test func wallpaperBlurKeepsEveryRadiusExactly() throws {
+    for radius in [0.0, 0.5, 1, 7.25, 30, 59.5, 60] {
+        var style = Style()
+        style.wallpaperBlur = radius
+        let data = try JSONEncoder().encode(style)
+        let restored = try JSONDecoder().decode(Style.self, from: data)
+        #expect(restored.wallpaperBlur == radius, "radius=\(radius)")
+    }
 }

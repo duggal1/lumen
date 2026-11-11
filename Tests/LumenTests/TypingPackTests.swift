@@ -14,8 +14,9 @@ private let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 10
     guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("config.json").path) else { return }
     let buffers = TypingPackLoader.buffers(in: dir)
     #expect(!buffers.isEmpty)
-    let a0 = TypingPackLoader.macToPack[0] ?? TypingPackLoader.genericCode
-    #expect(buffers[a0] != nil)
+    let a0 = TypingPackLoader.macToPack[0] ?? TypingPackLoader.macToPack.values.sorted().first
+    #expect(a0 != nil)
+    #expect(buffers[a0 ?? -1] != nil)
 }
 
 @Test func directorCutsStaySilentForTyping() throws {
