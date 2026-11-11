@@ -76,35 +76,6 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         didSet { UserDefaults.standard.set(captureMbps, forKey: "LumenCaptureMbps") }
     }
     var mic = true
-    /// Empty means use the macOS default input. When nonempty, the first
-    /// input uses ScreenCaptureKit and remaining inputs are independent CAFs.
-    var micInputIDs: [String] = UserDefaults.standard.stringArray(forKey: "LumenMicrophoneInputIDs") ?? [] {
-        didSet { UserDefaults.standard.set(micInputIDs, forKey: "LumenMicrophoneInputIDs") }
-    }
-    /// Discovered off-main so opening Inputs never blocks the tab on AVCapture.
-    var cachedAudioInputs: [(id: String, name: String)] = []
-    private var audioInputsDiscovered = false
-    private var audioInputsTask: Task<Void, Never>?
-    var availableAudioInputs: [(id: String, name: String)] {
-        if !audioInputsDiscovered, audioInputsTask == nil {
-            audioInputsTask = Task { @MainActor [weak self] in
-                guard let self else { return }
-                let found = await Task.detached(priority: .userInitiated) {
-                    AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio,
-                                                    position: .unspecified).devices
-                        .map { (id: $0.uniqueID, name: $0.localizedName) }
-                }.value
-                self.cachedAudioInputs = found
-                self.audioInputsDiscovered = true
-            }
-        }
-        return cachedAudioInputs
-    }
-    func selectAudioInput(_ id: String, enabled: Bool) {
-        var selected = micInputIDs.filter { $0 != id }
-        if enabled { selected.append(id) }
-        micInputIDs = selected
-    }
     var system = false
     var webcam = false
     var webcamQuality: WebcamQuality = .auto
@@ -457,15 +428,6 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         }
         cfg.fps = fps; cfg.mic = mic && Permissions.mic; cfg.systemAudio = system
         cfg.resolution = captureResolution; cfg.quality = captureQuality; cfg.customMbps = captureMbps
-        if cfg.mic && !micInputIDs.isEmpty {
-            let available = Set(availableAudioInputs.map(\.id))
-            guard micInputIDs.allSatisfy({ available.contains($0) }) else {
-                error = "A selected audio input is disconnected. Update microphone inputs before recording."
-                return
-            }
-            cfg.micDeviceID = micInputIDs.first
-            cfg.additionalMicDeviceIDs = Array(micInputIDs.dropFirst())
-        }
         cfg.webcamDeviceID = webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
         phase = .preparing
         let sourceDisplay: CGDirectDisplayID?
