@@ -65,7 +65,7 @@ enum Emphasis {
 
     private static func maskFrame(_ mask: Mask, t: Double, size: SIMD2<Double>) -> MaskFrame? {
         guard mask.approved, t >= mask.start, t < mask.end, let key = rect(mask.keys, at: t) else { return nil }
-        let pad = max(mask.padding, 0)
+        let pad = max(mask.padding, 0.35 * key.h)
         let x = max(key.x - pad, 0), y = max(key.y - pad, 0)
         let right = min(key.x + key.w + pad, size.x), bottom = min(key.y + key.h + pad, size.y)
         return MaskFrame(id: mask.id, mode: mask.mode, rect: SIMD4(Float(x), Float(y), Float(max(right - x, 0)), Float(max(bottom - y, 0))),
@@ -73,6 +73,16 @@ enum Emphasis {
     }
 
     private static func rect(_ keys: [MaskKey], at t: Double) -> MaskKey? {
+        guard let base = interpolated(keys, at: t) else { return nil }
+        var x0 = base.x, y0 = base.y, x1 = base.x + base.w, y1 = base.y + base.h
+        for key in keys where abs(key.t - t) <= 0.3 && hypot(key.x - base.x, key.y - base.y) < 4 * base.h {
+            x0 = min(x0, key.x); y0 = min(y0, key.y)
+            x1 = max(x1, key.x + key.w); y1 = max(y1, key.y + key.h)
+        }
+        return MaskKey(t: t, x: x0, y: y0, w: x1 - x0, h: y1 - y0)
+    }
+
+    private static func interpolated(_ keys: [MaskKey], at t: Double) -> MaskKey? {
         let sorted = keys.sorted { $0.t < $1.t }
         guard let first = sorted.first else { return nil }
         guard sorted.count > 1 else { return first }
