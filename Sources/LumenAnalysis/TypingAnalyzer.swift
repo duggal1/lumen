@@ -92,8 +92,14 @@ private final class TypingJob: @unchecked Sendable {
         return TypingTracer.trace(burst: burst, ts: ts, grids: grids, anchor: anchor, srcH: height)
     }
 
+}
+
     /// 16 source-px tiles, stride-2 sampling, one pass over the buffer.
-    private func lumaTiles(_ buffer: CVPixelBuffer) throws -> LumaTiles {
+func lumaTiles(_ buffer: CVPixelBuffer) throws -> LumaTiles {
+    try lumaSnapshot(buffer).tiles
+}
+
+func lumaSnapshot(_ buffer: CVPixelBuffer) throws -> (tiles: LumaTiles, signatures: [UInt64]) {
         guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { throw AnalysisError.pixelBuffer }
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { throw AnalysisError.pixelBuffer }
@@ -103,6 +109,7 @@ private final class TypingJob: @unchecked Sendable {
         let cols = max(1, (width + tile - 1) / tile), rows = max(1, (height + tile - 1) / tile)
         var sum = [UInt32](repeating: 0, count: cols * rows)
         var count = [UInt32](repeating: 0, count: cols * rows)
+        var signatures = [UInt64](repeating: 14695981039346656037, count: cols * rows)
         for y in stride(from: 0, to: height, by: 2) {
             let row = base + y * rowBytes
             let ry = y / tile
@@ -110,6 +117,7 @@ private final class TypingJob: @unchecked Sendable {
                 let i = x * 4
                 let luma = (29 * Int(row[i]) + 150 * Int(row[i + 1]) + 77 * Int(row[i + 2])) >> 8
                 let index = ry * cols + x / tile
+                signatures[index] = (signatures[index] ^ UInt64(luma >> 4)) &* 1099511628211
                 sum[index] += UInt32(luma)
                 count[index] += 1
             }
@@ -118,6 +126,5 @@ private final class TypingJob: @unchecked Sendable {
         for i in mean.indices where count[i] > 0 {
             mean[i] = UInt8(min(255, sum[i] / count[i]))
         }
-        return LumaTiles(cols: cols, rows: rows, tile: tile, mean: mean)
+        return (LumaTiles(cols: cols, rows: rows, tile: tile, mean: mean), signatures)
     }
-}
