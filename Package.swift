@@ -23,7 +23,7 @@ let package = Package(
         lib("LumenCore"),
         lib("LumenProject", ["LumenCore"]),
         lib("LumenDirector", ["LumenCore", "LumenProject"]),
-        lib("LumenAnalysis", ["LumenCore", "LumenProject"]),
+        lib("LumenAnalysis", ["LumenCore", "LumenProject", "LumenSpeech"]),
         lib("LumenCapture", ["LumenCore", "LumenProject", "LumenDirector"]),
         lib("LumenRender", ["LumenCore", "LumenProject", "LumenDirector"], resources: [.process("Shaders")]),
         .target(name: "CRNNoise", path: "Sources/CRNNoise", exclude: ["COPYING"], publicHeadersPath: "include", cSettings: [.unsafeFlags(["-O3"])]),
