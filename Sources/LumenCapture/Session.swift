@@ -436,6 +436,10 @@ public actor RecordingSession {
                     os_log("finalize: event sidecar unreadable: %@", log: .default, type: .error, String(describing: error))
                 }
                 progress(0.8)
+                guard finalMeta.source.duration.isFinite, finalMeta.source.duration > 0,
+                      working.timeMap.trimEnd > working.timeMap.trimStart else {
+                    throw CaptureError.writer("Recording has no usable duration.")
+                }
                 try b.save(ProjectFile(meta: finalMeta, timeline: working))
                 b.clearJournal()
                 progress(1)
