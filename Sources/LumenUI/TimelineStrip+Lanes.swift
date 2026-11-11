@@ -138,6 +138,13 @@ extension TimelineStrip {
         Canvas { c, size in
             let lat = vp.lattice
             var runs: [Run] = []
+            for segment in tl.recordingSegments {
+                if let run = layoutRun(lat, c0: vp.colFloor(segment.outputStart), c1: vp.colCeil(segment.outputEnd),
+                                       bodyH: 24, capH: 28, capCols: 1, body: StripInk.clip, cap: StripInk.clip,
+                                       labels: ["Recording"], truncate: true, selected: false) {
+                    runs.append(run)
+                }
+            }
             let primary = tl.clips.first?.path
             for clip in tl.clips {
                 let sel = clip.id == model.selection, hov = clip.id == hoveredClip
@@ -152,8 +159,8 @@ extension TimelineStrip {
                     runs.append(run)
                 }
             }
-            drawBase(c, size, lat, dust: !tl.clips.isEmpty, holes: runs.map(\.hole))
-            if tl.clips.isEmpty { drawEmpty(c, "No imported clips. Your recording is on the recording lane.") }
+            drawBase(c, size, lat, dust: !tl.clips.isEmpty || !tl.recordingSegments.isEmpty, holes: runs.map(\.hole))
+            if tl.clips.isEmpty && tl.recordingSegments.isEmpty { drawEmpty(c, "No recording or imported clips.") }
             for r in runs where !r.selected { drawRun(c, lat, r) }
             for r in runs where r.selected { drawRun(c, lat, r) }
         }
@@ -163,7 +170,7 @@ extension TimelineStrip {
 
     func clipAccessibility() -> String {
         let tl = model.timeline
-        guard !tl.clips.isEmpty else { return "No clips" }
+        guard !tl.clips.isEmpty || !tl.recordingSegments.isEmpty else { return "No clips" }
         return tl.clips.map { String(format: "Clip %@ %.1f to %.1f seconds", $0.name, $0.start, $0.end) }.joined(separator: ". ")
     }
 
