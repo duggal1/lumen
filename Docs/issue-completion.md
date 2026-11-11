@@ -33,3 +33,45 @@ Implemented on main. Verification is limited to `make build`, as requested; no t
 ## Limits of this delivery
 
 “Done” means implemented and source-reviewed, with compilation as the only executed verification. Runtime audio, launcher AX behavior, OCR throughput and rendering quality were not exercised. Existing tests were not updated or run; tests that reference the explicitly removed `BackdropBlur` API will need revision before a future test-suite build.
+
+## Exact changed files
+
+- `App/public/assets/typing/mechvibes-default/config.json`
+- `App/public/assets/typing/mechvibes-default/fallback.mp3`
+- `App/public/assets/typing/mechvibes-default/pack.wav`
+- `Docs/issue-completion.md`
+- `Package.swift`
+- `Sources/LumenAnalysis/DirtyRects.swift`
+- `Sources/LumenAnalysis/OCR.swift`
+- `Sources/LumenAnalysis/Service.swift`
+- `Sources/LumenAnalysis/Speech.swift`
+- `Sources/LumenAnalysis/TypingAnalyzer.swift`
+- `Sources/LumenAnalysis/TypingTracer.swift`
+- `Sources/LumenAudio/BundledAudioAssets.swift`
+- `Sources/LumenAudio/DeepFilterNet.swift`
+- `Sources/LumenAudio/Mixer.swift`
+- `Sources/LumenAudio/ProcessedVoice.swift`
+- `Sources/LumenAudio/SFX.swift`
+- `Sources/LumenAudio/TypingPacks.swift`
+- `Sources/LumenCapture/Capture.swift`
+- `Sources/LumenCapture/Input.swift`
+- `Sources/LumenCapture/Session.swift`
+- `Sources/LumenCore/AppAssets.swift`
+- `Sources/LumenDirector/Camera.swift`
+- `Sources/LumenDirector/Captions.swift`
+- `Sources/LumenDirector/Director.swift`
+- `Sources/LumenDirector/Emphasis.swift`
+- `Sources/LumenDirector/LiveCamera.swift`
+- `Sources/LumenDirector/Planner.swift`
+- `Sources/LumenExport/ProjectSession.swift`
+- `Sources/LumenProject/Composition.swift`
+- `Sources/LumenProject/Models.swift`
+- `Sources/LumenProject/Overlays.swift`
+- `Sources/LumenRender/BackdropBlur.swift`
+- `Sources/LumenRender/Renderer.swift`
+- `Sources/LumenRender/Shaders/Shaders.metal`
+- `Sources/LumenUI/AppModel.swift`
+- `Sources/LumenUI/EditorModel.swift`
+- `Sources/LumenUI/Inspector.swift`
+- `Sources/LumenUI/TimelineStrip+Lanes.swift`
+- `Tools/make-app.sh`
