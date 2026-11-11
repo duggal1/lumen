@@ -111,7 +111,7 @@ public enum Director {
         if t.audio.clickSounds { cues += clicks.map { SFXCue(t: $0.t, kind: .click, gainDb: 0) } }
         if t.audio.keySounds {
             cues += input.events.filter { $0.kind == .keyDown && !tm.isCut($0.t) }
-                .map { SFXCue(t: tm.output(atSource: $0.t), kind: .key, gainDb: -6, keyCode: $0.keyCode) }
+                .map { SFXCue(t: tm.output(atSource: $0.t), kind: .key, gainDb: 0, keyCode: $0.keyCode) }
         }
         if t.audio.whooshes {
             for z in t.zoom {
