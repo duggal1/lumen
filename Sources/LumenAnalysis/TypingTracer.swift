@@ -12,7 +12,7 @@ public enum TypingTracer {
         guard ts.count == grids.count, ts.count >= 2, let base = grids.first else { return nil }
         let cols = base.cols, rows = base.rows, tile = Double(base.tile)
         let maxLineRows = max(Int(0.08 * srcH / tile), 2)
-        func changed(_ g: LumaTiles) -> [Bool] { (0..<(cols * rows)).map { abs(Int(g.mean[$0]) - Int(base.mean[$0])) >= 8 } }
+        func changed(_ k: Int) -> [Bool] { (0..<(cols * rows)).map { abs(Int(grids[k].mean[$0]) - Int(grids[max(k - 1, 0)].mean[$0])) >= 6 } }
         func dilate(_ m: [Bool]) -> [Bool] {
             var o = m
             for r in 0..<rows { for c in 0..<cols where m[r * cols + c] { for dc in -2...2 where c + dc >= 0 && c + dc < cols { o[r * cols + c + dc] = true } } }
@@ -39,7 +39,7 @@ public enum TypingTracer {
         // First frame with a single-line-high blob = where the first typed characters appeared.
         var band: (r0: Int, r1: Int, left: Int)?, k0 = 1, lineRows = 1
         for k in 1..<ts.count {
-            let blobs = components(dilate(changed(grids[k]))).filter { $0.r1 - $0.r0 + 1 <= maxLineRows && $0.area >= 2 }
+            let blobs = components(dilate(changed(k))).filter { $0.r1 - $0.r0 + 1 <= maxLineRows && $0.area >= 2 }
             guard !blobs.isEmpty else { continue }
             func cy(_ b: Box) -> Double { Double(b.r0 + b.r1 + 1) / 2 * tile }
             var pick = blobs.min { $0.r0 < $1.r0 }!
@@ -51,7 +51,7 @@ public enum TypingTracer {
         guard let band else { return nil }
         var samples: [TypingTrace.Sample] = [], right = band.left
         for k in k0..<ts.count {
-            let m = changed(grids[k]); var found = -1
+            let m = changed(k); var found = -1
             for r in band.r0...band.r1 { for c in stride(from: cols - 1, through: band.left, by: -1) where m[r * cols + c] { found = max(found, c); break } }
             if found >= 0 { right = found }
             samples.append(.init(t: ts[k], x: Double(right + 1) * tile, y: Double(band.r0 + band.r1 + 1) / 2 * tile))
