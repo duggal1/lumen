@@ -242,16 +242,9 @@ struct Inspector: View {
             }
         }
         // Bundled gallery (packaged app + source assets for `swift run`).
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let roots: [URL?] = [
-            Bundle.main.resourceURL?.appendingPathComponent("Wallpapers"),
-            cwd.appendingPathComponent("App/public/assets/wallpapers"),
-            cwd.appendingPathComponent("wallpapers"),
-        ]
-        for r in roots.compactMap({ $0 }) where FileManager.default.fileExists(atPath: r.path) {
-            collect(r.appendingPathComponent("macos"), into: .macOS)
-            collect(r.appendingPathComponent("paintings"), into: .painting)
-            collect(r, into: .macOS)
+        if let root = AppAssets.directory(bundlePath: "Wallpapers", sourcePaths: ["App/public/assets/wallpapers", "wallpapers"]) {
+            collect(root.appendingPathComponent("macos"), into: .macOS)
+            collect(root.appendingPathComponent("paintings"), into: .painting)
         }
         // Every macOS wallpaper on this Mac (14/15/26 incl. Dynamic).
         let sysDir = URL(fileURLWithPath: "/System/Library/Desktop Pictures")
@@ -773,9 +766,18 @@ struct Inspector: View {
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 ToggleRow(label: "Detect sensitive data", on: m.bind(\.overlays.privacy.autoDetect))
-                SliderRow(label: "Pixel size", v: m.bind(\.overlays.privacy.pixelSize), range: 8...64, fmt: { "\(Int($0)) px" })
+                Row(label: "Style") {
+                    LDropdown(sel: m.bind(\.overlays.privacy.mode), options: [
+                        (.blur, "Frost", "drop"), (.pixelate, "Pixelate", "square.grid.3x3"), (.solid, "Redact", "rectangle.fill")
+                    ]).frame(width: 130)
+                }
+                SliderRow(label: "Pixel size", v: m.bind(\.overlays.privacy.pixelSize), range: 0...64,
+                          fmt: { $0 < 1 ? "Auto" : "\(Int($0)) px" })
                 SliderRow(label: "Padding", v: m.bind(\.overlays.privacy.padding), range: 0...24, fmt: { "\(Int($0)) px" })
-                SliderRow(label: "Sensitivity", v: m.bind(\.overlays.privacy.entropyThreshold), range: 3...4.5, fmt: { String(format: "%.1f", $0) })
+                SliderRow(label: "Sensitivity", v: Binding(
+                    get: { clamp((4.2 - m.timeline.overlays.privacy.entropyThreshold) / 1.4, 0, 1) },
+                    set: { value in m.edit(coalesce: true) { $0.overlays.privacy.entropyThreshold = 4.2 - value * 1.4 } }
+                ), range: 0...1, fmt: { "\(Int($0 * 100))%" })
                 if m.privacyScanning {
                     Text("Scanning sensitive text: \(Int(m.privacyScanProgress * 100))%. Export waits for the masks to be applied.")
                         .font(AppType.caption).foregroundStyle(Tok.text2)
@@ -851,6 +853,9 @@ struct Inspector: View {
                         $0.audio.micClean = value > 0
                     } }), range: 0...1, fmt: { "\(Int($0 * 100))%" })
                 ToggleRow(label: "Voice clarity", on: m.bind(\.audio.voiceClarity))
+                LButton(title: "Voice Isolation…", icon: "mic.badge.plus", kind: .quiet) {
+                    MicrophoneModes.showVoiceIsolationControls()
+                }
             }.card(padding: 16)
         }
     }
