@@ -288,38 +288,32 @@ public final class AudioMixer: @unchecked Sendable {
             hasProgram = true
         }
 
-        // Export typing: same hits as preview, offline mixed into the typing track.
-        // Same key = same sample, gain 0.7...1.0 from gap since previous key.
-        var prevKeyT: Double? = nil
+        var prevKeyT: Double?
         let typingBuffers: [Int: [Float]] = {
-            guard a.keySounds else { return [:] }
-            let dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("Resources/TypingPacks/\(a.typingPackId)", isDirectory: true)
-            let avail = TypingPackLoader.buffers(in: dir)
-            var map: [Int: [Float]] = [:]
-            for (code, buf) in avail {
-                guard let ch = buf.floatChannelData?[0], buf.format.channelCount > 0 else { continue }
-                let n = Int(buf.frameLength)
-                map[code] = Array(UnsafeBufferPointer(start: ch, count: n))
+            guard a.keySounds, let directory = TypingPackLoader.dir(for: a.typingPackId) else { return [:] }
+            var buffers: [Int: [Float]] = [:]
+            for (code, buffer) in TypingPackLoader.buffers(in: directory) {
+                guard let channel = buffer.floatChannelData?[0] else { continue }
+                let raw = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+                let pcm = AudioIO.resample(raw, from: buffer.format.sampleRate)
+                let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
+                guard peak > 1e-4 else { continue }
+                buffers[code] = pcm.map { $0 / peak }
             }
-            return map
+            return buffers
         }()
+        let fallbackKey = typingBuffers.keys.sorted().first
         for cue in d.cues {
             let buf: [Float]
             if cue.kind == .key {
                 guard a.keySounds else { continue }
-                let packCode = TypingPackLoader.macToPack[Int(cue.keyCode)] ?? TypingPackLoader.genericCode
-                guard let samples = typingBuffers[packCode] else { continue }
-                // Fast typing quieter per key: gain from gap since previous key
-                if let prev = prevKeyT {
-                    let gap = cue.t - prev
-                    let g: Float = gap < 0.05 ? 0.7 : gap < 0.15 ? 0.85 : 1.0
-                    let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + a.typingLevelDb) / 20)) * g
-                    buf = samples.map { $0 * amp }
-                } else {
-                    let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + a.typingLevelDb) / 20))
-                    buf = samples.map { $0 * amp }
-                }
+                let code = TypingPackLoader.macToPack[Int(cue.keyCode)]
+                let samples = code.flatMap({ typingBuffers[$0] })
+                    ?? fallbackKey.flatMap({ typingBuffers[$0] }) ?? bank.render(.key).samples
+                let gap = prevKeyT.map { cue.t - $0 } ?? 1
+                let gain: Float = gap < 0.05 ? 0.7 : gap < 0.15 ? 0.85 : 1
+                let amplitude = Float(pow(10, (a.typingLevelDb + cue.gainDb) / 20)) * gain
+                buf = samples.map { $0 * amplitude }
                 prevKeyT = cue.t
             } else {
                 let (b, gain) = bank.render(cue.kind, clickTone: a.clickTone)
