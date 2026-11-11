@@ -38,21 +38,18 @@ struct BackdropU { float4 content; float2 canvas; float angle; int count; int ki
                    float radius; float shadow; float scale; float cell; float density; int hasWall; float time; float4 pointer;
                    float wallBlur; float imgAlpha; float imgContrast; float imgBright; };
 
-// Continuous wallpaper blur: a 5x5 tent kernel, radius in canvas pixels.
-// The backdrop is cached, so 25 taps cost nothing per frame.
 float3 blurredWall(texture2d<float> tex, float2 uv, float2 texSize, float radiusPx) {
-    if (radiusPx <= 0.5) { return tex.sample(linClamp, uv).rgb; }
-    float2 step = (radiusPx * 0.5) / max(texSize.x, texSize.y);
-    float3 sum = float3(0.0);
-    float wsum = 0.0;
-    for (int y = -2; y <= 2; ++y) {
-        for (int x = -2; x <= 2; ++x) {
-            float w = (3.0 - abs(float(x))) * (3.0 - abs(float(y)));
-            sum += tex.sample(linClamp, clamp(uv + float2(float(x) * step.x, float(y) * step.y), 0.0, 1.0)).rgb * w;
-            wsum += w;
-        }
+    if (radiusPx <= 0.5) return tex.sample(linClamp, uv).rgb;
+    float sigma = radiusPx * 0.5, step = max(sigma * 0.5, 0.5);
+    float lod = clamp(log2(step), 0.0, float(tex.get_num_mip_levels() - 1));
+    float3 sum = float3(0.0); float ws = 0.0;
+    for (int y = -6; y <= 6; ++y) for (int x = -6; x <= 6; ++x) {
+        float2 offset = float2(x, y) * step;
+        float weight = exp(-dot(offset, offset) / (2.0 * sigma * sigma));
+        sum += tex.sample(linMip, clamp(uv + offset / texSize, 0.0, 1.0), level(lod)).rgb * weight;
+        ws += weight;
     }
-    return sum / wsum;
+    return sum / ws;
 }
 
 constant float kBayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
@@ -268,6 +265,22 @@ fragment float4 loupeFS(VO in [[stage_in]], constant LoupeU &u [[buffer(0)]], te
 }
 
 struct SourceMask { float4 rect; float4 block; };
+
+static float sdBox(float2 p, float2 h, float radius) {
+    float2 q = abs(p) - h + radius;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+}
+static float4 readPx(texture2d<float, access::read> texture, float2 p) {
+    return texture.read(uint2(clamp(p, float2(0.0), float2(texture.get_width() - 1, texture.get_height() - 1))));
+}
+static float4 cellMean(texture2d<float, access::read> texture, float4 rect, float cell, float2 index) {
+    float2 lo = rect.xy + 0.5, hi = max(lo, rect.xy + rect.zw - 0.5), centre = rect.xy + (index + 0.5) * cell;
+    return (readPx(texture, clamp(centre + float2(-0.25, -0.25) * cell, lo, hi))
+          + readPx(texture, clamp(centre + float2(0.25, -0.25) * cell, lo, hi))
+          + readPx(texture, clamp(centre + float2(-0.25, 0.25) * cell, lo, hi))
+          + readPx(texture, clamp(centre + float2(0.25, 0.25) * cell, lo, hi))) * 0.25;
+}
+
 kernel void pixelateMask(texture2d<float, access::read> source [[texture(0)]],
                          texture2d<float, access::write> target [[texture(1)]],
                          constant SourceMask *masks [[buffer(0)]],
@@ -275,29 +288,33 @@ kernel void pixelateMask(texture2d<float, access::read> source [[texture(0)]],
                          uint2 gid [[thread_position_in_grid]]) {
     uint2 size(source.get_width(), source.get_height());
     if (any(gid >= size)) return;
-    float2 p = float2(gid);
+    float2 p = float2(gid) + 0.5;
     float4 color = source.read(gid);
-    for (uint i = 0; i < count; ++i) {
-        float4 r = masks[i].rect;
-        if (all(p >= r.xy) && all(p < r.xy + r.zw)) {
-            float block = max(masks[i].block.x, 8.0);
-            if (masks[i].block.y > 0.5) {
-                // Solid: an opaque fill. Nothing of the original pixels can
-                // survive it, so the region reads as a block, not as content.
-                color = float4(0.09, 0.09, 0.09, 1.0);
-                break;
-            }
-            float2 origin = floor(p / block) * block;
-            color = float4(0.0);
-            for (uint y = 0; y < 4; ++y) {
-                for (uint x = 0; x < 4; ++x) {
-                    float2 point = origin + (float2(x, y) + 0.5) * block / 4.0;
-                    color += source.read(uint2(clamp(point, float2(0), float2(size - 1))));
-                }
-            }
-            color *= 1.0 / 16.0;
-            break;
+    for (uint index = 0; index < count; ++index) {
+        float4 rect = masks[index].rect;
+        float2 halfSize = rect.zw * 0.5, centre = rect.xy + halfSize;
+        float radius = min(masks[index].block.z, min(halfSize.x, halfSize.y));
+        float distance = sdBox(p - centre, halfSize, radius);
+        float coverage = saturate(0.5 - distance);
+        if (coverage <= 0.0) continue;
+        float cell = max(masks[index].block.x, 4.0);
+        float4 fill;
+        if (masks[index].block.y > 1.5) {
+            float2 grid = (p - rect.xy) / cell - 0.5, i0 = floor(grid), fraction = grid - i0;
+            fill = mix(mix(cellMean(source, rect, cell, i0), cellMean(source, rect, cell, i0 + float2(1, 0)), fraction.x),
+                       mix(cellMean(source, rect, cell, i0 + float2(0, 1)), cellMean(source, rect, cell, i0 + float2(1, 1)), fraction.x), fraction.y);
+        } else if (masks[index].block.y > 0.5) {
+            float2 offset = float2(8.0);
+            float4 background = (readPx(source, rect.xy - offset)
+                + readPx(source, float2(rect.x + rect.z + offset.x, rect.y - offset.y))
+                + readPx(source, float2(rect.x - offset.x, rect.y + rect.w + offset.y))
+                + readPx(source, rect.xy + rect.zw + offset)) * 0.25;
+            float rim = 1.0 - smoothstep(0.0, 1.5, abs(distance + 0.75));
+            fill = float4(background.rgb * (0.88 - 0.10 * rim), 1.0);
+        } else {
+            fill = cellMean(source, rect, cell, floor((p - rect.xy) / cell));
         }
+        color = mix(color, fill, coverage);
     }
     target.write(color, gid);
 }
