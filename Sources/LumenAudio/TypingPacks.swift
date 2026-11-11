@@ -66,40 +66,34 @@ public enum TypingPackLoader {
         return out
     }
 
+    public static var root: URL? {
+        guard let directory = BundledAudioAssets.root?.appendingPathComponent("typing", isDirectory: true),
+              FileManager.default.fileExists(atPath: directory.path) else { return nil }
+        return directory
+    }
+
+    public static func dir(for id: String) -> URL? {
+        guard let root else { return nil }
+        let requested = root.appendingPathComponent(id, isDirectory: true)
+        if FileManager.default.fileExists(atPath: requested.appendingPathComponent("config.json").path) { return requested }
+        let fallback = root.appendingPathComponent("mechvibes-default", isDirectory: true)
+        return FileManager.default.fileExists(atPath: fallback.appendingPathComponent("config.json").path) ? fallback : nil
+    }
+
     public static func availablePacks() -> [URL] {
-        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("Resources/TypingPacks", isDirectory: true)
-        guard let dirs = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return [] }
-        return dirs.filter { $0.pathExtension.isEmpty && FileManager.default.fileExists(atPath: $0.appendingPathComponent("config.json").path) }
+        guard let root,
+              let dirs = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return [] }
+        return dirs.filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("config.json").path) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
-    /// PS/2 scancode (Mechvibes) -> macOS virtual keycode (CGEvent).
-    /// Unknown macOS keys fall back to generic.
+    /// macOS virtual keycodes mapped to PS/2 set-1 codes used by Mechvibes.
+    /// Packs may define a subset; the mixer uses the first available key for others.
     public static let macToPack: [Int: Int] = [
-        0: 30,   // kVK_ANSI_A -> 30
-        1: 48,   // S
-        2: 46,   // D
-        3: 32,   // F
-        4: 18,   // H
-        5: 35,   // G
-        6: 33,   // Z
-        7: 34,   // X
-        8: 31,   // C
-        9: 49,   // V
-        11: 19,  // B
-        12: 37,  // Q
-        13: 20,  // W
-        14: 26,  // E
-        15: 24,  // R
-        16: 227, // Y (227 is PS/2 Y)
-        17: 21,  // T
-        49: 57,  // Space
-        36: 28,  // Return
-        51: 14,  // Delete (Backspace)
-        48: 15,  // Tab
-        56: 42,  // Shift
-        60: 42,  // Shift right -> same sample
+        0:30, 1:31, 2:32, 3:33, 4:35, 5:34, 6:44, 7:45, 8:46, 9:47, 11:48, 12:16, 13:17, 14:18, 15:19,
+        16:21, 17:20, 31:24, 32:22, 34:23, 35:25, 37:38, 38:36, 40:37, 45:49, 46:50,
+        18:2, 19:3, 20:4, 21:5, 23:6, 22:7, 26:8, 28:9, 25:10, 29:11,
+        27:12, 24:13, 33:26, 30:27, 41:39, 39:40, 50:41, 42:43, 43:51, 47:52, 44:53,
+        36:28, 48:15, 49:57, 51:14, 53:1, 56:42, 60:54, 57:58, 59:29, 62:29, 58:56, 61:56,
     ]
-    public static let genericCode = 30
 }
