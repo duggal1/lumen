@@ -126,6 +126,10 @@ public final class InputRecorder: @unchecked Sendable {
     private let axQ = DispatchQueue(label: "lumen.ax", qos: .utility)
     private var axTimer: DispatchSourceTimer?
     private var enhancedApps: Set<pid_t> = []
+    private let launcherPIDs = OSAllocatedUnfairLock<[pid_t]>(initialState: [])
+    private static let launcherIDs: Set<String> = [
+        "com.apple.Spotlight", "com.apple.dock", "com.raycast.macos", "com.runningwithcrayons.Alfred"
+    ]
     private var tap: CFMachPort?
     private var fh: FileHandle?
     private var timer: DispatchSourceTimer?
@@ -142,6 +146,7 @@ public final class InputRecorder: @unchecked Sendable {
         fh = try FileHandle(forWritingTo: url); try fh?.seekToEnd()
         running.withLock { $0 = true }
         axTrusted.withLock { $0 = AXIsProcessTrusted() }
+        refreshLauncherPIDs()
         let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp,
                                     .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel, .keyDown, .keyUp, .flagsChanged]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << CGEventMask($1.rawValue)) }
@@ -163,8 +168,11 @@ public final class InputRecorder: @unchecked Sendable {
         th.qualityOfService = .userInteractive; th.start()
         startFlushTimer()
         startAXTimer()
-        Task { @MainActor [weak self] in           // cursor shape poll @ 10 Hz (was 30 Hz: per-tick main churn)
+        Task { @MainActor [weak self] in
+            var ticks = 0
             while let self, self.running.withLock({ $0 }) {
+                if ticks % 20 == 0 { self.refreshLauncherPIDs() }
+                ticks += 1
                 let cursorShape = self.catalog.classify()
                 self.shape.withLock { $0 = cursorShape }
                 try? await Task.sleep(for: .milliseconds(100))
@@ -280,7 +288,53 @@ public final class InputRecorder: @unchecked Sendable {
         return reservation.0
     }
 
+    @MainActor private func refreshLauncherPIDs() {
+        let pids = NSWorkspace.shared.runningApplications
+            .filter { Self.launcherIDs.contains($0.bundleIdentifier ?? "") }
+            .map(\.processIdentifier)
+        launcherPIDs.withLock { $0 = pids }
+    }
+
+    private func enableAccessibility(_ app: AXUIElement) {
+        var pid: pid_t = 0
+        AXUIElementGetPid(app, &pid)
+        if enhancedApps.insert(pid).inserted {
+            AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        }
+    }
+
+    private func launcherFocus() -> AXFrame? {
+        for pid in launcherPIDs.withLock({ $0 }) {
+            let app = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(app, 0.04)
+            enableAccessibility(app)
+            guard (attribute(app, kAXHiddenAttribute) as? Bool) != true else { continue }
+            guard let value = attribute(app, kAXFocusedUIElementAttribute),
+                  CFGetTypeID(value) == AXUIElementGetTypeID() else { continue }
+            let element = value as! AXUIElement
+            AXUIElementSetMessagingTimeout(element, 0.04)
+            guard (attribute(element, kAXHiddenAttribute) as? Bool) != true else { continue }
+            if let value = attribute(element, kAXWindowAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() {
+                let window = value as! AXUIElement
+                AXUIElementSetMessagingTimeout(window, 0.04)
+                guard (attribute(window, kAXHiddenAttribute) as? Bool) != true,
+                      (attribute(window, kAXMinimizedAttribute) as? Bool) != true,
+                      let windowFrame = frame(window), windowFrame.w > 0, windowFrame.h > 0 else { continue }
+                if let number = attribute(window, "AXWindowNumber") as? NSNumber,
+                   let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [NSDictionary],
+                   !windows.contains(where: { ($0[kCGWindowNumber] as? NSNumber) == number }) { continue }
+            }
+            let role = (attribute(element, kAXRoleAttribute) as? String) ?? ""
+            guard role.contains("Text") || role.contains("Search") || role.contains("ComboBox"),
+                  let focused = frame(element) else { continue }
+            return focused
+        }
+        return nil
+    }
+
     private func focusedFrame(_ system: AXUIElement) -> AXFrame? {
+        if let focused = launcherFocus() { return focused }
         if let value = attribute(system, kAXFocusedUIElementAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() {
             let element = value as! AXUIElement
             AXUIElementSetMessagingTimeout(element, 0.05)
@@ -289,19 +343,14 @@ public final class InputRecorder: @unchecked Sendable {
         guard let value = attribute(system, kAXFocusedApplicationAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         let app = value as! AXUIElement
         AXUIElementSetMessagingTimeout(app, 0.05)
-        var pid: pid_t = 0
-        AXUIElementGetPid(app, &pid)
-        if enhancedApps.insert(pid).inserted {
-            AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-            AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
-        }
+        enableAccessibility(app)
         guard let focused = attribute(app, kAXFocusedUIElementAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
         return frame(focused as! AXUIElement)
     }
 
     private func startAXTimer() {
         let timer = DispatchSource.makeTimerSource(queue: axQ)
-        timer.schedule(deadline: .now(), repeating: 0.5)
+        timer.schedule(deadline: .now(), repeating: 1.0)
         timer.setEventHandler { [weak self] in self?.sampleSecureFields() }
         timer.resume(); axTimer = timer
     }
@@ -315,9 +364,11 @@ public final class InputRecorder: @unchecked Sendable {
         guard let value = attribute(system, kAXFocusedApplicationAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return }
         let app = value as! AXUIElement
         AXUIElementSetMessagingTimeout(app, 0.03)
+        enableAccessibility(app)
         guard let window = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(window) == AXUIElementGetTypeID() else { return }
         var pending = [window as! AXUIElement], visited = 0
-        while let element = pending.popLast(), visited < 256, HostClock.now() - now < 0.12 {
+        while visited < pending.count, visited < 1500, HostClock.now() - now < 0.25 {
+            let element = pending[visited]
             visited += 1
             AXUIElementSetMessagingTimeout(element, 0.03)
             let labels = [kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, "AXPlaceholderValue"]
@@ -329,7 +380,7 @@ public final class InputRecorder: @unchecked Sendable {
                 axFrames.withLock { $0.append(snapshot) }
             }
             if let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
-                pending.append(contentsOf: children.prefix(max(256 - visited - pending.count, 0)))
+                pending.append(contentsOf: children.prefix(max(1500 - pending.count, 0)))
             }
         }
     }
@@ -361,14 +412,30 @@ public final class InputRecorder: @unchecked Sendable {
         let secure = label.range(of: "secure|email|password|passcode|card|cvv|cvc|ssn", options: .regularExpression.union(.caseInsensitive)) != nil
         var result = AXFrame(x: (pos.x - origin.x) * scale, y: (pos.y - origin.y) * scale,
                              w: size.width * scale, h: size.height * scale, secure: secure, label: label)
-        if let range = attribute(element, kAXSelectedTextRangeAttribute) {
-            var bounds: CFTypeRef?
-            if AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, range, &bounds) == .success,
-               let bounds, CFGetTypeID(bounds) == AXValueGetTypeID() {
-                var rect = CGRect.zero
-                if AXValueGetValue(bounds as! AXValue, .cgRect, &rect), rect.height > 0 {
-                    result.caret = AXFrame.Rect(x: (rect.minX - origin.x) * scale, y: (rect.minY - origin.y) * scale,
-                                               w: max(rect.width * scale, 1), h: rect.height * scale)
+        result.sampledAt = HostClock.now()
+        if let range = attribute(element, kAXSelectedTextRangeAttribute), CFGetTypeID(range) == AXValueGetTypeID() {
+            var selection = CFRange(location: 0, length: 0)
+            if AXValueGetValue(range as! AXValue, .cfRange, &selection) {
+                let insertionPoint = selection.length == 0
+                let glyphBefore = insertionPoint && selection.location > 0
+                var probe = insertionPoint
+                    ? CFRange(location: glyphBefore ? selection.location - 1 : 0, length: 1)
+                    : selection
+                if let probeValue = AXValueCreate(.cfRange, &probe) {
+                    var bounds: CFTypeRef?
+                    if AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString,
+                                                                 probeValue, &bounds) == .success,
+                       let bounds, CFGetTypeID(bounds) == AXValueGetTypeID() {
+                        var rect = CGRect.zero
+                        if AXValueGetValue(bounds as! AXValue, .cgRect, &rect), rect.height > 0 {
+                            if insertionPoint {
+                                rect = CGRect(x: glyphBefore ? rect.maxX : rect.minX,
+                                              y: rect.minY, width: 1, height: rect.height)
+                            }
+                            result.caret = AXFrame.Rect(x: (rect.minX - origin.x) * scale, y: (rect.minY - origin.y) * scale,
+                                                       w: max(rect.width * scale, 1), h: rect.height * scale)
+                        }
+                    }
                 }
             }
         }
