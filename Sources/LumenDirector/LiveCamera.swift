@@ -3,7 +3,7 @@ import LumenCore
 import LumenProject
 
 public struct LiveCamera: Sendable {
-    public var maxScale = 2.2, hold = 1.6, omegaZoom = 8.0, omegaPan = 7.0, lookahead = 0.15, deadZone = 0.28
+    public var maxScale = 2.0, hold = 0.7, omegaZoom = 9.0, omegaPan = 7.0, lookahead = 0.15, deadZone = 0.28
     public var cursor = CursorStyle()
     private let src: SIMD2<Double>
     private var t = 0.0, started = false
@@ -38,18 +38,21 @@ public struct LiveCamera: Sendable {
             down = true; lastActivity = e.t; rings.append((e.t, e.x, e.y))
             if !zoomed {
                 let atRest = zoom1.x.x < 0.03
-                zoomed = true; lzShot = log(maxScale)
-                let c = norm(SIMD2(Double(e.x), Double(e.y))), hw = 0.5 / maxScale
+                zoomed = true; lzShot = log(min(maxScale, 1.7))
+                let c = norm(SIMD2(Double(e.x), Double(e.y))), hw = 0.5 / exp(lzShot)
                 tgt = SIMD2(clamp(c.x, hw, 1 - hw), clamp(c.y, hw, 1 - hw))
                 if atRest { fx1 = tgt; fx2 = tgt; fv1 = .zero; fv2 = .zero }
             }
         case .up: down = false; lastActivity = e.t
         case .keyDown:
             guard e.axFrameIndex > 0 else { return }
-            let scale = focus.map { clamp(min(src.x / max($0.w * 1.6, 1), src.y / max($0.h * 1.6, 1)), 1.3, 3.2) } ?? maxScale
+            let scale = focus.map { clamp(min(src.x / max($0.w * 1.3, 1), src.y / max($0.h * 1.3, 1)), 1.6, 2.0) } ?? maxScale
             typing = true; zoomed = true; lastActivity = e.t; lzShot = log(scale)
-            let point = focus.map { SIMD2($0.x + $0.w / 2, $0.y + $0.h / 2) } ?? SIMD2(Double(e.x), Double(e.y))
-            let center = norm(point), half = 0.5 / scale
+            let point = focus.map { f in
+                SIMD2(f.caret.map { $0.x + $0.w / 2 } ?? f.x + f.w / 2,
+                      f.caret.map { $0.y + $0.h / 2 } ?? f.y + f.h / 2)
+            } ?? SIMD2(Double(e.x), Double(e.y))
+            let center = norm(point) + SIMD2(0.15 / scale, 0), half = 0.5 / scale
             let next = SIMD2(clamp(center.x, half, 1 - half), clamp(center.y, half, 1 - half))
             if hypot(next.x - tgt.x, next.y - tgt.y) > 0.06 / scale { tgt = next }
         case .drag, .scroll: lastActivity = e.t
