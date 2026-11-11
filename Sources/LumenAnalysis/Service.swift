@@ -51,6 +51,7 @@ public struct AnalysisRequest: Sendable {
     public var includePersonMask: Bool
     public var includeTyping: Bool
     public var events: [InputEvent]
+    public var ax: [AXFrame] = []
 
     public init(screen: URL, webcam: URL? = nil, mic: URL? = nil, cacheDirectory: URL, webcamOffset: Double = 0,
                 micOffset: Double = 0, projectSalt: UInt64, privacy: PrivacyPlan = PrivacyPlan(), locale: String = "en-US",
@@ -82,17 +83,20 @@ public struct AnalysisResult: Sendable {
 
 public actor AnalysisService {
     public static let shared = AnalysisService()
-    private let speech = AppleSpeechEngine()
+    private let speech = MoonshineSpeechEngine()
     public init() {}
 
-    public func run(_ request: AnalysisRequest) async -> AnalysisResult {
+    public func run(_ request: AnalysisRequest, onTyping: @Sendable (AnalysisResult) -> Void = { _ in },
+                    onPrivacy: @Sendable (AnalysisResult) -> Void = { _ in }) async -> AnalysisResult {
         // At most 2 concurrent analyzers at .utility; pause while a recording
         // is active so capture never shares the CPU with analysis.
         while RecordingGate.isRecordingActive {
             try? await Task.sleep(for: .milliseconds(250))
             if Task.isCancelled { return AnalysisResult(errors: ["cancelled": "analysis paused during recording"]) }
         }
-        // Two waves of ≤2 so the cap holds without starving any analyzer.
+        let typingResult = await runTyping(request)
+        onTyping(typingResult)
+        // Keep the remaining analyzers bounded to two concurrent jobs.
         async let faceResult = face(request)
         async let activityResult = activity(request)
         let (faces, faceError) = await faceResult
@@ -100,9 +104,11 @@ public actor AnalysisService {
         async let ocrResult = ocr(request)
         async let transcriptResult = transcript(request)
         let (detections, ocrError) = await ocrResult
+        onPrivacy(AnalysisResult(ocr: detections, errors: ocrError.map { ["ocr": $0] } ?? [:]))
         let (words, transcriptError) = await transcriptResult
         let (mask, maskError) = await personMask(request)
-        let (traces, typingError) = await typing(request)
+        let traces = typingResult.typing
+        let typingError = typingResult.errors["typing"]
         var errors: [String: String] = [:]
         if let faceError { errors["face"] = faceError }
         if let activityError { errors["activity"] = activityError }
@@ -112,6 +118,16 @@ public actor AnalysisService {
         if let typingError { errors["typing"] = typingError }
         return AnalysisResult(face: faces, activity: activities, ocr: detections, transcript: words,
                               personMask: mask, typing: traces, errors: errors)
+    }
+
+    public func runTyping(_ request: AnalysisRequest) async -> AnalysisResult {
+        let (traces, error) = await typing(request)
+        return AnalysisResult(typing: traces, errors: error.map { ["typing": $0] } ?? [:])
+    }
+
+    public func runPrivacy(_ request: AnalysisRequest) async -> AnalysisResult {
+        let (detections, error) = await ocr(request)
+        return AnalysisResult(ocr: detections, errors: error.map { ["ocr": $0] } ?? [:])
     }
 
     private func face(_ r: AnalysisRequest) async -> ([FaceSample], String?) {
@@ -133,26 +149,32 @@ public actor AnalysisService {
     }
 
     private func ocr(_ r: AnalysisRequest) async -> ([OCRDetection], String?) {
+        defer { r.privacyProgress(1) }
         guard r.privacy.enabled, r.privacy.autoDetect else { return ([], nil) }
         guard ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else {
             return ([], "Automatic text scanning is disabled by LUMEN_NO_OCR.")
         }
         let params = OCRParameters(salt: r.projectSalt, patterns: r.privacy.customPatterns,
                                    entropyThreshold: r.privacy.entropyThreshold, fps: 4)
-        let (detections, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "sensitive-text", version: 5,
-                                               parameters: params) {
-            try await OCRAnalyzer.analyze(url: r.screen, projectSalt: r.projectSalt, customPatterns: r.privacy.customPatterns,
-                                          entropyThreshold: r.privacy.entropyThreshold, duration: r.sourceDuration, progress: r.privacyProgress)
-        }
-        if error == nil { r.privacyProgress(1) }
-        return (detections ?? [], error)
+        do {
+            let directory = analysisDirectory(r)
+            let key = try await AnalysisCache.key(media: r.screen, analyzer: "sensitive-text", version: 6, parameters: params)
+            if let detections = AnalysisCache.load([OCRDetection].self, key: key, directory: directory) { return (detections, nil) }
+            let detections = try await OCRAnalyzer.analyze(url: r.screen, projectSalt: r.projectSalt,
+                customPatterns: r.privacy.customPatterns, entropyThreshold: r.privacy.entropyThreshold,
+                duration: r.sourceDuration, progress: r.privacyProgress)
+            try AnalysisCache.save(detections, key: key, directory: directory)
+            return (detections, nil)
+        } catch let partial as PartialScan {
+            return (partial.detections, "Scan cut short — masks cover what was found. Retry scanning before sharing.")
+        } catch { return ([], error.localizedDescription) }
     }
 
     private func transcript(_ r: AnalysisRequest) async -> (Transcript?, String?) {
         guard r.includeSpeech, let mic = r.mic else { return (nil, nil) }
         let params = SpeechParameters(locale: r.locale, vocabulary: r.vocabulary, offset: r.micOffset)
         let engine = speech
-        return await cached(url: mic, directory: analysisDirectory(r), analyzer: "transcript", version: 1,
+        return await cached(url: mic, directory: analysisDirectory(r), analyzer: "transcript-medium", version: 2,
                             parameters: params) {
             var result = try await engine.transcribe(audio: mic, locale: Locale(identifier: r.locale), vocabulary: r.vocabulary)
             for i in result.words.indices { result.words[i].start += r.micOffset; result.words[i].end += r.micOffset }
@@ -179,10 +201,19 @@ public actor AnalysisService {
         guard r.includeTyping, !r.events.isEmpty else { return ([], nil) }
         let bursts = r.events.typingBursts()
         guard !bursts.isEmpty else { return ([], nil) }
-        let anchors: [SIMD2<Double>?] = bursts.map { _ in nil }
+        let anchors: [SIMD2<Double>?] = bursts.map { burst in
+            if let event = r.events.first(where: { $0.kind == .keyDown && $0.t >= burst.t0 && $0.t <= burst.t1
+                && $0.axFrameIndex > 0 && Int($0.axFrameIndex) <= r.ax.count }) {
+                let frame = r.ax[Int(event.axFrameIndex) - 1]
+                if frame.w > 0 { return SIMD2(frame.caret.map { $0.x + $0.w / 2 } ?? frame.x + frame.w / 2,
+                                              frame.caret.map { $0.y + $0.h / 2 } ?? frame.y + frame.h / 2) }
+            }
+            return r.events.last { $0.kind == .down && $0.t <= burst.t0 && burst.t0 - $0.t < 20 }
+                .map { SIMD2(Double($0.x), Double($0.y)) }
+        }
         let params = TypingParameters(bursts: bursts.map { [$0.t0, $0.t1] },
                                       anchors: anchors.map { $0.map { [$0.x, $0.y] } ?? [-1, -1] })
-        let (traces, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "typing", version: 3,
+        let (traces, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "typing", version: 4,
                                            parameters: params) {
             try await TypingAnalyzer.analyze(url: r.screen, bursts: bursts, anchors: anchors)
         }
