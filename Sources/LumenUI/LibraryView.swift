@@ -379,30 +379,6 @@ struct LibrarySurface: View {
     private var audioTab: some View {
         VStack(alignment: .leading, spacing: 16) {
             compactToggle("Microphone", icon: "mic", Bindable(app).mic)
-            if app.mic {
-                LButton(title: "Voice Isolation…", icon: "mic.badge.plus") {
-                    MicrophoneModes.showVoiceIsolationControls()
-                }
-                ForEach(app.availableAudioInputs, id: \.id) { device in
-                    HStack(spacing: Space.s4) {
-                        Label(device.name, systemImage: inputIcon(device.name))
-                            .font(AppType.label).foregroundStyle(Tok.text).lineLimit(1)
-                        Spacer(minLength: Space.s2)
-                        LToggle(on: Binding(
-                            get: { app.micInputIDs.contains(device.id) },
-                            set: { app.selectAudioInput(device.id, enabled: $0) }),
-                            label: device.name)
-                        .accessibilityLabel(device.name)
-                    }
-                    .frame(height: 48)
-                }
-                Text(app.micInputIDs.isEmpty
-                     ? "Using the system default microphone."
-                     : app.micInputIDs.count == 1
-                        ? "1 microphone selected as the primary voice."
-                        : "\(app.micInputIDs.count) microphones captured independently; first is primary.")
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-            }
             compactToggle("System audio", icon: "speaker.wave.2", Bindable(app).system)
             compactToggle("Webcam", icon: "video", Bindable(app).webcam)
             if app.webcam {
@@ -420,19 +396,6 @@ struct LibrarySurface: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Bare macOS input glyphs. A device that draws its own circle is swapped
-    /// for the plain variant, per the icon rule.
-    private func inputIcon(_ name: String) -> String {
-        let n = name.lowercased()
-        if n.contains("airpods") { return "airpods.gen3" }
-        if n.contains("headphone") || n.contains("headset") { return "headphones" }
-        if n.contains("iphone") { return "iphone" }
-        if n.contains("display") || n.contains("monitor") { return "display" }
-        if n.contains("macbook") || n.contains("built-in") || n.contains("mac ") { return "laptopcomputer" }
-        if n.contains("blackhole") || n.contains("loopback") || n.contains("virtual") { return "waveform" }
-        if n.contains("usb") || n.contains("interface") { return "cable.connector" }
-        return "mic"
-    }
 
     private func compactToggle(_ label: String, icon: String, _ on: Binding<Bool>) -> some View {
         HStack(spacing: Space.s4) {
