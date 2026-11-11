@@ -89,6 +89,10 @@ public actor AnalysisService {
     public func run(_ request: AnalysisRequest, onTyping: @Sendable (AnalysisResult) -> Void = { _ in },
                     onPrivacy: @Sendable (AnalysisResult) -> Void = { _ in },
                     onPrivacyStart: @Sendable () -> Void = {}) async -> AnalysisResult {
+        // The privacy gate must always resolve: whatever ends this run — a
+        // finished scan, a failure, a cancellation or a disabled plan — the
+        // progress reaches 1 so the editor stops waiting for the masks.
+        defer { request.privacyProgress(1) }
         // At most 2 concurrent analyzers at .utility; pause while a recording
         // is active so capture never shares the CPU with analysis.
         while RecordingGate.isRecordingActive {
