@@ -16,6 +16,7 @@ public final class ProjectSession: @unchecked Sendable {
     public let screen: ReaderFrameSource
     public let webcam: (any FrameSource)?
     private let saveQueue = DispatchQueue(label: "lumen.project.save", qos: .userInitiated)
+    private let analysisSequence = OSAllocatedUnfairLock<Int>(initialState: 0)
     private let inputState: OSAllocatedUnfairLock<DirectorInput>
     public var input: DirectorInput { inputState.withLock { $0 } }
     public let mixer: AudioMixer
@@ -66,7 +67,9 @@ public final class ProjectSession: @unchecked Sendable {
     @discardableResult
     public func analyze(_ timeline: Timeline, privacyProgress: @escaping @Sendable (Double) -> Void = { _ in },
                         onTyping: @escaping @Sendable () -> Void = {},
-                        onPrivacy: @escaping @Sendable (String?) -> Void = { _ in }) async -> AnalysisResult {
+                        onPrivacy: @escaping @Sendable (String?) -> Void = { _ in },
+                        onPrivacyStart: @escaping @Sendable () -> Void = {}) async -> AnalysisResult {
+        let sequence = analysisSequence.withLock { value in value += 1; return value }
         let origin = meta.clock.originHostSeconds
         let micOffset = (meta.mic?.startHostSeconds ?? origin) - origin
         let webcamOffset = (meta.webcam?.startHostSeconds ?? origin) - origin
@@ -88,13 +91,17 @@ public final class ProjectSession: @unchecked Sendable {
         request.sourceDuration = meta.source.duration
         request.privacyProgress = privacyProgress
         let result = await AnalysisService.shared.run(request, onTyping: { [self] result in
-            guard !Task.isCancelled, result.errors["typing"] == nil else { return }
+            guard !Task.isCancelled, analysisSequence.withLock({ $0 == sequence }), result.errors["typing"] == nil else { return }
             inputState.withLock { $0.typing = result.typing }
             onTyping()
         }, onPrivacy: { [self] result in
-            guard !Task.isCancelled else { return }
+            guard analysisSequence.withLock({ $0 == sequence }),
+                  !Task.isCancelled || result.errors["ocr"] != nil else { return }
             inputState.withLock { $0.ocr = result.ocr }
             onPrivacy(result.errors["ocr"])
+        }, onPrivacyStart: {
+            guard !Task.isCancelled, self.analysisSequence.withLock({ $0 == sequence }) else { return }
+            onPrivacyStart()
         })
         guard !Task.isCancelled else { return result }
         let appliedRequest = request
