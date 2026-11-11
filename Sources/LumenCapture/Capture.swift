@@ -49,7 +49,7 @@ public struct RecordingConfig: Sendable {
     public var mic = true
     public var micDeviceID: String?
     /// Extra independent sources, e.g. BlackHole alongside a real microphone.
-    /// The primary mic uses Apple voice processing independently of system audio.
+    /// ScreenCaptureKit captures the primary microphone separately from system audio.
     public var additionalMicDeviceIDs: [String] = []
     public var systemAudio = false
     public var webcamDeviceID: String?
