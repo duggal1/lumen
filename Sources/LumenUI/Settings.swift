@@ -102,13 +102,6 @@ struct SettingsSurface: View {
                            track: Tok.well, thumb: Tok.control)
                     .frame(width: 240)
             }
-            ForEach(app.availableAudioInputs, id: \.id) { device in
-                Row(label: device.name) {
-                    LToggle(on: Binding(get: { app.micInputIDs.contains(device.id) },
-                                        set: { app.selectAudioInput(device.id, enabled: $0) }),
-                            label: device.name)
-                }
-            }
         }
         .card()
     }
