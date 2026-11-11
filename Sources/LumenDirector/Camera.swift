@@ -35,14 +35,9 @@ enum CameraSolver {
         let rate = 240.0
         let n = max(Int(outDur * rate) + 1, 2), dt = 1 / rate
         var tr = CameraTrack(count: n, rate: rate)
-        // The camera has to have ARRIVED by the click, not merely started.
-        // A critically damped spring reaches 95 % at omega * t = 7.75, so the
-        // spring constant is derived from the lead: zoom and pan both settle
-        // exactly when the scene starts. The spec omegas (zoom 7, pan 5) are
-        // the reference values and scale the result.
-        let settle = 7.75 / max(p.leadIn, 0.2)
-        let omegaIn = settle * (p.omegaZoom / 7.0), omegaOut = omegaIn * 0.8
-        let omegaPan = settle * (p.omegaPan / 5.0)
+        let omegaIn = p.omegaZoom
+        let omegaOut = p.omegaZoom * 0.85
+        let omegaPan = p.omegaPan
 
         // Output-time shots. Auto shots activate the lead early; manual shots
         // exactly where the user put them.
