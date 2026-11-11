@@ -183,7 +183,6 @@ public final class Renderer: @unchecked Sendable {
     private var blurB: [MTLTexture?] = [nil, nil, nil]
     private var backdrop: MTLTexture?
     private var backdropKey: BackdropKey?
-    private var backdropMipmapped = false
     private var size = SIMD2<Int>(0, 0)
     private var wallTex: MTLTexture?
     private var wallID = ""
@@ -299,7 +298,7 @@ public final class Renderer: @unchecked Sendable {
         guard let image = NSImage(contentsOf: url),
               let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
         let w = cg.width, h = cg.height, bytes = w * 4
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: true)
         d.usage = [.shaderRead]; d.storageMode = .managed
         guard let tex = device.makeTexture(descriptor: d) else { return }
         var data = [UInt8](repeating: 0, count: bytes * h)
@@ -312,11 +311,14 @@ public final class Renderer: @unchecked Sendable {
             ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
         }
         tex.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0, withBytes: data, bytesPerRow: bytes)
+        if let command = queue.makeCommandBuffer(), let blit = command.makeBlitCommandEncoder() {
+            blit.generateMipmaps(for: tex); blit.endEncoding(); command.commit()
+        }
         wallTex = tex
     }
 
-    private func ensureTargets(_ s: SIMD2<Int>, backdropBlur: Bool) {
-        guard s != size || backdropMipmapped != backdropBlur else { return }
+    private func ensureTargets(_ s: SIMD2<Int>) {
+        guard s != size else { return }
         for _ in 0..<3 { sem.wait() }
         func mk(mipmapped: Bool = false) -> MTLTexture {
             let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float,
@@ -326,10 +328,7 @@ public final class Renderer: @unchecked Sendable {
         }
         work = (0..<3).map { _ in mk() }; accum = (0..<3).map { _ in mk() }
         captionSrc = [nil, nil, nil]; blurA = [nil, nil, nil]; blurB = [nil, nil, nil]
-        // Allocate mip storage only when the user enables blur. Ordinary video
-        // exports keep their previous memory footprint and renderer stages.
-        backdrop = mk(mipmapped: backdropBlur)
-        backdropMipmapped = backdropBlur
+        backdrop = mk()
         backdropKey = nil
         size = s
         for _ in 0..<3 { sem.signal() }
@@ -376,7 +375,7 @@ public final class Renderer: @unchecked Sendable {
         let cs = r.canvas
         guard output.width == cs.x, output.height == cs.y, cs.x > 0, cs.y > 0 else { return false }
         let tl = r.timeline
-        ensureTargets(cs, backdropBlur: tl.style.wallpaperBlur > 0)
+        ensureTargets(cs)
         if wait { sem.wait() } else if sem.wait(timeout: .now()) != .success { return false }
         let s = slot; slot = (slot + 1) % 3
         let g = Geometry(canvas: cs, src: SIMD2(Double(r.screen.texture.width), Double(r.screen.texture.height)), style: tl.style)
@@ -450,12 +449,7 @@ public final class Renderer: @unchecked Sendable {
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()
             }
-            if tl.style.wallpaperBlur > 0, let blit = cb.makeBlitCommandEncoder() {
-                // Generate the full mip pyramid only after the backdrop
-                // itself changed. Screen content never enters these mipmaps.
-                blit.generateMipmaps(for: bd)
-                blit.endEncoding()
-            }
+
         }
 
         // 2. sub-frames (motion blur): scene over transparent, accumulated, resolved over the backdrop
@@ -490,11 +484,9 @@ public final class Renderer: @unchecked Sendable {
         pd.colorAttachments[0].texture = output; pd.colorAttachments[0].loadAction = .dontCare; pd.colorAttachments[0].storeAction = .store
         if let e = cb.makeRenderCommandEncoder(descriptor: pd) {
             e.setRenderPipelineState(pr); quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
-            let zoom = r.live?.cameraScale ?? tl.evaluate(at: r.t).cameraScale
             frag(e, ResU(levels: fmt == .bgr10a2Unorm ? 1023 : 255,
                          seed: UInt32(truncatingIfNeeded: Int(r.t * 1000)),
-                         blur: BackdropBlur.mipLevel(enabled: tl.style.wallpaperBlur > 0,
-                                                     cameraScale: zoom),
+                         blur: 0,
                          alpha: r.transparent || r.cursorOnly ? 0 : 1))
             e.setFragmentTexture(K > 1 ? accum[s] : work[s], index: 0); e.setFragmentTexture(bd, index: 1)
             e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); e.endEncoding()
@@ -546,14 +538,21 @@ public final class Renderer: @unchecked Sendable {
         // fragment path below remains the fallback. The backdrop resolve
         // still composites this work texture over the cached backdrop.
         var computeContent = false
-        if drawingContent, st.emphasis.masks.isEmpty, tl.camera.upscaleEnabled, st.cameraTilt == .zero, let cp = contentPass, let up = upscaler {
+        if drawingContent, tl.camera.upscaleEnabled, st.cameraTilt == .zero, let cp = contentPass, let up = upscaler {
             let layout = ContentLayout(canvas: SIMD2<Int32>(Int32(g.canvas.x), Int32(g.canvas.y)),
                                        contentRect: content, radii: SIMD4<Float>(g.radii),
                                        srcSize: SIMD2<Float>(g.src))
             var params = UpscaleParams()
             params.maxFactor = tl.camera.upscaleMaxFactor
+            var hasher = Hasher()
+            hasher.combine(tl.overlays.privacy.pixelSize)
+            for mask in st.emphasis.masks {
+                hasher.combine(mask.rect.x); hasher.combine(mask.rect.y)
+                hasher.combine(mask.rect.z); hasher.combine(mask.rect.w); hasher.combine(mask.mode)
+            }
+            let upscaleID = st.emphasis.masks.isEmpty ? r.screen.id : r.screen.id ^ UInt64(bitPattern: Int64(hasher.finalize()))
             if let upscaled = try? cp.prepareUpscale(up, cb, layout: layout, camCenter: SIMD2<Float>(cam),
-                                                     zoom: Float(sc), source: src, sourceID: r.screen.id, params: params),
+                                                     zoom: Float(sc), source: src, sourceID: upscaleID, params: params),
                let ce = cb.makeComputeCommandEncoder(),
                let transparent = transparentTexture() {
                 try? cp.encode(ce, layout: layout, camCenter: SIMD2<Float>(cam), zoom: Float(sc),
@@ -811,32 +810,29 @@ public final class Renderer: @unchecked Sendable {
     private func maskedSource(_ source: MTLTexture, masks: [MaskFrame], pixelSize: Float,
                               slot: Int, cb: MTLCommandBuffer) -> MTLTexture? {
         guard !masks.isEmpty else { return source }
+        guard masks.count <= 128 else { return nil }
         if maskedSources[slot]?.width != source.width || maskedSources[slot]?.height != source.height {
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
-                width: source.width, height: source.height, mipmapped: false)
-            descriptor.usage = [.shaderRead, .shaderWrite]; descriptor.storageMode = .private
+                width: source.width, height: source.height, mipmapped: true)
+            descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]; descriptor.storageMode = .private
             maskedSources[slot] = device.makeTexture(descriptor: descriptor)
         }
-        guard let target = maskedSources[slot] else { return nil }
-        let regions = masks.map { mask in
-            let block = max(pixelSize, PrivacyMaskGeometry.cell(boxHeight: mask.rect.w))
-            // The kernel needs the mode: a solid mask paints an opaque fill,
-            // every other mode pixelates the region in source space.
-            let mode: Float = mask.mode == .solid ? 1 : 0
-            return SourceMaskGPU(rect: PrivacyMaskGeometry.mosaicRegion(mask.rect, cell: block),
-                                 block: SIMD4(block, mode, 0, 0))
+        guard let target = maskedSources[slot], let encoder = cb.makeComputeCommandEncoder() else { return nil }
+        let regions = masks.prefix(128).map { mask -> SourceMaskGPU in
+            let height = mask.rect.w
+            let cell = pixelSize > 0 ? pixelSize : min(max(height * 0.45, 6), 24)
+            let mode: Float = switch mask.mode { case .pixelate: 0; case .solid: 1; case .blur: 2 }
+            return SourceMaskGPU(rect: mask.rect, block: SIMD4(cell, mode, height * 0.22, 0))
         }
-        guard let buffer = regions.withUnsafeBytes({ bytes in
-            bytes.baseAddress.flatMap { device.makeBuffer(bytes: $0, length: bytes.count) }
-        }), let encoder = cb.makeComputeCommandEncoder() else { return nil }
         var count = UInt32(regions.count)
         encoder.setComputePipelineState(pSourceMask)
         encoder.setTexture(source, index: 0); encoder.setTexture(target, index: 1)
-        encoder.setBuffer(buffer, offset: 0, index: 0)
+        regions.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
         encoder.setBytes(&count, length: MemoryLayout<UInt32>.size, index: 1)
         encoder.dispatchThreads(MTLSize(width: source.width, height: source.height, depth: 1),
                                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
         encoder.endEncoding()
+        if let blit = cb.makeBlitCommandEncoder() { blit.generateMipmaps(for: target); blit.endEncoding() }
         return target
     }
 
