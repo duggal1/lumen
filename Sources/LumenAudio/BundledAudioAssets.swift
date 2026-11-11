@@ -1,4 +1,5 @@
 import Foundation
+import LumenCore
 
 /// A single resolver for sounds in a packaged Lumen.app and from a source checkout.
 /// Missing audio is not replaced by generated noise.
@@ -13,12 +14,7 @@ public enum BundledAudioAssets {
     }
 
     public static var root: URL? {
-        let candidates = [
-            Bundle.main.resourceURL?.appendingPathComponent("Audio", isDirectory: true),
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("App/public/assets", isDirectory: true)
-        ].compactMap { $0 }
-        return candidates.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("mouse-click.mp3").path) }
+        AppAssets.directory(bundlePath: "Audio", sourcePaths: ["App/public/assets"])
     }
 
     public static func effect(named name: String) -> URL? {
