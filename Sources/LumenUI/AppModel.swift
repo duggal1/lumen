@@ -90,6 +90,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var windows: [(id: CGWindowID, name: String)] = []
     var error: String?
     var stats: CaptureStats?
+    let recordingMeter = RecordingMeter()
     var projects: [ProjectRow] = []
     public var onFinished: ((URL) -> Void)?
     public let library: URL
@@ -100,9 +101,9 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     private var poll: Task<Void, Never>?
     private var hiddenWindows: [NSWindow] = []
 
-    public init() {
-        library = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
-        try? FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+    public init(library: URL? = nil) {
+        self.library = library ?? FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
+        try? FileManager.default.createDirectory(at: self.library, withIntermediateDirectories: true)
         refresh()
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.toggle() } }
         // Cmd+Opt+P toggles pause while recording (start/stop is Cmd+Opt+R).
@@ -412,6 +413,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     func start() async {
         guard phase == .idle else { return }
         phase = .preparing
+        recordingMeter.level = 0
+        stats = nil
         defer { if phase == .preparing { phase = .idle } }
         error = nil
         guard Permissions.screen else { Permissions.requestScreen(); error = "Screen Recording is off. Grant it, then relaunch Lumen."; return }
@@ -463,7 +466,19 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             try await session.start()
             phase = .recording
             hud?.showControls()
-            poll = Task { while !Task.isCancelled { stats = await session.stats(); try? await Task.sleep(for: .nanoseconds(11_111_111)) } }
+            poll = Task {
+                var nextStatus = ContinuousClock.now
+                while !Task.isCancelled {
+                    let sample = await session.stats()
+                    recordingMeter.level = sample.micLevel
+                    let now = ContinuousClock.now
+                    if now >= nextStatus {
+                        stats = sample
+                        nextStatus = now.advanced(by: .milliseconds(250))
+                    }
+                    try? await Task.sleep(for: .nanoseconds(16_666_667))
+                }
+            }
         } catch { fail(error) }
     }
 

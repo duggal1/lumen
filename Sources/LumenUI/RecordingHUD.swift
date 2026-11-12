@@ -1,5 +1,10 @@
 import AppKit
 import SwiftUI
+import Observation
+
+@MainActor @Observable final class RecordingMeter {
+    var level: Float = 0
+}
 
 @MainActor final class HUDController {
     private var panel: NSPanel?
@@ -109,8 +114,11 @@ private struct RecordingHUD: View {
                     .frame(width: 24, height: 24)
                     .accessibilityLabel(app.paused ? "Paused" : "Recording")
                 Text(time(app.stats?.elapsed ?? 0))
-                    .font(AppType.mono13).monospacedDigit().frame(width: 56, alignment: .leading)
-                RecordingLevelTape(level: app.paused ? 0 : (app.stats?.micLevel ?? 0), paused: app.paused)
+                    .font(AppType.label).monospacedDigit()
+                    .contentTransition(.numericText())
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: time(app.stats?.elapsed ?? 0))
+                    .frame(width: 56, alignment: .leading)
+                RecordingLevelTape(meter: app.recordingMeter, paused: app.paused)
                 Spacer(minLength: 0)
                 HUDAction(title: app.paused ? "Resume" : "Pause", icon: app.paused ? "play.fill" : "pause.fill") {
                     app.togglePause()
@@ -186,7 +194,7 @@ private struct HUDAction: View {
 }
 
 private struct RecordingLevelTape: View {
-    let level: Float
+    let meter: RecordingMeter
     let paused: Bool
     @State private var history: [Int] = []
 
@@ -208,13 +216,13 @@ private struct RecordingLevelTape: View {
             }
         }
         .frame(width: 72, height: 20)
-        .onChange(of: level) { _, value in
+        .onChange(of: meter.level) { _, value in
             let db = value > 0 && value.isFinite ? 20 * log10(Double(value)) : -100
             let magnitude = db <= -54 ? 0 : min(3, max(1, Int(((db + 54) / 48 * 3).rounded(.up))))
             history = Array((history + [magnitude]).suffix(24))
         }
         .accessibilityElement()
         .accessibilityLabel("Microphone level")
-        .accessibilityValue(paused ? "Paused" : level > 0.002 ? "Sound detected" : "Quiet")
+        .accessibilityValue(paused ? "Paused" : meter.level > 0.002 ? "Sound detected" : "Quiet")
     }
 }

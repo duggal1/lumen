@@ -90,11 +90,8 @@ public final class CAFWriter: @unchecked Sendable {
         guard n > 0, let inBuf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: n) else { return }
         inBuf.frameLength = n
         guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sb, at: 0, frameCount: Int32(n), into: inBuf.mutableAudioBufferList) == noErr else { return }
-        if let ch = inBuf.floatChannelData?[0] {
-            var s: Float = 0; for i in 0..<Int(n) { s += ch[i] * ch[i] }
-            let rms = (s / Float(n)).squareRoot()
-            level.withLock { $0 = rms }
-        }
+        let rms = Self.inputLevel(inBuf)
+        level.withLock { $0 = rms }
         let pts = hostTime ?? sb.presentationTimeStamp.seconds
         // Low-quality input warning (Bluetooth HFP ≤24 kHz).
         if fmt.sampleRate <= 24_000 {
@@ -173,6 +170,30 @@ public final class CAFWriter: @unchecked Sendable {
             _ = writeBuffer(inBox.buf, to: f, fileFormat: fileFmt, pts: pts)
             lastPTS = pts
         }
+    }
+
+    private static func inputLevel(_ buffer: AVAudioPCMBuffer) -> Float {
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return 0 }
+        let stride = buffer.format.isInterleaved ? Int(buffer.format.channelCount) : 1
+        var sum = 0.0
+        switch buffer.format.commonFormat {
+        case .pcmFormatFloat32:
+            guard let samples = buffer.floatChannelData?[0] else { return 0 }
+            for i in 0..<count {
+                let value = Double(samples[i * stride])
+                if value.isFinite { sum += value * value }
+            }
+        case .pcmFormatInt16:
+            guard let samples = buffer.int16ChannelData?[0] else { return 0 }
+            for i in 0..<count { let value = Double(samples[i * stride]) / 32768; sum += value * value }
+        case .pcmFormatInt32:
+            guard let samples = buffer.int32ChannelData?[0] else { return 0 }
+            for i in 0..<count { let value = Double(samples[i * stride]) / 2147483648; sum += value * value }
+        default:
+            return 0
+        }
+        return Float((sum / Double(count)).squareRoot())
     }
 
     /// Writes `buf` to `file`, converting format if needed with the carried converter.
@@ -485,13 +506,12 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private func video(_ sb: CMSampleBuffer) {
         guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let info = arr.first, let raw = info[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete,
-              let pb = CMSampleBufferGetImageBuffer(sb), let w = writer, let vin, adaptor != nil else { return }
+              let pb = CMSampleBufferGetImageBuffer(sb), let w = writer, vin != nil, adaptor != nil else { return }
         let pts = sb.presentationTimeStamp
         if !started {
             guard w.startWriting() else { return }
             w.startSession(atSourceTime: pts); started = true
             ptsRange.withLock { $0.first = pts.seconds }
-            vin.requestMediaDataWhenReady(on: videoQ) { [weak self] in self?.drainVideo() }
         }
         if pendingVideo != nil { dropped.withLock { $0 += 1 } }
         pendingVideo = (pb, pts)
