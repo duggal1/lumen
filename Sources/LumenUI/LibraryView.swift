@@ -48,7 +48,7 @@ struct LibrarySurface: View {
                     LedgerCard(app: app)
                     ActivityCard(app: app)
                     RecentRecordings(app: app, open: open, reveal: reveal, delete: delete)
-                    WhereYouRecord()
+                    WhereYouRecord(app: app)
                 }
                 .padding(Metrics.pagePad)
                 .frame(maxWidth: Metrics.wide)
