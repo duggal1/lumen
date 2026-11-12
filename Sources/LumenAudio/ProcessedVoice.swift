@@ -7,17 +7,19 @@ import LumenProject
 public enum CleanVoiceError: Error { case missingMicrophone }
 
 struct ProcessedVoiceCache {
-    static let revision = "voice-v10-df3-denoise-only"
+    static let revision = "voice-v12-df3-gentle-dereverb"
 
     private struct Settings: Encodable {
         let noiseStrength: Double
         let engine: String
         let declickDepth: Double
+        let dereverb: Double
 
         init(_ plan: AudioPlan, hasKeys: Bool) {
             noiseStrength = plan.micClean ? (plan.noiseReductionStrength.isFinite ? clamp(plan.noiseReductionStrength, 0, 1) : 1) : 0
             engine = noiseStrength > 0 && DeepFilterNet.isAvailable ? "df3" : "off"
             declickDepth = plan.declick && hasKeys ? plan.declickDepthDb : 0
+            dereverb = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
         }
     }
 
@@ -62,6 +64,20 @@ struct ProcessedVoiceCache {
 
         if plan.declick, !keyTimes.isEmpty {
             voice = Declick.process(voice, keyTimes: keyTimes, vad: VAD.regions(voice), depthDb: plan.declickDepthDb)
+        }
+        let echo = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
+        if echo > 0, voice.count > 16_384 {
+            var wpe = WPE()
+            wpe.taps = 4
+            wpe.iterations = 1
+            wpe.maxHz = 4_000
+            let reduced = wpe.process(voice)
+            if reduced.count == voice.count {
+                let amount = Float(echo * 0.3)
+                voice = zip(voice, reduced).map { dry, wet in
+                    wet.isFinite ? dry + (wet - dry) * amount : dry
+                }
+            }
         }
         return voice
     }
