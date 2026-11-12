@@ -16,6 +16,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     public enum Phase: Equatable { case idle, preparing, countdown(Int), recording, finishing }
     enum SourceKind: String, CaseIterable { case display, window, region }
     private enum RecoveryResult: Sendable { case recovered, noUsableFrames, failed(String) }
+    private enum RecoveryDiscardResult: Sendable { case discarded, failed(String) }
     struct ProjectRow: Identifiable {
         var id: URL { url }
         let url: URL
@@ -307,16 +308,17 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             let result = await Task.detached(priority: .utility) {
                 do {
                     try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-                    return nil
+                    return RecoveryDiscardResult.discarded
                 } catch {
-                    return error.localizedDescription
+                    return RecoveryDiscardResult.failed(error.localizedDescription)
                 }
             }.value
             recoveryOperations.remove(url)
-            if let result {
-                error = "Couldn’t discard this recording. \(result)"
-            } else {
+            switch result {
+            case .discarded:
                 refresh()
+            case .failed(let message):
+                error = "Couldn’t discard this recording. \(message)"
             }
         }
     }
