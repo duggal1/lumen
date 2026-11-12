@@ -143,9 +143,10 @@ enum TimelineSelection: Equatable {
         self.session = session; self.renderer = renderer; self.timeline = timeline; box = TimelineBox(timeline)
         self.exportSettings = exportSettings
         renderer.setCustomCursors(session.cursors)
-        // No eager remix at open: the full offline mix (WPE + studio chain)
-        // is seconds of CPU and was competing with derive at open. It is
-        // built lazily on first Play (see play()).
+        // Prepare the reusable neural result as soon as the editor opens.
+        // The full timeline mix still waits for derived cues.
+        let mixer = session.mixer, audioPlan = timeline.audio
+        Task.detached(priority: .userInitiated) { mixer.prepareVoice(audioPlan) }
         setTranscript(transcript)
         // Pre-start the audio engine off the main thread so the first Play
         // click never pays engine startup inside the transport gap.
