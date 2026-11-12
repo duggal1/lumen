@@ -40,8 +40,20 @@ public final class MainThreadWatchdog: @unchecked Sendable {
             .appendingPathComponent("hangs.json")
     }
 
+    /// The stall recorder stays on: it is the only way a hang the user cannot
+    /// reproduce leaves evidence behind. It costs one empty main-queue block
+    /// every 50 ms.
     public var isEnabled: Bool {
         ProcessInfo.processInfo.environment["LUMEN_HANG_WATCHDOG"] != "0"
+    }
+
+    /// Stack sampling is NOT free. `sample` suspends every thread of this
+    /// process thousands of times a second, so running it against a live
+    /// recording turns a 250 ms hiccup into a multi-second freeze — and the
+    /// freeze it causes can trigger another sample. It stays off unless a
+    /// developer asks for it explicitly.
+    public var isSamplingEnabled: Bool {
+        ProcessInfo.processInfo.environment["LUMEN_HANG_SAMPLE"] == "1"
     }
 
     /// Current stage for the next hang record. Set by RecordingSession on every transition.
@@ -80,7 +92,12 @@ public final class MainThreadWatchdog: @unchecked Sendable {
 
     /// Test hook: record a synthetic hang.
     func record(latencyMs: Double, stage: String) {
-        hangs.withLock { $0.append(HangRecord(timestamp: HostClock.now(), latencyMs: latencyMs, stage: stage)) }
+        hangs.withLock { records in
+            // Bounded: a long recording with a wedged main thread must not
+            // grow this array without limit.
+            records.append(HangRecord(timestamp: HostClock.now(), latencyMs: latencyMs, stage: stage))
+            if records.count > 200 { records.removeFirst(records.count - 200) }
+        }
     }
 
     private func loop() {
@@ -90,18 +107,29 @@ public final class MainThreadWatchdog: @unchecked Sendable {
             DispatchQueue.main.async { reply.signal() }
             if reply.wait(timeout: .now() + 0.25) == .timedOut {
                 record(latencyMs: (HostClock.now() - enqueued) * 1000, stage: current)
-                try? FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let stack = outputURL.deletingLastPathComponent().appendingPathComponent("stall-\(Int(Date().timeIntervalSince1970)).txt")
-                let sample = Process()
-                sample.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
-                sample.arguments = [String(ProcessInfo.processInfo.processIdentifier), "1", "1", "-file", stack.path]
-                sample.standardOutput = FileHandle.nullDevice; sample.standardError = FileHandle.nullDevice
-                try? sample.run()
-                os_log("main stalled in %@; stack sample: %@", log: .default, type: .fault, current, stack.path)
                 flush()
-                while running.withLock({ $0 }), reply.wait(timeout: .now() + 0.05) == .timedOut {}
+                if isSamplingEnabled { sampleStack(stage: current) }
+                // Wait for main to come back, but bounded: the watchdog is a
+                // reporter, never a reason the app stays stuck.
+                let deadline = Date().addingTimeInterval(2)
+                while running.withLock({ $0 }), Date() < deadline,
+                      reply.wait(timeout: .now() + 0.05) == .timedOut {}
             }
             Thread.sleep(forTimeInterval: 0.05)
         }
+    }
+
+    /// Developer-only: dump this process's stacks to a file. Never runs during
+    /// a normal recording (see `isSamplingEnabled`).
+    private func sampleStack(stage: String) {
+        try? FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let name = "stall-" + String(Int(Date().timeIntervalSince1970)) + ".txt"
+        let stack = outputURL.deletingLastPathComponent().appendingPathComponent(name)
+        let sample = Process()
+        sample.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+        sample.arguments = [String(ProcessInfo.processInfo.processIdentifier), "1", "1", "-file", stack.path]
+        sample.standardOutput = FileHandle.nullDevice; sample.standardError = FileHandle.nullDevice
+        try? sample.run()
+        os_log("main stalled in %@; stack sample: %@", log: .default, type: .fault, stage, stack.path)
     }
 }
