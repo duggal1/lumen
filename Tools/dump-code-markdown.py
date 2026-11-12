@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-"""Write LumenAudio source code to allcode.md."""
+"""Write Lumen source code to allcode.md."""
 
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+SOURCE_ROOT = ROOT / "Sources"
 OUTPUT = ROOT / "allcode.md"
-FOLDERS = ("LumenAudio",)
-CODE_EXTENSIONS = {".swift", ".c", ".h", ".m", ".mm", ".metal", ".cpp", ".hpp"}
+CODE_EXTENSIONS = {".swift", ".metal", ".c", ".h"}
 LANGUAGE_BY_EXTENSION = {
     ".swift": "swift",
+    ".metal": "metal",
     ".c": "c",
     ".h": "c",
-    ".m": "objective-c",
-    ".mm": "objective-c++",
-    ".metal": "metal",
-    ".cpp": "cpp",
-    ".hpp": "cpp",
 }
 
 
@@ -32,11 +28,15 @@ def fence_for(source: str) -> str:
 
 
 def main() -> None:
-    sections = ["# Audio processing source", ""]
+    folders = sorted(
+        path for path in SOURCE_ROOT.iterdir()
+        if path.is_dir() and path.name.startswith("Lumen")
+    )
+    sections = ["# Lumen source code", ""]
     count = 0
 
-    for folder_name in FOLDERS:
-        folder = ROOT / "Sources" / folder_name
+    for folder in folders:
+        folder_name = folder.name
         sections.extend((f"## {folder_name}/", ""))
         files = sorted(
             path for path in folder.rglob("*")
