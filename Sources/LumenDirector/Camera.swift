@@ -153,19 +153,25 @@ enum CameraSolver {
         var previousLogScale = 0.0
         var previousCenter = rest
         var lastStart = -Double.infinity
+        var previousIntentTime: Double?
+        let arrivalLead = 1.0 / 60.0
         for shot in shots {
             let estimate = targetCenter(shot, at: index(shot.start))
             let scaleChange = abs(shot.logScale - previousLogScale)
             let panDistance = hypot(estimate.x - previousCenter.x, estimate.y - previousCenter.y)
                 * exp(max(shot.logScale, previousLogScale))
             let panDuration = min(max((0.35 + 0.9 * panDistance) * (7 / panOmega) / shot.ease, 0.30), 1.2)
-            let duration = scaleChange > 0.03
+            let preferredDuration = scaleChange > 0.03
                 ? max(5.5 / (zoomIn * shot.ease), 0.6 * panDuration)
                 : panDuration
-            let start = max(shot.isAuto
-                            ? shot.start - max(p.leadIn.isFinite ? p.leadIn : 0.6, duration - 0.06)
-                            : shot.start,
-                            lastStart + 0.02)
+            let earliestStart = max(lastStart + 0.02, (previousIntentTime ?? -Double.infinity) + arrivalLead)
+            let deadline = shot.start - arrivalLead
+            let available = deadline - earliestStart
+            let duration = shot.isAuto && available > 1e-3 ? min(preferredDuration, available) : preferredDuration
+            let nominalStart = shot.isAuto
+                ? shot.start - max(p.leadIn.isFinite ? p.leadIn : 0.6, duration + arrivalLead)
+                : shot.start
+            let start = max(nominalStart, earliestStart)
             let end = start + duration
             let endCenter = targetCenter(shot, at: index(end))
             let endPan = panCoordinate(for: endCenter, logScale: shot.logScale)
@@ -181,6 +187,7 @@ enum CameraSolver {
                               endVelocity: endVelocity, endAcceleration: endAcceleration,
                               followUntil: isFollow(shot.focus) ? shot.off : nil))
             lastStart = start
+            previousIntentTime = shot.start
             previousLogScale = shot.logScale
             previousCenter = endCenter
         }
