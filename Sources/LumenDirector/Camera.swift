@@ -245,24 +245,17 @@ enum CameraSolver {
             scales[sample] = zoom
         }
 
-        func derivative(_ values: [Double]) -> [Float] {
+        func tangent(_ values: [Double]) -> [Float] {
             var result = [Float](repeating: 0, count: values.count)
-            if values.count > 2 {
-                for i in 1..<(values.count - 1) { result[i] = Float((values[i + 1] - values[i - 1]) * rate / 2) }
-                result[0] = result[1]
-                result[values.count - 1] = result[values.count - 2]
-            }
-            return result
-        }
-
-        func acceleration(_ values: [Double]) -> [Float] {
-            var result = [Float](repeating: 0, count: values.count)
+            guard values.count > 1 else { return result }
+            result[0] = Float((values[1] - values[0]) * rate)
+            result[values.count - 1] = Float((values[values.count - 1] - values[values.count - 2]) * rate)
             if values.count > 2 {
                 for i in 1..<(values.count - 1) {
-                    result[i] = Float((values[i + 1] - 2 * values[i] + values[i - 1]) * rate * rate)
+                    let left = (values[i] - values[i - 1]) * rate
+                    let right = (values[i + 1] - values[i]) * rate
+                    if left * right > 0 { result[i] = Float(2 * left * right / (left + right)) }
                 }
-                result[0] = result[1]
-                result[values.count - 1] = result[values.count - 2]
             }
             return result
         }
@@ -270,12 +263,9 @@ enum CameraSolver {
         track.nx = centersX.map(Float.init)
         track.ny = centersY.map(Float.init)
         track.lz = scales.map(Float.init)
-        track.vx = derivative(centersX)
-        track.vy = derivative(centersY)
-        track.vz = derivative(scales)
-        track.ax = acceleration(centersX)
-        track.ay = acceleration(centersY)
-        track.az = acceleration(scales)
+        track.vx = tangent(centersX)
+        track.vy = tangent(centersY)
+        track.vz = tangent(scales)
 
         var yaw = p.tilt == .reveal ? 12.0 : 0.0, yawVelocity = 0.0
         var pitch = 0.0, pitchVelocity = 0.0
