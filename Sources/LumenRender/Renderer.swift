@@ -68,7 +68,12 @@ private struct QuadU { var rect: SIMD4<Float>; var canvas: SIMD2<Float> }
 private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; var angle: Float; var count: Int32; var kind: Int32
                            var radius: Float; var shadow: Float; var scale: Float; var cell: Float; var density: Float; var hasWall: Int32
                            var time: Float; var pointer: SIMD4<Float>; var wallBlur: Float; var imgAlpha: Float; var imgContrast: Float; var imgBright: Float }
-private struct ContentU { var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>; var scale: Float; var radius: Float; var border: Float; var p: Float; var tilt: SIMD2<Float>; var radii: SIMD4<Float> }
+private struct ContentU {
+    var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>
+    var scale: Float; var radius: Float; var border: Float; var p: Float
+    var tilt: SIMD2<Float>; var radii: SIMD4<Float>
+    var upRegion: SIMD4<Float>; var upTexSize: SIMD2<Float>; var upFactor: Float; var upBlend: Float
+}
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float> }
 private struct SourceMaskGPU { var rect: SIMD4<Float>; var block: SIMD4<Float> }
@@ -241,7 +246,6 @@ public final class Renderer: @unchecked Sendable {
     public let fxKernels: FXKernels?
     public let upscaler: Upscaler?
     private let contentPass: ContentPass?
-    private var transparentTex: MTLTexture?
 
     public init() throws {
         guard let d = MTLCreateSystemDefaultDevice(), let q = d.makeCommandQueue() else { throw RenderError.noDevice }
@@ -705,13 +709,13 @@ public final class Renderer: @unchecked Sendable {
         let cam = ZoomTransform.clamp(SIMD2<Double>(Double(st.cameraCenter.x), Double(st.cameraCenter.y)), source: g.src, scale: sc)
         let pxPerSrc = g.content.z / g.src.x
         let drawingContent = !r.cursorOnly
-        // Real-time upscaler path (was dead code: ContentPass/Upscaler were
-        // never called). When magnification is high and tilt is off, the
-        // compute content pass draws from the upscaled texture; the
-        // fragment path below remains the fallback. The backdrop resolve
-        // still composites this work texture over the cached backdrop.
-        var computeContent = false
-        if drawingContent, tl.camera.upscaleEnabled, st.cameraTilt == .zero, let cp = contentPass, let up = upscaler {
+        // Real-time upscaler. SMOOTHNESS: the upscale chain still runs as compute
+        // (it must write textures), but its result is now consumed by
+        // `contentFS` as texture 1 instead of a second full-canvas compute
+        // pass that wrote the scene target. Tilt is no longer gated out: the
+        // fragment shader warps first, then samples the upscaled lattice.
+        var upscaled: (UpscaleResult, Float)?
+        if drawingContent, tl.camera.upscaleEnabled, let cp = contentPass, let up = upscaler {
             let layout = ContentLayout(canvas: SIMD2<Int32>(Int32(g.canvas.x), Int32(g.canvas.y)),
                                        contentRect: content, radii: SIMD4<Float>(g.radii),
                                        srcSize: SIMD2<Float>(g.src))
@@ -724,31 +728,28 @@ public final class Renderer: @unchecked Sendable {
                 hasher.combine(mask.rect.z); hasher.combine(mask.rect.w); hasher.combine(mask.mode)
             }
             let upscaleID = st.emphasis.masks.isEmpty ? r.screen.id : r.screen.id ^ UInt64(bitPattern: Int64(hasher.finalize()))
-            if let upscaled = try? cp.prepareUpscale(up, cb, layout: layout, camCenter: SIMD2<Float>(cam),
-                                                     zoom: Float(sc), source: src, sourceID: upscaleID, params: params),
-               let ce = cb.makeComputeCommandEncoder(),
-               let transparent = transparentTexture() {
-                try? cp.encode(ce, layout: layout, camCenter: SIMD2<Float>(cam), zoom: Float(sc),
-                               backdrop: transparent, canvas: tex, source: src, upscaled: upscaled)
-                ce.endEncoding()
-                computeContent = true
-            }
+            upscaled = try? cp.prepareUpscale(up, cb, layout: layout, camCenter: SIMD2<Float>(cam),
+                                              zoom: Float(sc), source: src, sourceID: upscaleID, params: params)
         }
         let pd = MTLRenderPassDescriptor()
-        pd.colorAttachments[0].texture = tex; pd.colorAttachments[0].loadAction = computeContent ? .load : .clear; pd.colorAttachments[0].storeAction = .store
+        pd.colorAttachments[0].texture = tex; pd.colorAttachments[0].loadAction = .clear; pd.colorAttachments[0].storeAction = .store
         pd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return }
         // After a scene copy the encoder is reopened; `enc` is the live one.
         var enc = e
         func draw() { enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
 
-        // content (fragment fallback when the upscaler did not engage)
-        if drawingContent, !computeContent {
+        // content (fragment path; the upscaler, when engaged, is sampled here)
+        if drawingContent {
             enc.setRenderPipelineState(pContent); quad(enc, content, canvasF)
             frag(enc, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam), scale: Float(sc),
                              radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0,
-                             tilt: st.cameraTilt, radii: SIMD4<Float>(g.radii)))
-            enc.setFragmentTexture(src, index: 0); draw()
+                             tilt: st.cameraTilt, radii: SIMD4<Float>(g.radii),
+                             upRegion: upscaled?.0.region ?? .zero, upTexSize: upscaled?.0.texSize ?? .one,
+                             upFactor: upscaled?.0.factor ?? 1, upBlend: upscaled?.1 ?? 0))
+            enc.setFragmentTexture(src, index: 0)
+            enc.setFragmentTexture(upscaled?.0.texture ?? src, index: 1)
+            draw()
         }
 
         // Highlight geometry follows the exact source-pixel camera transform.
@@ -1061,18 +1062,6 @@ public final class Renderer: @unchecked Sendable {
         d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
         captionSrc[index] = device.makeTexture(descriptor: d)
         return captionSrc[index]
-    }
-
-    private func transparentTexture() -> MTLTexture? {
-        if let transparentTex { return transparentTex }
-        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
-        desc.usage = [.shaderRead]
-        desc.storageMode = .shared
-        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
-        var zero: SIMD4<Float> = .zero
-        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &zero, bytesPerRow: 16)
-        transparentTex = tex
-        return tex
     }
 
     private func quad(_ e: MTLRenderCommandEncoder, _ rect: SIMD4<Float>, _ canvas: SIMD2<Float>) {

@@ -196,7 +196,13 @@ static float3 sampleMip(texture2d<float> t, float2 uv, float minif) {
 // `tilt` is (yaw, pitch) in degrees. A small perspective divide is enough to
 // sell depth without ever sampling outside the source: the warp is clamped so
 // the visible rectangle can never exceed the original frame.
-struct ContentU { float4 content; float2 src; float2 cam; float scale; float radius; float border; float p; float2 tilt; float4 radii; };
+struct ContentU {
+    float4 content; float2 src; float2 cam; float scale; float radius; float border; float p;
+    float2 tilt; float4 radii;
+    // SMOOTHNESS: the upscaler now feeds this pass directly (texture 1) instead
+    // of a separate full-canvas compute pass. `upBlend` 0 keeps plain Catmull.
+    float4 upRegion; float2 upTexSize; float upFactor; float upBlend;
+};
 
 // Standard rounded box with one radius per corner (tl, tr, br, bl). Only used
 // when the four corners actually differ; the squircle path stays for uniform
@@ -208,7 +214,8 @@ static float sdCorners(float2 p, float2 h, float4 r) {
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rr;
 }
 
-fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]], texture2d<float> src [[texture(0)]]) {
+fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]],
+                          texture2d<float> src [[texture(0)]], texture2d<float> up [[texture(1)]]) {
     float2 h = u.content.zw * 0.5;
     float4 R = u.radii;
     float d = (R.x == R.y && R.y == R.z && R.z == R.w)
@@ -227,6 +234,12 @@ fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]]
     }
     float2 sp = u.cam + n * view;
     float3 rgb = sampleMip(src, sp / u.src, view.x / u.content.z);
+    if (u.upBlend > 0.001) {
+        // Same source-pixel position, sampled from the upscaled lattice.
+        float2 q = (sp - u.upRegion.xy) * u.upFactor;
+        q = clamp(q, float2(0.5), u.upRegion.zw * u.upFactor - 0.5);
+        rgb = mix(rgb, catmull5(up, q / u.upTexSize, 0u), u.upBlend);
+    }
     if (u.border > 0.5) rgb = mix(rgb, float3(1.0), 0.08 * clamp(0.5 + (d + 1.0) / w, 0.0, 1.0));
     return float4(rgb * a, a);
 }

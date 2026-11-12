@@ -14,16 +14,9 @@ public struct ContentLayout {
     public var baseMagnification: Float { contentRect.z / srcSize.x }
 }
 
-private struct UpBindGPU { var region: SIMD4<Float>; var texSize: SIMD2<Float>; var factor: Float; var blend: Float }
-private struct ContentParamsGPU {
-    var contentRect: SIMD4<Float>; var radii: SIMD4<Float>
-    var camCenter: SIMD2<Float>; var srcSize: SIMD2<Float>
-    var magnification: Float; var pad: Float = 0
-    var canvasSize: SIMD2<Int32>
-    var up: UpBindGPU
-}
-
 /// Camera-transformed content over the cached backdrop, rounded per corner, with optional upscaled sampling.
+/// SMOOTHNESS: the upscaled texture is consumed by `contentFS` directly; this
+/// type only prepares the compute chain.
 public final class ContentPass {
     private let k: FXKernels
     public init(kernels: FXKernels) { k = kernels }
@@ -40,19 +33,5 @@ public final class ContentPass {
                                      source: SIMD2(Double(L.srcSize.x), Double(L.srcSize.y)), margin: 8 + extraMargin)
         let f = Upscaler.factor(forMagnification: m, maxFactor: p.maxFactor)
         return (try up.upscale(cb, source: source, region: region, factor: f, params: p, frameID: sourceID), blend)
-    }
-
-    public func encode(_ e: MTLComputeCommandEncoder, layout L: ContentLayout, camCenter: SIMD2<Float>, zoom: Float,
-                       backdrop: MTLTexture, canvas: MTLTexture, source: MTLTexture, upscaled: (UpscaleResult, Float)?) throws {
-        var up = UpBindGPU(region: .zero, texSize: .one, factor: 1, blend: 0)
-        if let (r, b) = upscaled { up = UpBindGPU(region: r.region, texSize: r.texSize, factor: r.factor, blend: b) }
-        var P = ContentParamsGPU(contentRect: L.contentRect, radii: L.radii, camCenter: camCenter, srcSize: L.srcSize,
-                                 magnification: zoom * L.baseMagnification, canvasSize: L.canvas, up: up)
-        let pipe = try k.pipeline("fx_content")
-        e.setComputePipelineState(pipe)
-        e.setTexture(backdrop, index: 0); e.setTexture(canvas, index: 1)
-        e.setTexture(source, index: 2); e.setTexture(upscaled?.0.texture ?? source, index: 3)
-        e.setBytes(&P, length: MemoryLayout<ContentParamsGPU>.stride, index: 0)
-        k.dispatch(e, pipeline: pipe, width: Int(L.canvas.x), height: Int(L.canvas.y))
     }
 }
