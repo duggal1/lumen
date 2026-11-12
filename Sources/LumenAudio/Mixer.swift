@@ -106,6 +106,12 @@ public final class AudioMixer: @unchecked Sendable {
         return voiceChain(plan, micIndex: index + 1, samples: extraMicrophones[index].samples)
     }
 
+    /// Start the expensive neural pass while the editor prepares its first frame.
+    public func prepareVoice(_ plan: AudioPlan) {
+        _ = voiceChain(plan)
+        for index in extraMicrophones.indices { _ = extraVoiceChain(index, plan: plan) }
+    }
+
     private func loadMusic(_ path: String?) -> MusicCache? {
         guard let path else { return nil }
         lock.lock(); defer { lock.unlock() }
