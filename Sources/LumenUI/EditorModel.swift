@@ -40,9 +40,11 @@ actor DerivePipeline {
     private var cache = DeriveCache()
     func derive(_ tl: Timeline, input: DirectorInput, revision: Int) -> Timeline? {
         // A slider can queue dozens of edits while a previous derive is
-        // running. Discard cancelled requests before doing any CPU work.
+        // running. Discard cancelled requests before doing any CPU work, and
+        // let the running derive notice the cancellation and stop early.
         guard !Task.isCancelled else { return nil }
-        let result = Director.derive(tl, input: input, revision: revision, cache: &cache)
+        let result = Director.deriveCancellable(tl, input: input, revision: revision, cache: &cache,
+                                                cancelled: { Task.isCancelled })
         return Task.isCancelled ? nil : result
     }
 }

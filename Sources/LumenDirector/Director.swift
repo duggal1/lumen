@@ -34,7 +34,40 @@ public struct DeriveCache: Sendable {
     }
     var cursorKey: CursorKey?
     var cursor: (CursorTrack, [ClickFX])?
+
+    /// SMOOTHNESS: the zoom planner only reads the camera parameters, the
+    /// source-time map, the manual segments and the recorded input. A
+    /// style-only edit (padding, colours) must not re-run it.
+    struct PlanKey: Equatable {
+        var camera: CameraParams
+        var signature: [Double]
+        var digest: UInt64
+        var manual: [ZoomSegment]
+        var source: SIMD3<Double>
+    }
+    var planKey: PlanKey?
+    var plan: [ZoomSegment]?
+
+    /// Same idea for the speed-ramp planner.
+    struct RampKey: Equatable {
+        var audio: AudioPlan
+        var signature: [Double]
+        var vad: [ClosedRange<Double>]
+        var digest: UInt64
+        var backing: Double
+    }
+    var rampKey: RampKey?
+    var ramps: [SpeedRamp]?
+
     public init() {}
+}
+
+extension TimeMap {
+    /// The part of the time map the planners read: trim and cuts. The auto
+    /// ramps are excluded — they are an output of the derive, not an input.
+    var sourceSignature: [Double] {
+        [trimStart, trimEnd] + cuts.flatMap { [$0.start, $0.end] }
+    }
 }
 
 extension TimeMap {
@@ -68,24 +101,58 @@ public enum Director {
     /// Cache-aware overload used by the interactive editor. The returned
     /// Timeline is byte-for-byte identical to the uncached call.
     public static func derive(_ tl: Timeline, input: DirectorInput, revision: Int, cache: inout DeriveCache) -> Timeline {
+        // SMOOTHNESS: this path never cancels, so the result is identical to
+        // the cancellable one. (`?? tl` is unreachable; it avoids a force
+        // unwrap on a path that must never trap.)
+        deriveCancellable(tl, input: input, revision: revision, cache: &cache, cancelled: { false }) ?? tl
+    }
+
+    /// SMOOTHNESS: a cancelled derive must be able to abandon its work. The
+    /// stages are checked between each other, and the camera solve checks
+    /// every few thousand samples, so a slider drag no longer queues behind
+    /// a full 1440 Hz solve that nobody is waiting for.
+    public static func deriveCancellable(_ tl: Timeline, input: DirectorInput, revision: Int,
+                                         cache: inout DeriveCache, cancelled: () -> Bool) -> Timeline? {
         var t = tl
         let src = input.source
+        if cancelled() { return nil }
+        let digest = inputDigest(input)
         var tm = t.timeMap
         if tm.sourceDuration != src.duration && tm.trimEnd <= 0 {
             tm = TimeMap(sourceDuration: src.duration, trimStart: 0, trimEnd: src.duration, ramps: tm.ramps, cuts: tm.cuts)
         }
         // time map first: camera runs in output time
         if t.audio.speedRampsAuto {
-            tm.ramps = tm.ramps.filter { $0.origin == .manual }
-                + SpeedRamps.plan(events: input.events, vad: input.vad, tm: tm, audio: t.audio, backing: src.backingScale)
+            let manualRamps = tm.ramps.filter { $0.origin == .manual }
+            let rkey = DeriveCache.RampKey(audio: t.audio, signature: tm.sourceSignature, vad: input.vad,
+                                           digest: digest, backing: src.backingScale)
+            let planned: [SpeedRamp]
+            if cache.rampKey == rkey, let cached = cache.ramps {
+                planned = cached
+            } else {
+                planned = SpeedRamps.plan(events: input.events, vad: input.vad, tm: tm, audio: t.audio, backing: src.backingScale)
+                cache.rampKey = rkey; cache.ramps = planned
+            }
+            tm.ramps = manualRamps + planned
         }
+        if cancelled() { return nil }
         t.timeMap = tm
         if t.camera.autoZoom {
             let manual = t.zoom.filter { $0.origin == .manual }
             let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
-            t.zoom = (manual + ZoomPlanner.plan(events: input.events, ax: input.ax, typing: input.typing, activity: input.activity, src: src, p: t.camera,
-                                                tm: tm, avoid: avoid)).sorted { $0.start < $1.start }
+            let pkey = DeriveCache.PlanKey(camera: t.camera, signature: tm.sourceSignature, digest: digest,
+                                           manual: manual, source: SIMD3(Double(src.width), Double(src.height), src.backingScale))
+            let planned: [ZoomSegment]
+            if cache.planKey == pkey, let cached = cache.plan {
+                planned = cached
+            } else {
+                planned = ZoomPlanner.plan(events: input.events, ax: input.ax, typing: input.typing, activity: input.activity, src: src, p: t.camera,
+                                           tm: tm, avoid: avoid)
+                cache.planKey = pkey; cache.plan = planned
+            }
+            t.zoom = (manual + planned).sorted { $0.start < $1.start }
         }
+        if cancelled() { return nil }
         let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature)
         let cursor: CursorTrack, clicks: [ClickFX]
         if cache.cursorKey == key, let cached = cache.cursor {
@@ -95,8 +162,10 @@ public enum Director {
             cache.cursorKey = key; cache.cursor = result
             (cursor, clicks) = result
         }
+        if cancelled() { return nil }
         let size = SIMD2(Double(src.width), Double(src.height))
-        let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size, outDur: tm.outputDuration, loop: t.cursor.loop)
+        guard let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size,
+                                           outDur: tm.outputDuration, loop: t.cursor.loop, cancelled: cancelled) else { return nil }
         let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad,
                                              outDur: tm.outputDuration, clicks: clicks)
         let layoutSpans = LayoutSolver.spans(t, tm, hasWebcam: t.webcam != nil)
@@ -106,6 +175,7 @@ public enum Director {
             + MaskTracks.secureFields(events: input.events, ax: input.ax, plan: t.overlays.privacy, src: src)
         let captions = CaptionPlanner.plan(words: input.transcript?.words ?? [], tm: tm, p: t.captions, aspect: t.style.aspectRatio,
                                            kindAt: layout.kind(at:), cornerAt: placement.corner(at:))
+        if cancelled() { return nil }
 
         var cues: [SFXCue] = []
         if t.audio.clickSounds { cues += clicks.map { SFXCue(t: $0.t, kind: .click, gainDb: 0) } }
@@ -188,6 +258,24 @@ public enum Director {
             }
         }
         return t
+    }
+
+    /// SMOOTHNESS: digest of everything the zoom/ramp planners read. A
+    /// style-only edit keeps the digest, a changed click does not.
+    private static func inputDigest(_ input: DirectorInput) -> UInt64 {
+        var h = Hasher()
+        for e in input.events {
+            h.combine(e.t); h.combine(e.kind); h.combine(e.x); h.combine(e.y)
+            h.combine(e.button); h.combine(e.keyCode); h.combine(e.flags)
+            h.combine(e.cursorShape); h.combine(e.axFrameIndex); h.combine(e.scrollDelta)
+        }
+        for f in input.ax { h.combine(f.x); h.combine(f.y); h.combine(f.w); h.combine(f.h) }
+        for t in input.typing {
+            h.combine(t.t0); h.combine(t.t1); h.combine(t.samples.count)
+            h.combine(t.rect?.origin.x); h.combine(t.rect?.origin.y); h.combine(t.rect?.size.width)
+        }
+        for a in input.activity { h.combine(a.t); h.combine(a.x); h.combine(a.y) }
+        return UInt64(bitPattern: Int64(h.finalize()))
     }
 }
 

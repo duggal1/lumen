@@ -58,6 +58,15 @@ enum CameraSolver {
 
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams,
                       src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
+        solve(zoom: zoom, tm: tm, cursor: cursor, p: p, src: src, outDur: outDur, loop: loop, cancelled: { false })
+            ?? CameraTrack(count: 2, rate: 240)
+    }
+
+    /// SMOOTHNESS: cancellable variant. The solve is the longest stage of a
+    /// derive; a cancelled edit must be able to abandon it instead of
+    /// blocking the next one.
+    static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams,
+                      src: SIMD2<Double>, outDur: Double, loop: Double?, cancelled: () -> Bool) -> CameraTrack? {
         _ = loop
         let rate = 240.0
         guard outDur.isFinite, outDur > 0, src.x.isFinite, src.y.isFinite, src.x > 0, src.y > 0 else {
@@ -206,6 +215,9 @@ enum CameraSolver {
         var followMove: Move?
 
         for sample in 0..<n {
+            // SMOOTHNESS: a cancelled derive abandons the solve here instead
+            // of running the whole 1440 Hz grid to completion.
+            if sample % 4096 == 0, cancelled() { return nil }
             let time = Double(sample) * dt
             while moveIndex < moves.count, moves[moveIndex].start <= time {
                 let move = moves[moveIndex]
