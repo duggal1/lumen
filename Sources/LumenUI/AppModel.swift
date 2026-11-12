@@ -518,15 +518,23 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             hud?.showControls()
             poll = Task {
                 var nextStatus = ContinuousClock.now
+                var lastLevel: Float = -1
                 while !Task.isCancelled {
                     let sample = await session.stats()
-                    recordingMeter.level = sample.micLevel
+                    // The meter drives a SwiftUI repaint on the floating
+                    // recorder. Publishing every poll kept the main thread
+                    // busy enough that clicking Pause or Stop waited behind
+                    // the redraw. Only publish a level that actually moved.
+                    if abs(sample.micLevel - lastLevel) > 0.004 {
+                        lastLevel = sample.micLevel
+                        recordingMeter.level = sample.micLevel
+                    }
                     let now = ContinuousClock.now
                     if now >= nextStatus {
                         stats = sample
                         nextStatus = now.advanced(by: .milliseconds(250))
                     }
-                    try? await Task.sleep(for: .nanoseconds(16_666_667))
+                    try? await Task.sleep(for: .milliseconds(50))
                 }
             }
         } catch { fail(error) }
