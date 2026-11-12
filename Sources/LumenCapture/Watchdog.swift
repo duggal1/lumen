@@ -22,7 +22,7 @@ public struct HangRecord: Codable, Sendable, Equatable {
 
 /// Pings main every 10 ms from a background thread and records any latency
 /// over 50 ms together with the current signpost stage. Writes hangs.json.
-/// Stays in Release behind LUMEN_HANG_WATCHDOG=1. No-op when flag is off.
+/// Enabled in release so a recording stall can be diagnosed after force quit.
 /// Threading: owns a background queue; main hop is one async enqueue.
 public final class MainThreadWatchdog: @unchecked Sendable {
     public static let shared = MainThreadWatchdog()
@@ -41,7 +41,7 @@ public final class MainThreadWatchdog: @unchecked Sendable {
     }
 
     public var isEnabled: Bool {
-        ProcessInfo.processInfo.environment["LUMEN_HANG_WATCHDOG"] == "1"
+        ProcessInfo.processInfo.environment["LUMEN_HANG_WATCHDOG"] != "0"
     }
 
     /// Current stage for the next hang record. Set by RecordingSession on every transition.
