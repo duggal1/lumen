@@ -15,6 +15,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
 @MainActor @Observable public final class AppModel {
     public enum Phase: Equatable { case idle, preparing, countdown(Int), recording, finishing }
     enum SourceKind: String, CaseIterable { case display, window, region }
+    private enum RecoveryResult: Sendable { case recovered, noUsableFrames, failed(String) }
     struct ProjectRow: Identifiable {
         var id: URL { url }
         let url: URL
@@ -59,6 +60,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     private var micTestEngine: AVAudioEngine?
     /// Bundles that crashed mid-recording and can be rebuilt from their journal.
     var recoverable: [ProjectBundle] = []
+    private var recoveryOperations: Set<URL> = []
     var kind = SourceKind(rawValue: UserDefaults.standard.string(forKey: "LumenDefaultSource") ?? "") ?? .display {
         didSet { UserDefaults.standard.set(kind.rawValue, forKey: "LumenDefaultSource") }
     }
@@ -269,17 +271,54 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
 
     /// Rebuilds a crashed recording from its journal and opens it.
     func recover(_ bundle: ProjectBundle) {
-        do {
-            guard try bundle.recoverFromJournal() != nil else {
-                error = "This recording has no usable frames yet."; return
+        let url = bundle.url.standardizedFileURL
+        guard recoveryOperations.insert(url).inserted else { return }
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                do {
+                    guard try bundle.recoverFromJournal() != nil else { return RecoveryResult.noUsableFrames }
+                    return RecoveryResult.recovered
+                } catch {
+                    return RecoveryResult.failed(error.localizedDescription)
+                }
+            }.value
+            recoveryOperations.remove(url)
+            switch result {
+            case .recovered:
+                refresh()
+                onFinished?(bundle.url)
+            case .noUsableFrames:
+                error = "This recording has no usable frames yet."
+            case .failed(let message):
+                error = "Couldn’t recover this recording. \(message)"
             }
-            refresh()
-            onFinished?(bundle.url)
-        } catch { self.error = "Couldn’t recover this recording. \(error.localizedDescription)" }
+        }
     }
 
     func discardRecovery(_ bundle: ProjectBundle) {
-        bundle.clearJournal(); refresh()
+        let url = bundle.url.standardizedFileURL
+        guard recoveryOperations.insert(url).inserted else { return }
+        guard url.pathExtension == "lumen", url.deletingLastPathComponent() == library.standardizedFileURL else {
+            recoveryOperations.remove(url)
+            error = "Couldn’t discard this recording because its project folder is outside the library."
+            return
+        }
+        Task {
+            let result = await Task.detached(priority: .utility) {
+                do {
+                    try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                    return nil
+                } catch {
+                    return error.localizedDescription
+                }
+            }.value
+            recoveryOperations.remove(url)
+            if let result {
+                error = "Couldn’t discard this recording. \(result)"
+            } else {
+                refresh()
+            }
+        }
     }
 
     func importSharedProject() {
