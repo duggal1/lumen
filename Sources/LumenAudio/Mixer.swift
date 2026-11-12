@@ -169,7 +169,7 @@ public final class AudioMixer: @unchecked Sendable {
         if a.micMode != .off, let voice = voiceChain(a) {
             let mapped = Self.mapped(voice, offset: micOffset, tm: tm,
                                      n: n, muteRamps: a.muteMicInRamps)
-            let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
+            let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
             let channel = mapped.map { $0 * gain }
             result.append(AudioStem(name: "microphone", left: channel, right: channel))
         }
@@ -179,7 +179,7 @@ public final class AudioMixer: @unchecked Sendable {
                 let input = extraMicrophones[index]
                 let mapped = Self.mapped(processed, offset: input.offset,
                                          tm: tm, n: n, muteRamps: a.muteMicInRamps)
-                let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
+                let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
                 let channel = mapped.map { $0 * gain }
                 result.append(AudioStem(name: "microphone-\(index + 2)", left: channel, right: channel))
             }
@@ -235,7 +235,7 @@ public final class AudioMixer: @unchecked Sendable {
 
         if a.micMode != .off, let v = voiceChain(a) {
             let y = Self.mapped(v, offset: micOffset, tm: tm, n: n, muteRamps: a.muteMicInRamps)
-            let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
+            let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
             for i in 0..<n { L[i] += y[i] * gain; R[i] += y[i] * gain }
             hasProgram = true
         }
@@ -244,7 +244,7 @@ public final class AudioMixer: @unchecked Sendable {
                 guard let processed = extraVoiceChain(index, plan: a) else { continue }
                 let mapped = Self.mapped(processed, offset: extraMicrophones[index].offset,
                                          tm: tm, n: n, muteRamps: a.muteMicInRamps)
-                let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
+                let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
                 for i in 0..<n { L[i] += mapped[i] * gain; R[i] += mapped[i] * gain }
                 hasProgram = true
             }
