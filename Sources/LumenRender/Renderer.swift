@@ -180,6 +180,9 @@ public final class Renderer: @unchecked Sendable {
     private let pBackdrop, pContent, pCursor, pRing, pWeb, pAccum: MTLRenderPipelineState
     private let pSourceMask: MTLComputePipelineState
     private var maskedSources: [MTLTexture?] = [nil, nil, nil]
+    /// SMOOTHNESS: cache key of the last privacy-mask pass per in-flight slot.
+    /// Identical source + masks ⇒ no GPU work at all.
+    private var maskKey: [UInt64?] = [nil, nil, nil]
     private let pTextSprite: MTLRenderPipelineState
     private let pCaptionCard: MTLRenderPipelineState
     private let pBlur: MTLRenderPipelineState
@@ -204,6 +207,8 @@ public final class Renderer: @unchecked Sendable {
     }
     /// EMA of GPU seconds per motion-blur sample, used to size preview blur.
     private let perSample = OSAllocatedUnfairLock<Double>(initialState: 0)
+    /// Preview-only hysteresis state for `sampleCount` (export stays pure).
+    private var blurK = 1, blurCooldown = 0
     private var slot = 0
     private var work: [MTLTexture] = [], accum: [MTLTexture] = []
     /// One blurred copy per in-flight slot, allocated only when a caption card
@@ -475,19 +480,27 @@ public final class Renderer: @unchecked Sendable {
 
     private func ensureTargets(_ s: SIMD2<Int>) {
         guard s != size else { return }
-        for _ in 0..<3 { sem.wait() }
-        func mk(mipmapped: Bool = false) -> MTLTexture {
+        // SMOOTHNESS: no GPU drain on a size change. Metal keeps every resource
+        // an encoded command buffer touches alive until that buffer completes,
+        // so the old targets stay valid on their own — waiting for them only
+        // stalls the frame that triggered the resize.
+        func mk() -> MTLTexture? {
             let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float,
-                                                               width: s.x, height: s.y, mipmapped: mipmapped)
+                                                               width: s.x, height: s.y, mipmapped: false)
             d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
-            return device.makeTexture(descriptor: d)!
+            return device.makeTexture(descriptor: d)
         }
-        work = (0..<3).map { _ in mk() }; accum = (0..<3).map { _ in mk() }
-        captionSrc = [nil, nil, nil]; blurA = [nil, nil, nil]; blurB = [nil, nil, nil]
-        backdrop = mk()
+        var w: [MTLTexture] = [], a: [MTLTexture] = []
+        for _ in 0..<3 {
+            guard let t = mk(), let u = mk() else { return }
+            w.append(t); a.append(u)
+        }
+        guard let b = mk() else { return }
+        work = w; accum = a; backdrop = b
         backdropKey = nil
+        captionSrc = [nil, nil, nil]; blurA = [nil, nil, nil]; blurB = [nil, nil, nil]
+        maskedSources = [nil, nil, nil]; maskKey = [nil, nil, nil]
         size = s
-        for _ in 0..<3 { sem.signal() }
     }
 
     // MARK: Entry points
@@ -636,7 +649,7 @@ public final class Renderer: @unchecked Sendable {
             let off = ((Double(i) + 0.5) / Double(K) - 0.5) * tl.camera.shutter * dt
             var st = r.live ?? tl.evaluate(at: r.t + off)
             if r.live == nil, tl.derived == nil { st.cameraCenter = SIMD2<Float>(Float(g.src.x / 2), Float(g.src.y / 2)) }
-            guard let protectedSource = maskedSource(srcTex, masks: st.emphasis.masks,
+            guard let protectedSource = maskedSource(srcTex, sourceID: r.screen.id, masks: st.emphasis.masks,
                                                        pixelSize: Float(tl.overlays.privacy.pixelSize), slot: s, cb: cb) else {
                 sem.signal(); return false
             }
@@ -698,7 +711,17 @@ public final class Renderer: @unchecked Sendable {
             let budget = per > 0 ? min(max(Int(0.5 / max(r.fps, 1) / per), 1), 4) : 2
             cap = min(budget, tl.camera.maxSamples)
         }
-        return min(max(n, 1), cap)
+        let want = min(max(n, 1), cap)
+        guard r.quality == .preview else { return want }        // export: pure function of the request
+        // SMOOTHNESS: sticky sample count. K flipping 1↔2↔3 on consecutive
+        // frames changes the ghost structure of the blur and the GPU cost in
+        // lockstep. Rise at once, fall one step every 8 frames.
+        if want >= blurK { blurK = want; blurCooldown = 0 }
+        else {
+            blurCooldown += 1
+            if blurCooldown >= 8 { blurK -= 1; blurCooldown = 0 }
+        }
+        return min(blurK, cap)
     }
 
     private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, slot: Int, st: FrameState, r: RenderRequest, g: Geometry,
@@ -1003,7 +1026,7 @@ public final class Renderer: @unchecked Sendable {
         }
     }
 
-    private func maskedSource(_ source: MTLTexture, masks: [MaskFrame], pixelSize: Float,
+    private func maskedSource(_ source: MTLTexture, sourceID: UInt64, masks: [MaskFrame], pixelSize: Float,
                               slot: Int, cb: MTLCommandBuffer) -> MTLTexture? {
         guard !masks.isEmpty else { return source }
         guard masks.count <= 128 else { return nil }
@@ -1012,28 +1035,29 @@ public final class Renderer: @unchecked Sendable {
                 width: source.width, height: source.height, mipmapped: true)
             descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]; descriptor.storageMode = .private
             maskedSources[slot] = device.makeTexture(descriptor: descriptor)
+            maskKey[slot] = nil
         }
         guard let target = maskedSources[slot] else { return nil }
-        // SMOOTHNESS: only the union of the mask rectangles needs the mask
-        // kernel. The rest of the frame is a straight GPU copy, so a 4K frame
-        // with one small redaction no longer runs ~8M pixel reads per sub-frame.
-        var lo = SIMD2<Float>(repeating: .greatestFiniteMagnitude)
-        var hi = SIMD2<Float>(repeating: -.greatestFiniteMagnitude)
-        for mask in masks.prefix(128) {
-            lo = simd_min(lo, SIMD2(mask.rect.x, mask.rect.y))
-            hi = simd_max(hi, SIMD2(mask.rect.x + mask.rect.z, mask.rect.y + mask.rect.w))
+        // SMOOTHNESS: identical source + identical masks ⇒ zero GPU work.
+        // The mask pass used to run over the whole frame for every motion-blur
+        // sub-frame, even when nothing about it had changed.
+        var hasher = Hasher()
+        hasher.combine(sourceID); hasher.combine(pixelSize)
+        for mask in masks {
+            hasher.combine(mask.rect.x); hasher.combine(mask.rect.y)
+            hasher.combine(mask.rect.z); hasher.combine(mask.rect.w); hasher.combine(mask.mode)
         }
-        lo -= 2; hi += 2
-        let x0 = max(Int(lo.x.rounded(.down)), 0), y0 = max(Int(lo.y.rounded(.down)), 0)
-        let x1 = min(Int(hi.x.rounded(.up)), source.width), y1 = min(Int(hi.y.rounded(.up)), source.height)
-        let w = x1 - x0, h = y1 - y0
-        guard w > 0, h > 0 else { return source }
+        let key = UInt64(bitPattern: Int64(hasher.finalize()))
+        if maskKey[slot] == key { return target }
+        maskKey[slot] = key
+        // 1. pure bandwidth copy: the frame outside every mask is unchanged.
         if let blit = cb.makeBlitCommandEncoder() {
             blit.copy(from: source, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
                       sourceSize: MTLSize(width: source.width, height: source.height, depth: 1),
                       to: target, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
             blit.endEncoding()
         }
+        // 2. ALU only inside each mask rectangle (plus the blur rim).
         guard let encoder = cb.makeComputeCommandEncoder() else { return nil }
         let regions = masks.prefix(128).map { mask -> SourceMaskGPU in
             let height = mask.rect.w
@@ -1042,14 +1066,22 @@ public final class Renderer: @unchecked Sendable {
             return SourceMaskGPU(rect: mask.rect, block: SIMD4(cell, mode, height * 0.22, 0))
         }
         var count = UInt32(regions.count)
-        var origin = SIMD2<UInt32>(UInt32(x0), UInt32(y0))
         encoder.setComputePipelineState(pSourceMask)
         encoder.setTexture(source, index: 0); encoder.setTexture(target, index: 1)
         regions.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
         encoder.setBytes(&count, length: MemoryLayout<UInt32>.size, index: 1)
-        encoder.setBytes(&origin, length: MemoryLayout<SIMD2<UInt32>>.size, index: 2)
-        encoder.dispatchThreads(MTLSize(width: w, height: h, depth: 1),
-                                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+        let pad: Float = 10                       // blur mode samples 8 px outside the rect
+        for mask in masks.prefix(128) {
+            let x0 = max(Int((mask.rect.x - pad).rounded(.down)), 0)
+            let y0 = max(Int((mask.rect.y - pad).rounded(.down)), 0)
+            let x1 = min(Int((mask.rect.x + mask.rect.z + pad).rounded(.up)), source.width)
+            let y1 = min(Int((mask.rect.y + mask.rect.w + pad).rounded(.up)), source.height)
+            guard x1 > x0, y1 > y0 else { continue }
+            var origin = SIMD2<UInt32>(UInt32(x0), UInt32(y0))
+            encoder.setBytes(&origin, length: MemoryLayout<SIMD2<UInt32>>.size, index: 2)
+            encoder.dispatchThreads(MTLSize(width: x1 - x0, height: y1 - y0, depth: 1),
+                                    threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+        }
         encoder.endEncoding()
         if let blit = cb.makeBlitCommandEncoder() { blit.generateMipmaps(for: target); blit.endEncoding() }
         return target
