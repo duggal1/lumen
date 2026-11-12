@@ -318,7 +318,7 @@ public final class AudioMixer: @unchecked Sendable {
                 let gap = prevKeyT.map { cue.t - $0 } ?? 1
                 let gain: Float = gap < 0.05 ? 0.7 : gap < 0.15 ? 0.85 : 1
                 // Typing has its own level; the general sfx gain does not stack on it.
-                let amplitude = Float(pow(10, (a.typingLevelDb + cue.gainDb) / 20)) * gain
+                let amplitude = Float(pow(10, (a.typingLevelDb + cue.gainDb + 2) / 20)) * gain
                 buf = samples.map { $0 * amplitude }
                 prevKeyT = cue.t
             } else {
