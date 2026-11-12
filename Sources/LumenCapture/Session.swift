@@ -240,6 +240,8 @@ public actor RecordingSession {
         do {
             activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled, .idleSystemSleepDisabled],
                                                              reason: "Lumen recording")
+            journalStart = Date()
+            try await writeJournal()
             try await MainActor.run { try input.start() }
             for recorder in extraMicrophones { recorder.start() }
             webcam?.start()
@@ -251,11 +253,13 @@ public actor RecordingSession {
                 await input.stop()
                 throw error
             }
-            journalStart = Date()
             startJournal()
             startWatchdog()
             transition(to: .recording)
         } catch {
+            if let bundle, case .failure(let clearError) = bundle.clearJournal() {
+                logger.error("could not clear failed-start journal: \(clearError.localizedDescription, privacy: .public)")
+            }
             RecordingGate.recordingStopped()
             transition(to: .failed("Starting stalled. \(error)"))
             throw error
@@ -285,15 +289,23 @@ public actor RecordingSession {
     private func startJournal() {
         journalTask?.cancel()
         journalTask = Task { [weak self] in
+            guard let self else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled else { return }
-                await self?.writeJournal()
+                do {
+                    try await self.writeJournal()
+                } catch {
+                    self.logger.error("recording journal checkpoint failed: \(error.localizedDescription, privacy: .public)")
+                }
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
             }
         }
     }
 
-    private func writeJournal() {
+    private func writeJournal() async throws {
         guard let b = bundle, let e = engine, let info = e.info else { return }
         let j = RecordingJournal(started: journalStart, updated: Date(), source: info,
                                  fps: Double(cfg?.fps ?? 60),
@@ -303,7 +315,9 @@ public actor RecordingSession {
                                  lastFramePTS: e.lastPTS,
                                  firstFramePTS: e.firstPTS,
                                  droppedFrames: e.droppedFrames)
-        b.writeJournal(j)
+        try await Task.detached(priority: .utility) {
+            try b.writeJournal(j).get()
+        }.value
     }
 
     /// Free-space watchdog + sleep/terminate finalize. Thresholds are
@@ -368,7 +382,10 @@ public actor RecordingSession {
         defer { timeoutTask.cancel() }
         do {
             guard let engine, let input else { throw CaptureError.noSource }
-            journalTask?.cancel(); journalTask = nil
+            let pendingJournal = journalTask
+            journalTask = nil
+            pendingJournal?.cancel()
+            await pendingJournal?.value
             stopWatchdog()
             if isPaused { resume() }
             isPaused = false
@@ -441,7 +458,7 @@ public actor RecordingSession {
                     throw CaptureError.writer("Recording has no usable duration.")
                 }
                 try b.save(ProjectFile(meta: finalMeta, timeline: working))
-                b.clearJournal()
+                try b.clearJournal().get()
                 progress(1)
             }.value
         } catch {
