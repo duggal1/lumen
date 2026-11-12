@@ -266,6 +266,9 @@ extension Timeline {
             var lo = 0, hi = d.clicks.count
             while lo < hi { let m = (lo + hi) / 2; if d.clicks[m].t <= t - dur { lo = m + 1 } else { hi = m } }
             var i = lo
+            // SMOOTHNESS: reserve once. `evaluate` runs for every sub-frame of
+            // every frame; the ring list is the one array that grows there.
+            rings.reserveCapacity(8)
             while i < d.clicks.count, d.clicks[i].t <= t {
                 rings.append(ClickRing(position: SIMD2(d.clicks[i].x, d.clicks[i].y), progress: Float((t - d.clicks[i].t) / dur)))
                 i += 1
@@ -287,9 +290,21 @@ extension Timeline {
         let sourceTime = timeMap.source(atOutput: t)
         let emphasis = Emphasis.evaluate(overlays: overlays, autoMasks: d.autoMasks, sourceTime: sourceTime,
                                          cursor: pos, sourceSize: d.sourceSize)
+        // SMOOTHNESS: captions are sorted by start — binary search instead of a
+        // linear scan that ran for every sub-frame of every frame.
+        var caption: CaptionChunk?
+        if !d.captions.isEmpty {
+            var lo = 0, hi = d.captions.count - 1
+            while lo < hi {
+                let mid = (lo + hi + 1) / 2
+                if d.captions[mid].start <= t { lo = mid } else { hi = mid - 1 }
+            }
+            let c = d.captions[lo]
+            if t >= c.start, t < c.end { caption = c }
+        }
         return FrameState(cameraCenter: cam, cameraScale: scale, cameraTilt: tilt, cursor: cs, clickFX: rings, webcamCrop: crop,
                           sourceTime: sourceTime, layout: d.layout.sample(at: t), layoutKind: layoutKind,
                           webcamCorner: d.placement.corner(at: t), webcamOpacity: d.placement.visibility(at: t),
-                          caption: d.captions.first { t >= $0.start && t < $0.end }, emphasis: emphasis)
+                          caption: caption, emphasis: emphasis)
     }
 }

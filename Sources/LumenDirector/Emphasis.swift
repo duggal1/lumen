@@ -56,10 +56,22 @@ public struct EmphasisFrame: Sendable, Equatable {
 enum Emphasis {
     static func evaluate(overlays: Overlays, autoMasks: [Mask], sourceTime t: Double,
                          cursor: SIMD2<Float>, sourceSize: SIMD2<Double>) -> EmphasisFrame {
-        let masks = (overlays.masks + autoMasks).compactMap { maskFrame($0, t: t, size: sourceSize) }
-        let highlights = overlays.highlights.compactMap { highlightFrame($0, t: t, size: sourceSize) }
-        let loupes = overlays.loupes.compactMap { loupeFrame($0, t: t, cursor: cursor) }
-        let texts = overlays.texts.compactMap { textFrame($0, t: t) }
+        // SMOOTHNESS: `evaluate` runs for every sub-frame of every frame, so
+        // the two mask sources are merged into one reserved buffer instead of
+        // concatenating (and re-allocating) both arrays on every call.
+        var masks: [MaskFrame] = []
+        masks.reserveCapacity(overlays.masks.count + autoMasks.count)
+        for mask in overlays.masks { if let f = maskFrame(mask, t: t, size: sourceSize) { masks.append(f) } }
+        for mask in autoMasks { if let f = maskFrame(mask, t: t, size: sourceSize) { masks.append(f) } }
+        var highlights: [HighlightFrame] = []
+        highlights.reserveCapacity(overlays.highlights.count)
+        for h in overlays.highlights { if let f = highlightFrame(h, t: t, size: sourceSize) { highlights.append(f) } }
+        var loupes: [LoupeFrame] = []
+        loupes.reserveCapacity(overlays.loupes.count)
+        for l in overlays.loupes { if let f = loupeFrame(l, t: t, cursor: cursor) { loupes.append(f) } }
+        var texts: [TextFrame] = []
+        texts.reserveCapacity(overlays.texts.count)
+        for b in overlays.texts { if let f = textFrame(b, t: t) { texts.append(f) } }
         return EmphasisFrame(masks: masks, highlights: highlights, loupes: loupes, texts: texts)
     }
 
@@ -83,7 +95,11 @@ enum Emphasis {
     }
 
     private static func interpolated(_ keys: [MaskKey], at t: Double) -> MaskKey? {
-        let sorted = keys.sorted { $0.t < $1.t }
+        // SMOOTHNESS: the keys are authored in time order. Sorting only when
+        // they are not keeps this allocation-free on the hot path.
+        var ordered = true
+        for i in 1..<max(keys.count, 1) where keys[i - 1].t > keys[i].t { ordered = false; break }
+        let sorted = ordered ? keys : keys.sorted { $0.t < $1.t }
         guard let first = sorted.first else { return nil }
         guard sorted.count > 1 else { return first }
         if t <= first.t { return first }
