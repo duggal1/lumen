@@ -1,5 +1,6 @@
 import Foundation
 import os
+import LumenCore
 
 /// Capability grants, the app allow-list, the folder allow-list and the
 /// bearer token, all in one 0600 file the human owns.
@@ -21,6 +22,7 @@ public final class Policy: @unchecked Sendable {
 
     public let fileURL: URL
     private let store = OSAllocatedUnfairLock<Store>(initialState: Store())
+    private let loadedAt = OSAllocatedUnfairLock<Date?>(initialState: nil)
 
     public init(fileURL: URL? = nil) {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -42,8 +44,23 @@ public final class Policy: @unchecked Sendable {
         return Data(bytes).base64EncodedString()
     }
 
+    /// Re-reads the policy file when it changed on disk, so a grant made by
+    /// the human takes effect in a daemon that is already running.
+    private func refreshIfChanged() {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let modified = (attributes?[.modificationDate] as? Date) ?? Date.distantPast
+        let known = loadedAt.withLock { $0 }
+        guard known != modified else { return }
+        if let data = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONDecoder().decode(Store.self, from: data) {
+            store.withLock { $0 = decoded }
+            loadedAt.withLock { $0 = modified }
+        }
+    }
+
     private func persist() {
         let snapshot = store.withLock { $0 }
+        loadedAt.withLock { $0 = nil }
         let dir = fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
@@ -57,15 +74,18 @@ public final class Policy: @unchecked Sendable {
     // MARK: Queries
 
     public func allowed(_ capability: Capability, for client: String) -> Bool {
-        store.withLock { $0.clients[client]?.capabilities ?? ["read", "record", "edit", "export"] }
+        refreshIfChanged()
+        return store.withLock { $0.clients[client]?.capabilities ?? ["read", "record", "edit", "export"] }
             .contains(capability.rawValue)
     }
 
     public func bundleAllowed(_ bundleID: String, for client: String) -> Bool {
-        store.withLock { $0.clients[client]?.bundleIDs ?? [] }.contains(bundleID)
+        refreshIfChanged()
+        return store.withLock { $0.clients[client]?.bundleIDs ?? [] }.contains(bundleID)
     }
 
     public func allowedPaths(for client: String) -> [String] {
+        refreshIfChanged()
         var list = store.withLock { $0.clients[client]?.paths ?? [] }
         // The project library is always writable: it is Lumen's own folder.
         if let library = libraryURL { list.append(library.path) }
@@ -95,9 +115,27 @@ public final class Policy: @unchecked Sendable {
         return resolved
     }
 
-    public var bearerToken: String {
-        store.withLock { $0.token }
+    /// The capabilities currently granted to a client.
+    public func grantedCapabilities(for client: String) -> [String] {
+        refreshIfChanged()
+        return store.withLock { $0.clients[client]?.capabilities ?? ["read", "record", "edit", "export"] }
     }
+
+    /// The bundle ids a client may act on.
+    public func grantedBundleIDs(for client: String) -> [String] {
+        refreshIfChanged()
+        return store.withLock { $0.clients[client]?.bundleIDs ?? [] }
+    }
+
+    /// The folders a client may read and write.
+    public func grantedPaths(for client: String) -> [String] {
+        refreshIfChanged()
+        return store.withLock { $0.clients[client]?.paths ?? [] }
+    }
+
+    /// The shared agent secret. One source of truth: the same token protects
+    /// the optional HTTP transport and the in-app MCP server.
+    public var bearerToken: String { AgentCredentials.token() }
 
     // MARK: Mutations
 
@@ -123,14 +161,6 @@ public final class Policy: @unchecked Sendable {
 
     /// A constant-time comparison so a token cannot be guessed by timing.
     public static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
-        let x = Array(a.utf8), y = Array(b.utf8)
-        var diff = x.count ^ y.count
-        let n = max(x.count, y.count)
-        for i in 0..<n {
-            let xi = i < x.count ? x[i] : 0
-            let yi = i < y.count ? y[i] : 0
-            diff |= Int(xi ^ yi)
-        }
-        return diff == 0
+        AgentCredentials.constantTimeEquals(a, b)
     }
 }

@@ -4,6 +4,7 @@ import LumenCore
 import LumenProject
 import LumenRender
 import LumenExport
+import LumenCore
 
 // MARK: - Preferences
 
@@ -244,6 +245,9 @@ public final class MCPTCPServer: @unchecked Sendable {
     private func read(_ fd: Int32) {
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         var pending = Data()
+        // Every connection must authenticate before it can call a tool:
+        // "localhost" is not an authorisation.
+        var authenticated = false
         while true {
             let n = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
             guard n > 0 else { break }
@@ -252,6 +256,19 @@ public final class MCPTCPServer: @unchecked Sendable {
                 let lineData = pending[..<newline]
                 pending.removeSubrange(pending.startIndex..<pending.index(after: newline))
                 guard let line = String(data: lineData, encoding: .utf8), !line.isEmpty else { continue }
+                if !authenticated {
+                    if !authorize(line) {
+                        let denied = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32001,\"message\":\"Unauthorized: send a lumen/auth request with the agent token first.\"}}"
+                        var bytes = Array(denied.utf8); bytes.append(0x0A)
+                        _ = bytes.withUnsafeBytes { send(fd, $0.baseAddress, $0.count, 0) }
+                        break
+                    }
+                    authenticated = true
+                    let ok = "{\"jsonrpc\":\"2.0\",\"id\":null,\"result\":{\"ok\":true}}"
+                    var bytes = Array(ok.utf8); bytes.append(0x0A)
+                    _ = bytes.withUnsafeBytes { send(fd, $0.baseAddress, $0.count, 0) }
+                    continue
+                }
                 let handler = self.handler
                 let fd = fd
                 Task { @MainActor in
@@ -263,6 +280,17 @@ public final class MCPTCPServer: @unchecked Sendable {
         }
         lock.lock(); clientFDs.remove(fd); lock.unlock()
         close(fd)
+    }
+
+    /// Checks the shared agent secret. The token lives in a 0600 file that only
+    /// the signed-in user can read.
+    private func authorize(_ line: String) -> Bool {
+        guard let data = line.data(using: .utf8),
+              let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              request["method"] as? String == "lumen/auth" else { return false }
+        let params = request["params"] as? [String: Any] ?? [:]
+        let token = params["token"] as? String ?? ""
+        return AgentCredentials.authorizes(header: "Bearer " + token)
     }
 }
 
