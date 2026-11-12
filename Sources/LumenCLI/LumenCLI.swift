@@ -111,6 +111,7 @@ struct Analyze: AsyncParsableCommand {
         summary["zoomAccuracy"] = [
             "clicks": accuracy.clicks,
             "zoomedClicks": accuracy.zoomedClicks,
+            "settled": accuracy.settled,
             "insideMargin": accuracy.insideMargin,
             "medianExcessError": accuracy.medianExcessError,
             "maxExcessError": accuracy.maxExcessError,
