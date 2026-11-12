@@ -189,15 +189,19 @@ enum CameraSolver {
                     2 * (rightVelocity - leftVelocity) / (leftSpan + rightSpan))
         }
 
-        /// SMOOTHNESS: the camera holds its position until the target leaves
-        /// the dead zone, then trails it by exactly that margin. The result is
-        /// continuous in time — no step when the target moves.
-        func deadzoneFollow(c: SIMD2<Double>, point: SIMD2<Double>,
-                            halfView: SIMD2<Double>, dead: SIMD2<Double>) -> SIMD2<Double> {
+        /// SMOOTHNESS: a smooth, dead-zoned follower for the camera target.
+        /// The camera holds while the target is inside the dead zone, then
+        /// closes on it exponentially and at a bounded rate — so the handover
+        /// from a scene's centre to the caret path is a glide, not a jump.
+        func followStep(c: SIMD2<Double>, point: SIMD2<Double>, halfView: SIMD2<Double>,
+                        dead: SIMD2<Double>, maxStep: SIMD2<Double>, k: Double) -> SIMD2<Double> {
             var out = c
-            for k in 0..<2 {
-                let d = point[k] - c[k], lim = dead[k] * halfView[k]
-                if d > lim { out[k] = point[k] - lim } else if d < -lim { out[k] = point[k] + lim }
+            for i in 0..<2 {
+                let d = point[i] - c[i], lim = dead[i] * halfView[i]
+                var target = point[i]
+                if d > lim { target = point[i] - lim } else if d < -lim { target = point[i] + lim }
+                let move = (target - c[i]) * k
+                out[i] = c[i] + min(max(move, -maxStep[i]), maxStep[i])
             }
             return out
         }
@@ -340,9 +344,12 @@ enum CameraSolver {
                     // small dead zone, so the camera glides with the caret
                     // instead of stepping to it every few hundred ms.
                     let desired = pathState(current.path, at: time).c
-                    let halfView = SIMD2(0.5 / exp(zoom), 0.5 / exp(zoom))
-                    followTarget = deadzoneFollow(c: followTarget, point: desired,
-                                                  halfView: halfView, dead: SIMD2(0.01, 0.01))
+                    let half = 0.5 / exp(zoom)
+                    let halfView = SIMD2(half, half)
+                    let maxStep = SIMD2(4 * half * dt, 4 * half * dt)
+                    followTarget = followStep(c: followTarget, point: desired, halfView: halfView,
+                                              dead: SIMD2(0.01, 0.01), maxStep: maxStep,
+                                              k: 1 - exp(-8 * dt))
                     pan = SIMD2((followTarget.x - 0.5) / margin, (followTarget.y - 0.5) / margin)
                 } else {
                     pan = SIMD2((followX[sample] - 0.5) / margin, (followY[sample] - 0.5) / margin)

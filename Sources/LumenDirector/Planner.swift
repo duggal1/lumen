@@ -267,12 +267,21 @@ enum ZoomPlanner {
         }
         /// SMOOTHNESS: the caret path is recorded as a continuous target for
         /// the camera instead of retargeting (and splitting the scene) every
-        /// 0.45 s. The solver follows it with the same spring as everything
-        /// else, so the camera glides instead of pulsing.
+        /// 0.45 s. The targets are the same ones the old retarget produced —
+        /// the camera just glides between them now.
         func follow(_ path: [PathPoint], from t0: Double) {
             guard var o = cur else { return }
+            var center = o.c
+            let h = half(o.scale)
             for s in path where s.t >= t0 && ok(s.t) {
+                let d = (s.p - center) / h
+                // The caret only pulls the camera once it leaves the tight window.
+                let outside = d.x > 0.06 || d.x < -0.34 || abs(d.y) > 0.22
+                guard outside else { continue }
                 let target = typingCenter(s.p, o.scale)
+                let moved = (target - center) / h
+                guard hypot(moved.x, moved.y) >= 0.12 else { continue }  // clamped to the same view: nothing to do
+                center = target
                 o.path.append(FollowPoint(t: s.t, p: SIMD2(target.x / W, target.y / H)))
             }
             cur = o
