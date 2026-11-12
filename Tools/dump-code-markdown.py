@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""Write Lumen source code to allcode.md."""
+"""Write the zoom and cursor motion source files to allcode.md."""
 
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE_ROOT = ROOT / "Sources"
 OUTPUT = ROOT / "allcode.md"
-CODE_EXTENSIONS = {".swift", ".metal", ".c", ".h"}
-LANGUAGE_BY_EXTENSION = {
-    ".swift": "swift",
-    ".metal": "metal",
-    ".c": "c",
-    ".h": "c",
-}
+FEATURE_FILES = (
+    "Sources/LumenCore/Core.swift",
+    "Sources/LumenCapture/Input.swift",
+    "Sources/LumenProject/AnalysisTypes.swift",
+    "Sources/LumenAnalysis/TypingAnalyzer.swift",
+    "Sources/LumenAnalysis/TypingTracer.swift",
+    "Sources/LumenDirector/ZeroPhase.swift",
+    "Sources/LumenDirector/Planner.swift",
+    "Sources/LumenDirector/Camera.swift",
+    "Sources/LumenDirector/Cursor.swift",
+    "Sources/LumenDirector/Director.swift",
+    "Sources/LumenDirector/LiveCamera.swift",
+    "Sources/LumenRender/ZoomTransform.swift",
+)
 
 
 def fence_for(source: str) -> str:
@@ -28,37 +34,26 @@ def fence_for(source: str) -> str:
 
 
 def main() -> None:
-    folders = sorted(
-        path for path in SOURCE_ROOT.iterdir()
-        if path.is_dir() and path.name.startswith("Lumen")
-    )
-    sections = ["# Lumen source code", ""]
-    count = 0
+    sections = ["# Zoom and cursor motion core", ""]
 
-    for folder in folders:
-        folder_name = folder.name
-        sections.extend((f"## {folder_name}/", ""))
-        files = sorted(
-            path for path in folder.rglob("*")
-            if path.is_file() and path.suffix.lower() in CODE_EXTENSIONS
-        )
-        for path in files:
-            source = path.read_text(encoding="utf-8")
-            relative_path = path.relative_to(ROOT).as_posix()
-            language = LANGUAGE_BY_EXTENSION.get(path.suffix.lower(), "")
-            fence = fence_for(source)
-            sections.extend((
-                f"### {relative_path}",
-                "",
-                f"{fence}{language}",
-                source.rstrip("\n"),
-                fence,
-                "",
-            ))
-            count += 1
+    for relative_path in FEATURE_FILES:
+        path = ROOT / relative_path
+        if not path.is_file():
+            raise FileNotFoundError(f"Core feature source file not found: {relative_path}")
+
+        source = path.read_text(encoding="utf-8")
+        fence = fence_for(source)
+        sections.extend((
+            f"## {relative_path}",
+            "",
+            f"{fence}swift",
+            source.rstrip("\n"),
+            fence,
+            "",
+        ))
 
     OUTPUT.write_text("\n".join(sections).rstrip() + "\n", encoding="utf-8")
-    print(f"Wrote {count} code files to {OUTPUT}")
+    print(f"Wrote {len(FEATURE_FILES)} core feature files to {OUTPUT}")
 
 
 if __name__ == "__main__":
