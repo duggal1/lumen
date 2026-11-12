@@ -227,28 +227,66 @@ private struct RecordingRow: View {
 // MARK: Where you record
 
 struct WhereYouRecord: View {
-    // Usage is honest: a library with projects but no window data says so,
-    // instead of a stub that pretends nothing was recorded.
-    private var rows: [(app: String, minutes: Double)] { [] }
+    let app: AppModel
+    @State private var range = 30
+
+    private var rows: [RecordedAppUsage] {
+        let cutoff = range == 0 ? nil : Calendar.current.date(byAdding: .day, value: -range, to: .now)
+        return AppUsageSummary.aggregate(app.projects.map { (date: $0.date, apps: $0.appUsage) }, since: cutoff)
+    }
+
     var body: some View {
+        let usage = rows
+        let total = usage.reduce(0) { $0 + $1.seconds }
+        let highest = usage.first?.seconds ?? 1
         VStack(alignment: .leading, spacing: Space.s3) {
-            Text("Where you record").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
-            if rows.isEmpty {
-                Text("No app usage detected yet.").font(AppType.caption).foregroundStyle(Tok.text2)
-                DustLine()
+            HStack {
+                Text("Where you record").font(AppType.title).foregroundStyle(Tok.text)
+                Spacer()
+                LSegmented(sel: $range, items: [(7, "7 days"), (30, "30 days"), (0, "All time")])
+                    .frame(width: 216)
+            }
+            if usage.isEmpty {
+                Text("App activity will appear after your next recording.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
             } else {
-                ForEach(rows, id: \.app) { row in
+                ForEach(Array(usage.prefix(6)), id: \.id) { row in
                     HStack(spacing: Space.s3) {
-                        Text(row.app).font(AppType.label).foregroundStyle(Tok.text)
-                        Spacer(minLength: Space.s3)
-                        Text(String(format: "%.0f min", row.minutes))
+                        Text(row.name).font(AppType.label).foregroundStyle(Tok.text)
+                            .lineLimit(1).frame(width: 120, alignment: .leading)
+                        UsageTape(fraction: row.seconds / highest).frame(maxWidth: .infinity).frame(height: 12)
+                        Text(duration(row.seconds)).font(AppType.caption.monospacedDigit())
+                            .foregroundStyle(Tok.text2).frame(width: 64, alignment: .trailing)
+                        Text("\(Int((row.seconds / total * 100).rounded()))%")
                             .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
-                    }
+                            .frame(width: 40, alignment: .trailing)
+                    }.frame(height: 32)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func duration(_ seconds: Double) -> String {
+        if seconds < 60 { return "\(Int(seconds.rounded())) sec" }
+        return "\(Int((seconds / 60).rounded())) min"
+    }
+}
+
+private struct UsageTape: View {
+    let fraction: Double
+    var body: some View {
+        Canvas { context, size in
+            let count = max(1, Int(size.width / 4))
+            let active = min(count, max(0, Int((fraction * Double(count)).rounded(.up))))
+            for column in 0..<count {
+                let rect = CGRect(x: CGFloat(column * 4), y: column < active ? 1 : 5,
+                                  width: column < active ? 3 : 1, height: column < active ? 10 : 1)
+                context.fill(Path(rect), with: .color(column < active ? Tok.accent : Tok.controlPressed),
+                             style: FillStyle(antialiased: false))
+            }
+        }.accessibilityHidden(true)
     }
 }
