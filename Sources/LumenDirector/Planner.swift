@@ -84,7 +84,7 @@ enum ZoomPlanner {
     /// Where was the caret at each key? Never falls back to the centre of a big element.
     private static func fixes(t0: Double, t1: Double, keys: [InputEvent], ax: [AXFrame], traces: [TypingTrace],
                               click: InputEvent?, W: Double, H: Double, b: Double) -> [Fix] {
-        var out: [Fix] = []
+        var out: [Fix] = [], fallback: [Fix] = []
         for e in keys where e.t >= t0 && e.t <= t1 {
             guard e.axFrameIndex > 0, Int(e.axFrameIndex) <= ax.count else { continue }
             let f = ax[Int(e.axFrameIndex) - 1]
@@ -105,14 +105,15 @@ enum ZoomPlanner {
             }
             // No trustworthy caret: only a single-line field may stand in, and only its left part.
             if f.h <= 0.09 * H {
-                out.append(Fix(t: e.t, p: SIMD2(f.x + min(f.w * 0.35, 0.18 * W), field.midY), field: field))
+                fallback.append(Fix(t: e.t, p: SIMD2(f.x + min(f.w * 0.35, 0.18 * W), field.midY), field: field))
             }
         }
         if !out.isEmpty { return out }
         if let tr = traces.first(where: { $0.t0 <= t1 + 0.15 && $0.t1 >= t0 - 0.15 && !$0.samples.isEmpty }) {
-            return tr.samples.filter { $0.x.isFinite && $0.y.isFinite }
+            return tr.samples.filter { $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
                 .map { Fix(t: $0.t, p: SIMD2($0.x, $0.y), field: tr.rect) }
         }
+        if !fallback.isEmpty { return fallback }
         if let c = click, c.x.isFinite, c.y.isFinite {
             let p = SIMD2(Double(c.x), Double(c.y))
             return [Fix(t: t0, p: p, field: nil), Fix(t: t1, p: p, field: nil)]
@@ -211,19 +212,20 @@ enum ZoomPlanner {
             shots.append(ZoomSegment(id: stableID(o.start, end), start: o.start, end: end, scale: o.scale,
                                      focus: .fixed(x: o.c.x / W, y: o.c.y / H), origin: .auto))
         }
-        func retarget(_ c: SIMD2<Double>, at t: Double) {
+        func retarget(_ c: SIMD2<Double>, at t: Double, minMove: Double = 0.12) {
             guard let o = cur else { return }
             let nc = clampC(c, o.scale)
             let moved = (nc - o.c) / half(o.scale)
-            if hypot(moved.x, moved.y) < 0.12 { return }
+            if hypot(moved.x, moved.y) < minMove { return }
             if t - o.start <= 0.2 { cur = Open(start: o.start, scale: o.scale, c: nc); return }
             close(at: t); cur = Open(start: t, scale: o.scale, c: nc)
         }
         func ensureVisible(_ pt: SIMD2<Double>, at t: Double) {          // clicks only
             guard let o = cur else { return }
             let d = (pt - o.c) / half(o.scale)
-            guard abs(d.x) > p.safeZone || abs(d.y) > p.safeZone else { return }
-            retarget(pt, at: t)                                          // click anchor is the exact pixel
+            let zone = clamp(p.safeZone.isFinite ? p.safeZone : 0.25, 0.03, 0.25)
+            guard abs(d.x) > zone || abs(d.y) > zone else { return }
+            retarget(pt, at: t, minMove: 0.03)                           // click anchor is the exact pixel
         }
         func absorbKeepAlive(upTo t: Double) {
             guard let o = cur else { return }
