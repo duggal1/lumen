@@ -22,6 +22,28 @@ public struct AudioImportInput: ToolInput {
     public var gainDb: Double = 0
     public var loop: Bool = false
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case path
+    case role
+    case atMarker = "at_marker"
+    case atOutput = "at_output"
+    case offsetMs = "offset_ms"
+    case gainDb = "gain_db"
+    case loop
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+    self.role = try c.decodeIfPresent(String.self, forKey: .role) ?? "voiceover"
+    self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker) ?? ""
+    self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput) ?? -1
+    self.offsetMs = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
+    self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb) ?? 0
+    self.loop = try c.decodeIfPresent(Bool.self, forKey: .loop) ?? false
+    }
 }
 
 public struct AudioMixSetInput: ToolInput {
@@ -33,6 +55,26 @@ public struct AudioMixSetInput: ToolInput {
     public var duckDepthDb: Double = -1000
     public var normalize: Bool = false
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case targetLUFS = "target_lufs"
+    case musicGainDb = "music_gain_db"
+    case micGainDb = "mic_gain_db"
+    case outputGainDb = "output_gain_db"
+    case duckDepthDb = "duck_depth_db"
+    case normalize
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.targetLUFS = try c.decodeIfPresent(Double.self, forKey: .targetLUFS) ?? 0
+    self.musicGainDb = try c.decodeIfPresent(Double.self, forKey: .musicGainDb) ?? -1000
+    self.micGainDb = try c.decodeIfPresent(Double.self, forKey: .micGainDb) ?? -1000
+    self.outputGainDb = try c.decodeIfPresent(Double.self, forKey: .outputGainDb) ?? -1000
+    self.duckDepthDb = try c.decodeIfPresent(Double.self, forKey: .duckDepthDb) ?? -1000
+    self.normalize = try c.decodeIfPresent(Bool.self, forKey: .normalize) ?? false
+    }
 }
 
 public struct VoiceoverGenerateInput: ToolInput {
@@ -45,6 +87,28 @@ public struct VoiceoverGenerateInput: ToolInput {
     public var offsetMs: Double = 0
     public var gainDb: Double = 0
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case text
+    case voice
+    case model
+    case atMarker = "at_marker"
+    case atOutput = "at_output"
+    case offsetMs = "offset_ms"
+    case gainDb = "gain_db"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+    self.voice = try c.decodeIfPresent(String.self, forKey: .voice) ?? ""
+    self.model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
+    self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker) ?? ""
+    self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput) ?? -1
+    self.offsetMs = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
+    self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb) ?? 0
+    }
 }
 
 // MARK: - Verify tools
@@ -54,6 +118,18 @@ public struct PreviewFrameInput: ToolInput {
     public var time: Double = 0
     public var maxWidth: Int = 960
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case time
+    case maxWidth = "max_width"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.time = try c.decodeIfPresent(Double.self, forKey: .time) ?? 0
+    self.maxWidth = try c.decodeIfPresent(Int.self, forKey: .maxWidth) ?? 960
+    }
 }
 
 public struct PreviewSheetInput: ToolInput {
@@ -62,11 +138,33 @@ public struct PreviewSheetInput: ToolInput {
     public var duration: Double = 0
     public var maxWidth: Int = 480
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case frames
+    case duration
+    case maxWidth = "max_width"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.frames = try c.decodeIfPresent(Int.self, forKey: .frames) ?? 6
+    self.duration = try c.decodeIfPresent(Double.self, forKey: .duration) ?? 0
+    self.maxWidth = try c.decodeIfPresent(Int.self, forKey: .maxWidth) ?? 480
+    }
 }
 
 public struct QAReportInput: ToolInput {
     public var projectID: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    }
 }
 
 // MARK: - Export tools
@@ -78,16 +176,48 @@ public struct ExportStartInput: ToolInput {
     public var includeAudio: Bool = true
     public var exportStems: Bool = false
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case preset
+    case output
+    case includeAudio = "include_audio"
+    case exportStems = "export_stems"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.preset = try c.decodeIfPresent(String.self, forKey: .preset) ?? "1080p30-h264"
+    self.output = try c.decodeIfPresent(String.self, forKey: .output) ?? ""
+    self.includeAudio = try c.decodeIfPresent(Bool.self, forKey: .includeAudio) ?? true
+    self.exportStems = try c.decodeIfPresent(Bool.self, forKey: .exportStems) ?? false
+    }
 }
 
 public struct JobStatusInput: ToolInput {
     public var jobID: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case jobID = "job_id"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.jobID = try c.decodeIfPresent(String.self, forKey: .jobID) ?? ""
+    }
 }
 
 public struct ExportCancelInput: ToolInput {
     public var jobID: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case jobID = "job_id"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.jobID = try c.decodeIfPresent(String.self, forKey: .jobID) ?? ""
+    }
 }
 
 public extension ToolRegistry {

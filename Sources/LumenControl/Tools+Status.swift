@@ -20,6 +20,16 @@ public struct ListWindowsInput: ToolInput {
     public var bundleID: String = ""
     public var includeOffscreen: Bool = false
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case bundleID = "bundle_id"
+    case includeOffscreen = "include_offscreen"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID) ?? ""
+    self.includeOffscreen = try c.decodeIfPresent(Bool.self, forKey: .includeOffscreen) ?? false
+    }
 }
 
 public struct ListDisplaysInput: ToolInput {
@@ -74,10 +84,19 @@ public extension ToolRegistry {
             description: "On-screen windows with their ids, owning app and title. Use it to pick the window to record or to act on.",
             capability: .read) { input, _ in
                 let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [NSDictionary] ?? []
+                // The window list has no bundle id, so it is resolved from the
+                // owner process.
+                var bundlesByPID: [Int32: String] = [:]
+                for app in NSWorkspace.shared.runningApplications {
+                    if let identifier = app.bundleIdentifier {
+                        bundlesByPID[Int32(app.processIdentifier)] = identifier
+                    }
+                }
                 var rows: [JSONValue] = []
                 for entry in list {
                     let owner = entry[kCGWindowOwnerName as String] as? String ?? ""
-                    let bundle = (entry["kCGWindowOwnerBundleID" as String] as? String) ?? ""
+                    let pid = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0
+                    let bundle = bundlesByPID[pid] ?? ""
                     let title = entry[kCGWindowName as String] as? String ?? ""
                     let number = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0
                     let layer = (entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0

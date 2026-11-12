@@ -9,12 +9,32 @@ public struct UISnapshotInput: ToolInput {
     public var bundleID: String = ""
     public var maxDepth: Int = 6
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case bundleID = "bundle_id"
+    case maxDepth = "max_depth"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID) ?? ""
+    self.maxDepth = try c.decodeIfPresent(Int.self, forKey: .maxDepth) ?? 6
+    }
 }
 
 public struct UIActInput: ToolInput {
     public var bundleID: String = ""
     public var actions: [DemoScript.Action] = []
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case bundleID = "bundle_id"
+    case actions
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID) ?? ""
+    self.actions = try c.decodeIfPresent([DemoScript.Action].self, forKey: .actions) ?? []
+    }
 }
 
 public struct UIWaitForInput: ToolInput {
@@ -24,6 +44,22 @@ public struct UIWaitForInput: ToolInput {
     public var identifier: String = ""
     public var timeoutS: Double = 8
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case bundleID = "bundle_id"
+    case role
+    case title
+    case identifier
+    case timeoutS = "timeout_s"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID) ?? ""
+    self.role = try c.decodeIfPresent(String.self, forKey: .role) ?? ""
+    self.title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+    self.identifier = try c.decodeIfPresent(String.self, forKey: .identifier) ?? ""
+    self.timeoutS = try c.decodeIfPresent(Double.self, forKey: .timeoutS) ?? 8
+    }
 }
 
 public struct RunScriptInput: ToolInput {
@@ -32,6 +68,16 @@ public struct RunScriptInput: ToolInput {
     public var mode: String = "physical"
     public var bundleID: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case mode
+    case bundleID = "bundle_id"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "physical"
+    self.bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID) ?? ""
+    }
 }
 
 public extension ToolRegistry {

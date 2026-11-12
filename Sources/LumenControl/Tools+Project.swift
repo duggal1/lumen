@@ -15,11 +15,27 @@ public struct ProjectListInput: ToolInput {
 public struct ProjectOpenInput: ToolInput {
     public var path: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case path
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+    }
 }
 
 public struct TimelineGetInput: ToolInput {
     public var projectID: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    }
 }
 
 /// One typed timeline operation. Flat and explicit so an agent cannot send
@@ -39,6 +55,38 @@ public struct PatchOp: Codable, Sendable {
     public var text: String = ""
     public var flag: Bool = true
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case op
+    case id
+    case start
+    case end
+    case scale
+    case focusMode = "focus_mode"
+    case focusX = "focus_x"
+    case focusY = "focus_y"
+    case speed
+    case key
+    case value
+    case text
+    case flag
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.op = try c.decodeIfPresent(String.self, forKey: .op) ?? ""
+    self.id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+    self.start = try c.decodeIfPresent(Double.self, forKey: .start) ?? 0
+    self.end = try c.decodeIfPresent(Double.self, forKey: .end) ?? 0
+    self.scale = try c.decodeIfPresent(Double.self, forKey: .scale) ?? 2
+    self.focusMode = try c.decodeIfPresent(String.self, forKey: .focusMode) ?? "follow"
+    self.focusX = try c.decodeIfPresent(Double.self, forKey: .focusX) ?? 0.5
+    self.focusY = try c.decodeIfPresent(Double.self, forKey: .focusY) ?? 0.5
+    self.speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 2
+    self.key = try c.decodeIfPresent(String.self, forKey: .key) ?? ""
+    self.value = try c.decodeIfPresent(Double.self, forKey: .value) ?? 0
+    self.text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+    self.flag = try c.decodeIfPresent(Bool.self, forKey: .flag) ?? true
+    }
 }
 
 public struct TimelinePatchInput: ToolInput {
@@ -47,11 +95,31 @@ public struct TimelinePatchInput: ToolInput {
     public var revision: Int = 0
     public var ops: [PatchOp] = []
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case revision
+    case ops
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.revision = try c.decodeIfPresent(Int.self, forKey: .revision) ?? 0
+    self.ops = try c.decodeIfPresent([PatchOp].self, forKey: .ops) ?? []
+    }
 }
 
 public struct UndoInput: ToolInput {
     public var projectID: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    }
 }
 
 public struct ZoomAddInput: ToolInput {
@@ -63,17 +131,55 @@ public struct ZoomAddInput: ToolInput {
     public var focusX: Double = 0.5
     public var focusY: Double = 0.5
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case start
+    case end
+    case scale
+    case focusMode = "focus_mode"
+    case focusX = "focus_x"
+    case focusY = "focus_y"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.start = try c.decodeIfPresent(Double.self, forKey: .start) ?? 0
+    self.end = try c.decodeIfPresent(Double.self, forKey: .end) ?? 0
+    self.scale = try c.decodeIfPresent(Double.self, forKey: .scale) ?? 2
+    self.focusMode = try c.decodeIfPresent(String.self, forKey: .focusMode) ?? "follow"
+    self.focusX = try c.decodeIfPresent(Double.self, forKey: .focusX) ?? 0.5
+    self.focusY = try c.decodeIfPresent(Double.self, forKey: .focusY) ?? 0.5
+    }
 }
 
 public struct ZoomRemoveInput: ToolInput {
     public var projectID: String = ""
     public var id: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case id
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+    }
 }
 
 public struct ZoomReplanInput: ToolInput {
     public var projectID: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    }
 }
 
 public struct CutRangeInput: ToolInput {
@@ -81,6 +187,18 @@ public struct CutRangeInput: ToolInput {
     public var start: Double = 0
     public var end: Double = 0
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case start
+    case end
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.start = try c.decodeIfPresent(Double.self, forKey: .start) ?? 0
+    self.end = try c.decodeIfPresent(Double.self, forKey: .end) ?? 0
+    }
 }
 
 public struct SpeedRampInput: ToolInput {
@@ -89,6 +207,20 @@ public struct SpeedRampInput: ToolInput {
     public var end: Double = 0
     public var speed: Double = 2
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case start
+    case end
+    case speed
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.start = try c.decodeIfPresent(Double.self, forKey: .start) ?? 0
+    self.end = try c.decodeIfPresent(Double.self, forKey: .end) ?? 0
+    self.speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 2
+    }
 }
 
 public struct StyleSetInput: ToolInput {
@@ -101,6 +233,28 @@ public struct StyleSetInput: ToolInput {
     public var background: String = ""
     public var backgroundImagePath: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case padding
+    case cornerRadius = "corner_radius"
+    case shadow
+    case aspect
+    case wallpaperBlur = "wallpaper_blur"
+    case background
+    case backgroundImagePath = "background_image_path"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.padding = try c.decodeIfPresent(Double.self, forKey: .padding) ?? -1
+    self.cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? -1
+    self.shadow = try c.decodeIfPresent(Double.self, forKey: .shadow) ?? -1
+    self.aspect = try c.decodeIfPresent(Double.self, forKey: .aspect) ?? 0
+    self.wallpaperBlur = try c.decodeIfPresent(Double.self, forKey: .wallpaperBlur) ?? -1
+    self.background = try c.decodeIfPresent(String.self, forKey: .background) ?? ""
+    self.backgroundImagePath = try c.decodeIfPresent(String.self, forKey: .backgroundImagePath) ?? ""
+    }
 }
 
 public struct BackgroundListInput: ToolInput {
@@ -112,12 +266,34 @@ public struct BackgroundSetInput: ToolInput {
     public var background: String = ""
     public var imagePath: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case background
+    case imagePath = "image_path"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.background = try c.decodeIfPresent(String.self, forKey: .background) ?? ""
+    self.imagePath = try c.decodeIfPresent(String.self, forKey: .imagePath) ?? ""
+    }
 }
 
 public struct CaptionsGenerateInput: ToolInput {
     public var projectID: String = ""
     public var locale: String = "en-US"
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case locale
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.locale = try c.decodeIfPresent(String.self, forKey: .locale) ?? "en-US"
+    }
 }
 
 public struct CaptionsSetInput: ToolInput {
@@ -125,11 +301,31 @@ public struct CaptionsSetInput: ToolInput {
     public var enabled: Bool = true
     public var locale: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case enabled
+    case locale
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+    self.locale = try c.decodeIfPresent(String.self, forKey: .locale) ?? ""
+    }
 }
 
 public struct PrivacyScanInput: ToolInput {
     public var projectID: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    }
 }
 
 public struct PrivacyApplyInput: ToolInput {
@@ -137,6 +333,16 @@ public struct PrivacyApplyInput: ToolInput {
     /// mask id -> approved
     public var decisions: [String: Bool] = [:]
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case projectID = "project_id"
+    case decisions
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.decisions = try c.decodeIfPresent([String: Bool].self, forKey: .decisions) ?? [:]
+    }
 }
 
 public extension ToolRegistry {

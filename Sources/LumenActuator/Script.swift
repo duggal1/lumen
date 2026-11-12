@@ -21,7 +21,17 @@ public struct DemoScript: Codable, Sendable, Equatable {
         public init(bundleID: String? = nil, name: String? = nil) {
             self.bundleID = bundleID; self.name = name
         }
-    }
+
+        enum CodingKeys: String, CodingKey {
+        case bundleID = "bundle_id"
+        case name
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID)
+        self.name = try c.decodeIfPresent(String.self, forKey: .name)
+        }
+}
 
     public struct Step: Codable, Sendable, Equatable {
         public var id: String = ""
@@ -38,7 +48,14 @@ public struct DemoScript: Codable, Sendable, Equatable {
             case `do` = "do"
             case padAfterS = "pad_after_s"
         }
-    }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        self.say = try c.decodeIfPresent(String.self, forKey: .say)
+        self.padAfterS = try c.decodeIfPresent(Double.self, forKey: .padAfterS) ?? 0
+        }
+}
 
     /// One action inside a step. The discriminator is `op`.
     public enum Action: Codable, Sendable, Equatable {
@@ -55,15 +72,15 @@ public struct DemoScript: Codable, Sendable, Equatable {
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             switch try c.decode(Operation.self, forKey: .op) {
-            case .launch: self = .launch(try c.decode(Launch.self, forKey: .launch))
-            case .waitFor: self = .waitFor(try c.decode(WaitFor.self, forKey: .waitFor))
-            case .click: self = .click(try c.decode(Click.self, forKey: .click))
-            case .type: self = .type(try c.decode(TypeText.self, forKey: .type))
-            case .key: self = .key(try c.decode(KeyPress.self, forKey: .key))
-            case .sleep: self = .sleep(try c.decode(Sleep.self, forKey: .sleep))
-            case .move: self = .move(try c.decode(Move.self, forKey: .move))
-            case .scroll: self = .scroll(try c.decode(Scroll.self, forKey: .scroll))
-            case .screenshot: self = .screenshot(try c.decode(Screenshot.self, forKey: .screenshot))
+            case .launch: self = .launch(try Launch(from: decoder))
+            case .waitFor: self = .waitFor(try WaitFor(from: decoder))
+            case .click: self = .click(try Click(from: decoder))
+            case .type: self = .type(try TypeText(from: decoder))
+            case .key: self = .key(try KeyPress(from: decoder))
+            case .sleep: self = .sleep(try Sleep(from: decoder))
+            case .move: self = .move(try Move(from: decoder))
+            case .scroll: self = .scroll(try Scroll(from: decoder))
+            case .screenshot: self = .screenshot(try Screenshot(from: decoder))
             }
         }
 
@@ -95,14 +112,38 @@ public struct DemoScript: Codable, Sendable, Equatable {
         public var bundleID: String?
         public var waitS: Double = 2
         public init() {}
-    }
+
+        enum CodingKeys: String, CodingKey {
+        case bundleID = "bundle_id"
+        case waitS = "wait_s"
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID)
+        self.waitS = try c.decodeIfPresent(Double.self, forKey: .waitS) ?? 2
+        }
+}
     public struct WaitFor: Codable, Sendable, Equatable {
         public var role: String?
         public var title: String?
         public var identifier: String?
         public var timeoutS: Double = 8
         public init() {}
-    }
+
+        enum CodingKeys: String, CodingKey {
+        case role
+        case title
+        case identifier
+        case timeoutS = "timeout_s"
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.role = try c.decodeIfPresent(String.self, forKey: .role)
+        self.title = try c.decodeIfPresent(String.self, forKey: .title)
+        self.identifier = try c.decodeIfPresent(String.self, forKey: .identifier)
+        self.timeoutS = try c.decodeIfPresent(Double.self, forKey: .timeoutS) ?? 8
+        }
+}
     public struct Click: Codable, Sendable, Equatable {
         public var target: TargetRef?
         /// Normalized position inside the target window (0...1).
@@ -110,37 +151,111 @@ public struct DemoScript: Codable, Sendable, Equatable {
         public var y: Double?
         public var moveMs: Int = 600
         public init() {}
-    }
+
+        enum CodingKeys: String, CodingKey {
+        case target
+        case x
+        case y
+        case moveMs = "move_ms"
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.target = try c.decodeIfPresent(TargetRef.self, forKey: .target)
+        self.x = try c.decodeIfPresent(Double.self, forKey: .x)
+        self.y = try c.decodeIfPresent(Double.self, forKey: .y)
+        self.moveMs = try c.decodeIfPresent(Int.self, forKey: .moveMs) ?? 600
+        }
+}
     public struct TypeText: Codable, Sendable, Equatable {
         public var text: String = ""
         public var cps: Double = 9
         public init() {}
-    }
+
+        enum CodingKeys: String, CodingKey {
+        case text
+        case cps
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        self.cps = try c.decodeIfPresent(Double.self, forKey: .cps) ?? 9
+        }
+}
     public struct KeyPress: Codable, Sendable, Equatable {
         public var key: String = ""
         public var modifiers: [String] = []
         public init() {}
-    }
+
+        enum CodingKeys: String, CodingKey {
+        case key
+        case modifiers
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.key = try c.decodeIfPresent(String.self, forKey: .key) ?? ""
+        self.modifiers = try c.decodeIfPresent([String].self, forKey: .modifiers) ?? []
+        }
+}
     public struct Sleep: Codable, Sendable, Equatable {
         public var seconds: Double = 1
         public init() {}
-    }
+
+        enum CodingKeys: String, CodingKey {
+        case seconds
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.seconds = try c.decodeIfPresent(Double.self, forKey: .seconds) ?? 1
+        }
+}
     public struct Move: Codable, Sendable, Equatable {
         public var target: TargetRef?
         public var x: Double?
         public var y: Double?
         public var moveMs: Int = 600
         public init() {}
-    }
+
+        enum CodingKeys: String, CodingKey {
+        case target
+        case x
+        case y
+        case moveMs = "move_ms"
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.target = try c.decodeIfPresent(TargetRef.self, forKey: .target)
+        self.x = try c.decodeIfPresent(Double.self, forKey: .x)
+        self.y = try c.decodeIfPresent(Double.self, forKey: .y)
+        self.moveMs = try c.decodeIfPresent(Int.self, forKey: .moveMs) ?? 600
+        }
+}
     public struct Scroll: Codable, Sendable, Equatable {
         public var target: TargetRef?
         public var dy: Double = -3
         public init() {}
-    }
+
+        enum CodingKeys: String, CodingKey {
+        case target
+        case dy
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.target = try c.decodeIfPresent(TargetRef.self, forKey: .target)
+        self.dy = try c.decodeIfPresent(Double.self, forKey: .dy) ?? -3
+        }
+}
     public struct Screenshot: Codable, Sendable, Equatable {
         public var path: String?
         public init() {}
-    }
+
+        enum CodingKeys: String, CodingKey {
+        case path
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.path = try c.decodeIfPresent(String.self, forKey: .path)
+        }
+}
 }
 
 /// How an element is addressed.
@@ -152,5 +267,19 @@ public struct TargetRef: Codable, Sendable, Equatable {
     public var index: Int = 0
     public init(role: String? = nil, title: String? = nil, identifier: String? = nil, index: Int = 0) {
         self.role = role; self.title = title; self.identifier = identifier; self.index = index
+    }
+
+    enum CodingKeys: String, CodingKey {
+    case role
+    case title
+    case identifier
+    case index
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.role = try c.decodeIfPresent(String.self, forKey: .role)
+    self.title = try c.decodeIfPresent(String.self, forKey: .title)
+    self.identifier = try c.decodeIfPresent(String.self, forKey: .identifier)
+    self.index = try c.decodeIfPresent(Int.self, forKey: .index) ?? 0
     }
 }

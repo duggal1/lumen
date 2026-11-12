@@ -23,6 +23,38 @@ public struct RecordStartInput: ToolInput {
     /// Automatic privacy masking. On by default for agent recordings.
     public var privacyAutoMask: Bool = true
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case target
+    case displayID = "display_id"
+    case bundleID = "bundle_id"
+    case windowID = "window_id"
+    case regionX = "region_x"
+    case regionY = "region_y"
+    case regionWidth = "region_width"
+    case regionHeight = "region_height"
+    case fps
+    case microphone
+    case systemAudio = "system_audio"
+    case webcam
+    case privacyAutoMask = "privacy_auto_mask"
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.target = try c.decodeIfPresent(String.self, forKey: .target) ?? "display"          // display | window | region
+    self.displayID = try c.decodeIfPresent(Int.self, forKey: .displayID) ?? 0
+    self.bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID) ?? ""
+    self.windowID = try c.decodeIfPresent(Int.self, forKey: .windowID) ?? 0
+    self.regionX = try c.decodeIfPresent(Double.self, forKey: .regionX) ?? 0
+    self.regionY = try c.decodeIfPresent(Double.self, forKey: .regionY) ?? 0
+    self.regionWidth = try c.decodeIfPresent(Double.self, forKey: .regionWidth) ?? 1
+    self.regionHeight = try c.decodeIfPresent(Double.self, forKey: .regionHeight) ?? 1
+    self.fps = try c.decodeIfPresent(Int.self, forKey: .fps) ?? 60
+    self.microphone = try c.decodeIfPresent(Bool.self, forKey: .microphone) ?? true
+    self.systemAudio = try c.decodeIfPresent(Bool.self, forKey: .systemAudio) ?? false
+    self.webcam = try c.decodeIfPresent(Bool.self, forKey: .webcam) ?? false
+    self.privacyAutoMask = try c.decodeIfPresent(Bool.self, forKey: .privacyAutoMask) ?? true
+    }
 }
 
 public struct RecordPauseInput: ToolInput {
@@ -37,6 +69,16 @@ public struct RecordMarkerInput: ToolInput {
     public var id: String = ""
     public var label: String = ""
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+    case id
+    case label
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+    self.label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
+    }
 }
 
 public struct RecordStopInput: ToolInput {
