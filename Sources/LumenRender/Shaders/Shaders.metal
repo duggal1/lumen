@@ -158,37 +158,37 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
     return float4(c * (1.0 - a), 1.0);
 }
 
-// ---- High-quality resampling: Catmull-Rom (9 taps) at two mip levels
-static float3 catmull(texture2d<float> t, float2 uv, uint lv) {
+// ---- High-quality resampling: Catmull-Rom (5 taps) at one mip level.
+// SMOOTHNESS: the corner taps of the 4x4 kernel carry <2% of the energy and
+// renormalizing after dropping them is visually indistinguishable, so this
+// halves the texture fetches in the preview's hottest shader.
+static float3 catmull5(texture2d<float> t, float2 uv, uint lv) {
     float2 sz = float2(t.get_width(lv), t.get_height(lv));
     float2 sp = uv * sz;
-    float2 t1 = floor(sp - 0.5) + 0.5;
-    float2 f = sp - t1;
-    float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
-    float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
-    float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
-    float2 w3 = f * f * (-0.5 + 0.5 * f);
+    float2 tc = floor(sp - 0.5) + 0.5;
+    float2 f = sp - tc;
+    float2 f2 = f * f, f3 = f2 * f;
+    float2 w0 = f2 - 0.5 * (f3 + f);
+    float2 w1 = 1.5 * f3 - 2.5 * f2 + 1.0;
+    float2 w3 = 0.5 * (f3 - f2);
+    float2 w2 = 1.0 - w0 - w1 - w3;
     float2 w12 = w1 + w2;
-    float2 p0 = (t1 - 1.0) / sz, p3 = (t1 + 2.0) / sz, p12 = (t1 + w2 / w12) / sz;
+    float2 p0 = (tc - 1.0) / sz, p3 = (tc + 2.0) / sz, p12 = (tc + w2 / w12) / sz;
     float L = float(lv);
-    float3 r = float3(0.0);
-    r += t.sample(linClamp, float2(p0.x,  p0.y),  level(L)).rgb * (w0.x  * w0.y);
-    r += t.sample(linClamp, float2(p12.x, p0.y),  level(L)).rgb * (w12.x * w0.y);
-    r += t.sample(linClamp, float2(p3.x,  p0.y),  level(L)).rgb * (w3.x  * w0.y);
-    r += t.sample(linClamp, float2(p0.x,  p12.y), level(L)).rgb * (w0.x  * w12.y);
-    r += t.sample(linClamp, float2(p12.x, p12.y), level(L)).rgb * (w12.x * w12.y);
-    r += t.sample(linClamp, float2(p3.x,  p12.y), level(L)).rgb * (w3.x  * w12.y);
-    r += t.sample(linClamp, float2(p0.x,  p3.y),  level(L)).rgb * (w0.x  * w3.y);
-    r += t.sample(linClamp, float2(p12.x, p3.y),  level(L)).rgb * (w12.x * w3.y);
-    r += t.sample(linClamp, float2(p3.x,  p3.y),  level(L)).rgb * (w3.x  * w3.y);
-    return r;
+    float3 r = t.sample(linClamp, float2(p12.x, p0.y),  level(L)).rgb * (w12.x * w0.y)
+             + t.sample(linClamp, float2(p0.x,  p12.y), level(L)).rgb * (w0.x  * w12.y)
+             + t.sample(linClamp, float2(p12.x, p12.y), level(L)).rgb * (w12.x * w12.y)
+             + t.sample(linClamp, float2(p3.x,  p12.y), level(L)).rgb * (w3.x  * w12.y)
+             + t.sample(linClamp, float2(p12.x, p3.y),  level(L)).rgb * (w12.x * w3.y);
+    float sum = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    return r / max(sum, 1e-4);
 }
 static float3 sampleMip(texture2d<float> t, float2 uv, float minif) {
     float maxL = float(t.get_num_mip_levels() - 1);
     float L = clamp(log2(max(minif, 1.0)), 0.0, maxL);
     float l0 = floor(L), f = L - l0;
-    float3 a = catmull(t, uv, uint(l0));
-    if (f > 0.001 && l0 + 1.0 <= maxL) a = mix(a, catmull(t, uv, uint(l0) + 1u), f);
+    float3 a = catmull5(t, uv, uint(l0));
+    if (f > 0.001 && l0 + 1.0 <= maxL) a = mix(a, catmull5(t, uv, uint(l0) + 1u), f);
     return max(a, float3(0.0));
 }
 
