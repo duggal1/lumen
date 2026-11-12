@@ -117,7 +117,11 @@ struct Analyze: AsyncParsableCommand {
             "medianExcessError": accuracy.medianExcessError,
             "maxExcessError": accuracy.maxExcessError,
             "maxAxisCenterError": accuracy.maxAxisCenterError,
-            "medianArrival": accuracy.medianArrival
+            "medianArrival": accuracy.medianArrival,
+            "centerTolerance": 0.015,
+            "arrivalThreshold": 0.98,
+            "allMeasuredZoomedClicksMeetTargets": accuracy.zoomedClicks > 0 &&
+                accuracy.centeredClicks == accuracy.zoomedClicks && accuracy.settled == accuracy.zoomedClicks
         ] as [String: Any]
         summary["zoomSegments"] = zoomItems
         summary["speedRamps"] = ramps
