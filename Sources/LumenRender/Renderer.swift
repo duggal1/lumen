@@ -113,37 +113,43 @@ private struct BackdropKey: Equatable { var style: Style; var size: SIMD2<Int>; 
 private struct Keep: @unchecked Sendable { let o: Any }
 
 /// BGRA source -> mip-mapped copy, regenerated only when a NEW source frame arrives (sample-and-hold reuses the chain).
-/// SMOOTHNESS: a small size-keyed LRU keeps the chains alive across a window
-/// resize or a source-resolution switch, so those transitions reuse an
-/// allocation instead of reallocating and regenerating every frame.
+/// SMOOTHNESS: the chain is only as deep as the frame actually needs, and a
+/// small LRU keeps the allocations alive across frames: the next frame never
+/// overwrites a texture that an earlier command buffer still reads.
 private final class MipCache {
-    private struct Entry { var tex: MTLTexture; var key: UInt64; var w: Int; var h: Int }
-    private var entries: [Entry] = []   // least-recently-used first
-    private let capacity = 3
+    private struct Entry { let tex: MTLTexture; var id: UInt64; var used: UInt64 }
+    private var entries: [Entry] = []
+    private var tick: UInt64 = 0
+    private let capacity = 4
 
-    func texture(for f: SourceFrame, device: MTLDevice, cb: MTLCommandBuffer) -> MTLTexture? {
+    func texture(for f: SourceFrame, levels: Int, device: MTLDevice, cb: MTLCommandBuffer) -> MTLTexture? {
+        tick &+= 1
         let w = f.texture.width, h = f.texture.height
-        if let i = entries.firstIndex(where: { $0.w == w && $0.h == h }) {
-            var e = entries.remove(at: i)
-            if e.key != f.id { copy(f, into: e.tex, w: w, h: h, cb: cb); e.key = f.id }
-            entries.append(e)
-            return e.tex
+        func fits(_ t: MTLTexture) -> Bool { t.width == w && t.height == h && t.mipmapLevelCount == levels }
+        if let i = entries.firstIndex(where: { $0.id == f.id && fits($0.tex) }) {
+            entries[i].used = tick
+            return entries[i].tex
         }
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: true)
-        d.usage = [.shaderRead, .renderTarget]; d.storageMode = .private
-        guard let t = device.makeTexture(descriptor: d) else { return nil }
-        copy(f, into: t, w: w, h: h, cb: cb)
-        entries.append(Entry(tex: t, key: f.id, w: w, h: h))
-        if entries.count > capacity { entries.removeFirst(entries.count - capacity) }
-        return t
-    }
-
-    private func copy(_ f: SourceFrame, into t: MTLTexture, w: Int, h: Int, cb: MTLCommandBuffer) {
-        guard let b = cb.makeBlitCommandEncoder() else { return }
+        let victim = entries.count < capacity ? nil : entries.indices.min { entries[$0].used < entries[$1].used }
+        let tex: MTLTexture
+        if let v = victim, fits(entries[v].tex) {
+            tex = entries[v].tex
+        } else {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: levels > 1)
+            d.mipmapLevelCount = levels
+            d.usage = [.shaderRead, .renderTarget]; d.storageMode = .private
+            guard let t = device.makeTexture(descriptor: d) else { return nil }
+            tex = t
+        }
+        guard let b = cb.makeBlitCommandEncoder() else { return nil }
         b.copy(from: f.texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-               sourceSize: MTLSize(width: w, height: h, depth: 1), to: t, destinationSlice: 0, destinationLevel: 0,
+               sourceSize: MTLSize(width: w, height: h, depth: 1), to: tex, destinationSlice: 0, destinationLevel: 0,
                destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-        b.generateMipmaps(for: t); b.endEncoding()
+        if levels > 1 { b.generateMipmaps(for: tex) }
+        b.endEncoding()
+        let entry = Entry(tex: tex, id: f.id, used: tick)
+        if let v = victim { entries[v] = entry } else { entries.append(entry) }
+        return tex
     }
 }
 
@@ -567,9 +573,43 @@ public final class Renderer: @unchecked Sendable {
         let s = slot; slot = (slot + 1) % 3
         let g = Geometry(canvas: cs, src: SIMD2(Double(r.screen.texture.width), Double(r.screen.texture.height)), style: tl.style)
 
-        guard let srcTex = screenMip.texture(for: r.screen, device: device, cb: cb), let bd = backdrop else { sem.signal(); return false }
+        // SMOOTHNESS: the sub-frame states are evaluated once, up front. They
+        // decide the mip depth of this frame, and the loop below reuses them
+        // instead of re-evaluating the timeline per sample.
+        let K = sampleCount(r, g)
+        let dt = 1 / max(r.fps, 1)
+        var states: [FrameState] = []
+        states.reserveCapacity(K)
+        for i in 0..<K {
+            let off = ((Double(i) + 0.5) / Double(K) - 0.5) * tl.camera.shutter * dt
+            var st = r.live ?? tl.evaluate(at: r.t + off)
+            if r.live == nil, tl.derived == nil { st.cameraCenter = SIMD2<Float>(Float(g.src.x / 2), Float(g.src.y / 2)) }
+            states.append(st)
+        }
+        // SMOOTHNESS: the mip chain is only read when the source is minified.
+        // A zoomed-in frame samples level 0 only, so the whole-frame copy and
+        // the mip chain can be skipped and the source texture used directly.
+        let sMin = states.map { max(Double($0.cameraScale), 1) }.min() ?? 1
+        let fullLevels = Int(floor(log2(Double(max(r.screen.texture.width, r.screen.texture.height))))) + 1
+        let minifAtRest = g.src.x / g.content.z
+        let levelsNeeded = minifAtRest <= 1 ? 1 : min(Int(ceil(log2(minifAtRest))) + 1, fullLevels)
+        let needMips = levelsNeeded > 1 && (g.src.x / sMin) / g.content.z > 1.0
+
+        guard let bd = backdrop else { sem.signal(); return false }
+        let srcTex: MTLTexture? = needMips
+            ? screenMip.texture(for: r.screen, levels: levelsNeeded, device: device, cb: cb)
+            : r.screen.texture
+        guard let srcTex else { sem.signal(); return false }
         var webTex: MTLTexture?
-        if tl.webcam != nil, let w = r.webcam { webTex = webMip.texture(for: w, device: device, cb: cb) }
+        if tl.webcam != nil, let w = r.webcam {
+            let bubbleW = tl.derived == nil
+                ? g.canvas.x * (tl.webcam?.size ?? 0.2)
+                : Double(states.first?.layout.cameraRect.z ?? 0) * g.canvas.x
+            let webFull = Int(floor(log2(Double(max(w.texture.width, w.texture.height))))) + 1
+            let webMinif = Double(w.texture.width) / max(bubbleW, 1)
+            let webLevels = webMinif <= 1 ? 1 : min(Int(ceil(log2(webMinif))) + 1, webFull)
+            webTex = webMip.texture(for: w, levels: webLevels, device: device, cb: cb)
+        }
         // Cache a bounded, timestamped pair of Vision mask textures per Metal
         // in-flight slot. Both preview and export traverse this same path.
         var matte: PersonMatteSequence.Pair?
@@ -643,14 +683,11 @@ public final class Renderer: @unchecked Sendable {
         }
 
         // 2. sub-frames (motion blur): scene over transparent, accumulated, resolved over the backdrop
-        let K = sampleCount(r, g)
-        let dt = 1 / max(r.fps, 1)
         for i in 0..<K {
-            let off = ((Double(i) + 0.5) / Double(K) - 0.5) * tl.camera.shutter * dt
-            var st = r.live ?? tl.evaluate(at: r.t + off)
-            if r.live == nil, tl.derived == nil { st.cameraCenter = SIMD2<Float>(Float(g.src.x / 2), Float(g.src.y / 2)) }
+            let st = states[i]
             guard let protectedSource = maskedSource(srcTex, sourceID: r.screen.id, masks: st.emphasis.masks,
-                                                       pixelSize: Float(tl.overlays.privacy.pixelSize), slot: s, cb: cb) else {
+                                                       pixelSize: Float(tl.overlays.privacy.pixelSize),
+                                                       levels: levelsNeeded, slot: s, cb: cb) else {
                 sem.signal(); return false
             }
             scene(cb, into: work[s], slot: s, st: st, r: r, g: g, src: protectedSource, web: webTex, matte: matte)
@@ -1027,12 +1064,14 @@ public final class Renderer: @unchecked Sendable {
     }
 
     private func maskedSource(_ source: MTLTexture, sourceID: UInt64, masks: [MaskFrame], pixelSize: Float,
-                              slot: Int, cb: MTLCommandBuffer) -> MTLTexture? {
+                              levels: Int, slot: Int, cb: MTLCommandBuffer) -> MTLTexture? {
         guard !masks.isEmpty else { return source }
         guard masks.count <= 128 else { return nil }
-        if maskedSources[slot]?.width != source.width || maskedSources[slot]?.height != source.height {
+        if maskedSources[slot]?.width != source.width || maskedSources[slot]?.height != source.height
+            || maskedSources[slot]?.mipmapLevelCount != levels {
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
-                width: source.width, height: source.height, mipmapped: true)
+                width: source.width, height: source.height, mipmapped: levels > 1)
+            descriptor.mipmapLevelCount = levels
             descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]; descriptor.storageMode = .private
             maskedSources[slot] = device.makeTexture(descriptor: descriptor)
             maskKey[slot] = nil
@@ -1083,7 +1122,7 @@ public final class Renderer: @unchecked Sendable {
                                     threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
         }
         encoder.endEncoding()
-        if let blit = cb.makeBlitCommandEncoder() { blit.generateMipmaps(for: target); blit.endEncoding() }
+        if levels > 1, let blit = cb.makeBlitCommandEncoder() { blit.generateMipmaps(for: target); blit.endEncoding() }
         return target
     }
 
