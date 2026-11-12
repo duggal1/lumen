@@ -20,6 +20,8 @@ final class PlaybackClock: @unchecked Sendable {
     func start(from t: Double, at h: Double, dur: Double) { s.withLock { $0 = S(playing: true, t0: t, h0: h, dur: dur) } }
     func pause(at h: Double) { s.withLock { if $0.playing { $0.t0 = min($0.t0 + max(h - $0.h0, 0), $0.dur); $0.playing = false } } }
     func seek(_ t: Double) { s.withLock { $0.t0 = t; $0.h0 = HostClock.now() } }
+    // SMOOTHNESS: duration captured at start() goes stale after cuts; update it without re-anchoring t0/h0.
+    func setDuration(_ d: Double) { s.withLock { $0.dur = d } }
     var playing: Bool { s.withLock { $0.playing } }
 }
 
@@ -305,9 +307,17 @@ enum TimelineSelection: Equatable {
                 self.needsInitialMix = false
                 if !self.hasMixed, !self.isMixing, !self.wantsPlayback { self.remix() }
             }
-            self.playhead = min(self.playhead, out.compositionDuration)
-            self.published = self.playhead
-            self.clock.seek(self.playhead)
+            // SMOOTHNESS: `playhead` is a 12 Hz echo, up to ~83 ms behind the real clock.
+            // Re-anchoring from it while playing rewinds video but not audio (A/V jump).
+            if self.clock.playing {
+                // The clock is the truth while playing. Never re-anchor it from the 12 Hz echo.
+                self.clock.setDuration(out.compositionDuration)
+                if self.clock.time(at: HostClock.now()) >= out.compositionDuration - 0.001 { self.pause() }
+            } else {
+                let t = min(self.playhead, out.compositionDuration)
+                self.playhead = t; self.published = t
+                self.clock.seek(t)
+            }
             if self.privacyAnalysisComplete { self.privacyScanning = false; self.privacyDeadline?.cancel() }
         }
     }
