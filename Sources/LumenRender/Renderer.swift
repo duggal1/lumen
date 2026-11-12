@@ -75,7 +75,7 @@ private struct ContentU {
     var upRegion: SIMD4<Float>; var upTexSize: SIMD2<Float>; var upFactor: Float; var upBlend: Float
 }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
-private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float>; var copyOrigin: SIMD2<Float> }
+private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float> }
 private struct SourceMaskGPU { var rect: SIMD4<Float>; var block: SIMD4<Float> }
 private struct WebU {
     var crop: SIMD4<Float>; var bubble: SIMD4<Float>
@@ -875,8 +875,6 @@ public final class Renderer: @unchecked Sendable {
             var ringSource: MTLTexture?
             // SMOOTHNESS: copy only the union of the ring quads (plus the wave's
             // displacement), not the whole canvas, once per frame.
-            var copyOrigin = SIMD2<Float>.zero
-            var copySize = SIMD2<Float>(Float(tex.width), Float(tex.height))
             if tl.cursor.clickEffect != .none, let cap = sceneCopyTexture(slot: slot, canvas: r.canvas) {
                 let pad = 20.0
                 var x0 = Double.greatestFiniteMagnitude, y0 = x0
@@ -890,14 +888,15 @@ public final class Renderer: @unchecked Sendable {
                 if cx1 > cx0, cy1 > cy0 {
                     enc.endEncoding()
                     if let blit = cb.makeBlitCommandEncoder() {
+                        // The region is copied to the SAME coordinates, so the
+                        // shader keeps sampling the scene in canvas pixels.
                         blit.copy(from: tex, sourceSlice: 0, sourceLevel: 0,
                                   sourceOrigin: MTLOrigin(x: cx0, y: cy0, z: 0),
                                   sourceSize: MTLSize(width: cx1 - cx0, height: cy1 - cy0, depth: 1),
-                                  to: cap, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+                                  to: cap, destinationSlice: 0, destinationLevel: 0,
+                                  destinationOrigin: MTLOrigin(x: cx0, y: cy0, z: 0))
                         blit.endEncoding()
                     }
-                    copyOrigin = SIMD2<Float>(Float(cx0), Float(cy0))
-                    copySize = SIMD2<Float>(Float(cx1 - cx0), Float(cy1 - cy0))
                     let rp = MTLRenderPassDescriptor()
                     rp.colorAttachments[0].texture = tex
                     rp.colorAttachments[0].loadAction = .load
@@ -922,8 +921,7 @@ public final class Renderer: @unchecked Sendable {
                 frag(enc, RingU(content: content, color: ringColor, center: SIMD2<Float>(c), radius: Float(R),
                               progress: ring.progress, cr: Float(g.radius), mode: mode,
                               cam: SIMD2<Float>(cam), scale: Float(sc),
-                              srcSize: ringSource != nil ? copySize : SIMD2<Float>(g.src),
-                              copyOrigin: copyOrigin))
+                              srcSize: ringSource != nil ? canvasF : SIMD2<Float>(g.src)))
                 enc.setFragmentTexture(ringSource ?? src, index: 0)
                 draw()
             }

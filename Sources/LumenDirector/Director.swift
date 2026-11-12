@@ -116,6 +116,7 @@ public enum Director {
         var t = tl
         let src = input.source
         var followPaths: [UUID: [(t: Double, c: SIMD2<Double>)]] = [:]
+        var followContinues: [UUID: Bool] = [:]
         if cancelled() { return nil }
         let digest = inputDigest(input)
         var tm = t.timeMap
@@ -154,7 +155,10 @@ public enum Director {
             t.zoom = (manual + planned.segments).sorted { $0.start < $1.start }
             // SMOOTHNESS: the caret paths travel with the plan and become the
             // camera's continuous follow targets.
-            followPaths = planned.follow.mapValues { points in points.map { (tm.output(atSource: $0.t), $0.p) } }
+            followPaths = planned.follow.mapValues { path in
+                path.points.map { (tm.output(atSource: $0.t), $0.p) }
+            }
+            followContinues = planned.follow.mapValues { $0.continues }
         }
         if cancelled() { return nil }
         let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature)
@@ -170,7 +174,8 @@ public enum Director {
         let size = SIMD2(Double(src.width), Double(src.height))
         guard let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size,
                                            outDur: tm.outputDuration, loop: t.cursor.loop,
-                                           follow: followPaths, cancelled: cancelled) else { return nil }
+                                           follow: followPaths, followContinues: followContinues,
+                                           cancelled: cancelled) else { return nil }
         let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad,
                                              outDur: tm.outputDuration, clicks: clicks)
         let layoutSpans = LayoutSolver.spans(t, tm, hasWebcam: t.webcam != nil)

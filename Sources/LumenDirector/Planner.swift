@@ -45,11 +45,16 @@ enum ZoomPlanner {
     typealias FollowPoint = PathPoint
     /// The plan and the continuous follow paths that belong to its segments.
     /// SMOOTHNESS: the caret path is a continuous target for the camera, not a
-    /// series of retargets. Splitting the scene on every caret move made the
-    /// camera pulse; the paths travel with the plan instead.
+    /// series of retargets. The scene still splits (so the segment focus keeps
+    /// tracking the caret) but the camera glides along the path.
     struct ZoomPlan {
         var segments: [ZoomSegment] = []
-        var follow: [UUID: [FollowPoint]] = [:]
+        var follow: [UUID: FollowPath] = [:]
+    }
+    /// A camera target path and whether it continues the previous segment's.
+    struct FollowPath {
+        var points: [FollowPoint] = []
+        var continues: Bool = false
     }
     struct Intent {
         enum Kind { case click, typing }
@@ -59,7 +64,12 @@ enum ZoomPlanner {
         var rect: CGRect? = nil                // click: verified AX element; typing: the field
         var path: [PathPoint] = []             // typing only: smoothed caret path
     }
-    private struct Open { var start: Double, scale: Double, c: SIMD2<Double>; var path: [FollowPoint] = [] }
+    private struct Open {
+        var start: Double, scale: Double, c: SIMD2<Double>
+        var path: [FollowPoint] = []
+        /// This segment continues the previous one's caret path.
+        var continuesPath = false
+    }
     private struct Fix { var t: Double; var p: SIMD2<Double>; var field: CGRect? }
 
     /// Same source-time window -> same id across replans.
@@ -218,7 +228,7 @@ enum ZoomPlanner {
             let h = half(s); return SIMD2(clamp(c.x, h.x, W - h.x), clamp(c.y, h.y, H - h.y))
         }
         var shots: [ZoomSegment] = []
-        var followPaths: [UUID: [FollowPoint]] = [:]
+        var followPaths: [UUID: FollowPath] = [:]
         var cur: Open?
         var last = 0.0                                  // last activity in the open scene
         var prevScale: Double?
@@ -232,19 +242,22 @@ enum ZoomPlanner {
             let id = stableID(o.start, end)
             shots.append(ZoomSegment(id: id, start: o.start, end: end, scale: o.scale,
                                      focus: .fixed(x: o.c.x / W, y: o.c.y / H), origin: .auto))
-            if !o.path.isEmpty { followPaths[id] = o.path }
+            if !o.path.isEmpty { followPaths[id] = FollowPath(points: o.path, continues: o.continuesPath) }
         }
-        func retarget(_ c: SIMD2<Double>, at t: Double, minMove: Double = 0.12, minimumDuration: Double = 0.2) {
+        func retarget(_ c: SIMD2<Double>, at t: Double, minMove: Double = 0.12, minimumDuration: Double = 0.2,
+                      continuesPath: Bool = false) {
             guard let o = cur else { return }
             let nc = clampC(c, o.scale)
             let moved = (nc - o.c) / half(o.scale)
             if hypot(moved.x, moved.y) < minMove { return }
             if minimumDuration >= 0.2, t - o.start <= 0.2 {
-                cur = Open(start: o.start, scale: o.scale, c: nc)
+                cur = Open(start: o.start, scale: o.scale, c: nc, path: o.path, continuesPath: o.continuesPath)
                 return
             }
             close(at: t, minimumDuration: minimumDuration)
-            cur = Open(start: t, scale: o.scale, c: nc)
+            // The path carries over: the camera keeps following it across the
+            // split instead of restarting on the new segment.
+            cur = Open(start: t, scale: o.scale, c: nc, path: o.path, continuesPath: continuesPath)
         }
         func ensureVisible(_ pt: SIMD2<Double>, at t: Double) {          // clicks only
             guard let o = cur else { return }
@@ -266,25 +279,31 @@ enum ZoomPlanner {
             clampC(SIMD2(pt.x + 0.16 * half(s).x, pt.y), s)
         }
         /// SMOOTHNESS: the caret path is recorded as a continuous target for
-        /// the camera instead of retargeting (and splitting the scene) every
-        /// 0.45 s. The targets are the same ones the old retarget produced —
-        /// the camera just glides between them now.
+        /// the camera. The scene still splits (the segment focus keeps
+        /// tracking the caret, which is what the inspector and the accuracy
+        /// rules read), but the camera now glides along the path instead of
+        /// restarting a spring on every retarget.
         func follow(_ path: [PathPoint], from t0: Double) {
             guard var o = cur else { return }
-            var center = o.c
-            let h = half(o.scale)
+            if o.path.isEmpty {
+                // The path starts where the camera already is.
+                o.path.append(FollowPoint(t: o.start, p: SIMD2(o.c.x / W, o.c.y / H)))
+                cur = o
+            }
+            var lastMove = t0 - 1
             for s in path where s.t >= t0 && ok(s.t) {
-                let d = (s.p - center) / h
+                guard let o = cur else { return }
+                let h = half(o.scale), d = (s.p - o.c) / h
                 // The caret only pulls the camera once it leaves the tight window.
                 let outside = d.x > 0.06 || d.x < -0.34 || abs(d.y) > 0.22
-                guard outside else { continue }
+                guard outside, s.t - lastMove >= 0.45 else { continue }
                 let target = typingCenter(s.p, o.scale)
-                let moved = (target - center) / h
+                let moved = (target - o.c) / h
                 guard hypot(moved.x, moved.y) >= 0.12 else { continue }  // clamped to the same view: nothing to do
-                center = target
-                o.path.append(FollowPoint(t: s.t, p: SIMD2(target.x / W, target.y / H)))
+                retarget(target, at: s.t, continuesPath: true)
+                lastMove = s.t
+                cur?.path.append(FollowPoint(t: s.t, p: SIMD2(target.x / W, target.y / H)))
             }
-            cur = o
         }
         func chooseScale(_ i: Intent, prev: Double?) -> Double {
             var s: Double
