@@ -108,24 +108,37 @@ private struct BackdropKey: Equatable { var style: Style; var size: SIMD2<Int>; 
 private struct Keep: @unchecked Sendable { let o: Any }
 
 /// BGRA source -> mip-mapped copy, regenerated only when a NEW source frame arrives (sample-and-hold reuses the chain).
+/// SMOOTHNESS: a small size-keyed LRU keeps the chains alive across a window
+/// resize or a source-resolution switch, so those transitions reuse an
+/// allocation instead of reallocating and regenerating every frame.
 private final class MipCache {
-    private var tex: MTLTexture?
-    private var key: UInt64 = .max
+    private struct Entry { var tex: MTLTexture; var key: UInt64; var w: Int; var h: Int }
+    private var entries: [Entry] = []   // least-recently-used first
+    private let capacity = 3
+
     func texture(for f: SourceFrame, device: MTLDevice, cb: MTLCommandBuffer) -> MTLTexture? {
         let w = f.texture.width, h = f.texture.height
-        if tex == nil || tex!.width != w || tex!.height != h {
-            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: true)
-            d.usage = [.shaderRead, .renderTarget]; d.storageMode = .private
-            tex = device.makeTexture(descriptor: d); key = .max
+        if let i = entries.firstIndex(where: { $0.w == w && $0.h == h }) {
+            var e = entries.remove(at: i)
+            if e.key != f.id { copy(f, into: e.tex, w: w, h: h, cb: cb); e.key = f.id }
+            entries.append(e)
+            return e.tex
         }
-        guard let t = tex else { return nil }
-        if key != f.id, let b = cb.makeBlitCommandEncoder() {
-            b.copy(from: f.texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                   sourceSize: MTLSize(width: w, height: h, depth: 1), to: t, destinationSlice: 0, destinationLevel: 0,
-                   destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-            b.generateMipmaps(for: t); b.endEncoding(); key = f.id
-        }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: true)
+        d.usage = [.shaderRead, .renderTarget]; d.storageMode = .private
+        guard let t = device.makeTexture(descriptor: d) else { return nil }
+        copy(f, into: t, w: w, h: h, cb: cb)
+        entries.append(Entry(tex: t, key: f.id, w: w, h: h))
+        if entries.count > capacity { entries.removeFirst(entries.count - capacity) }
         return t
+    }
+
+    private func copy(_ f: SourceFrame, into t: MTLTexture, w: Int, h: Int, cb: MTLCommandBuffer) {
+        guard let b = cb.makeBlitCommandEncoder() else { return }
+        b.copy(from: f.texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+               sourceSize: MTLSize(width: w, height: h, depth: 1), to: t, destinationSlice: 0, destinationLevel: 0,
+               destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        b.generateMipmaps(for: t); b.endEncoding()
     }
 }
 
