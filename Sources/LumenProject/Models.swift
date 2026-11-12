@@ -219,7 +219,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
     public var maxSamples = 8
     /// User setting for the real-time upscaler cap (2...10, ladder
     /// {2,3,4,5,6,8,10}). Magnification picks the smallest factor >= need.
-    public var upscaleMaxFactor = 8
+    public var upscaleMaxFactor = 10
     /// Master switch for the real-time upscaler (A/B testing, low-end GPUs).
     public var upscaleEnabled = true
     public var tilt: TiltMode = .off
@@ -247,7 +247,8 @@ public struct CameraParams: Codable, Equatable, Sendable {
             maxScale = 2.0; minScale = 1.25; leadIn = 0.6; hold = 0.7; zoomOutGap = 1.8
             omegaZoom = 9; omegaPan = 7; safeZone = 0.62; baseScale = 1.8; cameraModel = 4
         }
-        upscaleMaxFactor = min(max(c.opt(.upscaleMaxFactor, upscaleMaxFactor), 2), 10)
+        let savedUpscale = c.opt(.upscaleMaxFactor, upscaleMaxFactor)
+        upscaleMaxFactor = min(max(savedUpscale == 8 ? 10 : savedUpscale, 2), 10)
         upscaleEnabled = c.opt(.upscaleEnabled, upscaleEnabled)
         tilt = c.opt(.tilt, tilt); maxYaw = c.opt(.maxYaw, maxYaw); maxPitch = c.opt(.maxPitch, maxPitch)
         floatDeg = c.opt(.floatDeg, floatDeg); omegaTilt = c.opt(.omegaTilt, omegaTilt); tiltSeed = c.opt(.tiltSeed, tiltSeed)
