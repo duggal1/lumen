@@ -321,9 +321,9 @@ public actor RecordingSession {
     }
 
     /// Free-space watchdog + sleep/terminate finalize. Thresholds are
-    /// parameters (50 MB hard stop). Power loss leaves at most the last
-    /// journal interval (~1 s) plus fragment (~2 s) unflushed; process
-    /// death is fully covered by the atomic journal rename.
+    /// parameters (50 MB hard stop). Process death is bounded by the last
+    /// atomic checkpoint (~1 s) and the writer's last flushed fragment (~2 s).
+    /// Power loss may also discard filesystem-cached writes.
     private func startWatchdog() {
         watchdogTask?.cancel()
         sleepObserver = NotificationCenter.default.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
