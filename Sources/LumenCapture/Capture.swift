@@ -314,6 +314,11 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     public let bundle: ProjectBundle
     private let liveFrameHook = OSAllocatedUnfairLock<(@Sendable (CVPixelBuffer) -> Void)?>(initialState: nil)
     public func setLiveFrameHook(_ hook: (@Sendable (CVPixelBuffer) -> Void)?) { liveFrameHook.withLock { $0 = hook } }
+    private let inputScaleHook = OSAllocatedUnfairLock<(@Sendable (SIMD2<Double>) -> Void)?>(initialState: nil)
+    public func setInputScaleHook(_ hook: (@Sendable (SIMD2<Double>) -> Void)?) { inputScaleHook.withLock { $0 = hook } }
+    private let sourceInfo = OSAllocatedUnfairLock<SourceInfo?>(initialState: nil)
+    private let sourcePoints = OSAllocatedUnfairLock<CGSize?>(initialState: nil)
+    private let measuredSourceScale = OSAllocatedUnfairLock(initialState: false)
     private let videoQ = DispatchQueue(label: "lumen.capture.video", qos: .userInteractive)
     private let audioQ = DispatchQueue(label: "lumen.capture.audio", qos: .userInitiated)
     private var stream: SCStream?
@@ -331,7 +336,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private let pausedTime = OSAllocatedUnfairLock<Double>(initialState: 0)
     public private(set) var mic: CAFWriter?
     public private(set) var system: CAFWriter?
-    public private(set) var info: SourceInfo?
+    public var info: SourceInfo? { sourceInfo.withLock { $0 } }
 
     public init(bundle: ProjectBundle) { self.bundle = bundle }
     public var droppedFrames: Int { dropped.withLock { $0 } }
@@ -370,7 +375,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         let own = content.windows.filter { $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier }
         let sc = SCStreamConfiguration()
         let filter: SCContentFilter
-        var pw = 0, ph = 0, scale = 2.0, origin = CGPoint.zero
+        var pw = 0, ph = 0, scale = 2.0, origin = CGPoint.zero, points = CGSize.zero
         switch cfg.source {
         case .display(let id), .region(let id, _):
             guard let d = content.displays.first(where: { $0.displayID == id }) else { throw CaptureError.noSource }
@@ -381,10 +386,12 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
             if case .region(_, let r) = cfg.source {
                 sc.sourceRect = r; size = r.size; origin = CGPoint(x: b.minX + r.minX, y: b.minY + r.minY)
             }
+            points = size
             pw = Int((size.width * scale).rounded()) & ~1; ph = Int((size.height * scale).rounded()) & ~1
         case .window(let wid):
             guard let w = content.windows.first(where: { $0.windowID == wid }) else { throw CaptureError.noSource }
             filter = SCContentFilter(desktopIndependentWindow: w)
+            sc.ignoreShadowsSingleWindow = true
             // A window can be captured on a non-Retina or secondary screen.
             // Use the backing scale of the display containing most of the window.
             let hostDisplay = content.displays.max { lhs, rhs in
@@ -398,6 +405,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
                 scale = 1
             }
             origin = w.frame.origin
+            points = w.frame.size
             pw = Int((w.frame.width * scale).rounded()) & ~1
             ph = Int((w.frame.height * scale).rounded()) & ~1
         }
@@ -460,7 +468,11 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         meta = try FrameMetaWriter(url: bundle.framesMetaURL)
         if cfg.mic { mic = CAFWriter(url: bundle.micURL) }
         if cfg.systemAudio { system = CAFWriter(url: bundle.systemURL) }
-        info = SourceInfo(width: pw, height: ph, fps: Double(fps), duration: 0, backingScale: nativeScale * capFactor, originX: origin.x, originY: origin.y)
+        sourcePoints.withLock { $0 = points }
+        sourceInfo.withLock {
+            $0 = SourceInfo(width: pw, height: ph, fps: Double(fps), duration: 0,
+                            backingScale: nativeScale * capFactor, originX: origin.x, originY: origin.y)
+        }
 
         let s = SCStream(filter: filter, configuration: sc, delegate: self)
         try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQ)
@@ -507,6 +519,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let info = arr.first, let raw = info[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete,
               let pb = CMSampleBufferGetImageBuffer(sb), let w = writer, vin != nil, adaptor != nil else { return }
+        updateSourceScale(from: pb)
         let pts = sb.presentationTimeStamp
         if !started {
             guard w.startWriting() else { return }
@@ -519,6 +532,30 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         var rect = CGRect.zero
         if let d = info[.contentRect] as? [String: Any], let r = CGRect(dictionaryRepresentation: d as CFDictionary) { rect = r }
         meta?.write(pts: pts.seconds, status: raw, rect: rect)
+    }
+
+    private func updateSourceScale(from pixelBuffer: CVPixelBuffer) {
+        let shouldMeasure = measuredSourceScale.withLock { measured -> Bool in
+            guard !measured else { return false }
+            measured = true
+            return true
+        }
+        guard shouldMeasure, let points = sourcePoints.withLock({ $0 }), points.width > 0, points.height > 0 else { return }
+        let width = CVPixelBufferGetWidth(pixelBuffer), height = CVPixelBufferGetHeight(pixelBuffer)
+        let xScale = Double(width) / points.width
+        let yScale = Double(height) / points.height
+        guard xScale.isFinite, yScale.isFinite, xScale > 0, yScale > 0 else { return }
+        if abs(xScale - yScale) >= 0.01 {
+            os_log("capture source has nonuniform pixel scale x=%.5f y=%.5f", log: .default, type: .error, xScale, yScale)
+        }
+        sourceInfo.withLock { value in
+            guard var info = value else { return }
+            info.width = width
+            info.height = height
+            info.backingScale = (xScale + yScale) / 2
+            value = info
+        }
+        inputScaleHook.withLock { $0 }?(SIMD2(xScale, yScale))
     }
     private func drainVideo() {
         guard let vin, vin.isReadyForMoreMediaData, let pending = pendingVideo else { return }
