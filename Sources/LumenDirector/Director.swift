@@ -46,7 +46,7 @@ public struct DeriveCache: Sendable {
         var source: SIMD3<Double>
     }
     var planKey: PlanKey?
-    var plan: [ZoomSegment]?
+    var plan: ZoomPlanner.ZoomPlan?
 
     /// Same idea for the speed-ramp planner.
     struct RampKey: Equatable {
@@ -87,9 +87,9 @@ public enum Director {
         guard timeline.camera.autoZoom else { return timeline.zoom }
         let manual = timeline.zoom.filter { $0.origin == .manual }
         let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
-        return (manual + ZoomPlanner.plan(events: events, ax: ax, typing: [], activity: [],
-                                          src: source, p: timeline.camera, tm: timeline.timeMap,
-                                          avoid: avoid)).sorted { $0.start < $1.start }
+        return (manual + ZoomPlanner.planSegments(events: events, ax: ax, typing: [], activity: [],
+                                                   src: source, p: timeline.camera, tm: timeline.timeMap,
+                                                   avoid: avoid)).sorted { $0.start < $1.start }
     }
 
     /// Pure and deterministic: same input, same Timeline. Replaces only .auto zoom/ramps; .manual survive.
@@ -115,6 +115,7 @@ public enum Director {
                                          cache: inout DeriveCache, cancelled: () -> Bool) -> Timeline? {
         var t = tl
         let src = input.source
+        var followPaths: [UUID: [(t: Double, c: SIMD2<Double>)]] = [:]
         if cancelled() { return nil }
         let digest = inputDigest(input)
         var tm = t.timeMap
@@ -142,7 +143,7 @@ public enum Director {
             let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
             let pkey = DeriveCache.PlanKey(camera: t.camera, signature: tm.sourceSignature, digest: digest,
                                            manual: manual, source: SIMD3(Double(src.width), Double(src.height), src.backingScale))
-            let planned: [ZoomSegment]
+            let planned: ZoomPlanner.ZoomPlan
             if cache.planKey == pkey, let cached = cache.plan {
                 planned = cached
             } else {
@@ -150,7 +151,10 @@ public enum Director {
                                            tm: tm, avoid: avoid)
                 cache.planKey = pkey; cache.plan = planned
             }
-            t.zoom = (manual + planned).sorted { $0.start < $1.start }
+            t.zoom = (manual + planned.segments).sorted { $0.start < $1.start }
+            // SMOOTHNESS: the caret paths travel with the plan and become the
+            // camera's continuous follow targets.
+            followPaths = planned.follow.mapValues { points in points.map { (tm.output(atSource: $0.t), $0.p) } }
         }
         if cancelled() { return nil }
         let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature)
@@ -165,7 +169,8 @@ public enum Director {
         if cancelled() { return nil }
         let size = SIMD2(Double(src.width), Double(src.height))
         guard let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size,
-                                           outDur: tm.outputDuration, loop: t.cursor.loop, cancelled: cancelled) else { return nil }
+                                           outDur: tm.outputDuration, loop: t.cursor.loop,
+                                           follow: followPaths, cancelled: cancelled) else { return nil }
         let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad,
                                              outDur: tm.outputDuration, clicks: clicks)
         let layoutSpans = LayoutSolver.spans(t, tm, hasWebcam: t.webcam != nil)

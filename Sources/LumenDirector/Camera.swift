@@ -10,6 +10,10 @@ enum CameraSolver {
         var focus: Focus
         var ease: Double
         var isAuto: Bool
+        /// SMOOTHNESS: continuous camera target path (source seconds, output
+        /// time, normalized centre). The camera follows it instead of being
+        /// retargeted every few hundred milliseconds.
+        var path: [(t: Double, c: SIMD2<Double>)] = []
     }
 
     private struct Move {
@@ -20,6 +24,10 @@ enum CameraSolver {
         var endVelocity = SIMD2<Double>.zero
         var endAcceleration = SIMD2<Double>.zero
         var followUntil: Double? = nil
+        var path: [(t: Double, c: SIMD2<Double>)] = []
+        /// The centre the camera holds at the end of the move; the follow path
+        /// starts from there so the transition is continuous.
+        var followSeed = SIMD2<Double>(repeating: 0.5)
     }
 
     private struct Channel {
@@ -67,6 +75,16 @@ enum CameraSolver {
     /// blocking the next one.
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams,
                       src: SIMD2<Double>, outDur: Double, loop: Double?, cancelled: () -> Bool) -> CameraTrack? {
+        solve(zoom: zoom, tm: tm, cursor: cursor, p: p, src: src, outDur: outDur, loop: loop,
+              follow: [:], cancelled: cancelled)
+    }
+
+    /// SMOOTHNESS: `follow` carries the continuous camera target paths (the
+    /// caret path of a typing scene). The camera glides along them instead of
+    /// being retargeted — and the scene split — every 0.45 s.
+    static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams,
+                      src: SIMD2<Double>, outDur: Double, loop: Double?,
+                      follow: [UUID: [(t: Double, c: SIMD2<Double>)]], cancelled: () -> Bool) -> CameraTrack? {
         _ = loop
         let rate = 240.0
         guard outDur.isFinite, outDur > 0, src.x.isFinite, src.y.isFinite, src.x > 0, src.y > 0 else {
@@ -95,8 +113,23 @@ enum CameraSolver {
                   segment.scale.isFinite, segment.scale > 1.001, start < outDur else { return nil }
             let rawEase = segment.easing?.omegaScale ?? 1
             let ease = max(rawEase.isFinite ? rawEase : 1, 0.2)
-            return Shot(start: start, off: off, logScale: log(min(segment.scale, 16)),
-                        focus: segment.focus, ease: ease, isAuto: segment.origin == .auto)
+            let logScale = log(min(segment.scale, 16))
+            // SMOOTHNESS: the caret path of a typing scene becomes a
+            // continuous camera target, in output time and with the same
+            // centre offset the fixed focus uses.
+            var path: [(t: Double, c: SIMD2<Double>)] = []
+            if let points = follow[segment.id], !points.isEmpty {
+                let offset = SIMD2(clamp(p.centerOffsetX, -0.25, 0.25), clamp(p.centerOffsetY, -0.25, 0.25))
+                let shift = offset * exp(-logScale)
+                path = points.compactMap { point in
+                    let out = tm.output(atSource: point.t)
+                    guard out.isFinite, point.c.x.isFinite, point.c.y.isFinite else { return nil }
+                    return (out, point.c - shift)
+                }
+                path.sort { $0.0 < $1.0 }
+            }
+            return Shot(start: start, off: off, logScale: logScale,
+                        focus: segment.focus, ease: ease, isAuto: segment.origin == .auto, path: path)
         }.sorted { $0.start < $1.start }
 
         let hasFollow = shots.contains { isFollow($0.focus) }
@@ -156,6 +189,42 @@ enum CameraSolver {
                     2 * (rightVelocity - leftVelocity) / (leftSpan + rightSpan))
         }
 
+        /// SMOOTHNESS: the camera holds its position until the target leaves
+        /// the dead zone, then trails it by exactly that margin. The result is
+        /// continuous in time — no step when the target moves.
+        func deadzoneFollow(c: SIMD2<Double>, point: SIMD2<Double>,
+                            halfView: SIMD2<Double>, dead: SIMD2<Double>) -> SIMD2<Double> {
+            var out = c
+            for k in 0..<2 {
+                let d = point[k] - c[k], lim = dead[k] * halfView[k]
+                if d > lim { out[k] = point[k] - lim } else if d < -lim { out[k] = point[k] + lim }
+            }
+            return out
+        }
+
+        /// Position and velocity of a continuous target path at an output time.
+        func pathState(_ path: [(t: Double, c: SIMD2<Double>)], at time: Double) -> (c: SIMD2<Double>, v: SIMD2<Double>) {
+            func sample(_ t: Double) -> SIMD2<Double> {
+                guard let first = path.first else { return SIMD2<Double>(repeating: 0.5) }
+                if t <= first.t { return first.c }
+                guard path.count > 1 else { return first.c }
+                let last = path[path.count - 1]
+                if t >= last.t { return last.c }
+                var lo = 0, hi = path.count - 1
+                while lo + 1 < hi {
+                    let mid = (lo + hi) / 2
+                    if path[mid].t <= t { lo = mid } else { hi = mid }
+                }
+                let span = path[hi].t - path[lo].t
+                let u = span > 1e-9 ? (t - path[lo].t) / span : 0
+                return path[lo].c + (path[hi].c - path[lo].c) * u
+            }
+            let c = sample(time)
+            let h = 1 / rate
+            let v = (sample(time + h) - sample(time - h)) / (2 * h)
+            return (c, v)
+        }
+
         var moves: [Move] = []
         var previousLogScale = 0.0
         var previousCenter = rest
@@ -189,10 +258,17 @@ enum CameraSolver {
                 let x = pathState(followX, at: end), y = pathState(followY, at: end)
                 endVelocity = SIMD2(x.v / margin, y.v / margin)
                 endAcceleration = SIMD2(x.a / margin, y.a / margin)
+            } else if !shot.path.isEmpty {
+                // SMOOTHNESS: a path scene ends where the caret was, so the
+                // pan channel keeps the caret's own velocity at the handover.
+                let margin = max(panMargin(logScale: shot.logScale), 1e-8)
+                let state = pathState(shot.path, at: end)
+                endVelocity = state.v / margin
             }
             moves.append(Move(start: start, duration: duration, logScale: shot.logScale, pan: endPan,
                               endVelocity: endVelocity, endAcceleration: endAcceleration,
-                              followUntil: isFollow(shot.focus) ? shot.off : nil))
+                              followUntil: (isFollow(shot.focus) || !shot.path.isEmpty) ? shot.off : nil,
+                              path: shot.path, followSeed: endCenter))
             lastStart = start
             previousIntentTime = shot.start
             previousLogScale = shot.logScale
@@ -213,6 +289,8 @@ enum CameraSolver {
         var scales = [Double](repeating: 0, count: n)
         var moveIndex = 0
         var followMove: Move?
+        /// The camera's current follow target (normalized centre).
+        var followTarget = SIMD2<Double>(repeating: 0.5)
 
         for sample in 0..<n {
             // SMOOTHNESS: a cancelled derive abandons the solve here instead
@@ -227,11 +305,21 @@ enum CameraSolver {
                 if let current = followMove, let until = current.followUntil,
                    move.start >= current.start + current.duration, move.start <= until + 1e-9 {
                     let margin = max(panMargin(logScale: current.logScale), 1e-8)
-                    let x = pathState(followX, at: move.start), y = pathState(followY, at: move.start)
-                    startX = (panCoordinate(for: SIMD2(x.x, 0.5), logScale: current.logScale).x,
-                              x.v / margin, x.a / margin)
-                    startY = (panCoordinate(for: SIMD2(0.5, y.x), logScale: current.logScale).y,
-                              y.v / margin, y.a / margin)
+                    if !current.path.isEmpty {
+                        // SMOOTHNESS: hand over from the caret path with the
+                        // caret's own position and velocity.
+                        let state = pathState(current.path, at: move.start)
+                        startX = (panCoordinate(for: SIMD2(state.c.x, 0.5), logScale: current.logScale).x,
+                                  state.v.x / margin, 0)
+                        startY = (panCoordinate(for: SIMD2(0.5, state.c.y), logScale: current.logScale).y,
+                                  state.v.y / margin, 0)
+                    } else {
+                        let x = pathState(followX, at: move.start), y = pathState(followY, at: move.start)
+                        startX = (panCoordinate(for: SIMD2(x.x, 0.5), logScale: current.logScale).x,
+                                  x.v / margin, x.a / margin)
+                        startY = (panCoordinate(for: SIMD2(0.5, y.x), logScale: current.logScale).y,
+                                  y.v / margin, y.a / margin)
+                    }
                 }
                 logScale.retarget(at: move.start, to: move.logScale, duration: move.duration)
                 panX.retarget(at: move.start, to: move.pan.x, duration: move.duration, start: startX,
@@ -239,6 +327,7 @@ enum CameraSolver {
                 panY.retarget(at: move.start, to: move.pan.y, duration: move.duration, start: startY,
                               endVelocity: move.endVelocity.y, endAcceleration: move.endAcceleration.y)
                 followMove = move.followUntil == nil ? nil : move
+                if !move.path.isEmpty { followTarget = move.followSeed }
             }
 
             let zoom = max(logScale.move.sample(time).x, 0)
@@ -246,7 +335,18 @@ enum CameraSolver {
             if let current = followMove, let until = current.followUntil,
                time >= current.start + current.duration, time < until {
                 let margin = max(panMargin(logScale: zoom), 1e-8)
-                pan = SIMD2((followX[sample] - 0.5) / margin, (followY[sample] - 0.5) / margin)
+                if !current.path.isEmpty {
+                    // SMOOTHNESS: follow the continuous target path with a
+                    // small dead zone, so the camera glides with the caret
+                    // instead of stepping to it every few hundred ms.
+                    let desired = pathState(current.path, at: time).c
+                    let halfView = SIMD2(0.5 / exp(zoom), 0.5 / exp(zoom))
+                    followTarget = deadzoneFollow(c: followTarget, point: desired,
+                                                  halfView: halfView, dead: SIMD2(0.01, 0.01))
+                    pan = SIMD2((followTarget.x - 0.5) / margin, (followTarget.y - 0.5) / margin)
+                } else {
+                    pan = SIMD2((followX[sample] - 0.5) / margin, (followY[sample] - 0.5) / margin)
+                }
             }
             pan = SIMD2(clamp(pan.x, -1, 1), clamp(pan.y, -1, 1))
             let margin = panMargin(logScale: zoom)

@@ -40,6 +40,17 @@ enum SpeedRamps {
 /// (never the centre of an element), one scene per burst, with a tight follow window.
 enum ZoomPlanner {
     struct PathPoint { var t: Double; var p: SIMD2<Double> }
+    /// A point of the camera's continuous target path: source seconds and the
+    /// normalized target centre the camera should be heading towards.
+    typealias FollowPoint = PathPoint
+    /// The plan and the continuous follow paths that belong to its segments.
+    /// SMOOTHNESS: the caret path is a continuous target for the camera, not a
+    /// series of retargets. Splitting the scene on every caret move made the
+    /// camera pulse; the paths travel with the plan instead.
+    struct ZoomPlan {
+        var segments: [ZoomSegment] = []
+        var follow: [UUID: [FollowPoint]] = [:]
+    }
     struct Intent {
         enum Kind { case click, typing }
         var kind: Kind
@@ -48,7 +59,7 @@ enum ZoomPlanner {
         var rect: CGRect? = nil                // click: verified AX element; typing: the field
         var path: [PathPoint] = []             // typing only: smoothed caret path
     }
-    private struct Open { var start: Double, scale: Double, c: SIMD2<Double> }
+    private struct Open { var start: Double, scale: Double, c: SIMD2<Double>; var path: [FollowPoint] = [] }
     private struct Fix { var t: Double; var p: SIMD2<Double>; var field: CGRect? }
 
     /// Same source-time window -> same id across replans.
@@ -147,13 +158,21 @@ enum ZoomPlanner {
 
     // MARK: Plan
 
+    /// Segments only — the old signature, kept for callers that do not need
+    /// the continuous follow paths.
+    static func planSegments(events: [InputEvent], ax: [AXFrame], typing: [TypingTrace], activity: [ActivityPoint],
+                              src: SourceInfo, p: CameraParams, tm: TimeMap, avoid: [ClosedRange<Double>]) -> [ZoomSegment] {
+        plan(events: events, ax: ax, typing: typing, activity: activity, src: src, p: p, tm: tm, avoid: avoid).segments
+    }
+
     static func plan(events: [InputEvent], ax: [AXFrame], typing: [TypingTrace], activity: [ActivityPoint],
-                     src: SourceInfo, p: CameraParams, tm: TimeMap, avoid: [ClosedRange<Double>]) -> [ZoomSegment] {
+                     src: SourceInfo, p: CameraParams, tm: TimeMap, avoid: [ClosedRange<Double>]) -> ZoomPlan {
         let W = Double(src.width), H = Double(src.height), b = max(src.backingScale, 1)
-        guard W > 0, H > 0 else { return [] }
+        guard W > 0, H > 0 else { return ZoomPlan() }
         if p.preset == .fixed {
-            return [ZoomSegment(id: stableID(tm.trimStart, tm.trimEnd), start: tm.trimStart, end: tm.trimEnd,
-                                scale: p.baseScale, focus: .follow, origin: .auto)]
+            let segment = ZoomSegment(id: stableID(tm.trimStart, tm.trimEnd), start: tm.trimStart, end: tm.trimEnd,
+                                      scale: p.baseScale, focus: .follow, origin: .auto)
+            return ZoomPlan(segments: [segment])
         }
         let sorted = events.sorted { $0.t < $1.t }
         func ok(_ t: Double) -> Bool { t.isFinite && t >= tm.trimStart + 0.3 && t <= tm.trimEnd - 0.8 && !tm.isCut(t) }
@@ -199,6 +218,7 @@ enum ZoomPlanner {
             let h = half(s); return SIMD2(clamp(c.x, h.x, W - h.x), clamp(c.y, h.y, H - h.y))
         }
         var shots: [ZoomSegment] = []
+        var followPaths: [UUID: [FollowPoint]] = [:]
         var cur: Open?
         var last = 0.0                                  // last activity in the open scene
         var prevScale: Double?
@@ -209,8 +229,10 @@ enum ZoomPlanner {
             guard let o = cur else { return }
             cur = nil
             guard end - o.start > minimumDuration, o.scale > 1.001 else { return }
-            shots.append(ZoomSegment(id: stableID(o.start, end), start: o.start, end: end, scale: o.scale,
+            let id = stableID(o.start, end)
+            shots.append(ZoomSegment(id: id, start: o.start, end: end, scale: o.scale,
                                      focus: .fixed(x: o.c.x / W, y: o.c.y / H), origin: .auto))
+            if !o.path.isEmpty { followPaths[id] = o.path }
         }
         func retarget(_ c: SIMD2<Double>, at t: Double, minMove: Double = 0.12, minimumDuration: Double = 0.2) {
             guard let o = cur else { return }
@@ -243,20 +265,17 @@ enum ZoomPlanner {
         func typingCenter(_ pt: SIMD2<Double>, _ s: Double) -> SIMD2<Double> {
             clampC(SIMD2(pt.x + 0.16 * half(s).x, pt.y), s)
         }
-        /// Tight follow window: the caret never gets to wander to the right/bottom edge.
+        /// SMOOTHNESS: the caret path is recorded as a continuous target for
+        /// the camera instead of retargeting (and splitting the scene) every
+        /// 0.45 s. The solver follows it with the same spring as everything
+        /// else, so the camera glides instead of pulsing.
         func follow(_ path: [PathPoint], from t0: Double) {
-            var lastMove = t0 - 1
+            guard var o = cur else { return }
             for s in path where s.t >= t0 && ok(s.t) {
-                guard let o = cur else { return }
-                let h = half(o.scale), d = (s.p - o.c) / h
-                let outside = d.x > 0.06 || d.x < -0.34 || abs(d.y) > 0.22
-                guard outside, s.t - lastMove >= 0.45 else { continue }
                 let target = typingCenter(s.p, o.scale)
-                let moved = (target - o.c) / h
-                guard hypot(moved.x, moved.y) >= 0.12 else { continue }  // clamped to the same view: nothing to do
-                retarget(target, at: s.t)
-                lastMove = s.t
+                o.path.append(FollowPoint(t: s.t, p: SIMD2(target.x / W, target.y / H)))
             }
+            cur = o
         }
         func chooseScale(_ i: Intent, prev: Double?) -> Double {
             var s: Double
@@ -312,9 +331,12 @@ enum ZoomPlanner {
         absorbKeepAlive(upTo: .infinity)
         close(at: min(last + hold, tm.trimEnd))
 
-        return shots.filter { s in
+        let kept = shots.filter { s in
             !avoid.contains { $0.lowerBound < s.end && $0.upperBound > s.start - p.leadIn } &&
             tm.output(atSource: s.end) - tm.output(atSource: s.start) > 0.02
         }
+        // Only the paths of segments that survived the filter travel on.
+        let ids = Set(kept.map(\.id))
+        return ZoomPlan(segments: kept, follow: followPaths.filter { ids.contains($0.key) })
     }
 }
