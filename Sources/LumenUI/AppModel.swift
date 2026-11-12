@@ -26,6 +26,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         let fps: Double
         let dropped: Int
         let unreadable: Bool
+        let appUsage: [RecordedAppUsage]
         /// Capture pixels, named the way a person would name the output.
         var output: String {
             guard width > 0 else { return "—" }
@@ -87,7 +88,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     /// deliver and a 120 fps project timeline.
     var maxFPS = 60
     var supportedFPS: [Int] { [24, 30, 60, 120] }
-    var windows: [(id: CGWindowID, name: String)] = []
+    var windows: [(id: CGWindowID, name: String, appID: String, appName: String)] = []
     var error: String?
     var stats: CaptureStats?
     let recordingMeter = RecordingMeter()
@@ -95,6 +96,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     public var onFinished: ((URL) -> Void)?
     public let library: URL
     private let session = RecordingSession()
+    private var appUsageRecorder: RecordingAppUsage?
     private var hud: HUDController?
     private var hotKey: HotKey?
     private var pauseHotKey: HotKey?
@@ -137,14 +139,15 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                               width: meta?.source.width ?? 0, height: meta?.source.height ?? 0,
                               fps: meta?.source.fps ?? 0,
                               dropped: meta?.droppedFrames ?? 0,
-                              unreadable: meta == nil || !FileManager.default.fileExists(atPath: u.appendingPathComponent("screen.mov").path))
+                              unreadable: meta == nil || !FileManager.default.fileExists(atPath: u.appendingPathComponent("screen.mov").path),
+                              appUsage: (try? JSONDecoder().decode([RecordedAppUsage].self, from: Data(contentsOf: u.appendingPathComponent("app-usage.json")))) ?? [])
                 }.sorted { $0.date > $1.date }
             }.value
             self.projects = rows
             self.recoverable = await Task.detached(priority: .userInitiated) { RecoveryScanner.scan(library: self.library) }.value
             let c = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
             self.windows = (c?.windows ?? []).filter { $0.isOnScreen && ($0.title?.isEmpty == false) && $0.owningApplication?.bundleIdentifier != Bundle.main.bundleIdentifier }
-                .map { ($0.windowID, "\($0.owningApplication?.applicationName ?? "") — \($0.title ?? "")") }
+                .map { ($0.windowID, "\($0.owningApplication?.applicationName ?? "") — \($0.title ?? "")", $0.owningApplication?.bundleIdentifier ?? "", $0.owningApplication?.applicationName ?? "") }
             if self.windowID == 0 { self.windowID = self.windows.first?.id ?? 0 }
         }
     }
@@ -260,6 +263,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         Task {
             await session.togglePause()
             paused = await session.isPaused
+            appUsageRecorder?.setPaused(paused)
         }
     }
 
@@ -398,6 +402,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             if case .countdown = phase {} else { return }
         }
         phase = .finishing; poll?.cancel()
+        _ = appUsageRecorder?.finish(); appUsageRecorder = nil
         Task {
             do {
                 let bundle = try await session.stop()
@@ -465,6 +470,10 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             if let hub = livePreviewController?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }, focus: { hub.focus($0, $1) }) }
             try await session.start()
             phase = .recording
+            let usage = RecordingAppUsage()
+            let selectedWindow = kind == .window ? windows.first(where: { $0.id == windowID }) : nil
+            usage.start(fixedApp: selectedWindow.map { (id: $0.appID, name: $0.appName) })
+            appUsageRecorder = usage
             hud?.showControls()
             poll = Task {
                 var nextStatus = ContinuousClock.now
@@ -485,6 +494,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     func stop() async {
         guard phase == .recording else { return }
         finalizeProgress = 0
+        let appUsage = appUsageRecorder?.finish() ?? []
+        appUsageRecorder = nil
         phase = .finishing; poll?.cancel()
         // HUD dismisses within 200 ms of the click (spec §3.2): close it now,
         // finalize in the background with "Finishing…" progress in Library.
@@ -493,6 +504,12 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             try await session.stopCapture()
             let b = try await session.finalize { [weak self] value in
                 Task { @MainActor [weak self] in self?.finalizeProgress = value }
+            }
+            do {
+                let data = try JSONEncoder().encode(appUsage)
+                try data.write(to: b.url.appendingPathComponent("app-usage.json"), options: .atomic)
+            } catch {
+                self.error = "Recording saved, but app activity could not be saved: \(error.localizedDescription)"
             }
             paused = false
             phase = .idle; refresh()
@@ -508,6 +525,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
 
     private func fail(_ e: Error) {
         poll?.cancel(); paused = false
+        _ = appUsageRecorder?.finish(); appUsageRecorder = nil
         hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
         restoreLibraryAfterFailure()
         phase = .idle; error = "Recording failed. \(e)"
