@@ -186,7 +186,10 @@ private struct HUDAction: View {
             .background(Capsule().fill(hovered ? Tok.surface : Tok.washStrong))
         }
         .buttonStyle(.plain)
-        .onHover { hovered = $0 }
+        .onHover { inside in
+            hovered = inside
+            if inside { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+        }
         .pointerStyle(.link)
         .animation(reduceMotion ? nil : (hovered ? Motion.hoverIn : Motion.hoverOut), value: hovered)
         .accessibilityLabel(title)
