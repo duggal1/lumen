@@ -79,8 +79,8 @@ enum Ramp {   // rest, dust, quiet, body, tip
         Color(light: 0x9A3412, dark: 0xFFA14D)]
     /// Recording activity. Zero activity is a gap, never a colour.
     static let heat: [Color] = [
-        Color(light: 0xFFEDD5, dark: 0x7C2D12), Color(light: 0xFDBA74, dark: 0xC2410C),
-        Color(light: 0xF05A00, dark: 0xFF6A00), Color(light: 0xBF3F00, dark: 0xFFA14D)]
+        Color(light: 0xF05A00, dark: 0xFF6A00), Color(light: 0xF9781F, dark: 0xFF8533),
+        Color(light: 0xFF903B, dark: 0xFFA14D), Color(light: 0xFFAD6B, dark: 0xFFC185)]
     static let o = orange
 }
 
