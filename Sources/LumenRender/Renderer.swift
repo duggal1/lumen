@@ -171,6 +171,19 @@ public final class Renderer: @unchecked Sendable {
     private var pResolve: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     private var personMatte: PersonMatteSequence?
     private let sem = DispatchSemaphore(value: 3)
+    /// SMOOTHNESS: preview drawables currently owned by us (cap 2 of the pool's 3).
+    private let inFlight = OSAllocatedUnfairLock<Int>(initialState: 0)
+    /// One-shot release of an in-flight drawable slot; `presented` normally wins,
+    /// the command-buffer completion is the fallback.
+    private final class FrameSlot: @unchecked Sendable {
+        private let released = OSAllocatedUnfairLock<Bool>(initialState: false)
+        private let count: OSAllocatedUnfairLock<Int>
+        init(count: OSAllocatedUnfairLock<Int>) { self.count = count }
+        func release() {
+            let once = released.withLock { s -> Bool in if s { return false }; s = true; return true }
+            if once { count.withLock { $0 -= 1 } }
+        }
+    }
     /// EMA of GPU seconds per motion-blur sample, used to size preview blur.
     private let perSample = OSAllocatedUnfairLock<Double>(initialState: 0)
     private var slot = 0
@@ -462,15 +475,33 @@ public final class Renderer: @unchecked Sendable {
 
     // MARK: Entry points
 
-    /// Preview: renders into the layer's next drawable. Never blocks: returns false when all 3 frames are in flight.
+    /// Preview: renders into the layer's next drawable. Never blocks: returns false when the drawable budget is used.
     /// `presentAt` lets the caller present on an exact host-clock instant, so a
     /// frame rendered one vsync ahead has a full frame of scheduling slack.
     @discardableResult
     public func draw(_ r: RenderRequest, to layer: CAMetalLayer, presentAt: Double? = nil) -> Bool {
-        guard let dr = layer.nextDrawable(), let cb = queue.makeCommandBuffer() else { return false }
-        guard encode(r, output: dr.texture, commandBuffer: cb, wait: false) else { return false }
+        // SMOOTHNESS: cap drawables in flight at two. `nextDrawable()` blocks
+        // once the pool (3) is exhausted, stalling the render thread behind the
+        // window server; dropping the frame is strictly cheaper.
+        guard inFlight.withLock({ n -> Bool in if n >= 2 { return false }; n += 1; return true }) else { return false }
+        guard let dr = layer.nextDrawable(), let cb = queue.makeCommandBuffer() else {
+            inFlight.withLock { $0 -= 1 }
+            return false
+        }
+        // SMOOTHNESS: render at the drawable's real size. The tick's size can be
+        // one resize behind the layer by the time the drawable arrives.
+        var req = r
+        req.canvas = SIMD2(dr.texture.width, dr.texture.height)
+        guard encode(req, output: dr.texture, commandBuffer: cb, wait: false) else {
+            inFlight.withLock { $0 -= 1 }
+            return false
+        }
         let stats = presentStats, expected = 1 / max(r.fps, 1)
-        dr.addPresentedHandler { d in stats.record(d.presentedTime, expected: expected) }
+        let slot = FrameSlot(count: inFlight)
+        dr.addPresentedHandler { d in slot.release(); stats.record(d.presentedTime, expected: expected) }
+        // Fallback release when presentation is skipped (encoding error, layer
+        // torn down mid-flight); the slot itself is one-shot.
+        cb.addCompletedHandler { _ in slot.release() }
         if let t = presentAt, t > CACurrentMediaTime() { cb.present(dr, atTime: t) } else { cb.present(dr) }
         cb.commit(); return true
     }
