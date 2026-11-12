@@ -3,12 +3,38 @@ import LumenCore
 import LumenProject
 
 enum CameraSolver {
-    private struct Shot { var on: Double, off: Double, lz: Double, focus: Focus, ease: Double }
-    private struct Spring {
-        var x: Double, v = 0.0
-        init(_ x: Double) { self.x = x }
-        mutating func step(to target: Double, omega: Double, dt: Double) {
-            springStep(&x, &v, target: target, omega: omega, dt: dt)
+    private struct Shot {
+        var start: Double
+        var off: Double
+        var logScale: Double
+        var focus: Focus
+        var ease: Double
+        var isAuto: Bool
+    }
+
+    private struct Move {
+        var start: Double
+        var duration: Double
+        var logScale: Double
+        var pan: SIMD2<Double>
+        var endVelocity = SIMD2<Double>.zero
+        var endAcceleration = SIMD2<Double>.zero
+        var followUntil: Double? = nil
+    }
+
+    private struct Channel {
+        var move: QuinticMove
+
+        init(_ value: Double) {
+            move = QuinticMove(t0: 0, T: 1, x0: value, v0: 0, a0: 0, x1: value)
+        }
+
+        mutating func retarget(at time: Double, to target: Double, duration: Double,
+                               start: (x: Double, v: Double, a: Double)? = nil,
+                               endVelocity: Double = 0, endAcceleration: Double = 0) {
+            let state = start ?? move.sample(time)
+            move = QuinticMove(t0: time, T: duration, x0: state.x, v0: state.v, a0: state.a,
+                               x1: target, v1: endVelocity, a1: endAcceleration)
         }
     }
 
@@ -30,90 +56,228 @@ enum CameraSolver {
         return zip(forward, backward).map { ($0 + $1) / 2 }
     }
 
-    static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams, src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
+    static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams,
+                      src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
         _ = loop
         let rate = 240.0
-        let n = max(Int(outDur * rate) + 1, 2), dt = 1 / rate
-        var tr = CameraTrack(count: n, rate: rate)
-        let omegaIn = p.omegaZoom
-        let omegaOut = p.omegaZoom * 0.85
-        let omegaPan = p.omegaPan
-
-        // Output-time shots. Auto shots activate the lead early; manual shots
-        // exactly where the user put them.
-        let shots: [Shot] = zoom.compactMap { z in
-            let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
-            guard b - a > 0.1, z.scale > 1.001, a < outDur else { return nil }
-            return Shot(on: a - (z.origin == .auto ? p.leadIn : 0), off: b, lz: log(min(z.scale, 16)),
-                        focus: z.focus, ease: z.easing?.omegaScale ?? 1)
-        }.sorted { $0.on < $1.on }
-
-        // .follow shots (manual only now) still need the dead-zone cursor path.
-        var fx: [Double] = [], fy: [Double] = []
-        if shots.contains(where: { if case .follow = $0.focus { true } else { false } }) {
-            let halfZone = clamp(p.deadZone, 0.05, 0.45) / 2.0
-            let followOmega = 1 / max(clamp(p.followDelay, 0, 0.5), 0.045)
-            let rawX = (0..<n).map { Double(cursor.x[min(Int(Double($0) * gridRate / rate), cursor.x.count - 1)]) / src.x }
-            let rawY = (0..<n).map { Double(cursor.y[min(Int(Double($0) * gridRate / rate), cursor.y.count - 1)]) / src.y }
-            fx = zeroPhaseSmooth(centredPlay(rawX, halfZone: halfZone), omega: followOmega, dt: dt)
-            fy = zeroPhaseSmooth(centredPlay(rawY, halfZone: halfZone), omega: followOmega, dt: dt)
+        guard outDur.isFinite, outDur > 0, src.x.isFinite, src.y.isFinite, src.x > 0, src.y > 0 else {
+            return CameraTrack(count: 2, rate: rate)
         }
-        func targetCenter(_ s: Shot, _ i: Int) -> SIMD2<Double> {
-            var c: SIMD2<Double>
-            switch s.focus {
-            case .fixed(let x, let y): c = SIMD2(x, y)
-            case .element(let x, let y, let w, let h): c = SIMD2(x + w / 2, y + h / 2)
-            case .follow: c = SIMD2(fx[min(i, fx.count - 1)], fy[min(i, fy.count - 1)])
-            }
-            c -= SIMD2(clamp(p.centerOffsetX, -0.25, 0.25), clamp(p.centerOffsetY, -0.25, 0.25)) * exp(-s.lz)
-            let h = 0.5 / exp(s.lz)
-            return SIMD2(clamp(c.x, h, 1 - h), clamp(c.y, h, 1 - h))      // pre-clamped to the TARGET view
+        let dt = 1 / rate
+        let n = max(Int(outDur * rate) + 1, 2)
+        var track = CameraTrack(count: n, rate: rate)
+        let zoomIn = max(p.omegaZoom.isFinite ? p.omegaZoom : 1, 1)
+        let zoomOut = zoomIn * 0.85
+        let panOmega = max(p.omegaPan.isFinite ? p.omegaPan : 1, 1)
+        let rest = SIMD2<Double>(repeating: 0.5)
+
+        func index(_ time: Double) -> Int {
+            min(max(Int((time * rate).rounded()), 0), n - 1)
+        }
+        func isFollow(_ focus: Focus) -> Bool {
+            if case .follow = focus { return true }
+            return false
         }
 
-        var cz = Spring(0), cx = Spring(0.5), cy = Spring(0.5)
-        var si = -1, omega = omegaIn, lastLz = 0.0
-        var X = [Double](repeating: 0.5, count: n), Y = X, Z = [Double](repeating: 0, count: n)
-        for i in 0..<n {
-            let t = Double(i) * dt
-            while si + 1 < shots.count, shots[si + 1].on <= t {           // latest shot wins; contiguous shots = pan, no rest in between
-                si += 1
-                let lz = shots[si].lz
-                omega = (lz < lastLz - 1e-4 ? omegaOut : omegaIn) * shots[si].ease
-                lastLz = lz
+        let shots: [Shot] = zoom.compactMap { segment in
+            let start = tm.output(atSource: segment.start)
+            let off = tm.output(atSource: segment.end)
+            guard start.isFinite, off.isFinite, off - start > 0.1,
+                  segment.scale.isFinite, segment.scale > 1.001, start < outDur else { return nil }
+            let rawEase = segment.easing?.omegaScale ?? 1
+            let ease = max(rawEase.isFinite ? rawEase : 1, 0.2)
+            return Shot(start: start, off: off, logScale: log(min(segment.scale, 16)),
+                        focus: segment.focus, ease: ease, isAuto: segment.origin == .auto)
+        }.sorted { $0.start < $1.start }
+
+        let hasFollow = shots.contains { isFollow($0.focus) }
+        var followX = [Double](repeating: 0.5, count: n)
+        var followY = followX
+        let cursorCount = min(cursor.x.count, cursor.y.count)
+        if hasFollow, cursorCount > 0 {
+            let halfZone = clamp(p.deadZone.isFinite ? p.deadZone : 0.28, 0.05, 0.45) / 2
+            let followOmega = 1 / max(clamp(p.followDelay.isFinite ? p.followDelay : 0.12, 0, 0.5), 0.045)
+            let rawX = (0..<n).map { i in
+                let cursorIndex = min(Int(Double(i) * gridRate / rate), cursorCount - 1)
+                return Double(cursor.x[cursorIndex]) / src.x
             }
-            var tlz = 0.0, tc = SIMD2(0.5, 0.5)
-            if si >= 0, t < shots[si].off { tlz = shots[si].lz; tc = targetCenter(shots[si], i) }
-            else if lastLz != 0 { omega = omegaOut; lastLz = 0 }          // rest: zoom back out, slowly
-            cx.step(to: tc.x, omega: omegaPan, dt: dt); cy.step(to: tc.y, omega: omegaPan, dt: dt); cz.step(to: tlz, omega: omega, dt: dt)
-            let h = 0.5 / exp(cz.x)
-            X[i] = clamp(cx.x, h, 1 - h); Y[i] = clamp(cy.x, h, 1 - h); Z[i] = cz.x   // safety clamp only
-        }
-        func deriv(_ a: [Double]) -> [Float] {
-            var v = [Float](repeating: 0, count: a.count)
-            if a.count > 2 {
-                for i in 1..<(a.count - 1) { v[i] = Float((a[i + 1] - a[i - 1]) * rate / 2) }
-                v[0] = v[1]; v[a.count - 1] = v[a.count - 2]
+            let rawY = (0..<n).map { i in
+                let cursorIndex = min(Int(Double(i) * gridRate / rate), cursorCount - 1)
+                return Double(cursor.y[cursorIndex]) / src.y
             }
-            return v
+            followX = zeroPhaseSmooth(centredPlay(rawX, halfZone: halfZone), omega: followOmega, dt: dt)
+            followY = zeroPhaseSmooth(centredPlay(rawY, halfZone: halfZone), omega: followOmega, dt: dt)
         }
-        tr.nx = X.map { Float($0) }; tr.ny = Y.map { Float($0) }; tr.lz = Z.map { Float($0) }
-        tr.vx = deriv(X); tr.vy = deriv(Y); tr.vz = deriv(Z)
-        var yaw = p.tilt == .reveal ? 12.0 : 0.0, yawV = 0.0, pitch = 0.0, pitchV = 0.0
-        func phase(_ k: Int) -> Double { Double((p.tiltSeed >> UInt64(k * 8)) & 255) / 255 * 2 * .pi }
-        for i in 0..<n {
-            let t = Double(i) * dt, z = exp(Z[i])
-            var yT = 0.0, pT = 0.0
+
+        func targetCenter(_ shot: Shot, at sample: Int) -> SIMD2<Double> {
+            var center: SIMD2<Double>
+            switch shot.focus {
+            case .fixed(let x, let y): center = SIMD2(x, y)
+            case .element(let x, let y, let width, let height): center = SIMD2(x + width / 2, y + height / 2)
+            case .follow: center = SIMD2(followX[sample], followY[sample])
+            }
+            let offset = SIMD2(clamp(p.centerOffsetX, -0.25, 0.25), clamp(p.centerOffsetY, -0.25, 0.25))
+            center -= offset * exp(-shot.logScale)
+            let half = 0.5 / exp(shot.logScale)
+            return SIMD2(clamp(center.x, half, 1 - half), clamp(center.y, half, 1 - half))
+        }
+
+        func panCoordinate(for center: SIMD2<Double>, logScale: Double) -> SIMD2<Double> {
+            let margin = max(0.5 - 0.5 * exp(-max(logScale, 0)), 1e-8)
+            let pan = (center - rest) / margin
+            return SIMD2(clamp(pan.x, -1, 1), clamp(pan.y, -1, 1))
+        }
+
+        func pathState(_ values: [Double], at time: Double) -> (x: Double, v: Double, a: Double) {
+            guard !values.isEmpty else { return (0.5, 0, 0) }
+            let lastTime = Double(values.count - 1) * dt
+            func value(at sampleTime: Double) -> Double {
+                let frame = clamp(sampleTime, 0, lastTime) * rate
+                let low = min(Int(frame), values.count - 1)
+                let high = min(low + 1, values.count - 1)
+                return lerp(values[low], values[high], frame - Double(low))
+            }
+            let t = clamp(time, 0, lastTime)
+            let before = max(t - dt, 0)
+            let after = min(t + dt, lastTime)
+            let x = value(at: t)
+            guard before < t, after > t else { return (x, 0, 0) }
+            let leftSpan = t - before, rightSpan = after - t
+            let leftVelocity = (x - value(at: before)) / leftSpan
+            let rightVelocity = (value(at: after) - x) / rightSpan
+            return (x, (value(at: after) - value(at: before)) / (leftSpan + rightSpan),
+                    2 * (rightVelocity - leftVelocity) / (leftSpan + rightSpan))
+        }
+
+        var moves: [Move] = []
+        var previousLogScale = 0.0
+        var previousCenter = rest
+        var lastStart = -Double.infinity
+        for shot in shots {
+            let estimate = targetCenter(shot, at: index(shot.start))
+            let scaleChange = abs(shot.logScale - previousLogScale)
+            let panDistance = hypot(estimate.x - previousCenter.x, estimate.y - previousCenter.y)
+                * exp(max(shot.logScale, previousLogScale))
+            let panDuration = min(max((0.35 + 0.9 * panDistance) * (7 / panOmega) / shot.ease, 0.30), 1.2)
+            let duration = scaleChange > 0.03
+                ? max(5.5 / (zoomIn * shot.ease), 0.6 * panDuration)
+                : panDuration
+            let start = max(shot.isAuto
+                            ? shot.start - max(p.leadIn.isFinite ? p.leadIn : 0.6, duration - 0.06)
+                            : shot.start,
+                            lastStart + 0.02)
+            let end = start + duration
+            let endCenter = targetCenter(shot, at: index(end))
+            let endPan = panCoordinate(for: endCenter, logScale: shot.logScale)
+            var endVelocity = SIMD2<Double>.zero
+            var endAcceleration = SIMD2<Double>.zero
+            if isFollow(shot.focus) {
+                let margin = max(0.5 - 0.5 * exp(-shot.logScale), 1e-8)
+                let x = pathState(followX, at: end), y = pathState(followY, at: end)
+                endVelocity = SIMD2(x.v / margin, y.v / margin)
+                endAcceleration = SIMD2(x.a / margin, y.a / margin)
+            }
+            moves.append(Move(start: start, duration: duration, logScale: shot.logScale, pan: endPan,
+                              endVelocity: endVelocity, endAcceleration: endAcceleration,
+                              followUntil: isFollow(shot.focus) ? shot.off : nil))
+            lastStart = start
+            previousLogScale = shot.logScale
+            previousCenter = endCenter
+        }
+
+        let entries = moves
+        for (index, shot) in shots.enumerated() {
+            if index + 1 < entries.count, entries[index + 1].start <= shot.off + 1e-3 { continue }
+            moves.append(Move(start: shot.off, duration: 6.5 / (zoomOut * shot.ease), logScale: 0, pan: .zero))
+        }
+        moves.sort { $0.start < $1.start }
+
+        var logScale = Channel(0)
+        var panX = Channel(0), panY = Channel(0)
+        var centersX = [Double](repeating: 0.5, count: n)
+        var centersY = centersX
+        var scales = [Double](repeating: 0, count: n)
+        var moveIndex = 0
+        var followMove: Move?
+
+        for sample in 0..<n {
+            let time = Double(sample) * dt
+            while moveIndex < moves.count, moves[moveIndex].start <= time {
+                let move = moves[moveIndex]
+                moveIndex += 1
+                var startX: (x: Double, v: Double, a: Double)?
+                var startY: (x: Double, v: Double, a: Double)?
+                if let current = followMove, let until = current.followUntil,
+                   move.start >= current.start + current.duration, move.start <= until + 1e-9 {
+                    let margin = max(0.5 - 0.5 * exp(-current.logScale), 1e-8)
+                    let x = pathState(followX, at: move.start), y = pathState(followY, at: move.start)
+                    startX = (panCoordinate(for: SIMD2(x.x, 0.5), logScale: current.logScale).x,
+                              x.v / margin, x.a / margin)
+                    startY = (panCoordinate(for: SIMD2(0.5, y.x), logScale: current.logScale).y,
+                              y.v / margin, y.a / margin)
+                }
+                logScale.retarget(at: move.start, to: move.logScale, duration: move.duration)
+                panX.retarget(at: move.start, to: move.pan.x, duration: move.duration, start: startX,
+                              endVelocity: move.endVelocity.x, endAcceleration: move.endAcceleration.x)
+                panY.retarget(at: move.start, to: move.pan.y, duration: move.duration, start: startY,
+                              endVelocity: move.endVelocity.y, endAcceleration: move.endAcceleration.y)
+                followMove = move.followUntil == nil ? nil : move
+            }
+
+            let zoom = max(logScale.move.sample(time).x, 0)
+            var pan = SIMD2(panX.move.sample(time).x, panY.move.sample(time).x)
+            if let current = followMove, let until = current.followUntil,
+               time >= current.start + current.duration, time < until {
+                let margin = max(0.5 - 0.5 * exp(-zoom), 1e-8)
+                pan = SIMD2((followX[sample] - 0.5) / margin, (followY[sample] - 0.5) / margin)
+            }
+            pan = SIMD2(clamp(pan.x, -1, 1), clamp(pan.y, -1, 1))
+            let margin = 0.5 - 0.5 * exp(-zoom)
+            centersX[sample] = 0.5 + pan.x * margin
+            centersY[sample] = 0.5 + pan.y * margin
+            scales[sample] = zoom
+        }
+
+        func derivative(_ values: [Double]) -> [Float] {
+            var result = [Float](repeating: 0, count: values.count)
+            if values.count > 2 {
+                for i in 1..<(values.count - 1) { result[i] = Float((values[i + 1] - values[i - 1]) * rate / 2) }
+                result[0] = result[1]
+                result[values.count - 1] = result[values.count - 2]
+            }
+            return result
+        }
+
+        track.nx = centersX.map(Float.init)
+        track.ny = centersY.map(Float.init)
+        track.lz = scales.map(Float.init)
+        track.vx = derivative(centersX)
+        track.vy = derivative(centersY)
+        track.vz = derivative(scales)
+
+        var yaw = p.tilt == .reveal ? 12.0 : 0.0, yawVelocity = 0.0
+        var pitch = 0.0, pitchVelocity = 0.0
+        func phase(_ channel: Int) -> Double {
+            Double((p.tiltSeed >> UInt64(channel * 8)) & 255) / 255 * 2 * .pi
+        }
+        for sample in 0..<n {
+            let time = Double(sample) * dt
+            let scale = exp(scales[sample])
+            var yawTarget = 0.0, pitchTarget = 0.0
             switch p.tilt {
-            case .lean: yT = clamp(Double(tr.vx[i]) * z * 12, -p.maxYaw, p.maxYaw); pT = clamp(-Double(tr.vy[i]) * z * 9, -p.maxPitch, p.maxPitch)
+            case .lean:
+                yawTarget = clamp(Double(track.vx[sample]) * scale * 12, -p.maxYaw, p.maxYaw)
+                pitchTarget = clamp(-Double(track.vy[sample]) * scale * 9, -p.maxPitch, p.maxPitch)
             case .float:
-                yT = p.floatDeg * (0.6 * sin(2 * .pi * 0.11 * t + phase(0)) + 0.4 * sin(2 * .pi * 0.07 * t + phase(1)))
-                pT = p.floatDeg * (0.6 * sin(2 * .pi * 0.09 * t + phase(2)) + 0.4 * sin(2 * .pi * 0.05 * t + phase(3)))
+                yawTarget = p.floatDeg * (0.6 * sin(2 * .pi * 0.11 * time + phase(0)) + 0.4 * sin(2 * .pi * 0.07 * time + phase(1)))
+                pitchTarget = p.floatDeg * (0.6 * sin(2 * .pi * 0.09 * time + phase(2)) + 0.4 * sin(2 * .pi * 0.05 * time + phase(3)))
             case .reveal, .off: break
             }
-            springStep(&yaw, &yawV, target: yT, omega: p.omegaTilt, dt: dt)
-            springStep(&pitch, &pitchV, target: pT, omega: p.omegaTilt, dt: dt)
-            tr.yaw[i] = Float(yaw); tr.pitch[i] = Float(pitch)
+            springStep(&yaw, &yawVelocity, target: yawTarget, omega: p.omegaTilt, dt: dt)
+            springStep(&pitch, &pitchVelocity, target: pitchTarget, omega: p.omegaTilt, dt: dt)
+            track.yaw[sample] = Float(yaw)
+            track.pitch[sample] = Float(pitch)
         }
-        return tr
+        return track
     }
 }
