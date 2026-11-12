@@ -41,7 +41,7 @@ private final class VsyncClock: @unchecked Sendable {
 
 /// Main thread writes; the display-link thread only reads. Nothing on the hot
 /// path touches main-actor state, so a busy main thread cannot starve it.
-private final class PreviewShared: @unchecked Sendable {
+final class PreviewShared: @unchecked Sendable {
     private struct S {
         var pointerTarget = SIMD3<Double>(0.5, 0.5, 0)
         var drawable = CGSize(width: 2, height: 2)
@@ -164,7 +164,9 @@ struct PreviewView: NSViewRepresentable {
     init(model: EditorModel) {
         self.model = model
         let ml = CAMetalLayer(); metal = ml
-        let sh = PreviewShared(), vc = VsyncClock()
+        // The shared state is owned by the model: the export flag is written
+        // there, the pointer and the drawable size here.
+        let sh = model.previewShared, vc = VsyncClock()
         shared = sh; vsync = vc
         let (stream, continuation) = AsyncStream<Tick>.makeStream(bufferingPolicy: .bufferingNewest(1))
         feed = continuation

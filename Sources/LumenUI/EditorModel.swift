@@ -73,6 +73,10 @@ enum TimelineSelection: Equatable {
 @MainActor @Observable final class EditorModel {
     enum ExportState: Equatable { case idle, running(Double), done(URL), failed(String) }
     let session: ProjectSession, renderer: Renderer, box: TimelineBox, clock = PlaybackClock()
+    /// SMOOTHNESS: the preview's shared state lives on the model, so the
+    /// export flag reaches the display-link thread without going through
+    /// @Observable (which would invalidate the whole editor).
+    let previewShared = PreviewShared()
     private(set) var timeline: Timeline
     var playhead = 0.0
     enum TranscribeState: Equatable { case idle, running(Double), failed(String), notInstalled }
@@ -97,7 +101,9 @@ enum TimelineSelection: Equatable {
     var timelineFitRequest = 0
     var frameRate: Double { max(session.meta.source.fps, 1) }
     var frameDuration: Double { 1 / frameRate }
-    var exportState = ExportState.idle
+    var exportState = ExportState.idle {
+        didSet { previewShared.exportRunning = if case .running = exportState { true } else { false } }
+    }
     var exportSettings: ExportSettings
     var exportSeparateStems = UserDefaults.standard.bool(forKey: "lumen.export.separateWavStems")
     var exportPanelRequest = 0
