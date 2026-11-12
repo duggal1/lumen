@@ -12,7 +12,7 @@ public enum SchemaGenerator {
         var properties: [String: JSONValue] = [:]
         for child in Mirror(reflecting: sample).children {
             guard let name = child.label else { continue }
-            properties[name] = schema(forValue: child.value)
+            properties[Self.snakeCase(name)] = schema(forValue: child.value)
         }
         return .object([
             "type": .string("object"),
@@ -20,6 +20,22 @@ public enum SchemaGenerator {
             "required": .array(required.map { .string($0) }),
             "additionalProperties": .bool(false),
         ])
+    }
+
+    /// Tool arguments use snake_case, the way an agent writes them.
+    public static func snakeCase(_ name: String) -> String {
+        var out = ""
+        for (index, character) in name.enumerated() {
+            if character.isUppercase {
+                if index > 0 && !name[name.index(before: name.index(name.startIndex, offsetBy: index))].isUppercase {
+                    out.append("_")
+                }
+                out.append(Character(character.lowercased()))
+            } else {
+                out.append(character)
+            }
+        }
+        return out
     }
 
     /// Maps a runtime value to a JSON Schema fragment.
@@ -55,7 +71,7 @@ public enum SchemaGenerator {
             var properties: [String: JSONValue] = [:]
             for child in mirror.children {
                 guard let key = child.label else { continue }
-                properties[key] = schema(forValue: child.value)
+                properties[Self.snakeCase(key)] = schema(forValue: child.value)
             }
             return .object([
                 "type": .string("object"),

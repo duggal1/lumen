@@ -36,6 +36,11 @@ if pgrep -x Lumen >/dev/null; then
 fi
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_dir/Lumen" "$app/Contents/MacOS/Lumen"
+# The agent CLI lives inside the app bundle so an MCP client can use
+# /Applications/Lumen.app/Contents/MacOS/lumen-cli as its command.
+if [ -x "$bin_dir/lumen-cli" ]; then
+  cp "$bin_dir/lumen-cli" "$app/Contents/MacOS/lumen-cli"
+fi
 cp App/Info.plist "$app/Contents/Info.plist"
 # The native app must ship the MP3 assets it actually plays. They are not
 # synthesized and are resolved from Contents/Resources/Audio at runtime.

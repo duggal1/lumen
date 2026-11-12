@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import ScreenCaptureKit
 import LumenCore
 import LumenProject
 import LumenCapture
@@ -37,7 +38,13 @@ extension AppModel: LumenRuntime {
 
     public func startRecording(_ target: RecordingTarget, options: RecordingOptions) async throws {
         guard phase == .idle else { throw RuntimeFailure("A recording is already running.") }
-        agentTarget = target
+        var resolved = target
+        // Resolve the window now: the agent may have launched the app after
+        // the library last refreshed its window list.
+        if resolved.kind == .window, resolved.windowID == nil, let bundleID = resolved.bundleID {
+            resolved.windowID = await Self.windowID(bundleID: bundleID)
+        }
+        agentTarget = resolved
         agentOptions = options
         pendingMarkers = []
         await start()
@@ -71,6 +78,14 @@ extension AppModel: LumenRuntime {
     public func addMarker(_ marker: CaptureMarker) async throws {
         guard phase == .recording else { throw RuntimeFailure("No recording is running.") }
         pendingMarkers.append(marker)
+    }
+
+    /// The window id of an application's frontmost on-screen window.
+    static func windowID(bundleID: String) async -> UInt32? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true) else {
+            return nil
+        }
+        return content.windows.first { $0.owningApplication?.bundleIdentifier == bundleID }?.windowID
     }
 
     public func activeRecordingBundle() async -> URL? { lastProjectURL }
