@@ -113,6 +113,39 @@ public struct RecordingJournal: Codable, Sendable {
         self.pauseIntervals = pauseIntervals; self.lastFramePTS = lastFramePTS
         self.firstFramePTS = firstFramePTS; self.droppedFrames = droppedFrames
     }
+
+    func validate() throws {
+        guard schemaVersion == 1 else { throw RecoveryJournalError.unsupportedVersion(schemaVersion) }
+        guard started.timeIntervalSince1970.isFinite, updated.timeIntervalSince1970.isFinite else {
+            throw RecoveryJournalError.invalidValue("journal timestamps")
+        }
+        guard fps.isFinite, fps > 0, source.fps.isFinite, source.fps > 0,
+              source.width > 0, source.height > 0, source.backingScale.isFinite,
+              source.backingScale > 0, source.originX.isFinite, source.originY.isFinite,
+              source.duration.isFinite else {
+            throw RecoveryJournalError.invalidValue("capture format")
+        }
+        guard lastFramePTS.isFinite, lastFramePTS >= 0,
+              firstFramePTS.map({ $0.isFinite && $0 >= 0 && $0 <= lastFramePTS }) ?? true,
+              droppedFrames >= 0 else {
+            throw RecoveryJournalError.invalidValue("frame checkpoint")
+        }
+        guard pauseIntervals.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.end >= $0.start }) else {
+            throw RecoveryJournalError.invalidValue("pause intervals")
+        }
+    }
+}
+
+public enum RecoveryJournalError: LocalizedError {
+    case unsupportedVersion(Int)
+    case invalidValue(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedVersion(let version): "Recovery journal version \(version) is not supported."
+        case .invalidValue(let field): "Recovery journal has invalid \(field)."
+        }
+    }
 }
 
 public extension ProjectBundle {
@@ -121,21 +154,40 @@ public extension ProjectBundle {
     var journalURL: URL { url.appendingPathComponent("recording.journal") }
     var isUnfinished: Bool { FileManager.default.fileExists(atPath: journalURL.path) }
 
-    func writeJournal(_ j: RecordingJournal) {
-        guard let data = try? JSONEncoder().encode(j) else { return }
-        try? data.write(to: journalURL, options: .atomic)
+    @discardableResult
+    func writeJournal(_ j: RecordingJournal) -> Result<Void, Error> {
+        Result {
+            try j.validate()
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(j).write(to: journalURL, options: .atomic)
+        }
     }
-    func readJournal() -> RecordingJournal? {
-        guard let data = try? Data(contentsOf: journalURL) else { return nil }
-        return try? JSONDecoder().decode(RecordingJournal.self, from: data)
+    func readJournal() throws -> RecordingJournal? {
+        guard FileManager.default.fileExists(atPath: journalURL.path) else { return nil }
+        let journal = try JSONDecoder().decode(RecordingJournal.self, from: Data(contentsOf: journalURL))
+        try journal.validate()
+        return journal
     }
-    func clearJournal() { try? FileManager.default.removeItem(at: journalURL) }
+    @discardableResult
+    func clearJournal() -> Result<Void, Error> {
+        Result {
+            guard FileManager.default.fileExists(atPath: journalURL.path) else { return }
+            try FileManager.default.removeItem(at: journalURL)
+        }
+    }
 
     /// Rebuilds a usable project from a crashed session. Returns nil when the
-    /// bundle never produced a decodable frame record.
+    /// bundle has no journal or the checkpoint contains no usable frames.
     @discardableResult
     func recoverFromJournal() throws -> ProjectFile? {
-        guard let j = readJournal() else { return nil }
+        guard isUnfinished else { return nil }
+        if let existing = try? load(), existing.meta.source.duration.isFinite,
+           existing.meta.source.duration > 0 {
+            try clearJournal().get()
+            return existing
+        }
+        guard let j = try readJournal() else { return nil }
         let origin = j.firstFramePTS ?? 0
         let duration = max(j.lastFramePTS - origin, 0)
         guard duration > 0.1 else { return nil }
@@ -147,11 +199,6 @@ public extension ProjectBundle {
         if j.mic, FileManager.default.fileExists(atPath: micURL.path) { meta.mic = TrackMeta(file: "mic.caf", startHostSeconds: origin) }
         if j.system, FileManager.default.fileExists(atPath: systemURL.path) { meta.system = TrackMeta(file: "system.caf", startHostSeconds: origin) }
         if j.webcam, FileManager.default.fileExists(atPath: webcamURL.path) { meta.webcam = TrackMeta(file: "webcam.mov", startHostSeconds: origin) }
-        if let prior = try? load() {
-            meta = prior.meta
-            meta.source.duration = duration
-            meta.droppedFrames = j.droppedFrames
-        }
         var tl = Timeline(duration: duration)
         // Paused spans carry no footage; replay them as cuts so recovered
         // projects match what a clean stop would have produced.
@@ -164,7 +211,7 @@ public extension ProjectBundle {
         guard meta.source.duration > 0, tl.timeMap.trimEnd > tl.timeMap.trimStart else { return nil }
         let file = ProjectFile(meta: meta, timeline: tl)
         try save(file)
-        clearJournal()
+        try clearJournal().get()
         return file
     }
 }
