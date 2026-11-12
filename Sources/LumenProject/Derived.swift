@@ -11,11 +11,15 @@ public struct CursorTrack: Sendable, Equatable {
 }
 public struct CameraTrack: Sendable, Equatable {
     public var rate: Double
-    public var nx: [Float], ny: [Float], lz: [Float], vx: [Float], vy: [Float], vz: [Float]
+    public var nx: [Float], ny: [Float], lz: [Float]
+    public var vx: [Float], vy: [Float], vz: [Float]
+    public var ax: [Float], ay: [Float], az: [Float]
     public var yaw: [Float], pitch: [Float]             // degrees
     public init(count: Int, rate: Double = gridRate) {
         self.rate = rate
-        nx = .init(repeating: 0.5, count: count); ny = nx; lz = .init(repeating: 0, count: count); vx = lz; vy = lz; vz = lz; yaw = lz; pitch = lz
+        nx = .init(repeating: 0.5, count: count); ny = nx; lz = .init(repeating: 0, count: count)
+        vx = .init(repeating: 0, count: count); vy = vx; vz = vx
+        ax = vx; ay = vx; az = vx; yaw = vx; pitch = vx
     }
 }
 public struct ClickFX: Sendable, Equatable {
