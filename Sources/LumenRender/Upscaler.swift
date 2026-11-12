@@ -54,6 +54,20 @@ public final class Upscaler {
         return SIMD4(Int32(x0), Int32(y0), Int32(w), Int32(hh))
     }
 
+    /// SMOOTHNESS: snap the crop to a coarse grid. The cache key then survives
+    /// a slow camera move, so the upscale is not rebuilt (and its buffers not
+    /// reallocated) on every frame of a zoom. The grid only grows the crop, so
+    /// the sampled content stays correct.
+    public static func quantize(_ region: SIMD4<Int32>, source: SIMD2<Double>, grid: Int32 = 64) -> SIMD4<Int32> {
+        let g = max(grid, 1)
+        let x0 = (region.x / g) * g, y0 = (region.y / g) * g
+        let x1 = min(Int32((Double(region.x + region.z) / Double(g)).rounded(.up)) * g, Int32(source.x))
+        let y1 = min(Int32((Double(region.y + region.w) / Double(g)).rounded(.up)) * g, Int32(source.y))
+        let w = max(min(x1 - x0, Int32(source.x) - x0), 8)
+        let h = max(min(y1 - y0, Int32(source.y) - y0), 8)
+        return SIMD4(max(x0, 0), max(y0, 0), w, h)
+    }
+
     public func upscale(_ cb: MTLCommandBuffer, source: MTLTexture, region: SIMD4<Int32>, factor: Int,
                         params p: UpscaleParams, frameID: UInt64) throws -> UpscaleResult {
         if let l = last, l.id == frameID, l.region == region, l.factor == factor { return l.result }
