@@ -112,9 +112,11 @@ struct Analyze: AsyncParsableCommand {
             "clicks": accuracy.clicks,
             "zoomedClicks": accuracy.zoomedClicks,
             "settled": accuracy.settled,
+            "centeredClicks": accuracy.centeredClicks,
             "insideMargin": accuracy.insideMargin,
             "medianExcessError": accuracy.medianExcessError,
             "maxExcessError": accuracy.maxExcessError,
+            "maxAxisCenterError": accuracy.maxAxisCenterError,
             "medianArrival": accuracy.medianArrival
         ] as [String: Any]
         summary["zoomSegments"] = zoomItems
