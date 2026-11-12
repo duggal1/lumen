@@ -76,13 +76,29 @@ private func tempDirectory() throws -> URL {
     let port = try #require(server.boundPort)
     #expect(port != 0)
 
-    let reply = try exchange(port: port, line: "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n")
-    #expect(reply.contains("\"protocolVersion\":\"2025-06-18\""))
+    // Every connection authenticates first: "localhost" is not an
+    // authorisation, so the server demands the shared agent token.
+    let token = AgentCredentials.token()
+    let replies = try exchange(port: port, lines: [
+        "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"lumen/auth\",\"params\":{\"token\":\"\(token)\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n",
+    ])
+    #expect(replies.count == 2)
+    #expect(replies.last?.contains("\"protocolVersion\":\"2025-06-18\"") == true)
+
+    // Without the token the server refuses to answer.
+    let denied = try exchange(port: port, line: "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n")
+    #expect(denied.contains("Unauthorized"))
 }
 
 /// Blocking loopback exchange. The server answers on the main actor, so the
 /// test deliberately stays off the main actor while waiting on `recv`.
 private func exchange(port: UInt16, line: String) throws -> String {
+    try exchange(port: port, lines: [line]).first ?? ""
+}
+
+/// One connection, several lines, one reply per line.
+private func exchange(port: UInt16, lines: [String]) throws -> [String] {
     let fd = socket(AF_INET, SOCK_STREAM, 0)
     guard fd >= 0 else { throw MCPError.socket("socket() failed") }
     defer { close(fd) }
@@ -100,16 +116,20 @@ private func exchange(port: UInt16, line: String) throws -> String {
     }
     guard connected == 0 else { throw MCPError.socket("connect() failed") }
 
-    var bytes = Array(line.utf8)
-    _ = bytes.withUnsafeBytes { send(fd, $0.baseAddress, $0.count, 0) }
+    var replies: [String] = []
     var buffer = [UInt8](repeating: 0, count: 4096)
-    var reply = Data()
-    while !reply.contains(0x0A) {
-        let n = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
-        guard n > 0 else { break }
-        reply.append(buffer, count: n)
+    for line in lines {
+        var bytes = Array(line.utf8)
+        _ = bytes.withUnsafeBytes { send(fd, $0.baseAddress, $0.count, 0) }
+        var reply = Data()
+        while !reply.contains(0x0A) {
+            let n = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
+            guard n > 0 else { break }
+            reply.append(buffer, count: n)
+        }
+        replies.append(String(decoding: reply, as: UTF8.self).trimmingCharacters(in: .newlines))
     }
-    return String(decoding: reply, as: UTF8.self).trimmingCharacters(in: .newlines)
+    return replies
 }
 
 @MainActor
