@@ -248,12 +248,27 @@ enum CameraSolver {
             return result
         }
 
+        func acceleration(_ values: [Double]) -> [Float] {
+            var result = [Float](repeating: 0, count: values.count)
+            if values.count > 2 {
+                for i in 1..<(values.count - 1) {
+                    result[i] = Float((values[i + 1] - 2 * values[i] + values[i - 1]) * rate * rate)
+                }
+                result[0] = result[1]
+                result[values.count - 1] = result[values.count - 2]
+            }
+            return result
+        }
+
         track.nx = centersX.map(Float.init)
         track.ny = centersY.map(Float.init)
         track.lz = scales.map(Float.init)
         track.vx = derivative(centersX)
         track.vy = derivative(centersY)
         track.vz = derivative(scales)
+        track.ax = acceleration(centersX)
+        track.ay = acceleration(centersY)
+        track.az = acceleration(scales)
 
         var yaw = p.tilt == .reveal ? 12.0 : 0.0, yawVelocity = 0.0
         var pitch = 0.0, pitchVelocity = 0.0
