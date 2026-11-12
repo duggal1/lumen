@@ -363,8 +363,10 @@ struct LibrarySurface: View {
         if app.kind == .window { return "The window's native pixels, capped at \(resolutionTitle(app.captureResolution))." }
         let p = capturePixels
         let mp = Double(p.w * p.h) / 1_000_000
-        let capped = app.captureResolution != .native
-        return "\(p.w) × \(p.h) · \(String(format: "%.1f", mp)) MP" + (capped ? " · source capped" : " · native")
+        let isCapped = Int(CGDisplayPixelsHigh(app.displayID)) > app.captureResolution.resolutionHeight
+        let under4K = app.captureResolution == .ultraHD && p.h < 2160
+        let detail = under4K ? " · native source below 4K" : (isCapped ? " · source capped" : " · native")
+        return "\(p.w) × \(p.h) · \(String(format: "%.1f", mp)) MP" + detail
     }
 
     private var qualityReadout: String {
