@@ -223,7 +223,7 @@ enum ZoomPlanner {
         func ensureVisible(_ pt: SIMD2<Double>, at t: Double) {          // clicks only
             guard let o = cur else { return }
             let d = (pt - o.c) / half(o.scale)
-            let zone = clamp(p.safeZone.isFinite ? p.safeZone : 0.25, 0.03, 0.25)
+            let zone = clamp(p.safeZone.isFinite ? p.safeZone : 0.03, 0.005, 0.03)
             guard abs(d.x) > zone || abs(d.y) > zone else { return }
             retarget(pt, at: t, minMove: 0.03)                           // click anchor is the exact pixel
         }
