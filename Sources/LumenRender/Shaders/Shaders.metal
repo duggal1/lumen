@@ -347,7 +347,7 @@ fragment float4 cursorFS(VO in [[stage_in]], constant CursorU &u [[buffer(0)]], 
 // no flat fill. Front radius eases out; amplitude decays (critically damped,
 // no overshoot). Center is the exact corrected click position from Part 1.
 struct RingU { float4 content; float4 color; float2 center; float radius; float progress; float cr; int mode;
-               float2 cam; float scale; float2 srcSize; };
+               float2 cam; float scale; float2 srcSize; float2 copyOrigin; };
 fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]],
                        texture2d<float> src [[texture(0)]]) {
     float p = clamp(u.progress, 0.0, 1.0), e = 1.0 - pow(1.0 - p, 3.0);
@@ -387,7 +387,7 @@ fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]],
         float band = exp(-xr * xr);
         float wave = sin(5.2 * (r - R) / bandW);
         float2 q = in.px - dir * (band * wave * 16.0 * fade);
-        float3 base = src.sample(linClamp, clamp(q / u.srcSize, 0.0, 1.0), level(0.0)).rgb;
+        float3 base = src.sample(linClamp, clamp((q - u.copyOrigin) / u.srcSize, 0.0, 1.0), level(0.0)).rgb;
         float crest = exp(-pow((r - R) / (bandW * 0.55), 2.0));
         float shade = exp(-pow((r - R - bandW * 0.75) / (bandW * 0.5), 2.0));
         // A lens edge reads as glass only if it has both a highlight and a

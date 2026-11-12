@@ -75,7 +75,7 @@ private struct ContentU {
     var upRegion: SIMD4<Float>; var upTexSize: SIMD2<Float>; var upFactor: Float; var upBlend: Float
 }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
-private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float> }
+private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float>; var copyOrigin: SIMD2<Float> }
 private struct SourceMaskGPU { var rect: SIMD4<Float>; var block: SIMD4<Float> }
 private struct WebU {
     var crop: SIMD4<Float>; var bubble: SIMD4<Float>
@@ -806,41 +806,61 @@ public final class Renderer: @unchecked Sendable {
         // would displace a secret out from under its mosaic. Copy the scene
         // once per frame (only while a click is on screen) and sample that.
         if tl.cursor.clickRing != nil, !st.clickFX.isEmpty {
+            let ringSize = min(max(tl.cursor.clickSize, 0.5), 2.0)
+            let R = 70 * g.ui * pow(sc, 0.5) * ringSize
+            let centers = st.clickFX.map { g.toCanvas(SIMD2(Double($0.position.x), Double($0.position.y)), cam: cam, scale: sc) }
             var ringSource: MTLTexture?
+            // SMOOTHNESS: copy only the union of the ring quads (plus the wave's
+            // displacement), not the whole canvas, once per frame.
+            var copyOrigin = SIMD2<Float>.zero
+            var copySize = SIMD2<Float>(Float(tex.width), Float(tex.height))
             if tl.cursor.clickEffect != .none, let cap = sceneCopyTexture(slot: slot, canvas: r.canvas) {
-                enc.endEncoding()
-                if let blit = cb.makeBlitCommandEncoder() {
-                    blit.copy(from: tex, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                              sourceSize: MTLSize(width: tex.width, height: tex.height, depth: 1),
-                              to: cap, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-                    blit.endEncoding()
+                let pad = 20.0
+                var x0 = Double.greatestFiniteMagnitude, y0 = x0
+                var x1 = -Double.greatestFiniteMagnitude, y1 = x1
+                for c in centers {
+                    x0 = min(x0, c.x - R - pad); y0 = min(y0, c.y - R - pad)
+                    x1 = max(x1, c.x + R + pad); y1 = max(y1, c.y + R + pad)
                 }
-                let rp = MTLRenderPassDescriptor()
-                rp.colorAttachments[0].texture = tex
-                rp.colorAttachments[0].loadAction = .load
-                rp.colorAttachments[0].storeAction = .store
-                if let reopened = cb.makeRenderCommandEncoder(descriptor: rp) {
-                    enc = reopened; ringSource = cap
+                let cx0 = max(Int(x0.rounded(.down)), 0), cy0 = max(Int(y0.rounded(.down)), 0)
+                let cx1 = min(Int(x1.rounded(.up)), tex.width), cy1 = min(Int(y1.rounded(.up)), tex.height)
+                if cx1 > cx0, cy1 > cy0 {
+                    enc.endEncoding()
+                    if let blit = cb.makeBlitCommandEncoder() {
+                        blit.copy(from: tex, sourceSlice: 0, sourceLevel: 0,
+                                  sourceOrigin: MTLOrigin(x: cx0, y: cy0, z: 0),
+                                  sourceSize: MTLSize(width: cx1 - cx0, height: cy1 - cy0, depth: 1),
+                                  to: cap, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+                        blit.endEncoding()
+                    }
+                    copyOrigin = SIMD2<Float>(Float(cx0), Float(cy0))
+                    copySize = SIMD2<Float>(Float(cx1 - cx0), Float(cy1 - cy0))
+                    let rp = MTLRenderPassDescriptor()
+                    rp.colorAttachments[0].texture = tex
+                    rp.colorAttachments[0].loadAction = .load
+                    rp.colorAttachments[0].storeAction = .store
+                    if let reopened = cb.makeRenderCommandEncoder(descriptor: rp) {
+                        enc = reopened; ringSource = cap
+                    }
                 }
             }
             enc.setRenderPipelineState(pRing)
-            let ringSize = min(max(tl.cursor.clickSize, 0.5), 2.0)
-            let R = 70 * g.ui * pow(sc, 0.5) * ringSize
             let ringAlpha = Float(min(max(tl.cursor.clickIntensity, 0), 1.5))
             let ringColor = SIMD4<Float>(tl.cursor.clickColor.r, tl.cursor.clickColor.g, tl.cursor.clickColor.b, tl.cursor.clickColor.a * ringAlpha)
-            for ring in st.clickFX {
-                let c = g.toCanvas(SIMD2<Double>(Double(ring.position.x), Double(ring.position.y)), cam: cam, scale: sc)
+            let mode: Int32 = switch tl.cursor.clickEffect {
+            case .none, .ripple: 0
+            case .pulse: 1
+            case .burst: 2
+            case .glass: 3
+            }
+            for (i, ring) in st.clickFX.enumerated() {
+                let c = centers[i]
                 quad(enc, SIMD4<Float>(Float(c.x - R), Float(c.y - R), Float(2 * R), Float(2 * R)), canvasF)
-                let mode: Int32 = switch tl.cursor.clickEffect {
-                case .none, .ripple: 0
-                case .pulse: 1
-                case .burst: 2
-                case .glass: 3
-                }
                 frag(enc, RingU(content: content, color: ringColor, center: SIMD2<Float>(c), radius: Float(R),
                               progress: ring.progress, cr: Float(g.radius), mode: mode,
                               cam: SIMD2<Float>(cam), scale: Float(sc),
-                              srcSize: ringSource != nil ? canvasF : SIMD2<Float>(g.src)))
+                              srcSize: ringSource != nil ? copySize : SIMD2<Float>(g.src),
+                              copyOrigin: copyOrigin))
                 enc.setFragmentTexture(ringSource ?? src, index: 0)
                 draw()
             }
