@@ -6,6 +6,24 @@ public func clamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double { min(max(v
 public func lerp(_ a: Double, _ b: Double, _ t: Double) -> Double { a + (b - a) * t }
 public func smoothstep(_ x: Double) -> Double { let t = clamp(x, 0, 1); return t * t * (3 - 2 * t) }
 
+// MARK: Pan space
+//
+// At log-scale `lz` the viewport half-size is `0.5/exp(lz)`, so the legal
+// centre range is `[0.5·exp(-lz), 1 - 0.5·exp(-lz)]`. Writing the centre as
+// `0.5 + p·margin` with `p ∈ [-1, 1]` keeps it inside the source for every
+// pan at every scale, so the renderer never has to clamp it — and a clamped
+// centre is only C0, which shows up as a jerk when the clamp engages.
+
+/// How far the centre may travel from the middle of the source at `lz`.
+public func panMargin(logScale lz: Double) -> Double { 0.5 - 0.5 / exp(max(lz, 0)) }
+
+/// The pan coordinate (-1...1) of a centre at a given log-scale.
+public func panPosition(center: SIMD2<Double>, logScale lz: Double) -> SIMD2<Double> {
+    let m = max(panMargin(logScale: lz), 1e-8)
+    let o = (center - SIMD2<Double>(repeating: 0.5)) / m
+    return SIMD2(clamp(o.x, -1, 1), clamp(o.y, -1, 1))
+}
+
 /// Exact critically damped step, stable at any dt. Pure function.
 public func springStep(_ x: inout Double, _ v: inout Double, target: Double, omega w: Double, dt: Double) {
     let d = x - target, e = exp(-w * dt)

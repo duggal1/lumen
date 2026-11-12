@@ -123,9 +123,7 @@ enum CameraSolver {
         }
 
         func panCoordinate(for center: SIMD2<Double>, logScale: Double) -> SIMD2<Double> {
-            let margin = max(0.5 - 0.5 * exp(-max(logScale, 0)), 1e-8)
-            let pan = (center - rest) / margin
-            return SIMD2(clamp(pan.x, -1, 1), clamp(pan.y, -1, 1))
+            panPosition(center: center, logScale: logScale)
         }
 
         func pathState(_ values: [Double], at time: Double) -> (x: Double, v: Double, a: Double) {
@@ -178,7 +176,7 @@ enum CameraSolver {
             var endVelocity = SIMD2<Double>.zero
             var endAcceleration = SIMD2<Double>.zero
             if isFollow(shot.focus) {
-                let margin = max(0.5 - 0.5 * exp(-shot.logScale), 1e-8)
+                let margin = max(panMargin(logScale: shot.logScale), 1e-8)
                 let x = pathState(followX, at: end), y = pathState(followY, at: end)
                 endVelocity = SIMD2(x.v / margin, y.v / margin)
                 endAcceleration = SIMD2(x.a / margin, y.a / margin)
@@ -216,7 +214,7 @@ enum CameraSolver {
                 var startY: (x: Double, v: Double, a: Double)?
                 if let current = followMove, let until = current.followUntil,
                    move.start >= current.start + current.duration, move.start <= until + 1e-9 {
-                    let margin = max(0.5 - 0.5 * exp(-current.logScale), 1e-8)
+                    let margin = max(panMargin(logScale: current.logScale), 1e-8)
                     let x = pathState(followX, at: move.start), y = pathState(followY, at: move.start)
                     startX = (panCoordinate(for: SIMD2(x.x, 0.5), logScale: current.logScale).x,
                               x.v / margin, x.a / margin)
@@ -235,11 +233,11 @@ enum CameraSolver {
             var pan = SIMD2(panX.move.sample(time).x, panY.move.sample(time).x)
             if let current = followMove, let until = current.followUntil,
                time >= current.start + current.duration, time < until {
-                let margin = max(0.5 - 0.5 * exp(-zoom), 1e-8)
+                let margin = max(panMargin(logScale: zoom), 1e-8)
                 pan = SIMD2((followX[sample] - 0.5) / margin, (followY[sample] - 0.5) / margin)
             }
             pan = SIMD2(clamp(pan.x, -1, 1), clamp(pan.y, -1, 1))
-            let margin = 0.5 - 0.5 * exp(-zoom)
+            let margin = panMargin(logScale: zoom)
             centersX[sample] = 0.5 + pan.x * margin
             centersY[sample] = 0.5 + pan.y * margin
             scales[sample] = zoom

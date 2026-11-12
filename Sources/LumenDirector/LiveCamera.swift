@@ -24,10 +24,10 @@ public struct LiveCamera: Sendable {
         press = Spring3(x: SIMD3(1, 0, 0))
     }
     private func norm(_ p: SIMD2<Double>) -> SIMD2<Double> { SIMD2(p.x / src.x, p.y / src.y) }
+    /// SMOOTHNESS: shared pan-space helper (LumenCore) — one definition of
+    /// how a centre maps to a pan coordinate.
     private func panPosition(for center: SIMD2<Double>, logScale: Double) -> SIMD2<Double> {
-        let margin = max(0.5 - 0.5 * exp(-max(logScale, 0)), 1e-8)
-        let offset = (center - SIMD2<Double>(repeating: 0.5)) / margin
-        return SIMD2(clamp(offset.x, -1, 1), clamp(offset.y, -1, 1))
+        LumenCore.panPosition(center: center, logScale: logScale)
     }
     public mutating func ingest(_ e: InputEvent, focus: AXFrame? = nil) {
         if e.hasPosition {

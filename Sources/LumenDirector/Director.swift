@@ -114,12 +114,25 @@ public enum Director {
                 .map { SFXCue(t: tm.output(atSource: $0.t), kind: .key, gainDb: 0, keyCode: $0.keyCode) }
         }
         if t.audio.whooshes {
-            for z in t.zoom {
-                let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
+            // SMOOTHNESS: one whoosh pair per SCENE, not per segment. A
+            // retarget produces abutting segments, and a whoosh-out right on
+            // top of a whoosh-in reads as a stutter in the middle of one
+            // continuous zoom.
+            var scenes: [(start: Double, end: Double, scale: Double)] = []
+            for z in t.zoom.sorted(by: { $0.start < $1.start }) {
+                if let last = scenes.last, z.start - last.end <= 0.05 {
+                    scenes[scenes.count - 1].end = max(last.end, z.end)
+                    scenes[scenes.count - 1].scale = max(last.scale, z.scale)
+                } else {
+                    scenes.append((z.start, z.end, z.scale))
+                }
+            }
+            for s in scenes {
+                let a = tm.output(atSource: s.start), b = tm.output(atSource: s.end)
                 guard b - a > 0.2 else { continue }
                 // Small zooms still need an audible whoosh: floor at -9 dB,
                 // rise gently with zoom magnitude, never above -2 dB.
-                let g = clamp(-9 + 5 * (z.scale - 1), -9, -2)
+                let g = clamp(-9 + 5 * (s.scale - 1), -9, -2)
                 cues.append(SFXCue(t: a, kind: .whooshIn, gainDb: g)); cues.append(SFXCue(t: b, kind: .whooshOut, gainDb: g))
             }
         }
