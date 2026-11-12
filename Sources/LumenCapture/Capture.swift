@@ -334,8 +334,13 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private let pauseMark = OSAllocatedUnfairLock<Double?>(initialState: nil)
     private let pauseLog = OSAllocatedUnfairLock<[PauseInterval]>(initialState: [])
     private let pausedTime = OSAllocatedUnfairLock<Double>(initialState: 0)
-    public private(set) var mic: CAFWriter?
-    public private(set) var system: CAFWriter?
+    // The audio writers are read from the ScreenCaptureKit callback thread
+    // and written from the session thread. A plain stored property is a data
+    // race there (it crashed the capture callback), so they are guarded.
+    private let micWriter = OSAllocatedUnfairLock<CAFWriter?>(initialState: nil)
+    private let systemWriter = OSAllocatedUnfairLock<CAFWriter?>(initialState: nil)
+    public var mic: CAFWriter? { micWriter.withLock { $0 } }
+    public var system: CAFWriter? { systemWriter.withLock { $0 } }
     public var info: SourceInfo? { sourceInfo.withLock { $0 } }
 
     public init(bundle: ProjectBundle) { self.bundle = bundle }
@@ -466,8 +471,8 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         writer = w; vin = vi
         adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: vi, sourcePixelBufferAttributes: nil)
         meta = try FrameMetaWriter(url: bundle.framesMetaURL)
-        if cfg.mic { mic = CAFWriter(url: bundle.micURL) }
-        if cfg.systemAudio { system = CAFWriter(url: bundle.systemURL) }
+        if cfg.mic { micWriter.withLock { $0 = CAFWriter(url: bundle.micURL) } }
+        if cfg.systemAudio { systemWriter.withLock { $0 = CAFWriter(url: bundle.systemURL) } }
         let configuredPoints = points
         let configuredInfo = SourceInfo(width: pw, height: ph, fps: Double(fps), duration: 0,
                                         backingScale: nativeScale * capFactor, originX: origin.x, originY: origin.y)
