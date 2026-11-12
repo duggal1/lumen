@@ -141,12 +141,29 @@ enum TimelineSelection: Equatable {
     private var playbackTask: Task<Void, Never>?
     private var wantsPlayback = false
     private let player = PreviewAudioPlayer()
+    /// Keeps the wallpaper URL in sync with the active desktop space.
+    private var spaceObserver: NSObjectProtocol?
 
     init(session: ProjectSession, renderer: Renderer, timeline: Timeline,
          exportSettings: ExportSettings, transcript: Transcript?) {
         self.session = session; self.renderer = renderer; self.timeline = timeline; box = TimelineBox(timeline)
         self.exportSettings = exportSettings
         renderer.setCustomCursors(session.cursors)
+        // SMOOTHNESS: a background image that finishes decoding off the
+        // render thread must trigger one more frame, otherwise the preview
+        // keeps showing the fallback colour until the next edit.
+        renderer.setOnAssetReady { [weak self] in
+            Task { @MainActor in self?.bumpRenderVersion() }
+        }
+        // SMOOTHNESS: AppKit is main-thread only, so the wallpaper URL is
+        // resolved here and handed to the renderer; the render thread only
+        // stats and decodes it.
+        renderer.refreshWallpaperURL(Renderer.resolveWallpaperURL())
+        spaceObserver = NotificationCenter.default.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: NSWorkspace.shared, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.renderer.refreshWallpaperURL(Renderer.resolveWallpaperURL()) }
+        }
         // Prepare the reusable neural result as soon as the editor opens.
         // The full timeline mix still waits for derived cues.
         let mixer = session.mixer, audioPlan = timeline.audio
@@ -157,6 +174,10 @@ enum TimelineSelection: Equatable {
         let p = player
         Task.detached(priority: .utility) { p.warm() }
     }
+
+    /// Republish the timeline to the preview. The render version changes, so
+    /// the next display-link tick draws the frame again.
+    func bumpRenderVersion() { box.set(timeline) }
 
     static func open(url: URL) async throws -> EditorModel {
         // Everything that touches disk or CPU for a project load happens in
@@ -1036,6 +1057,10 @@ enum TimelineSelection: Equatable {
         }
 
         exportState = .running(0)
+        // SMOOTHNESS: the export renderer is built off the main thread, so the
+        // wallpaper URL is resolved here and handed over; otherwise a
+        // wallpaper backdrop would export as a flat colour.
+        Renderer.primeWallpaper(Renderer.resolveWallpaperURL())
         let stemExportEnabled = exportSeparateStems && !clipboard && settings.kind == .video
         exportTask = Task { [weak self] in
             let report: @Sendable (ExportProgress) -> Void = { [weak self] pr in

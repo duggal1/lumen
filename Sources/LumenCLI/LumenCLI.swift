@@ -159,6 +159,9 @@ struct Render: AsyncParsableCommand {
             let typing = s.input.typing.count
             FileHandle.standardError.write(Data("analyze: \(typing) typing trace(s), \(tl.zoom.filter { $0.origin == .auto }.count) auto zoom segment(s)\n".utf8))
         }
+        // SMOOTHNESS: the wallpaper URL is resolved on the main thread
+        // (AppKit is main-thread only) and handed to the export renderer.
+        await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
         try await Exporter.run(session: s, timeline: tl, preset: p, to: URL(fileURLWithPath: out)) { pr in
             if let n = pr.notice, pr.frame == 1 { FileHandle.standardError.write(Data((n + "\n").utf8)) }
             if pr.frame % 30 == 0 || pr.frame == pr.total { print("\rframe \(pr.frame)/\(pr.total)", terminator: ""); fflush(stdout) }
@@ -175,6 +178,9 @@ struct Frame: AsyncParsableCommand {
     func run() async throws {
         let (s, tl) = try await openProject(project)
         let h = (Int((Double(width) / tl.style.aspectRatio).rounded()) + 1) & ~1
+        // SMOOTHNESS: the wallpaper URL is resolved on the main thread
+        // (AppKit is main-thread only) and handed to the renderer.
+        await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
         let r = try Renderer(); r.setCustomCursors(s.cursors)
         let pb = try await FrameImage.render(renderer: r, session: s, timeline: tl, t: t, canvas: SIMD2(width, h))
         try FrameImage.writePNG(pb, to: URL(fileURLWithPath: out)); print("wrote \(out)")

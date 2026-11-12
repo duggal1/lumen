@@ -329,7 +329,10 @@ public final class Renderer: @unchecked Sendable {
     /// AppKit is main-thread only. The wallpaper URL is resolved there and
     /// handed to whichever renderer draws next (preview and export share it).
     public static func resolveWallpaperURL() -> URL? {
-        guard let screen = NSScreen.main, let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
+        // NSScreen.main is the screen with the key window; without one (a
+        // command-line run) fall back to the first attached display.
+        guard let screen = NSScreen.main ?? NSScreen.screens.first,
+              let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
         return url
     }
     public static func primeWallpaper(_ url: URL? = nil) {

@@ -40,6 +40,9 @@ struct Golden: AsyncParsableCommand {
 
     func run() async throws {
         let (s, tl) = try await openProject(project)
+        // SMOOTHNESS: the wallpaper URL is resolved on the main thread
+        // (AppKit is main-thread only) and handed to the renderer.
+        await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
         let renderer = try Renderer()
         renderer.setCustomCursors(s.cursors)
         let directory = URL(fileURLWithPath: reference)
