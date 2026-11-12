@@ -82,7 +82,7 @@ enum CameraSolver {
         let shots: [Shot] = zoom.compactMap { segment in
             let start = tm.output(atSource: segment.start)
             let off = tm.output(atSource: segment.end)
-            guard start.isFinite, off.isFinite, off - start > 0.1,
+            guard start.isFinite, off.isFinite, off - start > 0.02,
                   segment.scale.isFinite, segment.scale > 1.001, start < outDur else { return nil }
             let rawEase = segment.easing?.omegaScale ?? 1
             let ease = max(rawEase.isFinite ? rawEase : 1, 0.2)
@@ -164,7 +164,7 @@ enum CameraSolver {
             let preferredDuration = scaleChange > 0.03
                 ? max(5.5 / (zoomIn * shot.ease), 0.6 * panDuration)
                 : panDuration
-            let earliestStart = max(lastStart + 0.02, (previousIntentTime ?? -Double.infinity) + arrivalLead)
+            let earliestStart = max(lastStart + 1 / rate, (previousIntentTime ?? -Double.infinity) + 1 / rate)
             let deadline = shot.start - arrivalLead
             let available = deadline - earliestStart
             let duration = shot.isAuto && available > 1e-3 ? min(preferredDuration, available) : preferredDuration
