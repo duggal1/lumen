@@ -48,6 +48,21 @@ The app icon is generated from `App/public/assets/brand/logo/lumen.svg`.
 Local builds use ad hoc signing by default. Set `CODE_SIGN_IDENTITY` to a stable
 local signing identity to preserve permission identity across rebuilds.
 
+## Agent control
+
+Lumen can be driven by an AI agent over MCP: launch the app, record it, edit
+the timeline, add audio, check the result and export — with no human in the
+UI. The agent talks to a headless daemon (the same signed app, no windows, no
+Dock icon) through a private socket, and every capability beyond reading is
+granted by a human first.
+
+```json
+{ "mcpServers": { "lumen": { "command": "/Applications/Lumen.app/Contents/MacOS/lumen-cli", "args": ["mcp"] } } }
+```
+
+See `Docs/agent-platform.md` for the tool catalog, the permission model, the
+demo-script DSL and the smoke test.
+
 ## Implementation and verification
 
 Capture, project storage, Director, Metal rendering, offline audio mixing,
@@ -77,5 +92,7 @@ build plan. Clean-machine permission checks need hardware verification. The CLI
 harness); music uses loop/trim crossfades without beat detection; mesh
 backgrounds are static. Photo backgrounds need an
 Unsplash access key and are cached under Application Support. Email
-notifications open a mailto draft, not SMTP. MCP control is localhost-only,
-opt-in, and has no authentication. The packaged build is not notarized.
+notifications open a mailto draft, not SMTP. The in-app MCP server is
+localhost-only and opt-in, and now requires the shared agent token
+(`~/Library/Application Support/Lumen/agent-token`, mode 0600); the agent
+daemon listens on a 0600 unix socket. The packaged build is not notarized.
