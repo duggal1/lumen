@@ -20,7 +20,7 @@ echo "== lumen agent smoke =="
 
 # The human approves actuation for this run: the actuate capability and the
 # app allow-list are denied until somebody grants them.
-"$CLI" agent grant --capability actuate --bundle-id com.apple.calculator --path "$WORK" >/dev/null
+"$CLI" agent grant --client smoke --capability actuate --bundle-id com.apple.calculator --path "$WORK" >/dev/null
 
 python3 - "$CLI" "$WORK" <<'PY'
 import json, subprocess, sys, time, os, wave, struct, math
@@ -85,7 +85,7 @@ def check(name, ok, detail=""):
 
 # 1. initialize (this is how the daemon learns which client it is talking to)
 call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                    "clientInfo": {"name": "stdio"}})
+                    "clientInfo": {"name": "smoke"}})
 status = tool("lumen_status")
 print("status:", json.dumps(status))
 check("status returns permissions", "permissions" in status)
@@ -188,7 +188,7 @@ except subprocess.TimeoutExpired:
     proc.kill()
 
 import subprocess as _sp
-_sp.run([cli, "agent", "revoke", "--capability", "actuate"], capture_output=True)
+_sp.run([cli, "agent", "reset", "--client", "smoke"], capture_output=True)
 
 print()
 if failures:

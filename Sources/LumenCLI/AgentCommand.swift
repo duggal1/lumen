@@ -8,7 +8,7 @@ import LumenCore
 struct Agent: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "agent",
         abstract: "Manage agent permissions: capabilities, the app allow-list and shared folders.",
-        subcommands: [AgentStatus.self, AgentGrant.self, AgentRevoke.self, AgentToken.self, AgentProbe.self])
+        subcommands: [AgentStatus.self, AgentGrant.self, AgentRevoke.self, AgentToken.self, AgentProbe.self, AgentReset.self])
 
     struct AgentStatus: ParsableCommand {
         static let configuration = CommandConfiguration(commandName: "status",
@@ -82,6 +82,18 @@ struct Agent: ParsableCommand {
             let policy = Policy()
             policy.revoke(client: client, capabilities: [capability])
             print("Revoked \(capability) for \(client).")
+        }
+    }
+
+    struct AgentReset: ParsableCommand {
+        static let configuration = CommandConfiguration(commandName: "reset",
+            abstract: "Remove every grant for a client.")
+        @Option(name: .long, help: "Client id (default: stdio).")
+        var client: String = "stdio"
+        func run() throws {
+            let policy = Policy()
+            policy.reset(client: client)
+            print("Cleared the grants for \(client).")
         }
     }
 

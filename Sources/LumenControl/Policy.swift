@@ -133,6 +133,12 @@ public final class Policy: @unchecked Sendable {
         return store.withLock { $0.clients[client]?.paths ?? [] }
     }
 
+    /// Removes every grant for a client.
+    public func reset(client: String) {
+        store.withLock { $0.clients.removeValue(forKey: client) }
+        persist()
+    }
+
     /// The shared agent secret. One source of truth: the same token protects
     /// the optional HTTP transport and the in-app MCP server.
     public var bearerToken: String { AgentCredentials.token() }
