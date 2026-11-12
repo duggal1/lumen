@@ -65,6 +65,14 @@ public actor Engine {
     public func openProject(at path: String) async throws -> ProjectRef {
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         let bundle = ProjectBundle(url: url)
+        guard FileManager.default.fileExists(atPath: bundle.projectURL.path) else {
+            if bundle.isUnfinished {
+                throw ToolError(code: "PROJECT_UNFINISHED",
+                                hint: "This recording was interrupted before it was finished. Recover it from the Library, or record again.")
+            }
+            throw ToolError(code: "PROJECT_NOT_FOUND",
+                            hint: "There is no project at \(url.path).")
+        }
         let file = try bundle.load()
         let identifier = url.deletingPathExtension().lastPathComponent
         let ref = ProjectRef(identifier: identifier, url: url)

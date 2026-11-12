@@ -11,6 +11,37 @@ enum HeadlessMode {
     static var enabled: Bool { CommandLine.arguments.contains("--headless") }
 }
 
+/// Starts the agent daemon. The daemon is the same engine as the UI, so the
+/// windowed app serves it too: an agent and a human can work on the same
+/// projects at the same time.
+@MainActor
+final class LumenAppDelegate: NSObject, NSApplicationDelegate {
+    static var model: AppModel?
+    private var daemon: LumenDaemon?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard let model = LumenAppDelegate.model else { return }
+        startDaemon(model)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        daemon?.stop()
+        daemon = nil
+    }
+
+    func startDaemon(_ model: AppModel) {
+        guard daemon == nil else { return }
+        let daemon = LumenDaemon(runtime: model)
+        self.daemon = daemon
+        do {
+            try daemon.start()
+            NSLog("Lumen agent daemon listening on \(LumenDaemon.defaultSocketPath().path)")
+        } catch {
+            NSLog("Lumen agent daemon failed to start: \(error)")
+        }
+    }
+}
+
 /// The process entry point. The windowed app and the headless daemon are the
 /// same binary and the same bundle id, so macOS permissions (Screen
 /// Recording, Accessibility, Input Monitoring) are attributed to Lumen in
@@ -34,20 +65,23 @@ enum HeadlessRunner {
         application.setActivationPolicy(.accessory)
         let model = AppModel()
         model.headless = true
-        let daemon = LumenDaemon(runtime: model)
-        do {
-            try daemon.start()
-            NSLog("Lumen agent daemon listening on \(LumenDaemon.defaultSocketPath().path)")
-        } catch {
-            NSLog("Lumen agent daemon failed to start: \(error)")
-        }
+        LumenAppDelegate.model = model
+        let delegate = LumenAppDelegate()
+        delegate.startDaemon(model)
         application.run()
     }
 }
 
 /// The normal, windowed app. Unchanged from before the agent layer existed.
 struct LumenUIApp: App {
-    @State private var app = AppModel()
+    @NSApplicationDelegateAdaptor(LumenAppDelegate.self) private var delegate
+    @State private var app: AppModel
+
+    init() {
+        let model = AppModel()
+        _app = State(initialValue: model)
+        LumenAppDelegate.model = model
+    }
 
     var body: some Scene {
         Window("Lumen", id: "library") {

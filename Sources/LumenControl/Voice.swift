@@ -90,7 +90,9 @@ public struct ElevenLabsProvider: VoiceProvider {
                 return (data, "Read cached narration for voice \(voiceID) (no network call).")
             }
         }
-        var request = URLRequest(url: URL(string: endpoint + "/" + voiceID)!)
+        // The current ElevenLabs text-to-speech endpoint. The output format
+        // is explicit so the cached file always matches what we asked for.
+        var request = URLRequest(url: URL(string: endpoint + "/" + voiceID + "?output_format=mp3_44100_128")!)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "xi-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

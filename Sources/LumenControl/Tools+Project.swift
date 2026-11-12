@@ -352,8 +352,12 @@ public extension ToolRegistry {
             capability: .read) { _, ctx in
                 let library = await ctx.engine.runtime.recordingLibrary()
                 let rows = library.map { url -> JSONValue in
-                    .object(["project_id": .string(url.deletingPathExtension().lastPathComponent),
-                             "path": .string(url.path)])
+                    let bundle = ProjectBundle(url: url)
+                    let complete = FileManager.default.fileExists(atPath: bundle.projectURL.path)
+                    return .object(["project_id": .string(url.deletingPathExtension().lastPathComponent),
+                                    "path": .string(url.path),
+                                    "complete": .bool(complete),
+                                    "unfinished": .bool(!complete && bundle.isUnfinished)])
                 }
                 return .object(["projects": .array(rows)])
             })
