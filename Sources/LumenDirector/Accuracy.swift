@@ -8,10 +8,12 @@ public struct ZoomAccuracy: Sendable {
     public var clicks = 0
     public var zoomedClicks = 0
     public var settled = 0
+    public var centeredClicks = 0
     public var insideMargin = 0
     public var medianExcessError = 0.0
     public var medianArrival = 1.0
     public var maxExcessError = 0.0
+    public var maxAxisCenterError = 0.0
     public init() {}
 }
 
@@ -39,10 +41,14 @@ public enum AccuracyReport {
             let achievableY = clamp(y, viewHeight / 2, height - viewHeight / 2)
             let idealX = (x - achievableX) / viewWidth
             let idealY = (y - achievableY) / viewHeight
-            let excess = hypot((nx - 0.5) - idealX, (ny - 0.5) - idealY)
+            let errorX = abs((nx - 0.5) - idealX)
+            let errorY = abs((ny - 0.5) - idealY)
+            let excess = hypot(errorX, errorY)
             result.zoomedClicks += 1
+            if errorX <= 0.015 && errorY <= 0.015 { result.centeredClicks += 1 }
             if nx >= 0.12 && nx <= 0.88 && ny >= 0.12 && ny <= 0.88 { result.insideMargin += 1 }
             errors.append(excess)
+            result.maxAxisCenterError = max(result.maxAxisCenterError, max(errorX, errorY))
             let arrival = clamp(log(scale) / log(zoom.scale), 0, 1)
             arrivals.append(arrival)
             if arrival >= 0.98 { result.settled += 1 }
