@@ -164,20 +164,27 @@ enum CursorPipeline {
         return (tr, clicks)
     }
 
-    static func glide(_ X: inout [Double], _ Y: inout [Double], _ a: Int, _ b: Int, _ g: Double) {
+    static func glide(_ X: inout [Double], _ Y: inout [Double], _ a: Int, _ b: Int, _ g: Double,
+                      rate: Double = gridRate, maxShift: Double = 0.05) {
         let m = b - a
+        guard a >= 0, b <= min(X.count, Y.count), m > 2,
+              rate.isFinite, rate > 0, maxShift.isFinite, maxShift >= 0 else { return }
+        let gain = clamp(g.isFinite ? g : 0, 0, 1)
+        guard gain > 0 else { return }
         var cum = [Double](repeating: 0, count: m)
         for k in 1..<m { cum[k] = cum[k - 1] + hypot(X[a + k] - X[a + k - 1], Y[a + k] - Y[a + k - 1]) }
         let L = cum[m - 1]; guard L > 1 else { return }
         let ox = Array(X[a..<b]), oy = Array(Y[a..<b])
+        let lag = Int((maxShift * rate).rounded())
         var p = 0
         for k in 0..<m {
             let tau = Double(k) / Double(m - 1)
-            let s = L * (10 * pow(tau, 3) - 15 * pow(tau, 4) + 6 * pow(tau, 5))
+            var s = L * (10 * pow(tau, 3) - 15 * pow(tau, 4) + 6 * pow(tau, 5))
+            s = min(max(s, cum[max(k - lag, 0)]), cum[min(k + lag, m - 1)])
             while p < m - 2 && cum[p + 1] < s { p += 1 }
             let seg = cum[p + 1] - cum[p], f = seg > 1e-9 ? (s - cum[p]) / seg : 0
-            X[a + k] = lerp(ox[k], ox[p] + (ox[p + 1] - ox[p]) * f, g)
-            Y[a + k] = lerp(oy[k], oy[p] + (oy[p + 1] - oy[p]) * f, g)
+            X[a + k] = lerp(ox[k], ox[p] + (ox[p + 1] - ox[p]) * f, gain)
+            Y[a + k] = lerp(oy[k], oy[p] + (oy[p + 1] - oy[p]) * f, gain)
         }
     }
 }
