@@ -117,18 +117,24 @@ public final class InputRecorder: @unchecked Sendable {
     public func setLiveFocusHook(_ hook: (@Sendable (InputEvent, AXFrame) -> Void)?) { liveFocusHook.withLock { $0 = hook } }
     private let liveEventHook = OSAllocatedUnfairLock<(@Sendable (InputEvent) -> Void)?>(initialState: nil)
     public func setLiveEventHook(_ hook: (@Sendable (InputEvent) -> Void)?) { liveEventHook.withLock { $0 = hook } }
-    private let url: URL, origin: CGPoint, scale: Double, clock: RecordingClock, axURL: URL
+    private let url: URL, clock: RecordingClock, axURL: URL
+    private let origin: OSAllocatedUnfairLock<CGPoint>
+    private let sourceScale: OSAllocatedUnfairLock<SIMD2<Double>>
+    private let windowID: CGWindowID?
     private let shape = OSAllocatedUnfairLock<UInt16>(initialState: 0)
     private let loop = OSAllocatedUnfairLock<CFRunLoop?>(uncheckedState: nil)
     private let axFrames = OSAllocatedUnfairLock<[AXFrame]>(initialState: [])
     private let focusQuery = OSAllocatedUnfairLock(initialState: (last: -Double.infinity, index: UInt32(0), pending: false))
     private let axTrusted = OSAllocatedUnfairLock(initialState: false)
     private let axQ = DispatchQueue(label: "lumen.ax", qos: .utility)
+    private let windowOriginQ = DispatchQueue(label: "lumen.window.origin", qos: .utility)
     private var axTimer: DispatchSourceTimer?
+    private var windowOriginTimer: DispatchSourceTimer?
     private var enhancedApps: Set<pid_t> = []
     private let launcherPIDs = OSAllocatedUnfairLock<[pid_t]>(initialState: [])
     private static let launcherIDs: Set<String> = [
-        "com.apple.Spotlight", "com.apple.dock", "com.raycast.macos", "com.runningwithcrayons.Alfred"
+        "com.apple.Spotlight", "com.apple.dock", "com.raycast.macos", "com.runningwithcrayons.Alfred",
+        "com.apple.apps.launcher"
     ]
     private var tap: CFMachPort?
     private var fh: FileHandle?
@@ -137,8 +143,20 @@ public final class InputRecorder: @unchecked Sendable {
     private let running = OSAllocatedUnfairLock(initialState: false)
     private let catalog: CursorCatalog
 
-    @MainActor public init(url: URL, axURL: URL, origin: CGPoint, scale: Double, clock: RecordingClock) {
-        self.url = url; self.axURL = axURL; self.origin = origin; self.scale = scale; self.clock = clock; catalog = CursorCatalog()
+    @MainActor public init(url: URL, axURL: URL, origin: CGPoint, scale: Double, clock: RecordingClock,
+                           windowID: CGWindowID? = nil) {
+        self.url = url
+        self.axURL = axURL
+        self.origin = OSAllocatedUnfairLock(initialState: origin)
+        self.sourceScale = OSAllocatedUnfairLock(initialState: SIMD2(repeating: scale))
+        self.clock = clock
+        self.windowID = windowID
+        catalog = CursorCatalog()
+    }
+
+    func setSourceScale(_ scale: SIMD2<Double>) {
+        guard scale.x.isFinite, scale.y.isFinite, scale.x > 0, scale.y > 0 else { return }
+        sourceScale.withLock { $0 = scale }
     }
 
     @MainActor public func start() throws {
@@ -146,6 +164,8 @@ public final class InputRecorder: @unchecked Sendable {
         fh = try FileHandle(forWritingTo: url); try fh?.seekToEnd()
         running.withLock { $0 = true }
         axTrusted.withLock { $0 = AXIsProcessTrusted() }
+        refreshWindowOrigin()
+        startWindowOriginMonitor()
         refreshLauncherPIDs()
         let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp,
                                     .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel, .keyDown, .keyUp, .flagsChanged]
@@ -193,6 +213,7 @@ public final class InputRecorder: @unchecked Sendable {
         loop.withLock { if let l = $0 { CFRunLoopStop(l) } }
         timer?.cancel()
         axTimer?.cancel(); axTimer = nil
+        windowOriginTimer?.cancel(); windowOriginTimer = nil
         await withCheckedContinuation { continuation in
             writeQ.async { [self] in
                 flush(); try? fh?.close()
@@ -223,7 +244,9 @@ public final class InputRecorder: @unchecked Sendable {
             eventTimestamp: e.timestamp, clock: clock, receivedAt: HostClock.now())
         var ev = InputEvent(t: eventHost)
         let loc = e.location                                   // Quartz global space: already top-left origin
-        ev.x = Float((loc.x - origin.x) * scale); ev.y = Float((loc.y - origin.y) * scale)
+        let sourceOrigin = origin.withLock { $0 }
+        let scale = sourceScale.withLock { $0 }
+        ev.x = Float((loc.x - sourceOrigin.x) * scale.x); ev.y = Float((loc.y - sourceOrigin.y) * scale.y)
         ev.cursorShape = shape.withLock { $0 }
         ev.flags = UInt16(truncatingIfNeeded: e.flags.rawValue >> 16)
         switch type {
@@ -293,6 +316,25 @@ public final class InputRecorder: @unchecked Sendable {
             .filter { Self.launcherIDs.contains($0.bundleIdentifier ?? "") }
             .map(\.processIdentifier)
         launcherPIDs.withLock { $0 = pids }
+    }
+
+    private func startWindowOriginMonitor() {
+        guard windowID != nil else { return }
+        let source = DispatchSource.makeTimerSource(queue: windowOriginQ)
+        source.schedule(deadline: .now(), repeating: .milliseconds(33), leeway: .milliseconds(5))
+        source.setEventHandler { [weak self] in self?.refreshWindowOrigin() }
+        source.resume()
+        windowOriginTimer = source
+    }
+
+    private func refreshWindowOrigin() {
+        guard let windowID,
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [NSDictionary],
+              let entry = windows.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowID }),
+              let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
+              let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+              frame.origin.x.isFinite, frame.origin.y.isFinite else { return }
+        origin.withLock { $0 = frame.origin }
     }
 
     private func enableAccessibility(_ app: AXUIElement) {
@@ -410,8 +452,10 @@ public final class InputRecorder: @unchecked Sendable {
         let names = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, "AXPlaceholderValue"]
         let label = names.compactMap { attribute(element, $0) as? String }.joined(separator: " ")
         let secure = label.range(of: "secure|email|password|passcode|card|cvv|cvc|ssn", options: .regularExpression.union(.caseInsensitive)) != nil
-        var result = AXFrame(x: (pos.x - origin.x) * scale, y: (pos.y - origin.y) * scale,
-                             w: size.width * scale, h: size.height * scale, secure: secure, label: label)
+        let sourceOrigin = origin.withLock { $0 }
+        let scale = sourceScale.withLock { $0 }
+        var result = AXFrame(x: (pos.x - sourceOrigin.x) * scale.x, y: (pos.y - sourceOrigin.y) * scale.y,
+                             w: size.width * scale.x, h: size.height * scale.y, secure: secure, label: label)
         result.sampledAt = HostClock.now()
         if let range = attribute(element, kAXSelectedTextRangeAttribute), CFGetTypeID(range) == AXValueGetTypeID() {
             var selection = CFRange(location: 0, length: 0)
@@ -432,8 +476,8 @@ public final class InputRecorder: @unchecked Sendable {
                                 rect = CGRect(x: glyphBefore ? rect.maxX : rect.minX,
                                               y: rect.minY, width: 1, height: rect.height)
                             }
-                            result.caret = AXFrame.Rect(x: (rect.minX - origin.x) * scale, y: (rect.minY - origin.y) * scale,
-                                                       w: max(rect.width * scale, 1), h: rect.height * scale)
+                            result.caret = AXFrame.Rect(x: (rect.minX - sourceOrigin.x) * scale.x, y: (rect.minY - sourceOrigin.y) * scale.y,
+                                                       w: max(rect.width * scale.x, 1), h: rect.height * scale.y)
                         }
                     }
                 }
