@@ -31,10 +31,10 @@ public struct RecordingConfig: Sendable {
         /// Bits per pixel per frame, capped so a 4K/60 screen never writes more than 250 Mbps.
         public var bitsPerPixel: Double {
             switch self {
-            case .standard: 0.06
-            case .high: 0.12
-            case .ultraHD: 0.22
-            case .bluray: 0.35
+            case .standard: 0.14
+            case .high: 0.20
+            case .ultraHD: 0.28
+            case .bluray: 0.40
             case .custom: 0
             }
         }
