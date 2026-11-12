@@ -30,7 +30,8 @@ struct LumenApp: App {
         MenuBarExtra {
             MenuBarContent(app)
         } label: {
-            Label(app.recordingStatus, systemImage: app.phase == .recording ? (app.paused ? "pause.circle.fill" : "record.circle.fill") : "record.circle")
+            Label(app.phase == .recording ? (app.paused ? "Paused" : "Recording") : "Lumen",
+                  systemImage: app.phase == .recording ? (app.paused ? "pause.circle.fill" : "record.circle.fill") : "record.circle")
         }
     }
 }
