@@ -156,8 +156,9 @@ struct MonthGraph: View {
 
     @ViewBuilder private var readout: some View {
         if let d = hovered {
-            let v = Int((minutes[calendar.startOfDay(for: d)] ?? 0).rounded())
-            Text(v > 0 ? "\(d.formatted(.dateTime.month(.abbreviated).day())) · \(v) min" : "\(d.formatted(.dateTime.month(.abbreviated).day())) · No recording")
+            let value = minutes[calendar.startOfDay(for: d)] ?? 0
+            let duration = value < 1 ? "\(max(1, Int((value * 60).rounded()))) sec" : "\(Int(value.rounded())) min"
+            Text(value > 0 ? "\(d.formatted(.dateTime.month(.abbreviated).day())) · \(duration)" : "\(d.formatted(.dateTime.month(.abbreviated).day())) · No recording")
                 .font(AppType.caption).foregroundStyle(Tok.text2)
         } else {
             Text("Minutes recorded per day").font(AppType.caption).foregroundStyle(Tok.text2)
