@@ -135,12 +135,12 @@ struct Inspector: View {
         }
     }
 
-    /// Two sources, two tabs: the macOS wallpapers on this machine and the
-    /// paintings. Solid colours, gradients, mesh and remote photos are gone —
-    /// they were never wallpapers.
+    /// The background picker presents its four actual sources as one tab row.
     enum WallpaperSource: String, CaseIterable, Identifiable {
-        case macOS = "macOS"
         case painting = "Painting"
+        case macOS = "macOS"
+        case canvas = "Canvas"
+        case dither = "Dither"
         var id: String { rawValue }
     }
 
@@ -202,7 +202,7 @@ struct Inspector: View {
             let comps = raw.split(separator: "_", omittingEmptySubsequences: true).map(String.init)
             if comps.count >= 3 {
                 let last = comps.last!
-                if last.lowercased().hasPrefix("cma-") || last.lowercased() == "cma" {
+                if last.lowercased().hasPrefix("cma-") || last.lowercased().hasPrefix("met-") || last.lowercased() == "cma" {
                     raw = comps.dropLast().joined(separator: "_")
                     // Drop the artist prefix token before the first "_".
                     let afterFirst = raw.split(separator: "_", maxSplits: 1, omittingEmptySubsequences: true)
@@ -279,25 +279,90 @@ struct Inspector: View {
         return width >= 2560
     }
 
-    @State private var wallpaperSource: WallpaperSource = .macOS
+    @State private var wallpaperSource: WallpaperSource = .painting
     @State private var wallpaperSelectTask: Task<Void, Never>?
 
     private var wallpaperList: some View {
         VStack(spacing: 12) {
-            LSegmented(sel: $wallpaperSource,
+            LSegmented(sel: Binding(get: { wallpaperSource }, set: selectWallpaperSource),
                        items: WallpaperSource.allCases.map { ($0, $0.rawValue) })
-                .frame(width: 190)
-            WallpaperGrid(model: model, choices: Self.wallpaperChoices()[wallpaperSource] ?? []) { choice in
-                wallpaperSelectTask?.cancel()
-                wallpaperSelectTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(150))
-                    guard !Task.isCancelled else { return }
-                    model.edit { $0.style.setPhotoBackground(choice.url.path) }
-                    model.edit { $0.style.background = .image }
+                .frame(maxWidth: .infinity)
+            switch wallpaperSource {
+            case .painting, .macOS:
+                WallpaperGrid(model: model, choices: Self.wallpaperChoices()[wallpaperSource] ?? []) { choice in
+                    wallpaperSelectTask?.cancel()
+                    wallpaperSelectTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(150))
+                        guard !Task.isCancelled else { return }
+                        model.edit { $0.style.setPhotoBackground(choice.url.path) }
+                    }
                 }
+                SliderRow(label: "Blur", v: model.bind(\.style.wallpaperBlur), range: 0...60,
+                          fmt: { "\(Int($0))" })
+                SliderRow(label: "Opacity", v: model.bind(\.style.imageOpacity), range: 0...1, fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Contrast", v: model.bind(\.style.imageContrast), range: 0...2, fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Brightness", v: model.bind(\.style.imageBrightness), range: 0...2, fmt: { "\(Int($0 * 100))%" })
+            case .canvas, .dither:
+                generatedBackgroundControls
             }
         }
+        .onAppear(perform: syncWallpaperSource)
         .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private var generatedBackgroundControls: some View {
+        let m = model
+        VStack(spacing: 0) {
+            Row(label: "Palette") {
+                LDropdown(sel: paletteName(m),
+                          options: DitherPalettes.all.map { ($0.0, $0.0, "circle.lefthalf.filled") }
+                            + (DitherPalettes.all.contains { $0.1 == m.timeline.style.colors } ? [] : [("Custom", "Custom", "paintpalette")]))
+                    .frame(width: 130)
+            }
+            Row(label: "Canvas color") {
+                ColorPicker("Canvas color", selection: canvasColor(m, index: 0), supportsOpacity: false).labelsHidden()
+            }
+            Row(label: "Pattern color") {
+                ColorPicker("Pattern color", selection: canvasColor(m, index: 1), supportsOpacity: false).labelsHidden()
+            }
+            if wallpaperSource == .dither {
+                SliderRow(label: "Cell", v: m.bind(\.style.ditherCell), range: 2...24, fmt: { "\(Int($0)) pt" })
+                SliderRow(label: "Ink", v: m.bind(\.style.ditherDensity), range: 0.15...0.9, fmt: { "\(Int($0 * 100))%" })
+            }
+        }
+    }
+
+    private func selectWallpaperSource(_ source: WallpaperSource) {
+        wallpaperSource = source
+        switch source {
+        case .painting, .macOS:
+            let choices = Self.wallpaperChoices()[source] ?? []
+            let currentPath = model.timeline.style.backgroundImagePath
+            let choice = choices.first { $0.url.path == currentPath } ?? choices.first
+            if model.timeline.style.background == .image, choice?.url.path == currentPath { return }
+            model.edit { style in
+                if let choice { style.style.setPhotoBackground(choice.url.path) }
+                else { style.style.background = .image }
+            }
+        case .canvas, .dither:
+            let kind: BackgroundKind = source == .canvas ? .canvas : .dither
+            guard model.timeline.style.background != kind else { return }
+            model.edit { $0.style.background = kind }
+        }
+    }
+
+    private func syncWallpaperSource() {
+        switch model.timeline.style.background {
+        case .canvas: wallpaperSource = .canvas
+        case .dither: wallpaperSource = .dither
+        case .wallpaper: wallpaperSource = .macOS
+        case .image:
+            let path = model.timeline.style.backgroundImagePath?.lowercased() ?? ""
+            wallpaperSource = path.contains("/wallpapers/macos/")
+                || path.hasPrefix("/system/library/desktop pictures/") ? .macOS : .painting
+        default: wallpaperSource = .painting
+        }
     }
 
     private var backgroundPage: some View {
@@ -307,42 +372,7 @@ struct Inspector: View {
                 if m.session.webcam != nil {
                     ToggleRow(label: "Show face cam", on: Binding(get: { m.timeline.webcam != nil }, set: { m.setWebcam($0) }))
                 }
-                Row(label: "Background") {
-                    LDropdown(sel: m.bind(\.style.background),
-                              options: (BackgroundKind.offered + (m.timeline.style.background == .dither ? [.dither] : []))
-                                .map { ($0, $0 == .dither ? "Legacy" : $0.rawValue.capitalized, backgroundIcon($0)) })
-                        .frame(width: 130)
-                }
-                if m.timeline.style.background != .wallpaper && m.timeline.style.background != .image {
-                    Row(label: "Palette") {
-                        LDropdown(sel: paletteName(m),
-                                  options: (DitherPalettes.all.map { ($0.0, $0.0, "circle.lefthalf.filled") }
-                                    + (DitherPalettes.all.contains { $0.1 == m.timeline.style.colors } ? [] : [("Custom", "Custom", "paintpalette")])) )
-                            .frame(width: 130)
-                    }
-                    Row(label: "Canvas color") {
-                        ColorPicker("Canvas color", selection: canvasColor(m, index: 0), supportsOpacity: false).labelsHidden()
-                    }
-                    if m.timeline.style.background != .solid {
-                        Row(label: "Pattern color") {
-                            ColorPicker("Pattern color", selection: canvasColor(m, index: 1), supportsOpacity: false).labelsHidden()
-                        }
-                    }
-                }
-                if m.timeline.style.background == .dither || m.timeline.style.background == .wave || m.timeline.style.background == .field {
-                    SliderRow(label: "Cell", v: m.bind(\.style.ditherCell), range: 2...24, fmt: { "\(Int($0)) pt" })
-                }
-                if m.timeline.style.background == .dither || m.timeline.style.background == .wave {
-                    SliderRow(label: "Ink", v: m.bind(\.style.ditherDensity), range: 0.15...0.9, fmt: { "\(Int($0 * 100))%" })
-                }
-                if m.timeline.style.background == .image || m.timeline.style.background == .wallpaper {
-                    wallpaperList
-                        .padding(.top, 8)
-                }
-                // One blur knob, continuous, in pixels. No toggle, no preset:
-                // a wallpaper is either sharp or it is not.
-                SliderRow(label: "Blur", v: m.bind(\.style.wallpaperBlur), range: 0...60,
-                          fmt: { "\(Int($0))" })
+                wallpaperList
             }.card(padding: 16)
 
             VStack(spacing: 0) {
@@ -363,12 +393,6 @@ struct Inspector: View {
                     SliderRow(label: "Bottom", v: paddingEdge(\.bottom), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
                     SliderRow(label: "Left", v: paddingEdge(\.left), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
                 }
-            }.card(padding: 16)
-
-            VStack(spacing: 0) {
-                SliderRow(label: "Opacity", v: m.bind(\.style.imageOpacity), range: 0...1, fmt: { "\(Int($0 * 100))%" })
-                SliderRow(label: "Contrast", v: m.bind(\.style.imageContrast), range: 0...2, fmt: { "\(Int($0 * 100))%" })
-                SliderRow(label: "Brightness", v: m.bind(\.style.imageBrightness), range: 0...2, fmt: { "\(Int($0 * 100))%" })
             }.card(padding: 16)
 
             VStack(spacing: 0) {
@@ -474,20 +498,6 @@ struct Inspector: View {
                     get: { m.snapEnabled },
                     set: { m.snapEnabled = $0 }))
             }.card(padding: 16)
-        }
-    }
-
-    private func backgroundIcon(_ kind: BackgroundKind) -> String {
-        switch kind {
-        case .dither: "square.grid.3x3.fill"
-        case .wave: "waveform.path"
-        case .field: "square.grid.3x3"
-        case .canvas: "rectangle.fill"
-        case .wallpaper: "photo"
-        case .image: "photo.on.rectangle"
-        case .solid: "square.fill"
-        case .gradient, .mesh: "square.fill.on.square"
-        case .image: "photo.stack"
         }
     }
 
