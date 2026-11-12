@@ -58,7 +58,8 @@ import LumenExport
     let renderer = try Renderer()
     let (session, loaded) = try await ProjectSession.open(bundle, device: renderer.device)
     let derived = session.derive(loaded, revision: 1)
-    let model = EditorModel(session: session, renderer: renderer, timeline: derived)
+    let model = EditorModel(session: session, renderer: renderer, timeline: derived,
+                            exportSettings: ExportSettings(), transcript: nil)
 
     model.play()
     // Synchronous gate: video must be running the line after play() returns.
