@@ -4,6 +4,7 @@ import MetalKit
 import AppKit
 import CoreVideo
 import QuartzCore
+import ImageIO
 import simd
 import os
 import LumenCore
@@ -184,12 +185,28 @@ public final class Renderer: @unchecked Sendable {
     private var backdrop: MTLTexture?
     private var backdropKey: BackdropKey?
     private var size = SIMD2<Int>(0, 0)
-    private var wallTex: MTLTexture?
-    private var wallID = ""
-    private var styleImage: MTLTexture?
-    private var styleImageID = ""
-    private var cameraBackground: MTLTexture?
-    private var cameraBackgroundID = ""
+    /// SMOOTHNESS: image assets live behind a lock and decode off the render
+    /// thread. The frame path only snapshots them, never touches disk/AppKit.
+    private struct Assets: Sendable {
+        var styleImage: TexBox?
+        var wall: TexBox?
+        var cameraBackground: TexBox?
+        var styleImageID = ""; var styleRequest = ""
+        var wallID = ""; var wallRequest = ""; var wallURL: URL?
+        var cameraBackgroundID = ""; var cameraBackgroundRequest = ""
+    }
+    /// SMOOTHNESS: Metal objects are not Sendable; this box lets decoded
+    /// textures cross into the lock-protected asset store from a decode task.
+    private final class TexBox: @unchecked Sendable {
+        let tex: MTLTexture
+        init(_ tex: MTLTexture) { self.tex = tex }
+    }
+    private let assets = OSAllocatedUnfairLock(initialState: Assets())
+    private let readyHandler = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
+    private var styleImageSource = "", styleImageCheckedAt = 0.0
+    private var cameraBackgroundSource = "", cameraBackgroundCheckedAt = 0.0
+    private var wallpaperCheckedAt = 0.0
+    private static let primedWallpaper = OSAllocatedUnfairLock<URL?>(initialState: nil)
     private let screenMip = MipCache(), webMip = MipCache()
     private var atlas: CursorAtlas?
     private var atlasPack: CursorPack?
@@ -225,6 +242,12 @@ public final class Renderer: @unchecked Sendable {
         fxKernels = fk
         upscaler = fk.map(Upscaler.init(kernels:))
         contentPass = fk.map(ContentPass.init(kernels:))
+        // SMOOTHNESS: compile the resolve pipelines up front so the first
+        // preview frame never pays a shader compile on the render thread.
+        for fmt in [MTLPixelFormat.bgra8Unorm, .bgr10a2Unorm] { pResolve[fmt] = try Self.pipe(d, l, "resolveFS", fmt, 0) }
+        // Seed the wallpaper URL that the main thread already resolved.
+        let seeded = Self.primedWallpaper.withLock { $0 }
+        assets.withLock { $0.wallURL = seeded; $0.wallRequest = seeded?.path ?? "" }
     }
 
     /// Prefer the metallib SwiftPM builds. Older Xcode toolchains only copy
@@ -257,50 +280,153 @@ public final class Renderer: @unchecked Sendable {
 
     public func setCustomCursors(_ c: [CustomCursor]) { customs = c; atlas = nil }
 
-    /// User-selected image is decoded only on path/version change, never per frame.
-    private func loadCameraBackgroundIfNeeded(_ path: String?) {
-        guard let path, !path.isEmpty else { cameraBackgroundID = ""; cameraBackground = nil; return }
-        let url = URL(fileURLWithPath: path)
-        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
-        let version = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
-        let id = "\(url.path)#\(version)"
-        guard id != cameraBackgroundID else { return }
-        cameraBackgroundID = id
-        cameraBackground = try? MTKTextureLoader(device: device)
-            .newTexture(URL: url, options: [.SRGB: false])
+    /// Fires when a background-decode task publishes a texture, so the preview
+    /// can redraw the frame that previously showed the fallback colour.
+    public func setOnAssetReady(_ h: (@Sendable () -> Void)?) { readyHandler.withLock { $0 = h } }
+    private func fireAssetReady() { readyHandler.withLock { $0 }?() }
+
+    /// AppKit is main-thread only. The wallpaper URL is resolved there and
+    /// handed to whichever renderer draws next (preview and export share it).
+    public static func resolveWallpaperURL() -> URL? {
+        guard let screen = NSScreen.main, let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
+        return url
+    }
+    public static func primeWallpaper(_ url: URL? = nil) {
+        let u = url ?? resolveWallpaperURL()
+        primedWallpaper.withLock { $0 = u }
+    }
+    public func refreshWallpaperURL(_ url: URL?) {
+        Self.primedWallpaper.withLock { $0 = url }
+        assets.withLock { $0.wallURL = url; $0.wallRequest = url?.path ?? "" }
     }
 
-    /// A user photo or Unsplash download used as the canvas backdrop. Decoded
-    /// only when the path or file modification date changes.
-    private func loadStyleImageIfNeeded(_ path: String?) {
-        guard let path, !path.isEmpty else { styleImageID = ""; styleImage = nil; return }
-        let url: URL = (path == "serene-lake.jpg" ? Bundle.main.url(forResource: "serene-lake", withExtension: "jpg", subdirectory: "Wallpapers")
+    private func styleImageURL(_ path: String) -> URL {
+        (path == "serene-lake.jpg" ? Bundle.main.url(forResource: "serene-lake", withExtension: "jpg", subdirectory: "Wallpapers")
             ?? Bundle.main.url(forResource: "serene-lake", withExtension: "jpg")
             : nil) ?? URL(fileURLWithPath: path)
-        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
-        let version = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
-        let id = "\(url.path)#\(version)"
-        guard id != styleImageID else { return }
-        styleImageID = id
-        styleImage = try? MTKTextureLoader(device: device)
-            .newTexture(URL: url, options: [.SRGB: false, .generateMipmaps: true])
     }
 
-    /// The Mac's own desktop picture, loaded once per wallpaper change. No download, no bundled asset.
-    private func loadWallpaperIfNeeded() {
-        guard let screen = NSScreen.main, let url = NSWorkspace.shared.desktopImageURL(for: screen) else {
-            wallTex = nil; wallID = ""; return
+    /// User-selected webcam background. Throttled to one stat per second; the
+    /// decode itself runs off the render thread (export decodes inline so its
+    /// first frame is already correct and deterministic).
+    private func loadCameraBackgroundIfNeeded(_ path: String?, quality: RenderQuality) {
+        guard let path, !path.isEmpty else {
+            cameraBackgroundSource = ""
+            assets.withLock { $0.cameraBackground = nil; $0.cameraBackgroundID = ""; $0.cameraBackgroundRequest = "" }
+            return
         }
+        let now = CACurrentMediaTime()
+        if path == cameraBackgroundSource, now - cameraBackgroundCheckedAt < 1.0 { return }
+        cameraBackgroundSource = path; cameraBackgroundCheckedAt = now
+        let url = URL(fileURLWithPath: path)
+        let version = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let id = "\(url.path)#\(version)"
+        let current = assets.withLock { ($0.cameraBackgroundRequest, $0.cameraBackgroundID) }
+        guard current.0 != id || current.1 != id else { return }
+        assets.withLock { $0.cameraBackgroundRequest = id }
+        if quality == .export {
+            if let tex = try? MTKTextureLoader(device: device).newTexture(URL: url, options: [.SRGB: false]) {
+                let boxed = TexBox(tex)
+                assets.withLock { $0.cameraBackground = boxed; $0.cameraBackgroundID = id }
+            }
+        } else {
+            decodeCameraBackground(url: url, id: id)
+        }
+    }
+
+    /// A user photo or Unsplash download used as the canvas backdrop. Same
+    /// throttle/decode split as the webcam background.
+    private func loadStyleImageIfNeeded(_ path: String?, quality: RenderQuality) {
+        guard let path, !path.isEmpty else {
+            styleImageSource = ""
+            assets.withLock { $0.styleImage = nil; $0.styleImageID = ""; $0.styleRequest = "" }
+            return
+        }
+        let now = CACurrentMediaTime()
+        if path == styleImageSource, now - styleImageCheckedAt < 1.0 { return }
+        styleImageSource = path; styleImageCheckedAt = now
+        let url = styleImageURL(path)
+        let version = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let id = "\(url.path)#\(version)"
+        let current = assets.withLock { ($0.styleRequest, $0.styleImageID) }
+        guard current.0 != id || current.1 != id else { return }
+        assets.withLock { $0.styleRequest = id }
+        if quality == .export {
+            if let tex = try? MTKTextureLoader(device: device).newTexture(URL: url, options: [.SRGB: false, .generateMipmaps: true]) {
+                let boxed = TexBox(tex)
+                assets.withLock { $0.styleImage = boxed; $0.styleImageID = id }
+            }
+        } else {
+            decodeStyleImage(url: url, id: id)
+        }
+    }
+
+    private func decodeStyleImage(url: URL, id: String) {
+        let device = self.device
+        Task.detached(priority: .utility) { [weak self] in
+            guard let tex = try? await MTKTextureLoader(device: device)
+                .newTexture(URL: url, options: [.SRGB: false, .generateMipmaps: true]) else { return }
+            let boxed = TexBox(tex)
+            self?.assets.withLock { if $0.styleRequest == id { $0.styleImage = boxed; $0.styleImageID = id } }
+            self?.fireAssetReady()
+        }
+    }
+
+    private func decodeCameraBackground(url: URL, id: String) {
+        let device = self.device
+        Task.detached(priority: .utility) { [weak self] in
+            guard let tex = try? await MTKTextureLoader(device: device)
+                .newTexture(URL: url, options: [.SRGB: false]) else { return }
+            let boxed = TexBox(tex)
+            self?.assets.withLock { if $0.cameraBackgroundRequest == id { $0.cameraBackground = boxed; $0.cameraBackgroundID = id } }
+            self?.fireAssetReady()
+        }
+    }
+
+    /// The Mac's own desktop picture, loaded once per wallpaper change. The URL
+    /// is resolved on the main thread (`refreshWallpaperURL`); this only stats
+    /// it, once a second, and decodes off the render thread.
+    private func loadWallpaperIfNeeded(quality: RenderQuality) {
+        let url = assets.withLock { $0.wallURL }
+        guard let url else {
+            assets.withLock { $0.wall = nil; $0.wallID = ""; $0.wallRequest = "" }
+            return
+        }
+        let now = CACurrentMediaTime()
+        if now - wallpaperCheckedAt < 1.0 { return }
+        wallpaperCheckedAt = now
         let stamp = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
         let id = "\(url.path)#\(stamp)"
-        guard id != wallID else { return }
-        wallID = id; wallTex = nil
-        guard let image = NSImage(contentsOf: url),
-              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        let current = assets.withLock { ($0.wallRequest, $0.wallID) }
+        guard current.0 != id || current.1 != id else { return }
+        assets.withLock { $0.wallRequest = id }
+        if quality == .export {
+            if let tex = makeWallpaperTexture(url: url) {
+                let boxed = TexBox(tex)
+                assets.withLock { $0.wall = boxed; $0.wallID = id }
+            }
+        } else {
+            decodeWallpaper(url: url, id: id)
+        }
+    }
+
+    private func decodeWallpaper(url: URL, id: String) {
+        Task.detached(priority: .utility) { [weak self] in
+            guard let tex = self?.makeWallpaperTexture(url: url) else { return }
+            let boxed = TexBox(tex)
+            self?.assets.withLock { if $0.wallRequest == id { $0.wall = boxed; $0.wallID = id } }
+            self?.fireAssetReady()
+        }
+    }
+
+    /// ImageIO + CoreGraphics, so this is safe off the main thread (unlike NSImage).
+    private func makeWallpaperTexture(url: URL) -> MTLTexture? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
         let w = cg.width, h = cg.height, bytes = w * 4
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: true)
         d.usage = [.shaderRead]; d.storageMode = .managed
-        guard let tex = device.makeTexture(descriptor: d) else { return }
+        guard let tex = device.makeTexture(descriptor: d) else { return nil }
         var data = [UInt8](repeating: 0, count: bytes * h)
         data.withUnsafeMutableBytes { raw in
             guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: bytes,
@@ -314,7 +440,7 @@ public final class Renderer: @unchecked Sendable {
         if let command = queue.makeCommandBuffer(), let blit = command.makeBlitCommandEncoder() {
             blit.generateMipmaps(for: tex); blit.endEncoding(); command.commit()
         }
-        wallTex = tex
+        return tex
     }
 
     private func ensureTargets(_ s: SIMD2<Int>) {
@@ -402,15 +528,18 @@ public final class Renderer: @unchecked Sendable {
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y))
 
         // 1. backdrop cache (style or size change only)
-        if tl.style.background == .wallpaper || tl.webcam?.backdrop == .wallpaper { loadWallpaperIfNeeded() }
-        if tl.style.background == .image { loadStyleImageIfNeeded(tl.style.backgroundImagePath) }
-        if tl.webcam?.backdrop == .image { loadCameraBackgroundIfNeeded(tl.webcam?.backdropImagePath) }
+        if tl.style.background == .wallpaper || tl.webcam?.backdrop == .wallpaper { loadWallpaperIfNeeded(quality: r.quality) }
+        if tl.style.background == .image { loadStyleImageIfNeeded(tl.style.backgroundImagePath, quality: r.quality) }
+        if tl.webcam?.backdrop == .image { loadCameraBackgroundIfNeeded(tl.webcam?.backdropImagePath, quality: r.quality) }
+        // SMOOTHNESS: one lock snapshot per frame; the decode tasks publish into
+        // this same struct, so the render thread never blocks on disk or AppKit.
+        let a = assets.withLock { $0 }
         let patterned = tl.style.background == .wave || tl.style.background == .field
         let backgroundTime = patterned ? (r.quality == .export ? r.t : r.uiTime)
             : (tl.style.background == .dither && r.quality == .preview ? r.uiTime : 0)
         let pointer = tl.style.background == .wave && r.quality == .preview ? r.pointer : .zero
         let key = BackdropKey(style: tl.style, size: cs,
-                              wall: tl.style.background == .wallpaper ? wallID : (tl.style.background == .image ? styleImageID : ""),
+                              wall: tl.style.background == .wallpaper ? a.wallID : (tl.style.background == .image ? a.styleImageID : ""),
                               phase: backgroundTime, pointer: pointer)
         let needsBackdrop = !r.transparent && !r.cursorOnly
         if needsBackdrop && backdropKey != key {
@@ -434,14 +563,14 @@ public final class Renderer: @unchecked Sendable {
                 case .field: 7
                 case .image: 8
                 }
-                let hasStyleImage = st.background == .image && styleImage != nil
-                if st.background == .wallpaper, let wallTex { e.setFragmentTexture(wallTex, index: 0) }
-                if hasStyleImage, let styleImage { e.setFragmentTexture(styleImage, index: 0) }
+                let hasStyleImage = st.background == .image && a.styleImage != nil
+                if st.background == .wallpaper, let wallTex = a.wall?.tex { e.setFragmentTexture(wallTex, index: 0) }
+                if hasStyleImage, let styleImage = a.styleImage?.tex { e.setFragmentTexture(styleImage, index: 0) }
                 frag(e, BackdropU(content: SIMD4<Float>(g.content), canvas: canvasF, angle: Float(st.gradientAngle * .pi / 180),
                                   count: Int32(max(st.colors.count, 1)), kind: kind,
                                   radius: Float(g.radius), shadow: Float(st.shadow), scale: Float(g.ui * 1.33),
                                   cell: Float(max(2, st.ditherCell * g.ui)), density: Float(st.ditherDensity),
-                                  hasWall: (st.background == .wallpaper && wallTex != nil) || hasStyleImage ? 1 : 0,
+                                  hasWall: (st.background == .wallpaper && a.wall != nil) || hasStyleImage ? 1 : 0,
                                   time: Float(backgroundTime), pointer: pointer,
                                   wallBlur: Float(st.wallpaperBlur), imgAlpha: Float(st.imageOpacity),
                                   imgContrast: Float(st.imageContrast), imgBright: Float(st.imageBrightness)))
@@ -701,12 +830,14 @@ public final class Renderer: @unchecked Sendable {
                 let crop = st.webcamCrop, ww = Double(web.width)
                 let region = SIMD4<Float>(Float(x), Float(y), Float(width), Float(height))
                 let cutout = st.layout.cutoutBlend > 0.5 && wl.backdrop == .original
+                // SMOOTHNESS: snapshot the decoded assets once for this webcam block.
+                let assetsNow = assets.withLock { $0 }
                 var maskMode: Float = switch wl.backdrop {
                 case .original: cutout ? 1 : 0
                 case .transparent: 1
-                case .wallpaper: wallTex == nil ? 3 : 2
+                case .wallpaper: assetsNow.wall == nil ? 3 : 2
                 case .canvas: 3
-                case .image: cameraBackground == nil ? 3 : 2
+                case .image: assetsNow.cameraBackground == nil ? 3 : 2
                 }
                 if matte == nil { maskMode = 0 } // Never simulate a missing AI mask.
                 let color = tl.style.colors.first?.simd ?? SIMD4<Float>(0.1, 0.1, 0.1, 1)
@@ -727,7 +858,7 @@ public final class Renderer: @unchecked Sendable {
                     enc.setFragmentTexture(matte.next, index: 2)
                 }
                 if maskMode == 2 {
-                    let background = wl.backdrop == .image ? cameraBackground : wallTex
+                    let background = wl.backdrop == .image ? assetsNow.cameraBackground?.tex : assetsNow.wall?.tex
                     if let background { enc.setFragmentTexture(background, index: 3) }
                 }
                 draw()
