@@ -21,6 +21,18 @@ public final class MCPServer: @unchecked Sendable {
         self.audit = audit
     }
 
+    /// The client identity from an initialize request. Capability grants are
+    /// per client, so the name the client introduces itself with is the name
+    /// the human approves.
+    public static func clientName(from line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              request["method"] as? String == "initialize" else { return nil }
+        let params = request["params"] as? [String: Any] ?? [:]
+        let info = params["clientInfo"] as? [String: Any] ?? [:]
+        return info["name"] as? String
+    }
+
     /// Handles one JSON-RPC line. Returns the reply line, or nil for a
     /// notification that expects no answer.
     public func handle(_ line: String, client: String = "stdio") async -> String? {
@@ -37,7 +49,7 @@ public final class MCPServer: @unchecked Sendable {
                 "protocolVersion": Self.protocolVersion,
                 "capabilities": ["tools": ["listChanged": false],
                                  "resources": ["subscribe": false],
-                                 "prompts": []],
+                                 "prompts": [Any]()],
                 "serverInfo": ["name": "lumen", "version": "1.0.0"],
             ])
         case "ping":
@@ -82,7 +94,9 @@ public final class MCPServer: @unchecked Sendable {
                 "content": [["type": "text", "text": text]],
                 "isError": !ok,
             ]
-            if ok, case .object(let o) = payload { body["structuredContent"] = o }
+            if ok, case .object(let o) = payload {
+                body["structuredContent"] = o.mapValues(\.foundationValue)
+            }
             return result(id: id, body)
         case "resources/list":
             return result(id: id, ["resources": resourceList()])
@@ -173,8 +187,35 @@ public final class MCPServer: @unchecked Sendable {
     }
 
     private func json(_ value: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return "{}" }
+        // Sanitize first: JSONSerialization throws on values it cannot write
+        // (a Swift enum, an empty array), and an agent must never be able to
+        // crash the daemon with a tool result.
+        let clean = Self.sanitize(value)
+        guard let data = try? JSONSerialization.data(withJSONObject: clean, options: [.sortedKeys]) else { return "{}" }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Converts an arbitrary value tree into something JSONSerialization can
+    /// write.
+    static func sanitize(_ value: Any) -> Any {
+        switch value {
+        case is String, is Bool, is Int, is Double, is NSNull:
+            return value
+        case let v as JSONValue:
+            return v.foundationValue
+        case let v as Float:
+            return Double(v)
+        case let v as Int64:
+            return Double(v)
+        case let v as UInt64:
+            return Double(v)
+        case let v as [Any]:
+            return v.map { sanitize($0) }
+        case let v as [String: Any]:
+            return v.mapValues { sanitize($0) }
+        default:
+            return String(describing: value)
+        }
     }
 
     /// The workflow prompt an agent can pull in.

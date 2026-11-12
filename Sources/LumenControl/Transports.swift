@@ -46,6 +46,8 @@ public final class UnixSocketServer: @unchecked Sendable {
         }
         // 0600: the socket is private to the signed-in user.
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+        // A pid file lets the CLI tell a stale socket from a live daemon.
+        try? String(String(ProcessInfo.processInfo.processIdentifier)).write(to: pidURL, atomically: true, encoding: .utf8)
         listener = fd
         running = true
         let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
@@ -59,15 +61,23 @@ public final class UnixSocketServer: @unchecked Sendable {
         source?.cancel(); source = nil
         if listener >= 0 { close(listener); listener = -1 }
         try? FileManager.default.removeItem(at: path)
+        try? FileManager.default.removeItem(at: pidURL)
     }
+
+    /// The pid of the daemon that owns this socket.
+    public var pidURL: URL { path.deletingLastPathComponent().appendingPathComponent("agent.pid") }
 
     private func accept() {
         let client = Darwin.accept(listener, nil, nil)
         guard client >= 0 else { return }
-        queue.async { [weak self] in self?.serve(client) }
+        // One queue per connection: an idle client must never block another
+        // client, and the replies on one connection stay in order.
+        let connection = DispatchQueue(label: "lumen.agent.socket.conn", qos: .userInitiated)
+        connection.async { [weak self] in self?.serve(client, on: connection) }
     }
 
-    private func serve(_ fd: Int32) {
+    private func serve(_ fd: Int32, on connection: DispatchQueue) {
+        var clientID = "socket"
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 64 * 1024)
         while running {
@@ -78,12 +88,23 @@ public final class UnixSocketServer: @unchecked Sendable {
                 let lineData = buffer[buffer.startIndex..<index]
                 buffer.removeSubrange(buffer.startIndex...index)
                 guard let line = String(data: lineData, encoding: .utf8), !line.isEmpty else { continue }
+                // The client introduces itself with the initialize request;
+                // its name is what capability grants are checked against.
+                if let name = MCPServer.clientName(from: line) { clientID = name }
+                let requestClient = clientID
+                // Handle it on this connection's own queue, in order. The
+                // read loop waits for the reply so replies never overtake
+                // each other, and no other connection is affected.
+                let done = DispatchSemaphore(value: 0)
                 Task {
-                    guard let reply = await self.server.handle(line, client: "socket") else { return }
-                    var bytes = Array(reply.utf8)
-                    bytes.append(0x0A)
-                    _ = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+                    if let reply = await self.server.handle(line, client: requestClient) {
+                        var bytes = Array(reply.utf8)
+                        bytes.append(0x0A)
+                        _ = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+                    }
+                    done.signal()
                 }
+                done.wait()
             }
         }
         close(fd)

@@ -60,6 +60,13 @@ public enum DaemonLauncher {
     public static func ensureRunning(socketPath: URL = LumenDaemon.defaultSocketPath(),
                                     timeout: TimeInterval = 25) throws {
         if canConnect(socketPath) { return }
+        // A socket file with no daemon behind it is stale: remove it so the
+        // new daemon can bind the path.
+        if let pid = liveDaemonPID(socketPath: socketPath) {
+            throw ToolError(code: "DAEMON_UNREACHABLE",
+                            hint: "A Lumen daemon is running (pid \(pid)) but its socket at \(socketPath.path) is gone. Quit Lumen and try again.")
+        }
+        try? FileManager.default.removeItem(at: socketPath)
         let app = locateApp()
         guard let app else {
             throw ToolError(code: "DAEMON_NOT_FOUND",
@@ -76,6 +83,14 @@ public enum DaemonLauncher {
         }
         throw ToolError(code: "DAEMON_NOT_RUNNING",
                         hint: "The Lumen daemon did not start in time. Open Lumen once and check its permissions.")
+    }
+
+    /// The pid of a daemon that is still alive, if any.
+    static func liveDaemonPID(socketPath: URL) -> Int32? {
+        let pidURL = socketPath.deletingLastPathComponent().appendingPathComponent("agent.pid")
+        guard let text = try? String(contentsOf: pidURL, encoding: .utf8),
+              let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0 else { return nil }
+        return kill(pid, 0) == 0 ? pid : nil
     }
 
     static func canConnect(_ path: URL) -> Bool {

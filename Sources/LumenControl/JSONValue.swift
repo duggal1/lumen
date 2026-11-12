@@ -64,6 +64,20 @@ public enum JSONValue: Codable, Sendable, Equatable {
         self = .null
     }
 
+    /// A Foundation value that JSONSerialization can write. `JSONValue` is a
+    /// Swift enum, so it has to be converted before it goes into a
+    /// JSONSerialization dictionary.
+    public var foundationValue: Any {
+        switch self {
+        case .null: return NSNull()
+        case .bool(let b): return b
+        case .number(let n): return n
+        case .string(let s): return s
+        case .array(let a): return a.map(\.foundationValue)
+        case .object(let o): return o.mapValues(\.foundationValue)
+        }
+    }
+
     public subscript(key: String) -> JSONValue? {
         if case .object(let o) = self { return o[key] }
         return nil
