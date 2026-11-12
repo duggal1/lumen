@@ -14,7 +14,7 @@ public struct LiveCamera: Sendable {
     private var cur1: Spring3, cur2: Spring3, zoom1: Spring3, press: Spring3
     private var typing = false
     private var tgt = SIMD2<Double>(0.5, 0.5)
-    private var fx1 = SIMD2<Double>(0.5, 0.5), fv1 = SIMD2<Double>.zero, fx2 = SIMD2<Double>(0.5, 0.5), fv2 = SIMD2<Double>.zero
+    private var pan = SIMD2<Double>.zero, panVelocity = SIMD2<Double>.zero
     private var rings: [(t: Double, x: Float, y: Float)] = []
 
     public init(source: SIMD2<Double>) {
@@ -24,6 +24,11 @@ public struct LiveCamera: Sendable {
         press = Spring3(x: SIMD3(1, 0, 0))
     }
     private func norm(_ p: SIMD2<Double>) -> SIMD2<Double> { SIMD2(p.x / src.x, p.y / src.y) }
+    private func panPosition(for center: SIMD2<Double>, logScale: Double) -> SIMD2<Double> {
+        let margin = max(0.5 - 0.5 * exp(-max(logScale, 0)), 1e-8)
+        let offset = (center - SIMD2<Double>(repeating: 0.5)) / margin
+        return SIMD2(clamp(offset.x, -1, 1), clamp(offset.y, -1, 1))
+    }
     public mutating func ingest(_ e: InputEvent, focus: AXFrame? = nil) {
         if e.hasPosition {
             let p = SIMD2(Double(e.x), Double(e.y))
@@ -41,7 +46,7 @@ public struct LiveCamera: Sendable {
                 zoomed = true; lzShot = log(min(maxScale, 1.7))
                 let c = norm(SIMD2(Double(e.x), Double(e.y))), hw = 0.5 / exp(lzShot)
                 tgt = SIMD2(clamp(c.x, hw, 1 - hw), clamp(c.y, hw, 1 - hw))
-                if atRest { fx1 = tgt; fx2 = tgt; fv1 = .zero; fv2 = .zero }
+                if atRest { pan = panPosition(for: tgt, logScale: lzShot); panVelocity = .zero }
             }
         case .up: down = false; lastActivity = e.t
         case .keyDown:
@@ -79,7 +84,7 @@ public struct LiveCamera: Sendable {
         if zoomed && !down && tt - lastActivity > hold { zoomed = false }
         let wz = SIMD3<Double>(repeating: omegaZoom)
         zoom1.step(target: SIMD3(zoomed ? lzShot : 0, 0, 0), omega: wz, dt: dt)
-        let sc = exp(lzShot), hw = 0.5 / sc
+        let sc = exp(max(lzShot, 0)), hw = 0.5 / sc
         if zoomed && !typing {
             let pred = norm(raw + vel * lookahead), half = deadZone / sc
             for k in 0..<2 {
@@ -88,13 +93,18 @@ public struct LiveCamera: Sendable {
                 tgt[k] = clamp(tgt[k], hw, 1 - hw)
             }
         }
+        let targetLogScale = zoomed ? lzShot : 0
+        let targetPan = zoomed ? panPosition(for: tgt, logScale: targetLogScale) : .zero
+        let zoomSettling = abs(zoom1.x.x - targetLogScale) > 0.02
+        let panOmega = zoomSettling ? omegaZoom : omegaPan
         for k in 0..<2 {
-            springStep(&fx2[k], &fv2[k], target: zoomed ? tgt[k] : 0.5, omega: omegaPan, dt: dt)
+            springStep(&pan[k], &panVelocity[k], target: targetPan[k], omega: panOmega, dt: dt)
         }
     }
     private func state(at now: Double) -> FrameState {
-        let lz = max(zoom1.x.x, 0), half = 0.5 / exp(lz)
-        let c = SIMD2(clamp(fx2.x, half, 1 - half), clamp(fx2.y, half, 1 - half))
+        let lz = max(zoom1.x.x, 0), margin = 0.5 - 0.5 / exp(lz)
+        let c = SIMD2(0.5 + clamp(pan.x, -1, 1) * margin,
+                      0.5 + clamp(pan.y, -1, 1) * margin)
         let cs = CursorSample(position: SIMD2(Float(cur2.x.x), Float(cur2.x.y)), velocity: SIMD2(Float(cur2.v.x), Float(cur2.v.y)),
                               opacity: Float(smoothstep(opacity)), press: Float(press.x.x), shape: shape)
         var fx: [ClickRing] = []
