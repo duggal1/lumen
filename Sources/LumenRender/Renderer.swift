@@ -993,7 +993,28 @@ public final class Renderer: @unchecked Sendable {
             descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]; descriptor.storageMode = .private
             maskedSources[slot] = device.makeTexture(descriptor: descriptor)
         }
-        guard let target = maskedSources[slot], let encoder = cb.makeComputeCommandEncoder() else { return nil }
+        guard let target = maskedSources[slot] else { return nil }
+        // SMOOTHNESS: only the union of the mask rectangles needs the mask
+        // kernel. The rest of the frame is a straight GPU copy, so a 4K frame
+        // with one small redaction no longer runs ~8M pixel reads per sub-frame.
+        var lo = SIMD2<Float>(repeating: .greatestFiniteMagnitude)
+        var hi = SIMD2<Float>(repeating: -.greatestFiniteMagnitude)
+        for mask in masks.prefix(128) {
+            lo = simd_min(lo, SIMD2(mask.rect.x, mask.rect.y))
+            hi = simd_max(hi, SIMD2(mask.rect.x + mask.rect.z, mask.rect.y + mask.rect.w))
+        }
+        lo -= 2; hi += 2
+        let x0 = max(Int(lo.x.rounded(.down)), 0), y0 = max(Int(lo.y.rounded(.down)), 0)
+        let x1 = min(Int(hi.x.rounded(.up)), source.width), y1 = min(Int(hi.y.rounded(.up)), source.height)
+        let w = x1 - x0, h = y1 - y0
+        guard w > 0, h > 0 else { return source }
+        if let blit = cb.makeBlitCommandEncoder() {
+            blit.copy(from: source, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                      sourceSize: MTLSize(width: source.width, height: source.height, depth: 1),
+                      to: target, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+            blit.endEncoding()
+        }
+        guard let encoder = cb.makeComputeCommandEncoder() else { return nil }
         let regions = masks.prefix(128).map { mask -> SourceMaskGPU in
             let height = mask.rect.w
             let cell = pixelSize > 0 ? pixelSize : min(max(height * 0.45, 6), 24)
@@ -1001,11 +1022,13 @@ public final class Renderer: @unchecked Sendable {
             return SourceMaskGPU(rect: mask.rect, block: SIMD4(cell, mode, height * 0.22, 0))
         }
         var count = UInt32(regions.count)
+        var origin = SIMD2<UInt32>(UInt32(x0), UInt32(y0))
         encoder.setComputePipelineState(pSourceMask)
         encoder.setTexture(source, index: 0); encoder.setTexture(target, index: 1)
         regions.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
         encoder.setBytes(&count, length: MemoryLayout<UInt32>.size, index: 1)
-        encoder.dispatchThreads(MTLSize(width: source.width, height: source.height, depth: 1),
+        encoder.setBytes(&origin, length: MemoryLayout<SIMD2<UInt32>>.size, index: 2)
+        encoder.dispatchThreads(MTLSize(width: w, height: h, depth: 1),
                                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
         encoder.endEncoding()
         if let blit = cb.makeBlitCommandEncoder() { blit.generateMipmaps(for: target); blit.endEncoding() }

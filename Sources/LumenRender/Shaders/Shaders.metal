@@ -298,11 +298,15 @@ kernel void pixelateMask(texture2d<float, access::read> source [[texture(0)]],
                          texture2d<float, access::write> target [[texture(1)]],
                          constant SourceMask *masks [[buffer(0)]],
                          constant uint &count [[buffer(1)]],
+                         constant uint2 &origin [[buffer(2)]],
                          uint2 gid [[thread_position_in_grid]]) {
+    // SMOOTHNESS: the dispatch covers only the union of the mask rectangles;
+    // `origin` maps the local thread position back into the full frame.
     uint2 size(source.get_width(), source.get_height());
-    if (any(gid >= size)) return;
-    float2 p = float2(gid) + 0.5;
-    float4 color = source.read(gid);
+    uint2 px = gid + origin;
+    if (any(px >= size)) return;
+    float2 p = float2(px) + 0.5;
+    float4 color = source.read(px);
     for (uint index = 0; index < count; ++index) {
         float4 rect = masks[index].rect;
         float2 halfSize = rect.zw * 0.5, centre = rect.xy + halfSize;
@@ -329,7 +333,7 @@ kernel void pixelateMask(texture2d<float, access::read> source [[texture(0)]],
         }
         color = mix(color, fill, coverage);
     }
-    target.write(color, gid);
+    target.write(color, px);
 }
 
 // ---- Cursor sprite (premultiplied atlas, mip-mapped)
