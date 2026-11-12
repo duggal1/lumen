@@ -52,6 +52,18 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     public var phase = Phase.idle
     /// Mirrors `RecordingSession.isPaused` for the HUD.
     public var paused = false
+    /// Headless mode: the daemon runs the same engine with no window and no
+    /// floating recorder panel.
+    public var headless = false
+    /// An agent-driven recording target. When set, `start()` records exactly
+    /// this instead of the UI's current selection.
+    public var agentTarget: RecordingTarget?
+    /// Options for an agent-driven recording.
+    public var agentOptions: RecordingOptions?
+    /// Markers recorded during the session, written into the project on stop.
+    var pendingMarkers: [CaptureMarker] = []
+    /// The project the last recording produced.
+    public private(set) var lastProjectURL: URL?
     public var micTesting = false
     public var micTestLevel: Float = 0
     /// Real per-buffer peaks, newest last, for the pixel scope.
@@ -98,7 +110,9 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var projects: [ProjectRow] = []
     public var onFinished: ((URL) -> Void)?
     public let library: URL
-    private let session = RecordingSession()
+    /// The capture session. Internal so the agent runtime adapter can drive
+    /// the same lifecycle the UI buttons drive.
+    let session = RecordingSession()
     private var appUsageRecorder: RecordingAppUsage?
     private var hud: HUDController?
     private var hotKey: HotKey?
@@ -475,9 +489,29 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             guard let r = await RegionSelector.pick() else { return }
             cfg = RecordingConfig(source: .region(r.display, r.rect))
         }
+        // An agent may ask for an exact target; it wins over the UI selection.
+        if let target = agentTarget {
+            switch target.kind {
+            case .display:
+                cfg = RecordingConfig(source: .display(target.displayID ?? CGMainDisplayID()))
+            case .window:
+                let id = target.windowID ?? windows.first { $0.appID == (target.bundleID ?? "") }?.id ?? 0
+                guard id != 0 else { error = "That window is not on screen."; return }
+                cfg = RecordingConfig(source: .window(id))
+            case .region:
+                cfg = RecordingConfig(source: .region(target.displayID ?? CGMainDisplayID(),
+                                                       target.rect ?? CGRect(x: 0, y: 0, width: 1, height: 1)))
+            }
+        }
         cfg.fps = fps; cfg.mic = mic && Permissions.mic; cfg.systemAudio = system
         cfg.resolution = captureResolution; cfg.quality = captureQuality; cfg.customMbps = captureMbps
         cfg.webcamDeviceID = webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
+        if let options = agentOptions {
+            cfg.fps = options.fps
+            cfg.mic = options.microphone && Permissions.mic
+            cfg.systemAudio = options.systemAudio
+            cfg.webcamDeviceID = options.webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
+        }
         phase = .preparing
         let sourceDisplay: CGDirectDisplayID?
         switch cfg.source {
@@ -487,10 +521,14 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         let recordingScreen = NSScreen.screens.first {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == sourceDisplay
         } ?? NSScreen.main
-        hud = HUDController(self, screen: recordingScreen)
-        hideLibraryForRecording()
-        hud?.show()
-        if livePreview { livePreviewController = LivePreviewController(); livePreviewController?.show() }
+        // The daemon runs without a window: no floating recorder panel, no
+        // library. The agent drives the same engine through tools.
+        if !headless {
+            hud = HUDController(self, screen: recordingScreen)
+            hideLibraryForRecording()
+            hud?.show()
+            if livePreview { livePreviewController = LivePreviewController(); livePreviewController?.show() }
+        }
         do {
             // Preparation runs CONCURRENTLY during the countdown (spec §3.2).
             // HUD/countdown visible within 100 ms of the click; SCShareableContent
@@ -560,6 +598,14 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             } catch {
                 self.error = "Recording saved, but app activity could not be saved: \(error.localizedDescription)"
             }
+            // Markers recorded during the session become part of the project.
+            if !pendingMarkers.isEmpty {
+                var file = MarkerFile()
+                file.markers = pendingMarkers
+                pendingMarkers = []
+                try? b.saveMarkers(file)
+            }
+            lastProjectURL = b.url
             paused = false
             phase = .idle; refresh()
             let finished = b.url

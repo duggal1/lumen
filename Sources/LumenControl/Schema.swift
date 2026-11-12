@@ -1,0 +1,147 @@
+import Foundation
+
+/// JSON Schema generation for tool inputs.
+///
+/// The schema is DERIVED from the Codable input type, never hand-written: the
+/// registry builds a default instance of the input type and reflects over it.
+/// Every tool input type gives every property a default value, so the
+/// reflection sees the real property names and the real types.
+public enum SchemaGenerator {
+    /// Builds a JSON Schema object for a default instance of `sample`.
+    public static func schema(for sample: Any, required: [String] = []) -> JSONValue {
+        var properties: [String: JSONValue] = [:]
+        for child in Mirror(reflecting: sample).children {
+            guard let name = child.label else { continue }
+            properties[name] = schema(forValue: child.value)
+        }
+        return .object([
+            "type": .string("object"),
+            "properties": .object(properties),
+            "required": .array(required.map { .string($0) }),
+            "additionalProperties": .bool(false),
+        ])
+    }
+
+    /// Maps a runtime value to a JSON Schema fragment.
+    public static func schema(forValue value: Any) -> JSONValue {
+        let type = type(of: value)
+        let name = String(describing: type)
+        if let optional = OptionalTypeInfo(name) {
+            return .object([
+                "type": .array([.string(optional.wrapped), .string("null")]),
+                "x-lumen-type": .string(optional.wrapped),
+            ])
+        }
+        if let element = ArrayTypeInfo(name) {
+            return .object([
+                "type": .string("array"),
+                "items": schema(forTypeName: element.element),
+            ])
+        }
+        if let valueType = DictionaryTypeInfo(name) {
+            return .object([
+                "type": .string("object"),
+                "additionalProperties": schema(forTypeName: valueType.value),
+            ])
+        }
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .enum {
+            let cases = enumCases(of: name)
+            var out: [String: JSONValue] = ["type": .string("string")]
+            if !cases.isEmpty { out["enum"] = .array(cases.map { .string($0) }) }
+            return .object(out)
+        }
+        if mirror.displayStyle == .struct || mirror.displayStyle == .class {
+            var properties: [String: JSONValue] = [:]
+            for child in mirror.children {
+                guard let key = child.label else { continue }
+                properties[key] = schema(forValue: child.value)
+            }
+            return .object([
+                "type": .string("object"),
+                "properties": .object(properties),
+                "additionalProperties": .bool(false),
+            ])
+        }
+        return schema(forTypeName: name)
+    }
+
+    /// A schema for a type we only know by name (array elements, dictionary
+    /// values, generic parameters).
+    public static func schema(forTypeName name: String) -> JSONValue {
+        switch name {
+        case "String", "Substring": return .object(["type": .string("string")])
+        case "Bool": return .object(["type": .string("boolean")])
+        case "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64":
+            return .object(["type": .string("integer")])
+        case "Double", "Float", "CGFloat": return .object(["type": .string("number")])
+        case "URL": return .object(["type": .string("string"), "format": .string("uri")])
+        case "Date": return .object(["type": .string("string"), "format": .string("date-time")])
+        default: break
+        }
+        if let optional = OptionalTypeInfo(name) { return schema(forTypeName: optional.wrapped) }
+        if let element = ArrayTypeInfo(name) {
+            return .object(["type": .string("array"), "items": schema(forTypeName: element.element)])
+        }
+        if let valueType = DictionaryTypeInfo(name) {
+            return .object(["type": .string("object"), "additionalProperties": schema(forTypeName: valueType.value)])
+        }
+        return .object(["type": .string("object")])
+    }
+
+    /// Enum case names, read from the type's metadata through a fresh value.
+    private static func enumCases(of rawName: String) -> [String] {
+        let name = rawName.split(separator: ".").last.map(String.init) ?? rawName
+        switch name {
+        case "RecordingTargetKind": return RecordingTargetKindCases.all
+        case "Capability": return CapabilityCases.all
+        case "InputMode": return InputModeCases.all
+        case "AudioRole": return AudioRoleCases.all
+        case "ZoomOrigin": return ZoomOriginCases.all
+        case "PrivacyMode": return PrivacyModeCases.all
+        case "BackgroundKind": return BackgroundKindCases.all
+        case "MaskMode": return MaskModeCases.all
+        default: return []
+        }
+    }
+}
+
+// MARK: - Type-name parsing
+
+struct OptionalTypeInfo {
+    let wrapped: String
+    init?(_ name: String) {
+        guard name.hasPrefix("Optional<"), name.hasSuffix(">") else { return nil }
+        wrapped = String(name.dropFirst("Optional<".count).dropLast())
+    }
+}
+
+struct ArrayTypeInfo {
+    let element: String
+    init?(_ name: String) {
+        guard name.hasPrefix("["), name.hasSuffix("]") else { return nil }
+        element = String(name.dropFirst().dropLast())
+    }
+}
+
+struct DictionaryTypeInfo {
+    let value: String
+    init?(_ name: String) {
+        guard name.hasPrefix("Dictionary<"), name.hasSuffix(">") else { return nil }
+        let inner = name.dropFirst("Dictionary<".count).dropLast()
+        let parts = inner.split(separator: ",")
+        guard parts.count == 2 else { return nil }
+        value = String(parts[1]).trimmingCharacters(in: .whitespaces)
+    }
+}
+
+// MARK: - Case lists (kept next to the generator so the schema stays honest)
+
+enum RecordingTargetKindCases { static let all = ["display", "window", "region"] }
+enum CapabilityCases { static let all = ["read", "record", "actuate", "edit", "export", "network"] }
+enum InputModeCases { static let all = ["physical", "virtual"] }
+enum AudioRoleCases { static let all = ["music", "voiceover", "sfx"] }
+enum ZoomOriginCases { static let all = ["manual", "auto"] }
+enum PrivacyModeCases { static let all = ["blur", "pixelate", "solid"] }
+enum BackgroundKindCases { static let all = ["dither", "canvas", "wallpaper", "solid", "gradient", "mesh", "wave", "field", "image"] }
+enum MaskModeCases { static let all = ["blur", "pixelate", "solid"] }

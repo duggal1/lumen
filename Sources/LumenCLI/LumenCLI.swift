@@ -17,7 +17,7 @@ import LumenSpeech
 @main
 struct LumenCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "lumen-cli", abstract: "Headless Lumen",
-        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self, Bench.self, Golden.self, AudioCheckCmd.self, GpuInfo.self, TapMove.self, ZoomVerify.self])
+        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self, Bench.self, Golden.self, AudioCheckCmd.self, GpuInfo.self, TapMove.self, ZoomVerify.self, MCP.self])
 }
 
 struct TapMove: AsyncParsableCommand {

@@ -34,10 +34,14 @@ let package = Package(
                                  .linkedLibrary("moonshine")]),
         lib("LumenSpeech", ["LumenCore", "LumenProject", "LumenAudio", "CMoonshine"]),
         lib("LumenExport", ["LumenCore", "LumenProject", "LumenDirector", "LumenAnalysis", "LumenRender", "LumenAudio"]),
+        lib("LumenActuator", ["LumenCore"]),
+        lib("LumenControl", ["LumenCore", "LumenProject", "LumenDirector", "LumenRender", "LumenAudio",
+                             "LumenAnalysis", "LumenExport", "LumenSpeech", "LumenActuator"]),
         lib("LumenUI", all),
-        .executableTarget(name: "LumenApp", dependencies: ["LumenUI"]),
+        .executableTarget(name: "LumenApp", dependencies: ["LumenUI", "LumenControl", "LumenCapture"]),
         .executableTarget(name: "LumenCLI", dependencies: [
             "LumenProject", "LumenDirector", "LumenRender", "LumenAudio", "LumenExport", "LumenSpeech",
+            "LumenControl", "LumenAnalysis",
             .product(name: "ArgumentParser", package: "swift-argument-parser")]),
         .executableTarget(name: "LumenRecordDemo", dependencies: ["LumenCapture"]),
     ]
