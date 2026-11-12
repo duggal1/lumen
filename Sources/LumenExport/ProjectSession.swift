@@ -45,8 +45,14 @@ public final class ProjectSession: @unchecked Sendable {
             return (try await source.frame(atSource: time), nil)
         }
         let s = tl.timeMap.source(atOutput: t)
-        let wf = tl.webcam != nil ? try? await webcam?.frame(atSource: s) : nil
-        return (try await screen.frame(atSource: s), wf)
+        // SMOOTHNESS: the webcam and the screen are two independent readers.
+        // Awaiting the webcam first delayed the screen decode by a full frame.
+        async let web: SourceFrame? = {
+            guard tl.webcam != nil, let w = webcam else { return nil }
+            return try? await w.frame(atSource: s)
+        }()
+        let screenFrame = try await screen.frame(atSource: s)
+        return (screenFrame, await web)
     }
 
     private func clipSource(for url: URL) async throws -> ReaderFrameSource {
