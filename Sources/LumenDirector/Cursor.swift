@@ -165,7 +165,7 @@ enum CursorPipeline {
     }
 
     static func glide(_ X: inout [Double], _ Y: inout [Double], _ a: Int, _ b: Int, _ g: Double,
-                      rate: Double = gridRate, maxShift: Double = 0.05) {
+                      rate: Double = gridRate, maxShift: Double = 1.0 / 240.0) {
         let m = b - a
         guard a >= 0, b <= min(X.count, Y.count), m > 2,
               rate.isFinite, rate > 0, maxShift.isFinite, maxShift >= 0 else { return }
