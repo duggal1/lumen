@@ -205,27 +205,31 @@ enum ZoomPlanner {
         let keep = sorted.filter { ($0.kind == .scroll || $0.kind == .drag) && ok($0.t) }
         var ki = 0
 
-        func close(at end: Double) {
+        func close(at end: Double, minimumDuration: Double = 0.2) {
             guard let o = cur else { return }
             cur = nil
-            guard end - o.start > 0.2, o.scale > 1.001 else { return }
+            guard end - o.start > minimumDuration, o.scale > 1.001 else { return }
             shots.append(ZoomSegment(id: stableID(o.start, end), start: o.start, end: end, scale: o.scale,
                                      focus: .fixed(x: o.c.x / W, y: o.c.y / H), origin: .auto))
         }
-        func retarget(_ c: SIMD2<Double>, at t: Double, minMove: Double = 0.12) {
+        func retarget(_ c: SIMD2<Double>, at t: Double, minMove: Double = 0.12, minimumDuration: Double = 0.2) {
             guard let o = cur else { return }
             let nc = clampC(c, o.scale)
             let moved = (nc - o.c) / half(o.scale)
             if hypot(moved.x, moved.y) < minMove { return }
-            if t - o.start <= 0.2 { cur = Open(start: o.start, scale: o.scale, c: nc); return }
-            close(at: t); cur = Open(start: t, scale: o.scale, c: nc)
+            if minimumDuration >= 0.2, t - o.start <= 0.2 {
+                cur = Open(start: o.start, scale: o.scale, c: nc)
+                return
+            }
+            close(at: t, minimumDuration: minimumDuration)
+            cur = Open(start: t, scale: o.scale, c: nc)
         }
         func ensureVisible(_ pt: SIMD2<Double>, at t: Double) {          // clicks only
             guard let o = cur else { return }
             let d = (pt - o.c) / half(o.scale)
             let zone = clamp(p.safeZone.isFinite ? p.safeZone : 0.03, 0.005, 0.03)
             guard abs(d.x) > zone || abs(d.y) > zone else { return }
-            retarget(pt, at: t, minMove: 0.03)                           // click anchor is the exact pixel
+            retarget(pt, at: t, minMove: 0.03, minimumDuration: 0.02)    // click anchor is the exact pixel
         }
         func absorbKeepAlive(upTo t: Double) {
             guard let o = cur else { return }
@@ -310,7 +314,7 @@ enum ZoomPlanner {
 
         return shots.filter { s in
             !avoid.contains { $0.lowerBound < s.end && $0.upperBound > s.start - p.leadIn } &&
-            tm.output(atSource: s.end) - tm.output(atSource: s.start) > 0.2
+            tm.output(atSource: s.end) - tm.output(atSource: s.start) > 0.02
         }
     }
 }
