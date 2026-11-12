@@ -7,6 +7,7 @@ import LumenProject
 public struct ZoomAccuracy: Sendable {
     public var clicks = 0
     public var zoomedClicks = 0
+    public var settled = 0
     public var insideMargin = 0
     public var medianExcessError = 0.0
     public var medianArrival = 1.0
@@ -42,7 +43,9 @@ public enum AccuracyReport {
             result.zoomedClicks += 1
             if nx >= 0.12 && nx <= 0.88 && ny >= 0.12 && ny <= 0.88 { result.insideMargin += 1 }
             errors.append(excess)
-            arrivals.append(clamp(log(scale) / log(zoom.scale), 0, 1))
+            let arrival = clamp(log(scale) / log(zoom.scale), 0, 1)
+            arrivals.append(arrival)
+            if arrival >= 0.98 { result.settled += 1 }
         }
         func median(_ items: [Double], empty: Double) -> Double {
             guard !items.isEmpty else { return empty }
