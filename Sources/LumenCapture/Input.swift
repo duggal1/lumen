@@ -264,13 +264,13 @@ public final class InputRecorder: @unchecked Sendable {
     private func reserveFocus(event: InputEvent) -> UInt32 {
         guard axTrusted.withLock({ $0 }) else { return 0 }
         let reservation = focusQuery.withLock { state -> (UInt32, Bool) in
-            if state.pending || event.t - state.last < 1.0 / 30 { return (state.index, false) }
+            if state.pending || event.t - state.last < 1.0 / 20 { return (state.index, false) }
             state.last = event.t; state.pending = true
             state.index = axFrames.withLock { $0.append(AXFrame(x: 0, y: 0, w: 0, h: 0)); return UInt32($0.count) }
             return (state.index, true)
         }
         if reservation.1 {
-            axQ.asyncAfter(deadline: .now() + 0.015) { [self] in
+            axQ.asyncAfter(deadline: .now() + 0.04) { [self] in
                 defer { focusQuery.withLock { $0.pending = false } }
                 let system = AXUIElementCreateSystemWide()
                 AXUIElementSetMessagingTimeout(system, 0.05)

@@ -25,7 +25,17 @@ public final class TypingSampler {
     }
 
     public func play(packCode: Int, gain: Float, at when: AVAudioTime? = nil) {
-        guard let buf = buffers[packCode] else { return }
+        let buf: AVAudioPCMBuffer
+        if let exact = buffers[packCode] {
+            buf = exact
+        } else if !buffers.isEmpty {
+            let codes = buffers.keys.sorted()
+            let pick = codes[Int(bitPattern: UInt(bitPattern: packCode)) % codes.count]
+            guard let fallback = buffers[pick] else { return }
+            buf = fallback
+        } else {
+            return
+        }
         let i: Int
         if let idx = voiceForKey[packCode] { i = idx }
         else { i = next; next = (next + 1) % voices.count; voiceForKey[packCode] = i }

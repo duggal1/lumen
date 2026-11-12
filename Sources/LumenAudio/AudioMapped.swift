@@ -2,11 +2,23 @@ import Foundation
 import LumenCore
 import LumenProject
 
-/// Time-map audio sampling (moved from Mixer.swift to keep each file ≤500 lines).
-/// Pure function of (samples, TimeMap). Owned by the offline mixer.
+/// 4-point Catmull-Rom. Linear interpolation at a fractional offset is a low-pass
+/// (-2 dB @ 10 kHz, -6 dB @ 16 kHz at half a sample); this keeps the highs.
+@inline(__always) private func cubic(_ x: [Float], _ pos: Double) -> Float {
+    let i = Int(pos.rounded(.down))
+    guard i >= 0, i + 1 < x.count else { return 0 }
+    let f = Float(pos - Double(i))
+    if f < 1e-6 { return x[i] }
+    let p1 = x[i], p2 = x[i + 1]
+    let p0 = i >= 1 ? x[i - 1] : p1
+    let p3 = i + 2 < x.count ? x[i + 2] : p2
+    return p1 + 0.5 * f * (p2 - p0 + f * (2 * p0 - 5 * p1 + 4 * p2 - p3 + f * (3 * (p1 - p2) + p3 - p0)))
+}
+
+/// Time-map audio sampling. Pure function of (samples, TimeMap). Owned by the offline mixer.
 extension AudioMixer {
-    /// Source-time audio -> output time through the time map (1 ms steps, linear interpolation).
-    /// Fades to silence (10 ms) inside speed ramps when `muteRamps` is set.
+    /// Source-time audio -> output time through the time map (1 ms steps, cubic interpolation).
+    /// Fades to silence inside speed ramps when `muteRamps` is set.
     /// Cut joins use a 40 ms equal-power crossfade (never an abrupt jump).
     static func mapped(_ x: [Float], offset: Double, tm: TimeMap, n: Int, muteRamps: Bool) -> [Float] {
         let fs = AudioIO.fs, spms = Int(fs / 1000)
@@ -37,8 +49,7 @@ extension AudioMixer {
                         let postPos = (tm.source(atOutput: cutOut + 0.001) + advance - offset) * fs
                         func sample(at pos: Double) -> Float {
                             guard pos >= 0, pos < Double(x.count - 1) else { return 0 }
-                            let i0 = Int(pos), f = Float(pos - Double(i0))
-                            return x[i0] * (1 - f) + x[i0 + 1] * f
+                            return cubic(x, pos)
                         }
                         cross = (sample(at: prePos), sample(at: postPos), w)
                         break
@@ -50,8 +61,7 @@ extension AudioMixer {
                     continue
                 }
                 if gg > 0.001, ss >= 0, ss < Double(x.count - 1) {
-                    let i0 = Int(ss), f = Float(ss - Double(i0))
-                    y[i] = (x[i0] * (1 - f) + x[i0 + 1] * f) * Float(gg)
+                    y[i] = cubic(x, ss) * Float(gg)
                 }
             }
             prevS = s; prevG = g

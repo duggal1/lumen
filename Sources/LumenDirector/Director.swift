@@ -165,6 +165,14 @@ public enum Director {
                                      targetLz, arrival, vx, vy)
                 FileHandle.standardError.write(Data(message.utf8))
             }
+            for e in input.events where e.kind == .keyDown && e.axFrameIndex > 0 && Int(e.axFrameIndex) <= input.ax.count {
+                guard let c = input.ax[Int(e.axFrameIndex) - 1].caret else { continue }
+                let o = tm.output(atSource: e.t), f = t.evaluate(at: o)
+                let vw = Double(src.width) / Double(f.cameraScale), vh = Double(src.height) / Double(f.cameraScale)
+                let nx = (c.x + c.w / 2 - (Double(f.cameraCenter.x) - vw / 2)) / vw
+                let ny = (c.y + c.h / 2 - (Double(f.cameraCenter.y) - vh / 2)) / vh
+                FileHandle.standardError.write(Data(String(format: "LUMEN_TYPING t=%.3f scale=%.2f caret_in_view=(%.2f,%.2f)\n", e.t, f.cameraScale, nx, ny).utf8))
+            }
         }
         return t
     }

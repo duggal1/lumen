@@ -310,27 +310,41 @@ public final class AudioMixer: @unchecked Sendable {
             return buffers
         }()
         let packCodes = Set(typingBuffers.keys)
-        let fallbackKey = typingBuffers.keys.sorted().first
+        let availableCodes = typingBuffers.keys.sorted()
         for cue in d.cues {
             let buf: [Float]
             if cue.kind == .key {
                 guard a.keySounds else { continue }
-                // Only a key the pack really defines gets its own sample; every
-                // other key falls back to the pack's first sample, then to the
-                // recorded key tap. Typing is never silent.
+                // Prefer the pack's exact sample for this key. If the pack does not
+                // define one, pick deterministically among available samples so
+                // different keys don't collapse to the same sound.
                 let code = TypingPackLoader.packCode(for: Int(cue.keyCode), definedIn: packCodes)
-                let samples = code.flatMap({ typingBuffers[$0] })
-                    ?? fallbackKey.flatMap({ typingBuffers[$0] }) ?? bank.render(.key).samples
+                let samples: [Float]
+                if let code, let exact = typingBuffers[code] {
+                    samples = exact
+                } else if !availableCodes.isEmpty {
+                    let pick = availableCodes[Int(bitPattern: UInt(bitPattern: Int(cue.keyCode))) % availableCodes.count]
+                    samples = typingBuffers[pick] ?? []
+                } else {
+                    samples = bank.render(.key).samples
+                }
                 let gap = prevKeyT.map { cue.t - $0 } ?? 1
                 let gain: Float = gap < 0.05 ? 0.7 : gap < 0.15 ? 0.85 : 1
                 // Typing has its own level; the general sfx gain does not stack on it.
                 let amplitude = Float(pow(10, (a.typingLevelDb + cue.gainDb + 2) / 20)) * gain
-                buf = samples.map { $0 * amplitude }
+                let source = samples.isEmpty ? bank.render(.key).samples : samples
+                buf = source.map { $0 * amplitude }
                 prevKeyT = cue.t
             } else {
                 let (b, gain) = bank.render(cue.kind, clickTone: a.clickTone)
                 let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + gain) / 20))
-                buf = b.map { $0 * amp }
+                let volumeMultiplier: Float
+                switch cue.kind {
+                case .whooshIn, .whooshOut: volumeMultiplier = 0.4
+                case .click: volumeMultiplier = 1.0
+                default: volumeMultiplier = 1.0
+                }
+                buf = b.map { $0 * amp * volumeMultiplier }
             }
             let s0 = Int(cue.t * fs)
             for (k, v) in buf.enumerated() where s0 + k >= 0 && s0 + k < n {

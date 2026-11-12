@@ -7,6 +7,10 @@ App/public/assets/music/**/*.mp3
 wallpapers/
 App/public/assets/wallpapers/macos/
 
+# Local typing sound samples
+App/public/assets/typing/**/*.wav
+Resources/TypingPacks/**/*.wav
+
 # --- Agent / proof scaffolding: local only, never in the public repo ---
 .opencode/
 .proof/

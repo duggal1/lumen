@@ -50,6 +50,7 @@ private final class OCRJob: @unchecked Sendable {
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let readerLock = OSAllocatedUnfairLock<ReaderHandle?>(uncheckedState: nil)
     private let cancelled = OSAllocatedUnfairLock(initialState: false)
+    private let queue = DispatchQueue(label: "lumen.analysis.ocr")
 
     init(asset: AVAsset, track: AVAssetTrack, offset: Double, salt: UInt64, patterns: [String], entropyThreshold: Double, fps: Double, duration: Double, firstFrameOnly: Bool, progress: @escaping @Sendable (Double) -> Void) {
         self.asset = asset; self.track = track; self.offset = offset; self.salt = salt; self.patterns = patterns
@@ -58,10 +59,12 @@ private final class OCRJob: @unchecked Sendable {
 
     func cancel() {
         cancelled.withLock { $0 = true }
-        readerLock.withLock { $0?.reader.cancelReading() }
-        requestLock.withLock { $0.forEach { $0.request.cancel() } }
-        let found = partial.withLock { $0 }
-        resolve(.failure(found.isEmpty ? CancellationError() : PartialScan(detections: deduplicate(found))))
+        queue.async { [self] in
+            readerLock.withLock { $0?.reader.cancelReading() }
+            requestLock.withLock { $0.forEach { $0.request.cancel() } }
+            let found = partial.withLock { $0 }
+            resolve(.failure(found.isEmpty ? CancellationError() : PartialScan(detections: deduplicate(found))))
+        }
     }
 
     func value() async throws -> [OCRDetection] {
@@ -71,17 +74,20 @@ private final class OCRJob: @unchecked Sendable {
                 state.continuation = continuation; return nil
             }
             if let prior { continuation.resume(with: prior); return }
-            DispatchQueue.global(qos: .utility).async { [self] in
+            queue.async { [self] in
                 do { resolve(.success(try run())) }
                 catch {
                     let found = partial.withLock { $0 }
                     resolve(.failure(found.isEmpty ? error : PartialScan(detections: deduplicate(found))))
                 }
             }
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + max(180, duration * 2)) { [weak self] in
+            queue.asyncAfter(deadline: .now() + max(180, duration * 2)) { [weak self] in
                 guard let self, self.completion.withLock({ $0.result == nil }) else { return }
-                self.resolve(.failure(PartialScan(detections: self.deduplicate(self.partial.withLock { $0 }))))
-                self.cancel()
+                self.cancelled.withLock { $0 = true }
+                self.readerLock.withLock { $0?.reader.cancelReading() }
+                self.requestLock.withLock { $0.forEach { $0.request.cancel() } }
+                let found = self.partial.withLock { $0 }
+                self.resolve(.failure(found.isEmpty ? CancellationError() : PartialScan(detections: self.deduplicate(found))))
             }
         }
     }
@@ -96,6 +102,7 @@ private final class OCRJob: @unchecked Sendable {
     }
 
     func run() throws -> [OCRDetection] {
+        if cancelled.withLock({ $0 }) { throw CancellationError() }
         let reader = try AVAssetReader(asset: asset)
         let handle = ReaderHandle(reader)
         readerLock.withLock { $0 = handle }
@@ -106,6 +113,7 @@ private final class OCRJob: @unchecked Sendable {
         output.alwaysCopiesSampleData = false
         guard reader.canAdd(output) else { throw AnalysisError.readerConfiguration }
         reader.add(output)
+        if cancelled.withLock({ $0 }) { reader.cancelReading(); throw CancellationError() }
         guard reader.startReading() else { throw reader.error ?? AnalysisError.readerStart }
         var nextTrack = 0.0
         defer { retireTrackers() }
@@ -162,7 +170,7 @@ private final class OCRJob: @unchecked Sendable {
             if firstFrameOnly { reader.cancelReading(); break }
         }
         if reader.status == .failed { throw reader.error ?? AnalysisError.readerFailed }
-        if let previous = lastDetections.first {
+        if !firstFrameOnly, let previous = lastDetections.first {
             let end = max(duration, asset.duration.seconds) + offset
             for held in stride(from: previous.t + 0.25, through: end, by: 0.25) {
                 detections.append(contentsOf: lastDetections.map { var value = $0; value.t = held; return value })

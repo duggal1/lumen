@@ -133,7 +133,7 @@ public final class CAFWriter: @unchecked Sendable {
             if lastPTS != nil, let anchor = firstPTS, fileFmt.sampleRate > 0 {
                 let expected = anchor + Double(totalFrames) / fileFmt.sampleRate
                 let delta = pts - expected
-                if delta > 0.005 {
+                if delta > 0.025 {
                     // Gap: fill with exact-length silence (never collapse timeline).
                     let gapFrames = Int64((delta * fileFmt.sampleRate).rounded())
                     // Short gap (<100 ms): crossfaded silence is already clicked-safe
@@ -143,7 +143,7 @@ public final class CAFWriter: @unchecked Sendable {
                         writeSilence(to: f, format: fileFmt, frames: gapFrames, ramp: true)
                         totalFrames += gapFrames
                     }
-                } else if delta < -0.005 {
+                } else if delta < -0.025 {
                     // Overlap: trim the head of this buffer.
                     let skip = Int64((-delta * fileFmt.sampleRate).rounded())
                     if skip >= Int64(inBox.buf.frameLength) {
