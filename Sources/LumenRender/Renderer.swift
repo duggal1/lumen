@@ -607,7 +607,7 @@ public final class Renderer: @unchecked Sendable {
         if tl.webcam != nil, let w = r.webcam {
             let bubbleW = tl.derived == nil
                 ? g.canvas.x * (tl.webcam?.size ?? 0.2)
-                : Double(states.first?.layout.cameraRect.z ?? 0) * g.canvas.x
+                : (states.map { Double($0.layout.cameraRect.z) * g.canvas.x }.max() ?? 0)
             let webFull = Int(floor(log2(Double(max(w.texture.width, w.texture.height))))) + 1
             let webMinif = Double(w.texture.width) / max(bubbleW, 1)
             let webLevels = webMinif <= 1 ? 1 : min(Int(ceil(log2(webMinif))) + 1, webFull)
