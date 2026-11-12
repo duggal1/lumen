@@ -206,10 +206,13 @@ public actor RecordingSession {
             unit = ClockCalibration.eventUnit()
             if let info = e.info {
                 let clock = RecordingClock(originHostSeconds: 0, eventUnit: unit)
+                let windowID: CGWindowID? = if case .window(let id) = config.source { id } else { nil }
                 let i = await MainActor.run {
-                    InputRecorder(url: b.eventsURL, axURL: b.axURL, origin: CGPoint(x: info.originX, y: info.originY), scale: info.backingScale, clock: clock)
+                    InputRecorder(url: b.eventsURL, axURL: b.axURL, origin: CGPoint(x: info.originX, y: info.originY),
+                                  scale: info.backingScale, clock: clock, windowID: windowID)
                 }
                 input = i
+                e.setInputScaleHook { [weak i] scale in i?.setSourceScale(scale) }
             }
             if config.webcamDeviceID != nil { webcam = try WebcamRecorder(url: b.webcamURL, deviceID: config.webcamDeviceID, quality: config.webcamQuality) }
             // Device IDs are unique and checked before recording starts; never
