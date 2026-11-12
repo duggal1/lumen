@@ -468,11 +468,11 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         meta = try FrameMetaWriter(url: bundle.framesMetaURL)
         if cfg.mic { mic = CAFWriter(url: bundle.micURL) }
         if cfg.systemAudio { system = CAFWriter(url: bundle.systemURL) }
-        sourcePoints.withLock { $0 = points }
-        sourceInfo.withLock {
-            $0 = SourceInfo(width: pw, height: ph, fps: Double(fps), duration: 0,
-                            backingScale: nativeScale * capFactor, originX: origin.x, originY: origin.y)
-        }
+        let configuredPoints = points
+        let configuredInfo = SourceInfo(width: pw, height: ph, fps: Double(fps), duration: 0,
+                                        backingScale: nativeScale * capFactor, originX: origin.x, originY: origin.y)
+        sourcePoints.withLock { $0 = configuredPoints }
+        sourceInfo.withLock { $0 = configuredInfo }
 
         let s = SCStream(filter: filter, configuration: sc, delegate: self)
         try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQ)
