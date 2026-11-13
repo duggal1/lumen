@@ -136,7 +136,8 @@ public enum ToolSchemas {
         case "timeline_get", "undo", "zoom_replan", "qa_report", "project_close", "captions_generate", "captions_set",
              "privacy_scan", "privacy_apply":
             if name == "captions_generate" {
-                props = ["project_id": project, "locale": J.str("Speech and caption locale.", def: "en-US")]
+                props = ["project_id": project, "locale": J.str("Speech and caption locale.", def: "en-US"),
+                         "wait": J.bool("Wait for transcription and receive progress notifications.", def: false)]
             } else if name == "captions_set" {
                 props = ["project_id": project, "enabled": J.bool("Show captions.", def: true),
                          "locale": J.str("Caption locale.")]
@@ -146,6 +147,9 @@ public enum ToolSchemas {
                                                 "additionalProperties": J.bool("Whether each mask is approved.")])]
             } else if name == "project_close" {
                 props = ["project_id": project]
+            } else if name == "privacy_scan" {
+                props = ["project_id": project,
+                         "wait": J.bool("Wait for scan completion and receive progress notifications.", def: false)]
             } else {
                 props = ["project_id": project]
             }
@@ -218,7 +222,8 @@ public enum ToolSchemas {
                      "preset": J.str("Export preset name.", def: "1080p30-h264"),
                      "output": J.str("Output path inside an approved folder."),
                      "include_audio": J.bool("Include the audio mix.", def: true),
-                     "export_stems": J.bool("Write separate audio stems.", def: false)]
+                     "export_stems": J.bool("Write separate audio stems.", def: false),
+                     "wait": J.bool("Wait for export completion and receive progress notifications.", def: false)]
         case "job_status", "export_cancel":
             if name == "job_status" {
                 props = ["job_id": J.str("Job id returned by a long-running tool."),

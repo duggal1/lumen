@@ -196,9 +196,12 @@ public struct ToolContext: Sendable {
     public let dryRun: Bool
     /// AGENT: one guard for every path argument, so no tool can forget confinement.
     public let paths: PathGuard
+    /// AGENT: long-running tools need an MCP progress route while their request stays open.
+    public let progress: (@Sendable (Double, String?) -> Void)?
 
     public init(engine: Engine, policy: Policy, jobs: JobManager, audit: AuditLog,
-                clientID: String, dryRun: Bool) {
+                clientID: String, dryRun: Bool,
+                progress: (@Sendable (Double, String?) -> Void)? = nil) {
         self.engine = engine
         self.policy = policy
         self.jobs = jobs
@@ -206,6 +209,13 @@ public struct ToolContext: Sendable {
         self.clientID = clientID
         self.dryRun = dryRun
         self.paths = PathGuard(policy: policy, client: clientID)
+        self.progress = progress
+    }
+
+    /// Waits for a job and routes progress to the current MCP request.
+    // AGENT: progress callbacks belong to the request that explicitly asked to wait.
+    public func waitForJob(_ id: String) async throws -> JobManager.Job {
+        try await jobs.waitForCompletion(id, progress: progress)
     }
 }
 

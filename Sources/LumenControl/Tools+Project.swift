@@ -421,16 +421,20 @@ public struct BackgroundSetInput: ToolInput {
 public struct CaptionsGenerateInput: ToolInput {
     public var projectID: String = ""
     public var locale: String = "en-US"
+    // AGENT: agents may request a complete transcription result in one progress-reporting call.
+    public var wait: Bool = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
     case projectID = "project_id"
     case locale
+    case wait
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
     self.locale = try c.decodeIfPresent(String.self, forKey: .locale) ?? "en-US"
+    self.wait = try c.decodeIfPresent(Bool.self, forKey: .wait) ?? false
     }
 }
 
@@ -455,14 +459,18 @@ public struct CaptionsSetInput: ToolInput {
 
 public struct PrivacyScanInput: ToolInput {
     public var projectID: String = ""
+    // AGENT: a client can await scan completion without polling when that fits its workflow.
+    public var wait: Bool = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
     case projectID = "project_id"
+    case wait
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.wait = try c.decodeIfPresent(Bool.self, forKey: .wait) ?? false
     }
 }
 
@@ -712,6 +720,7 @@ public extension ToolRegistry {
             description: "Transcribes the recorded microphone and turns captions on. Needs the local speech model; returns a job id.",
             capability: .edit, required: ["project_id"], mutating: true, longRunning: true) { input, ctx in
                 let job = try await ctx.engine.startTranscription(projectID: input.projectID, locale: input.locale)
+                if input.wait { return try await ctx.waitForJob(job).jsonValue }
                 return .object(["job_id": .string(job)])
             })
 
@@ -732,6 +741,7 @@ public extension ToolRegistry {
             description: "Runs the privacy scan over a recording and applies automatic masks. Returns a job id; poll it with job_status.",
             capability: .edit, required: ["project_id"], mutating: true, longRunning: true) { input, ctx in
                 let job = try await ctx.engine.startPrivacyScan(projectID: input.projectID)
+                if input.wait { return try await ctx.waitForJob(job).jsonValue }
                 return .object(["job_id": .string(job)])
             })
 

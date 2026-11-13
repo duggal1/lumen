@@ -28,7 +28,9 @@ public final class MCPServer: @unchecked Sendable {
 
     /// Handles one JSON-RPC line. Returns the reply line, or nil for a
     /// notification that expects no answer.
-    public func handle(_ line: String, client: String = "stdio") async -> String? {
+    // AGENT: transports supply a serialized writer so job progress notifications share the request connection.
+    public func handle(_ line: String, client: String = "stdio",
+                       notify: (@Sendable (String) -> Void)? = nil) async -> String? {
         guard let data = line.data(using: .utf8),
               let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let method = request["method"] as? String else {
@@ -78,11 +80,23 @@ public final class MCPServer: @unchecked Sendable {
                 return error(id: id, code: -32602, message: "Missing tool name")
             }
             let arguments = (params["arguments"] as? [String: Any] ?? [:])
+            let progressToken = (params["_meta"] as? [String: Any])?["progressToken"].map(JSONValue.init(any:))
+            let progress: (@Sendable (Double, String?) -> Void)? = progressToken.flatMap { token in
+                guard let notify else { return nil }
+                return { value, message in
+                    var fields: [String: JSONValue] = ["progressToken": token, "progress": .number(value)]
+                    if let message { fields["message"] = .string(message) }
+                    notify(JSONValue.object(["jsonrpc": .string("2.0"),
+                                             "method": .string("notifications/progress"),
+                                             "params": .object(fields)]).jsonText)
+                }
+            }
             var argDict: [String: JSONValue] = [:]
             for (key, value) in arguments { argDict[key] = JSONValue(any: value) }
             let argValue = JSONValue.object(argDict)
             let ctx = ToolContext(engine: engine, policy: policy, jobs: jobs, audit: audit,
-                                  clientID: client, dryRun: (arguments["dry_run"] as? Bool) ?? false)
+                                  clientID: client, dryRun: (arguments["dry_run"] as? Bool) ?? false,
+                                  progress: progress)
             let ok: Bool
             let payload: JSONValue
             do {

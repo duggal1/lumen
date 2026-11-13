@@ -188,6 +188,8 @@ public struct ExportStartInput: ToolInput {
     public var output: String = ""
     public var includeAudio: Bool = true
     public var exportStems: Bool = false
+    // AGENT: export_start can keep one MCP request open when the client needs inline completion.
+    public var wait: Bool = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -196,6 +198,7 @@ public struct ExportStartInput: ToolInput {
     case output
     case includeAudio = "include_audio"
     case exportStems = "export_stems"
+    case wait
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -204,6 +207,7 @@ public struct ExportStartInput: ToolInput {
     self.output = try c.decodeIfPresent(String.self, forKey: .output) ?? ""
     self.includeAudio = try c.decodeIfPresent(Bool.self, forKey: .includeAudio) ?? true
     self.exportStems = try c.decodeIfPresent(Bool.self, forKey: .exportStems) ?? false
+    self.wait = try c.decodeIfPresent(Bool.self, forKey: .wait) ?? false
     }
 }
 
@@ -382,6 +386,12 @@ public extension ToolRegistry {
                                                           outputPath: resolved.path,
                                                           includeAudio: input.includeAudio,
                                                           exportStems: input.exportStems)
+                if input.wait {
+                    let completed = try await ctx.waitForJob(job)
+                    guard case .object(var result) = completed.jsonValue else { return completed.jsonValue }
+                    result["output"] = .string(resolved.path)
+                    return .object(result)
+                }
                 return .object(["job_id": .string(job), "output": .string(resolved.path)])
             })
 
