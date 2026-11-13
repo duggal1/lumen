@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import ApplicationServices
 import AppKit
+import os
 
 /// How the actuator drives the machine.
 public enum InputMode: String, Sendable, Codable, CaseIterable {
@@ -46,6 +47,10 @@ public final class InputSynthesizer: @unchecked Sendable {
     private let source: CGEventSource?
     /// AGENT: every event batch re-checks that the frontmost app is still approved.
     public var gate: ActuationGate?
+    // AGENT: track synthesized pointer positions so the watchdog can distinguish its own motion.
+    private let posted = OSAllocatedUnfairLock<CGPoint?>(initialState: nil)
+    public var lastPosted: CGPoint? { posted.withLock { $0 } }
+    public var checkpoint: (@Sendable () throws -> Void)?
 
     public init(mode: InputMode = .physical, tag: Int64 = Int64.random(in: 1_000_000...9_000_000)) {
         self.mode = mode
@@ -57,19 +62,21 @@ public final class InputSynthesizer: @unchecked Sendable {
 
     /// Moves the cursor along a minimum-jerk path. Absolute deadlines, so the
     /// path never drifts with the frame rate.
-    public func moveCursor(to target: CGPoint, ms: Int) async throws {
+    public func moveCursor(to target: CGPoint, ms: Int, dragging: Bool = false) async throws {
         let hz = 120.0
         let n = max(Int(Double(ms) / 1000 * hz), 2)
         let start = Self.currentMouseLocation()
         let clock = ContinuousClock()
         let t0 = clock.now
         for i in 1...n {
+            try checkpoint?()
             try gate?.assertFrontmost()
             let u = Double(i) / Double(n)
             let s = u * u * u * (10 + u * (-15 + 6 * u))   // minimum jerk
             let p = CGPoint(x: start.x + (target.x - start.x) * s,
                             y: start.y + (target.y - start.y) * s)
-            postMouse(type: .mouseMoved, at: p, button: .left, clickState: 0)
+            // AGENT: dragging must send dragged events so the target sees the held button.
+            postMouse(type: dragging ? .leftMouseDragged : .mouseMoved, at: p, button: .left, clickState: dragging ? 1 : 0)
             try await clock.sleep(until: t0.advanced(by: .seconds(Double(i) / hz)))
         }
     }
@@ -89,7 +96,9 @@ public final class InputSynthesizer: @unchecked Sendable {
         let clicks = max(count, 1)
         for i in 1...clicks {
             postMouse(type: down, at: point, button: cgButton, clickState: Int64(i))
-            try await Task.sleep(for: .milliseconds(max(holdMs, 0)))
+            // AGENT: cancellation during a hold must release the mouse button.
+            do { try await Task.sleep(for: .milliseconds(max(holdMs, 0))) }
+            catch { postMouse(type: up, at: point, button: cgButton, clickState: Int64(i)); throw error }
             postMouse(type: up, at: point, button: cgButton, clickState: Int64(i))
             if i < clicks { try await Task.sleep(for: .milliseconds(60)) }
         }
@@ -102,12 +111,17 @@ public final class InputSynthesizer: @unchecked Sendable {
         try gate?.assertFrontmost()
         try await moveCursor(to: start, ms: max(ms / 3, 50))
         postMouse(type: .leftMouseDown, at: start, button: .left, clickState: 1)
-        try await moveCursor(to: end, ms: max(ms, 50))
+        // AGENT: release at the last posted position if a drag is interrupted.
+        do { try await moveCursor(to: end, ms: max(ms, 50), dragging: true) }
+        catch { postMouse(type: .leftMouseUp, at: lastPosted ?? start, button: .left, clickState: 1); throw error }
         postMouse(type: .leftMouseUp, at: end, button: .left, clickState: 1)
     }
 
     public func scroll(at point: CGPoint, dy: Double) throws {
+        try checkpoint?()
         try gate?.assertFrontmost()
+        // AGENT: place the wheel event over the requested target before scrolling.
+        postMouse(type: .mouseMoved, at: point, button: .left, clickState: 0)
         // AGENT: dy is in lines, but it was posted as 3 pixels of wheel travel,
         // which is invisible. Line units match what a trackpad sends.
         guard let event = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 1,
@@ -127,12 +141,15 @@ public final class InputSynthesizer: @unchecked Sendable {
         var next = clock.now
         var index = 0
         for character in text {
+            try checkpoint?()
             try gate?.assertFrontmost()
             let key = Self.virtualKey(for: character)
             // AGENT: jitter was computed and thrown away, so every keystroke
             // landed on a perfectly even grid. It now shapes the interval.
             next = next.advanced(by: .seconds(perChar * Self.jitter(for: index)))
             try await clock.sleep(until: next)
+            try checkpoint?()
+            try gate?.assertFrontmost()
             if let key {
                 postKey(code: key.code, down: true, unicode: String(character), shift: key.shift)
                 postKey(code: key.code, down: false, unicode: String(character), shift: key.shift)
@@ -188,10 +205,11 @@ public final class InputSynthesizer: @unchecked Sendable {
             default: break
             }
         }
-        if let code = Self.namedKey(name) {
-            postKey(code: code, down: true, unicode: nil, shift: flags.contains(.maskShift), flags: flags)
-            postKey(code: code, down: false, unicode: nil, shift: flags.contains(.maskShift), flags: flags)
-        }
+        // AGENT: unknown keys must fail visibly and single-character shortcuts need ANSI key codes.
+        let code = Self.namedKey(name) ?? (name.count == 1 ? name.first.flatMap { Self.virtualKey(for: $0)?.code } : nil)
+        guard let code else { throw ActuatorError.failed("Unknown key ‘\(name)’. Use a character or a supported named key.") }
+        postKey(code: code, down: true, unicode: nil, shift: flags.contains(.maskShift), flags: flags)
+        postKey(code: code, down: false, unicode: nil, shift: flags.contains(.maskShift), flags: flags)
     }
 
     /// The kill switch: Escape always works, even mid-run.
@@ -207,6 +225,7 @@ public final class InputSynthesizer: @unchecked Sendable {
                                   mouseButton: button) else { return }
         event.setIntegerValueField(.mouseEventClickState, value: clickState)
         event.setIntegerValueField(.eventSourceUserData, value: tag)
+        posted.withLock { $0 = point }
         event.post(tap: .cghidEventTap)
     }
 
@@ -250,8 +269,9 @@ public final class InputSynthesizer: @unchecked Sendable {
             return Key(code: code, shift: ascii != lower)
         }
         switch ascii {
-        case 0x31...0x39:  // 1-9
-            return Key(code: CGKeyCode(ascii - 0x31 + 18), shift: false)
+        // AGENT: ANSI digit key codes are not consecutive.
+        case 0x31...0x39:
+            return Key(code: [18, 19, 20, 21, 23, 22, 26, 28, 25][Int(ascii - 0x31)], shift: false)
         case 0x30:         // 0
             return Key(code: 29, shift: false)
         case 0x20: return Key(code: 49, shift: false)   // space
