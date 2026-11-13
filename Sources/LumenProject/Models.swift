@@ -20,28 +20,34 @@ public struct RGBA: Codable, Equatable, Sendable {
 /// Two flat tones, ordered-dithered into a pixel field. Base first, ink second.
 public enum DitherPalettes {
     public static let all: [(String, [RGBA])] = [
-        ("Ember", [RGBA(0x0A0A0A), RGBA(0xFF6A00)]),
-        ("Ember white", [RGBA(0xF4F4F4), RGBA(0xF05A00)]),
-        ("Ocean", [RGBA(0x06121F), RGBA(0x38BDF8)]),
-        ("Ocean white", [RGBA(0xEFF6FF), RGBA(0x2563EB)]),
-        ("Moss", [RGBA(0x07130C), RGBA(0x4ADE80)]),
-        ("Moss white", [RGBA(0xF0FDF4), RGBA(0x16A34A)]),
-        ("Rose", [RGBA(0x140A10), RGBA(0xF472B6)]),
-        ("Rose white", [RGBA(0xFDF2F8), RGBA(0xDB2777)]),
-        ("Graphite", [RGBA(0x0A0A0A), RGBA(0x525252)]),
-        ("Paper", [RGBA(0xF4F4F4), RGBA(0x171717)]),
+        ("Orange / black", [RGBA(0x0A0A0A), RGBA(0xFF6A00)]),
+        ("Orange / white", [RGBA(0xFFFFFF), RGBA(0xFF6A00)]),
+        ("Green / white", [RGBA(0xFFFFFF), RGBA(0x39D353)]),
+        ("Green / black", [RGBA(0x0A0A0A), RGBA(0x39D353)]),
     ]
     public static func colors(named name: String) -> [RGBA] {
         all.first { $0.0 == name }?.1 ?? all[0].1
     }
 }
 
-/// Legacy gradients are kept for decoding old projects; the picker offers dither, canvas, wallpaper and solid.
+/// Legacy backgrounds remain decodable for existing projects.
 public enum BackgroundKind: String, Codable, CaseIterable, Sendable {
-    case dither, canvas, wallpaper, solid, gradient, mesh, wave, field
+    case dither, canvas, wallpaper, solid, gradient, mesh
     /// A local image, either chosen from disk or fetched through Unsplash.
     case image
-    public static let offered: [BackgroundKind] = [.solid, .wave, .field, .canvas, .wallpaper, .image]
+    public static let offered: [BackgroundKind] = [.solid, .canvas, .wallpaper, .image]
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        if value == "wave" || value == "field" {
+            self = .dither
+        } else if let kind = Self(rawValue: value) {
+            self = kind
+        } else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown background kind: \(value)")
+        }
+    }
 }
 
 public enum GradientPresets {
@@ -88,6 +94,7 @@ public struct Style: Codable, Equatable, Sendable {
     public var colors: [RGBA] = [RGBA(0xF4F4F4), RGBA(0xDADADA)]
     public var gradientAngle: Double = 35
     public var ditherCell: Double = 4, ditherDensity: Double = 0.55, contentScale: Double = 1
+    public var ditherSaturation = true
     public var padding: Double = 0.025
     public var cornerRadius: Double = 14
     public var shadow: Double = 0.45
@@ -110,13 +117,14 @@ public struct Style: Codable, Equatable, Sendable {
     public var insets: EdgeInsetsN { paddingInsets ?? EdgeInsetsN(all: padding) }
     public var radii: CornerRadii { cornerRadii ?? CornerRadii(all: cornerRadius) }
     enum CodingKeys: String, CodingKey {
-        case background, colors, gradientAngle, ditherCell, ditherDensity, contentScale, padding, cornerRadius, shadow, innerBorder, canvas, paddingInsets, cornerRadii, customAspect, wallpaperBlur, backgroundImagePath, imageOpacity, imageContrast, imageBrightness, frameWeight
+        case background, colors, gradientAngle, ditherCell, ditherDensity, contentScale, ditherSaturation, padding, cornerRadius, shadow, innerBorder, canvas, paddingInsets, cornerRadii, customAspect, wallpaperBlur, backgroundImagePath, imageOpacity, imageContrast, imageBrightness, frameWeight
     }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         background = c.opt(.background, background); colors = c.opt(.colors, colors); gradientAngle = c.opt(.gradientAngle, gradientAngle)
         ditherCell = c.opt(.ditherCell, ditherCell); ditherDensity = c.opt(.ditherDensity, ditherDensity); contentScale = c.opt(.contentScale, contentScale)
+        ditherSaturation = c.opt(.ditherSaturation, ditherSaturation)
         padding = c.opt(.padding, padding); cornerRadius = c.opt(.cornerRadius, cornerRadius); shadow = c.opt(.shadow, shadow)
         innerBorder = c.opt(.innerBorder, innerBorder); canvas = c.opt(.canvas, canvas)
         paddingInsets = try? c.decodeIfPresent(EdgeInsetsN.self, forKey: .paddingInsets)
@@ -281,6 +289,8 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
     public var placement: Double                        // OUTPUT seconds
     public var gainDb: Double, mute: Bool, separateTrack: Bool
     public var variant: String?                         // "EN", "ES"
+    public var trimStart: Double? = nil
+    public var trimDuration: Double? = nil
     public init(id: UUID = UUID(), role: Role, path: String? = nil, placement: Double = 0, gainDb: Double = 0, mute: Bool = false,
                 separateTrack: Bool = false, variant: String? = nil) {
         self.id = id; self.role = role; self.path = path; self.placement = placement; self.gainDb = gainDb; self.mute = mute
@@ -535,6 +545,9 @@ public struct Timeline: Sendable, Codable, Equatable {
     /// Logical split points in the recording, source seconds. No output effect.
     public var seams: [SplitSeam] = []
     public var zoom: [ZoomSegment] = []
+    /// AGENT: ids of automatic zooms a human deleted. Replanning used to add
+    /// them straight back, so the delete never stuck.
+    public var suppressedAuto: [String] = []
     public var style = Style()
     public var cursor = CursorStyle()
     public var camera = CameraParams()
@@ -548,7 +561,7 @@ public struct Timeline: Sendable, Codable, Equatable {
     public var clips: [TimelineClip] = []
     public var derived: DerivedTracks?
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, timeMap, zoom, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips, seams
+        case schemaVersion, timeMap, zoom, suppressedAuto, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips, seams
     }
     public init(duration: Double) { timeMap = TimeMap(sourceDuration: duration) }
     public init(from d: Decoder) throws {
@@ -558,6 +571,7 @@ public struct Timeline: Sendable, Codable, Equatable {
         schemaVersion = 4
         seams = c.opt(.seams, seams)
         zoom = c.opt(.zoom, zoom)
+        suppressedAuto = c.opt(.suppressedAuto, suppressedAuto)
         if version < 2 { for i in zoom.indices { zoom[i].start = timeMap.source(atOutput: zoom[i].start); zoom[i].end = timeMap.source(atOutput: zoom[i].end) } }
         if version < 4 {
             // v3 -> v4: legacy Loudness key targetLUFS is handled inside AudioPlan decode.

@@ -415,6 +415,10 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id", "id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "remove zoom") { timeline in
+                    // AGENT: deleting an auto zoom must survive the next replan.
+                    for zoom in timeline.zoom where zoom.id.uuidString == input.id && zoom.origin == .auto {
+                        timeline.suppressedAuto.append(zoom.id.uuidString)
+                    }
                     timeline.zoom.removeAll { $0.id.uuidString == input.id }
                 }
                 return .object(result)
@@ -547,6 +551,9 @@ public extension ToolRegistry {
             if op.scale > 0 { timeline.zoom[index].scale = op.scale }
             timeline.zoom[index].focus = focus(from: op.focusMode, x: op.focusX, y: op.focusY)
         case "zoom_remove":
+            for zoom in timeline.zoom where zoom.id.uuidString == op.id && zoom.origin == .auto {
+                timeline.suppressedAuto.append(zoom.id.uuidString)
+            }
             timeline.zoom.removeAll { $0.id.uuidString == op.id }
         case "cut_add":
             timeline.timeMap.cuts.append(CutRange(start: op.start, end: op.end, origin: .manual))

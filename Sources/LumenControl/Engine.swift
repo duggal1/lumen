@@ -562,12 +562,17 @@ public actor Engine {
         let ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: h.bundle.axURL))) ?? []
         let plan = Director.planRecordingZoom(events: session.input.events, ax: ax,
                                              source: h.meta.source, timeline: h.timeline)
+        // AGENT: a zoom the human deleted came back on the next replan; the
+        // suppression list keeps their decision.
+        let suppressed = Set(h.timeline.suppressedAuto)
+        let kept = plan.filter { !suppressed.contains($0.id.uuidString) }
         let result = try await edit(projectID: projectID, expectRevision: nil,
                                    describe: "automatic zoom replan") { timeline in
-            timeline.zoom = plan
+            timeline.zoom = kept
         }
         var payload = result
-        payload["zoom_segments"] = .int(plan.count)
+        payload["zoom_segments"] = .int(kept.count)
+        payload["suppressed"] = .int(plan.count - kept.count)
         return payload
     }
 
