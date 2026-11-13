@@ -103,7 +103,7 @@ public extension ToolRegistry {
                 script.app.bundleID = input.bundleID.isEmpty ? nil : input.bundleID
                 script.steps = [DemoScript.Step(id: "ui_act", do: input.actions)]
                 let runner = ScriptRunner(mode: .physical, sink: ctx.engine.markerSink(),
-                                          writablePath: ctx.paths.writablePath)
+                                          writablePath: { try ctx.paths.writablePath($0, ext: PathGuard.imageExt) })
                 let markers = try await runner.run(script)
                 return .object(["markers": .array(markers.map { self.markerJSON($0) })])
             })
@@ -136,7 +136,7 @@ public extension ToolRegistry {
                 }
                 let mode: InputMode = input.mode == "virtual" ? .virtual : .physical
                 let runner = ScriptRunner(mode: mode, sink: ctx.engine.markerSink(),
-                                          writablePath: ctx.paths.writablePath)
+                                          writablePath: { try ctx.paths.writablePath($0, ext: PathGuard.imageExt) })
                 do {
                     let markers = try await runner.run(script)
                     return .object(["markers": .array(markers.map { self.markerJSON($0) })])
