@@ -285,7 +285,7 @@ struct Inspector: View {
 
     private var wallpaperList: some View {
         VStack(spacing: 12) {
-            LSegmented(sel: Binding(get: { wallpaperSource }, set: selectWallpaperSource),
+            LSegmented(sel: Binding(get: { wallpaperSource }, set: { source in selectWallpaperSource(source) }),
                        items: WallpaperSource.allCases.map { ($0, $0.rawValue) })
                 .frame(maxWidth: .infinity)
             switch wallpaperSource {
