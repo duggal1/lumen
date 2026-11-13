@@ -611,28 +611,43 @@ public extension ToolRegistry {
             }
             return value
         }
+        // AGENT: reject non-finite or out-of-range values before they enter the timeline.
+        func range(_ value: Double, _ name: String, _ bounds: ClosedRange<Double>) throws -> Double {
+            guard value.isFinite, bounds.contains(value) else { throw ToolError.invalidArguments("\(name) must be in \(bounds).") }
+            return value
+        }
         switch op.op {
         case "zoom_add":
             let start = try need(op.start, "start"), end = try need(op.end, "end")
-            timeline.zoom.append(ZoomSegment(start: start, end: end, scale: op.scale ?? 2,
-                                            focus: focus(from: op.focusMode ?? "follow",
-                                                         x: op.focusX ?? 0.5, y: op.focusY ?? 0.5),
-                                            origin: .manual))
+            guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else { throw ToolError.invalidArguments("zoom_add requires a valid source-time span.") }
+            let scale = try range(op.scale ?? 2, "scale", 1.1...4)
+            try applyCommand(.addZoom(ZoomSegment(start: start, end: end, scale: scale,
+                                                  focus: focus(from: op.focusMode ?? "follow",
+                                                               x: op.focusX ?? 0.5, y: op.focusY ?? 0.5),
+                                                  origin: .manual)), to: &timeline)
         case "zoom_set":
             let id = try need(op.id, "id")
             guard let index = timeline.zoom.firstIndex(where: { $0.id.uuidString == id }) else {
                 throw ToolError.failed("No zoom with id \(id).")
             }
-            if let start = op.start, let end = op.end, end > start {
+            if let start = op.start, let end = op.end {
+                guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else { throw ToolError.invalidArguments("zoom_set requires a valid source-time span.") }
                 timeline.zoom[index].start = start
                 timeline.zoom[index].end = end
             } else if (op.start == nil) != (op.end == nil) {
                 throw ToolError.invalidArguments("zoom_set needs both start and end, or neither.")
             }
-            if let scale = op.scale, scale > 0 { timeline.zoom[index].scale = scale }
-            if op.focusMode != nil || op.focusX != nil || op.focusY != nil {
-                timeline.zoom[index].focus = focus(from: op.focusMode ?? "follow",
-                                                   x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
+            if let scale = op.scale { timeline.zoom[index].scale = try range(scale, "scale", 1.1...4) }
+            // AGENT: changing only focus coordinates must preserve the existing focus mode and other coordinates.
+            if let mode = op.focusMode {
+                guard ["follow", "fixed", "element"].contains(mode) else { throw ToolError.invalidArguments("focus_mode must be follow, fixed, or element.") }
+                timeline.zoom[index].focus = focus(from: mode, x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
+            } else if op.focusX != nil || op.focusY != nil {
+                switch timeline.zoom[index].focus {
+                case .fixed(let x, let y): timeline.zoom[index].focus = .fixed(x: op.focusX ?? x, y: op.focusY ?? y)
+                case .element(let x, let y, let w, let h): timeline.zoom[index].focus = .element(x: op.focusX ?? x, y: op.focusY ?? y, w: w, h: h)
+                case .follow: throw ToolError.invalidArguments("Specify focus_mode when changing coordinates on a follow zoom.")
+                }
             }
             // AGENT: edited automatic zooms must survive the next planner pass.
             timeline.zoom[index].origin = .manual
@@ -645,22 +660,22 @@ public extension ToolRegistry {
             timeline.zoom.removeAll { $0.id.uuidString == id }
         case "cut_add":
             let start = try need(op.start, "start"), end = try need(op.end, "end")
-            guard end > start else {
+            guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else {
                 throw ToolError.invalidArguments("cut_add needs end after start, in source seconds.")
             }
-            timeline.timeMap.cuts.append(CutRange(start: start, end: end, origin: .manual))
+            let a = timeline.timeMap.output(atSource: start), b = timeline.timeMap.output(atSource: end)
+            try applyCommand(.cutOutputRange(start: a, end: b), to: &timeline)
         case "cut_remove":
             let id = try need(op.id, "id")
             timeline.timeMap.cuts.removeAll { $0.id.uuidString == id }
         case "ramp_set":
             let start = try need(op.start, "start"), end = try need(op.end, "end")
             // AGENT: validate speed before rebuilding the time map.
-            guard start.isFinite, end.isFinite, start >= 0, end > start,
+            guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001,
                   (op.speed ?? 2).isFinite, (0.25...16).contains(op.speed ?? 2) else {
                 throw ToolError.invalidArguments("ramp_set needs end after start, in source seconds.")
             }
-            timeline.timeMap.ramps.append(SpeedRamp(start: start, end: end,
-                                                    speed: op.speed ?? 2, origin: .manual))
+            try applyCommand(.addSpeedRamp(start: start, end: end, speed: op.speed ?? 2), to: &timeline)
         case "ramp_remove":
             let id = try need(op.id, "id")
             // AGENT: remember deleted automatic ramps before the planner regenerates them.
@@ -671,10 +686,13 @@ public extension ToolRegistry {
         case "style_set":
             let key = try need(op.key, "key")
             switch key {
-            case "padding": timeline.style.padding = try need(op.value, "value")
-            case "corner_radius": timeline.style.cornerRadius = try need(op.value, "value")
-            case "shadow": timeline.style.shadow = try need(op.value, "value")
-            case "aspect": timeline.style.customAspect = try need(op.value, "value")
+            case "padding": timeline.style.padding = try range(need(op.value, "value"), "padding", 0...0.2)
+            case "corner_radius": timeline.style.cornerRadius = try range(need(op.value, "value"), "corner_radius", 0...80)
+            case "shadow": timeline.style.shadow = try range(need(op.value, "value"), "shadow", 0...1)
+            case "aspect":
+                let aspect = try need(op.value, "value")
+                guard aspect.isFinite, aspect > 0.2, aspect < 5 else { throw ToolError.invalidArguments("aspect must be greater than 0.2 and less than 5.") }
+                timeline.style.customAspect = aspect
             case "wallpaper_blur": timeline.style.wallpaperBlur = try need(op.value, "value")
             case "background": timeline.style.background = try backgroundKind(try need(op.text, "text"))
             case "background_image":
