@@ -127,9 +127,6 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.toggle() } }
         // Cmd+Opt+P toggles pause while recording (start/stop is Cmd+Opt+R).
         pauseHotKey = HotKey(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.togglePause() } }
-        if UserDefaults.standard.bool(forKey: MCPPreferences.enabledKey) {
-            MCPHost.shared.configure(enabled: true, actions: self)
-        }
     }
 
     func refresh() {

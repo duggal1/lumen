@@ -18,7 +18,6 @@ struct SettingsSurface: View {
     @State private var tab = Tab.general
     @AppStorage("LumenAppearance") private var appearance = "system"
     @AppStorage("Lumen24Hour") private var use24Hour = false
-    @AppStorage("LumenMCPEnabled") private var mcpEnabled = false
     @AppStorage("LumenEmailEnabled") private var emailEnabled = false
     @AppStorage("LumenEmailRecipient") private var emailRecipient = ""
     @AppStorage("LumenEmailOnRecording") private var emailRecording = true
@@ -62,15 +61,6 @@ struct SettingsSurface: View {
                            items: [("12", "12-hour"), ("24", "24-hour")],
                            track: Tok.well, thumb: Tok.control)
                     .frame(width: 240)
-            }
-            ToggleRow(label: "MCP server", on: Binding(get: { mcpEnabled }, set: { on in
-                mcpEnabled = on
-                MCPHost.shared.configure(enabled: on, actions: app)
-            }))
-            if mcpEnabled, let port = MCPHost.shared.runningPort {
-                Row(label: "Endpoint") {
-                    Text("127.0.0.1:\(port)").font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
-                }
             }
             ToggleRow(label: "Email notifications", on: $emailEnabled)
             if emailEnabled {

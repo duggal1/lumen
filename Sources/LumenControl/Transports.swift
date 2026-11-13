@@ -12,6 +12,8 @@ public final class UnixSocketServer: @unchecked Sendable {
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     private var running = false
+    /// AGENT: held for the process lifetime so a second daemon cannot steal the socket.
+    private var lockFD: Int32 = -1
 
     public init(socketPath: URL, server: MCPServer) {
         self.path = socketPath
@@ -19,7 +21,22 @@ public final class UnixSocketServer: @unchecked Sendable {
     }
 
     public func start() throws {
-        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let directory = path.deletingLastPathComponent()
+        // AGENT: the socket lives in a 0700 directory so it is private before bind.
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        // AGENT: never unlink a live daemon's socket; the lock file is the arbiter.
+        let lockPath = directory.appendingPathComponent("agent.lock").path
+        let lock = open(lockPath, O_CREAT | O_RDWR, 0o600)
+        guard lock >= 0, flock(lock, LOCK_EX | LOCK_NB) == 0 else {
+            if lock >= 0 { close(lock) }
+            throw ToolError(code: "DAEMON_ALREADY_RUNNING",
+                            hint: "Another Lumen daemon owns the agent socket.")
+        }
+        lockFD = lock
+        // AGENT: the socket is born 0600 instead of being chmod'ed after bind.
+        let oldMask = umask(0o177)
+        defer { umask(oldMask) }
         try? FileManager.default.removeItem(at: path)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw ToolError.failed("socket() failed") }
@@ -44,8 +61,6 @@ public final class UnixSocketServer: @unchecked Sendable {
             close(fd)
             throw ToolError.failed("Could not bind the agent socket at \(path.path)")
         }
-        // 0600: the socket is private to the signed-in user.
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
         // A pid file lets the CLI tell a stale socket from a live daemon.
         try? String(String(ProcessInfo.processInfo.processIdentifier)).write(to: pidURL, atomically: true, encoding: .utf8)
         listener = fd
@@ -60,6 +75,7 @@ public final class UnixSocketServer: @unchecked Sendable {
         running = false
         source?.cancel(); source = nil
         if listener >= 0 { close(listener); listener = -1 }
+        if lockFD >= 0 { flock(lockFD, LOCK_UN); close(lockFD); lockFD = -1 }
         try? FileManager.default.removeItem(at: path)
         try? FileManager.default.removeItem(at: pidURL)
     }
@@ -70,6 +86,9 @@ public final class UnixSocketServer: @unchecked Sendable {
     private func accept() {
         let client = Darwin.accept(listener, nil, nil)
         guard client >= 0 else { return }
+        // AGENT: a client that vanishes mid-reply must not raise SIGPIPE and kill the daemon.
+        var one: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
         // One queue per connection: an idle client must never block another
         // client, and the replies on one connection stay in order.
         let connection = DispatchQueue(label: "lumen.agent.socket.conn", qos: .userInitiated)
@@ -84,6 +103,8 @@ public final class UnixSocketServer: @unchecked Sendable {
             let n = chunk.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
             guard n > 0 else { break }
             buffer.append(chunk, count: n)
+            // AGENT: cap the per-connection buffer so one client cannot exhaust memory.
+            guard buffer.count < 16 << 20 else { break }
             while let index = buffer.firstIndex(of: 0x0A) {
                 let lineData = buffer[buffer.startIndex..<index]
                 buffer.removeSubrange(buffer.startIndex...index)
@@ -223,131 +244,5 @@ public final class StdioServer: @unchecked Sendable {
             }
         }
         dispatchMain()
-    }
-}
-
-// MARK: - Optional HTTP transport (remote agents)
-
-/// A minimal HTTP/1.1 transport for remote agents. It binds 127.0.0.1 only,
-/// requires a bearer token with a constant-time compare, and rejects any
-/// request whose Origin header is not local (that blocks DNS rebinding).
-public final class HTTPServer: @unchecked Sendable {
-    private let server: MCPServer
-    private let policy: Policy
-    private let port: UInt16
-    private var listener: Int32 = -1
-    private var source: DispatchSourceRead?
-    private let queue = DispatchQueue(label: "lumen.agent.http")
-
-    public init(port: UInt16, server: MCPServer, policy: Policy) {
-        self.port = port
-        self.server = server
-        self.policy = policy
-    }
-
-    public func start() throws {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw ToolError.failed("socket() failed") }
-        var yes: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = port.bigEndian
-        addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
-        let bound = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-        }
-        guard bound == 0, listen(fd, 8) == 0 else {
-            close(fd)
-            throw ToolError.failed("Could not bind 127.0.0.1:\(port)")
-        }
-        listener = fd
-        let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-        src.setEventHandler { [weak self] in self?.accept() }
-        src.resume()
-        source = src
-    }
-
-    public func stop() {
-        source?.cancel(); source = nil
-        if listener >= 0 { close(listener); listener = -1 }
-    }
-
-    private func accept() {
-        let client = Darwin.accept(listener, nil, nil)
-        guard client >= 0 else { return }
-        queue.async { [weak self] in self?.serve(client) }
-    }
-
-    private func serve(_ fd: Int32) {
-        defer { close(fd) }
-        var buffer = Data()
-        var chunk = [UInt8](repeating: 0, count: 16 * 1024)
-        // Read until the headers are complete.
-        while buffer.range(of: Data("\r\n\r\n".utf8)) == nil {
-            let n = chunk.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
-            if n <= 0 { return }
-            buffer.append(chunk, count: n)
-        }
-        guard let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8)) else { return }
-        let headerData = buffer[buffer.startIndex..<headerEnd.lowerBound]
-        guard let headerText = String(data: headerData, encoding: .utf8) else { return }
-        var lines = headerText.components(separatedBy: "\r\n")
-        guard !lines.isEmpty else { return }
-        let requestLine = lines.removeFirst().split(separator: " ")
-        guard requestLine.count >= 2 else { return }
-        let path = String(requestLine[1])
-        var headers: [String: String] = [:]
-        for line in lines {
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            let key = String(line[line.startIndex..<colon]).lowercased()
-            let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
-            headers[key] = value
-        }
-        let contentLength = Int(headers["content-length"] ?? "0") ?? 0
-        var body = Data(buffer[headerEnd.upperBound...])
-        while body.count < contentLength {
-            let n = chunk.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
-            if n <= 0 { break }
-            body.append(chunk, count: n)
-        }
-        // 1. Authorization: a bearer token, compared in constant time.
-        let auth = headers["authorization"] ?? ""
-        let token = auth.hasPrefix("Bearer ") ? String(auth.dropFirst(7)) : ""
-        guard Policy.constantTimeEquals(token, policy.bearerToken), !token.isEmpty else {
-            respond(fd, status: 401, body: "{\"error\":\"unauthorized\"}")
-            return
-        }
-        // 2. Origin: local only. This is what stops DNS rebinding.
-        if let origin = headers["origin"] {
-            let lowered = origin.lowercased()
-            let local = lowered.hasPrefix("http://127.0.0.1") || lowered.hasPrefix("http://localhost")
-                || lowered.hasPrefix("http://[::1]")
-            if !local {
-                respond(fd, status: 403, body: "{\"error\":\"origin_not_allowed\"}")
-                return
-            }
-        }
-        guard path.contains("/mcp") || path == "/" else {
-            respond(fd, status: 404, body: "{\"error\":\"not_found\"}")
-            return
-        }
-        guard let line = String(data: body, encoding: .utf8), !line.isEmpty else {
-            respond(fd, status: 400, body: "{\"error\":\"empty_body\"}")
-            return
-        }
-        Task {
-            let reply = await server.handle(line, client: "http") ?? "{\"jsonrpc\":\"2.0\",\"id\":null,\"result\":{}}"
-            respond(fd, status: 200, body: reply)
-        }
-    }
-
-    private func respond(_ fd: Int32, status: Int, body: String) {
-        let reason = status == 200 ? "OK" : (status == 401 ? "Unauthorized" : "Forbidden")
-        let data = Data(body.utf8)
-        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
-        var out = Data(header.utf8)
-        out.append(data)
-        _ = out.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
     }
 }

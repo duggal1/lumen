@@ -28,8 +28,13 @@ public enum AgentCredentials {
         let value = Data(bytes).base64EncodedString()
         try? FileManager.default.createDirectory(at: tokenURL.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
-        try? Data(value.utf8).write(to: tokenURL, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenURL.path)
+        // AGENT: the token used to be created 0644 and chmod'ed after, a readable window.
+        let fd = open(tokenURL.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        if fd >= 0 {
+            let data = Data(value.utf8)
+            data.withUnsafeBytes { _ = Darwin.write(fd, $0.baseAddress, data.count) }
+            close(fd)
+        }
         return value
     }
 

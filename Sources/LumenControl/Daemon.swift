@@ -12,9 +12,8 @@ public final class LumenDaemon: @unchecked Sendable {
     public let engine: Engine
     public let server: MCPServer
     public let socket: UnixSocketServer
-    public var http: HTTPServer?
 
-    public init(runtime: LumenRuntime, socketPath: URL? = nil, httpPort: UInt16? = nil) {
+    public init(runtime: LumenRuntime, socketPath: URL? = nil) {
         registry = ToolRegistry()
         policy = Policy()
         audit = AuditLog()
@@ -22,25 +21,26 @@ public final class LumenDaemon: @unchecked Sendable {
         engine = Engine(runtime: runtime, jobs: jobs, policy: policy)
         server = MCPServer(registry: registry, engine: engine, policy: policy, jobs: jobs, audit: audit)
         socket = UnixSocketServer(socketPath: socketPath ?? LumenDaemon.defaultSocketPath(), server: server)
-        if let httpPort { http = HTTPServer(port: httpPort, server: server, policy: policy) }
         registerAllTools(in: registry)
     }
 
-    /// Where the daemon listens. 0600, inside the user's Application Support.
+    /// Where the daemon listens: `~/.lumen/run/agent.sock`, 0700 directory.
+    ///
+    /// AGENT: `sun_path` is 104 bytes, and Application Support overflows it on
+    /// long user names, so the socket moved somewhere short and private.
     public static func defaultSocketPath() -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("Lumen", isDirectory: true).appendingPathComponent("agent.sock")
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".lumen", isDirectory: true)
+            .appendingPathComponent("run", isDirectory: true)
+            .appendingPathComponent("agent.sock")
     }
 
     public func start() throws {
         try socket.start()
-        try http?.start()
     }
 
     public func stop() {
         socket.stop()
-        http?.stop()
     }
 }
 
