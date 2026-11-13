@@ -64,14 +64,27 @@ public final class JobManager: @unchecked Sendable {
         let id = "job_" + UUID().uuidString.prefix(8).lowercased()
         let job = Job(id: id, kind: kind, state: .queued, progress: 0, message: nil, result: nil, error: nil,
                       created: Date().timeIntervalSince1970, updated: Date().timeIntervalSince1970)
-        state.withLock { s in s.jobs[id] = job; s.order.append(id) }
-        let task = Task { [weak self] in
+        // AGENT: install the task while holding the store lock so fast completion cannot leave a stale handle.
+        state.withLock { s in
+            let cutoff = Date().timeIntervalSince1970 - 3600
+            let finished = s.order.filter { key in
+                guard let old = s.jobs[key] else { return true }
+                return old.state != .queued && old.state != .running && old.updated < cutoff
+            }
+            for key in finished { s.jobs[key] = nil; s.listeners[key] = nil }
+            s.order.removeAll { s.jobs[$0] == nil }
+            while s.order.count >= 200, let index = s.order.firstIndex(where: { s.tasks[$0] == nil }) {
+                let key = s.order.remove(at: index); s.jobs[key] = nil; s.listeners[key] = nil
+            }
+            s.jobs[id] = job; s.order.append(id)
+            let task = Task { [weak self] in
             guard let self else { return }
-            self.update(id) { j in j.state = .running }
             let reporter = JobReporter(jobID: id) { [weak self] progress, message in
                 self?.progress(id, progress, message)
             }
             do {
+                try Task.checkCancellation()
+                self.update(id) { j in if j.state == .queued { j.state = .running } }
                 let result = try await body(reporter)
                 if Task.isCancelled {
                     self.update(id) { $0.state = .cancelled }
@@ -87,9 +100,10 @@ public final class JobManager: @unchecked Sendable {
                     j.updated = Date().timeIntervalSince1970
                 }
             }
-            self.state.withLock { $0.tasks[id] = nil }
+            self.state.withLock { $0.tasks[id] = nil; $0.listeners[id] = nil }
+            }
+            s.tasks[id] = task
         }
-        state.withLock { $0.tasks[id] = task }
         return id
     }
 
