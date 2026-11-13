@@ -640,7 +640,7 @@ public final class Renderer: @unchecked Sendable {
         // this same struct, so the render thread never blocks on disk or AppKit.
         let a = assets.withLock { $0 }
         let animatedBackground = tl.style.background == .dither || tl.style.background == .canvas
-        let backgroundTime = animatedBackground ? (r.quality == .export ? r.t : r.uiTime) : 0
+        let backgroundTime = animatedBackground ? (r.quality == .export ? r.t : r.uiTime) * (tl.style.background == .canvas ? tl.style.canvasSpeed : 1) : 0
         let dither = tl.style.background == .dither
         let pointer = dither && r.quality == .preview ? r.pointer : .zero
         let key = BackdropKey(style: tl.style, size: cs,

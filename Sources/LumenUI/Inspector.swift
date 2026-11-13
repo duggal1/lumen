@@ -315,7 +315,11 @@ struct Inspector: View {
     @ViewBuilder
     private var generatedBackgroundControls: some View {
         if wallpaperSource == .canvas {
-            CanvasPresetGrid(model: model)
+            VStack(spacing: 0) {
+                SliderRow(label: "Canvas speed", v: model.bind(\.style.canvasSpeed), range: -2...2,
+                          fmt: { String(format: "%.1f×", $0) })
+                CanvasPresetGrid(model: model)
+            }
         } else {
             VStack(spacing: 0) {
                 DitherPaletteGrid(model: model, kind: .dither)
