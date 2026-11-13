@@ -9,6 +9,29 @@ public enum ToolSchemas {
     /// AGENT: MCP clients can validate the stable result shapes they consume most often.
     static func outputSchema(for name: String) -> JSONValue? {
         switch name {
+        case "lumen_status":
+            return J.obj([
+                "phase": J.str("Current recording phase."),
+                "paused": J.bool("Whether the current recording is paused."),
+                "recording": J.bool("Whether a recording is active."),
+                "permissions": J.obj([
+                    "screen_recording": J.bool("Screen Recording permission."),
+                    "accessibility": J.bool("Accessibility permission."),
+                    "input_monitoring": J.bool("Input Monitoring permission."),
+                    "microphone": J.bool("Microphone permission."),
+                    "camera": J.bool("Camera permission."),
+                ], required: ["screen_recording", "accessibility", "input_monitoring", "microphone", "camera"]),
+                "permission_links": J.obj([
+                    "screen_recording": J.str("System Settings pane for Screen Recording."),
+                    "accessibility": J.str("System Settings pane for Accessibility."),
+                    "input_monitoring": J.str("System Settings pane for Input Monitoring."),
+                ], required: ["screen_recording", "accessibility", "input_monitoring"]),
+                "library": J.str("Recording library path."),
+                "projects": J.int("Number of projects in the library.", min: 0),
+                "active_project": .object(["type": .array([.string("string"), .string("null")])]),
+                "version": J.str("Lumen version."),
+            ], required: ["phase", "paused", "recording", "permissions", "permission_links", "library",
+                          "projects", "active_project", "version"])
         case "job_status":
             return J.obj([
                 "job_id": J.str("Stable job identifier."),
