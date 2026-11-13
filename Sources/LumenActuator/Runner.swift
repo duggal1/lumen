@@ -97,6 +97,9 @@ public actor ScriptRunner {
     public func run(_ script: DemoScript, checkpoint: Checkpoint? = nil) async throws -> [CaptureMarker] {
         // AGENT: virtual delivery currently falls through to HID; refuse it until isolated delivery is implemented.
         guard mode == .physical else { throw ActuatorError.failed("Virtual mode is unavailable; use physical mode after approving the target app.") }
+        // AGENT: duplicate step IDs would make later marker references ambiguous.
+        let ids = script.steps.enumerated().map { $0.element.id.isEmpty ? "step-\($0.offset + 1)" : $0.element.id }
+        guard Set(ids).count == ids.count else { throw ActuatorError.failed("Script step IDs must be unique.") }
         bundleID = script.app.bundleID ?? bundleID
         let allowed = allowedBundles.union([bundleID].compactMap { $0 })
         if !allowed.isEmpty { synth.gate = ActuationGate(allowed: allowed) }
