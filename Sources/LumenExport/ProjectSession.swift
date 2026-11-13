@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Metal
 @preconcurrency import AVFoundation
 import os
@@ -19,6 +20,10 @@ public final class ProjectSession: @unchecked Sendable {
     // AGENT: editor saves must compare the last on-disk revision before replacing an agent's update.
     private let projectRevision: OSAllocatedUnfairLock<Int>
     private let saveConflictHandler = OSAllocatedUnfairLock<(@Sendable (Int, Int) -> Void)?>(initialState: nil)
+    // AGENT: an open editor watches atomic project-file replacements to receive newer agent timelines.
+    private let projectChangeHandler = OSAllocatedUnfairLock<(@Sendable (ProjectFile) -> Void)?>(initialState: nil)
+    private var projectWatcher: DispatchSourceFileSystemObject?
+    private let projectWatchQueue = DispatchQueue(label: "lumen.project.watch", qos: .utility)
     private let analysisSequence = OSAllocatedUnfairLock<Int>(initialState: 0)
     private let inputState: OSAllocatedUnfairLock<DirectorInput>
     public var input: DirectorInput { inputState.withLock { $0 } }
@@ -38,6 +43,32 @@ public final class ProjectSession: @unchecked Sendable {
         projectRevision = OSAllocatedUnfairLock(initialState: revision)
         inputState = OSAllocatedUnfairLock(initialState: input)
         self.mixer = mixer; self.transcriptFile = transcriptFile; self.micOffset = micOffset; self.waveform = waveform; self.cursors = cursors; self.device = device
+        startProjectWatcher()
+    }
+
+    deinit { projectWatcher?.cancel() }
+
+    private func startProjectWatcher() {
+        let fd = Darwin.open(bundle.url.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write,
+                                                                queue: projectWatchQueue)
+        source.setEventHandler { [weak self] in
+            guard let session = self else { return }
+            // AGENT: defer briefly so the atomic writer advances its in-memory revision before the watcher compares.
+            session.projectWatchQueue.asyncAfter(deadline: .now() + .milliseconds(80)) { [weak session] in
+                session?.publishIfNewerProjectFile()
+            }
+        }
+        source.setCancelHandler { Darwin.close(fd) }
+        source.resume()
+        projectWatcher = source
+    }
+
+    private func publishIfNewerProjectFile() {
+        guard let file = try? bundle.load(), let revision = file.revision,
+              revision > currentProjectRevision else { return }
+        projectChangeHandler.withLock { $0 }?(file)
     }
 
     /// One frame for an OUTPUT time. Recording times read the screen track at
@@ -70,6 +101,14 @@ public final class ProjectSession: @unchecked Sendable {
     public func derive(_ tl: Timeline, revision: Int) -> Timeline { Director.derive(tl, input: input, revision: revision) }
     public func setSaveConflictHandler(_ handler: @escaping @Sendable (Int, Int) -> Void) {
         saveConflictHandler.withLock { $0 = handler }
+    }
+    // AGENT: an accepted disk timeline is applied on the main actor before its revision becomes the editor's save base.
+    public func setProjectChangeHandler(_ handler: @escaping @Sendable (ProjectFile) -> Void) {
+        projectChangeHandler.withLock { $0 = handler }
+    }
+    // AGENT: update the editor's compare-and-swap base after its in-memory timeline is replaced.
+    public func adoptExternalRevision(_ revision: Int) {
+        projectRevision.withLock { $0 = max($0, revision) }
     }
     public func save(_ tl: Timeline) {
         saveQueue.async { [self] in
