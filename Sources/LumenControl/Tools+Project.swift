@@ -6,6 +6,35 @@ import LumenExport
 import LumenAudio
 import LumenSpeech
 
+// MARK: - Time
+
+/// A time with an explicit basis.
+///
+/// AGENT: `start` and `end` were bare numbers, so an agent could not tell the
+/// source seconds a zoom or cut lives in from the output seconds the preview
+/// and QA report speak. Callers now name the basis.
+public struct TimeRef: Codable, Sendable, Equatable {
+    public var seconds: Double
+    /// "source" (the recording) or "output" (after cuts and ramps).
+    public var basis: String
+    public init(seconds: Double, basis: String = "source") {
+        self.seconds = seconds
+        self.basis = basis
+    }
+}
+
+extension Timeline {
+    /// Converts a caller-supplied time to the source seconds the timeline stores.
+    func sourceSeconds(_ ref: TimeRef) throws -> Double {
+        switch ref.basis {
+        case "source": return ref.seconds
+        case "output": return timeMap.source(atOutput: ref.seconds)
+        default:
+            throw ToolError.invalidArguments("basis must be \"source\" or \"output\", not \(ref.basis).")
+        }
+    }
+}
+
 // MARK: - Project and timeline tools
 
 public struct ProjectListInput: ToolInput {
@@ -130,6 +159,8 @@ public struct ZoomAddInput: ToolInput {
     public var focusMode: String = "follow"
     public var focusX: Double = 0.5
     public var focusY: Double = 0.5
+    /// "source" (the recording) or "output" (after cuts and ramps).
+    public var basis: String = "source"
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -140,12 +171,14 @@ public struct ZoomAddInput: ToolInput {
     case focusMode = "focus_mode"
     case focusX = "focus_x"
     case focusY = "focus_y"
+    case basis
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
     self.start = try c.decodeIfPresent(Double.self, forKey: .start) ?? 0
     self.end = try c.decodeIfPresent(Double.self, forKey: .end) ?? 0
+    self.basis = try c.decodeIfPresent(String.self, forKey: .basis) ?? "source"
     self.scale = try c.decodeIfPresent(Double.self, forKey: .scale) ?? 2
     self.focusMode = try c.decodeIfPresent(String.self, forKey: .focusMode) ?? "follow"
     self.focusX = try c.decodeIfPresent(Double.self, forKey: .focusX) ?? 0.5
@@ -186,18 +219,22 @@ public struct CutRangeInput: ToolInput {
     public var projectID: String = ""
     public var start: Double = 0
     public var end: Double = 0
+    /// "source" (the recording) or "output" (after cuts and ramps).
+    public var basis: String = "source"
     public init() {}
 
     enum CodingKeys: String, CodingKey {
     case projectID = "project_id"
     case start
     case end
+    case basis
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
     self.start = try c.decodeIfPresent(Double.self, forKey: .start) ?? 0
     self.end = try c.decodeIfPresent(Double.self, forKey: .end) ?? 0
+    self.basis = try c.decodeIfPresent(String.self, forKey: .basis) ?? "source"
     }
 }
 
@@ -206,6 +243,8 @@ public struct SpeedRampInput: ToolInput {
     public var start: Double = 0
     public var end: Double = 0
     public var speed: Double = 2
+    /// "source" (the recording) or "output" (after cuts and ramps).
+    public var basis: String = "source"
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -213,12 +252,14 @@ public struct SpeedRampInput: ToolInput {
     case start
     case end
     case speed
+    case basis
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
     self.start = try c.decodeIfPresent(Double.self, forKey: .start) ?? 0
     self.end = try c.decodeIfPresent(Double.self, forKey: .end) ?? 0
+    self.basis = try c.decodeIfPresent(String.self, forKey: .basis) ?? "source"
     self.speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 2
     }
 }
@@ -399,11 +440,14 @@ public extension ToolRegistry {
             })
 
         register(ToolDefinition<ZoomAddInput>(name: "zoom_add",
-            description: "Adds a manual zoom. Manual zooms survive an auto replan.",
+            description: "Adds a manual zoom. start and end are source seconds unless basis is \"output\". Manual zooms survive an auto replan.",
             capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "manual zoom") { timeline in
-                    timeline.zoom.append(ZoomSegment(start: input.start, end: input.end, scale: input.scale,
+                    // AGENT: zoom times are stored in source seconds; honour the caller's basis.
+                    let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
+                    let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
+                    timeline.zoom.append(ZoomSegment(start: start, end: end, scale: input.scale,
                                                     focus: self.focus(from: input.focusMode, x: input.focusX, y: input.focusY),
                                                     origin: .manual))
                 }
@@ -432,21 +476,25 @@ public extension ToolRegistry {
             })
 
         register(ToolDefinition<CutRangeInput>(name: "cut_range",
-            description: "Cuts a span out of the recording, in source seconds.",
+            description: "Cuts a span out of the recording. start and end are in source seconds unless basis is \"output\".",
             capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "cut") { timeline in
-                    timeline.timeMap.cuts.append(CutRange(start: input.start, end: input.end, origin: .manual))
+                    let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
+                    let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
+                    timeline.timeMap.cuts.append(CutRange(start: start, end: end, origin: .manual))
                 }
                 return .object(result)
             })
 
         register(ToolDefinition<SpeedRampInput>(name: "speed_ramp_set",
-            description: "Sets a speed ramp over a source range. 2.0 plays twice as fast.",
+            description: "Sets a speed ramp. start and end are source seconds unless basis is \"output\". 2.0 plays twice as fast.",
             capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "speed ramp") { timeline in
-                    timeline.timeMap.ramps.append(SpeedRamp(start: input.start, end: input.end,
+                    let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
+                    let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
+                    timeline.timeMap.ramps.append(SpeedRamp(start: start, end: end,
                                                             speed: input.speed, origin: .manual))
                 }
                 return .object(result)

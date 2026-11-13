@@ -145,6 +145,12 @@ public actor Engine {
         var out: [String: JSONValue] = [
             "revision": .int(revision),
             "duration": .number(timeline.compositionDuration),
+            // AGENT: the agent cannot guess which clock each field uses.
+            "time_basis": .object([
+                "zoom": .string("source"), "cuts": .string("source"), "ramps": .string("source"),
+                "clips": .string("output"), "duration": .string("output"),
+                "note": .string("Pass basis: \"output\" to zoom_add, cut_range or speed_ramp_set to use output seconds."),
+            ]),
             "zoom": .array(timeline.zoom.map { z in
                 .object(["id": .string(z.id.uuidString),
                          "start": .number(z.start), "end": .number(z.end),
