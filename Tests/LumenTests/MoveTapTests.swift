@@ -1,6 +1,8 @@
 import Foundation
 import Testing
+import LumenCore
 @testable import LumenProject
+@testable import LumenDirector
 
 private func tlWithTap() -> Timeline {
     var tl = Timeline(duration: 10)
@@ -39,4 +41,23 @@ private func tlWithTap() -> Timeline {
     #expect(!fx.contains(.zoom))
     #expect(!fx.contains(.camera))
     #expect(try JSONEncoder().encode(tl).count > 0)
+}
+
+@Test func aTapKeepsItsExactPositionAsTheRippleHotspot() throws {
+    let src = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 10, backingScale: 2, originX: 0, originY: 0)
+    var tl = Timeline(duration: 10)
+    tl.audio.speedRampsAuto = false
+    tl.timeMap.trimStart = 0; tl.timeMap.trimEnd = 10
+    tl.cursor.clickEffect = .ripple
+    tl.overlays.taps = [TapIndicator(t: 5, x: 733, y: 411)]
+    tl = Director.derive(tl, input: DirectorInput(events: [], source: src), revision: 1)
+    // The click pins the cursor exactly on the recorded point, so the ripple is
+    // centred on the hotspot and not on a smoothed approximation of it.
+    let state = tl.evaluate(at: 5)
+    #expect(state.clickFX.count == 1)
+    #expect(state.clickFX.first?.position.x == 733)
+    #expect(state.clickFX.first?.position.y == 411)
+    let cursor = state.cursor.position
+    #expect(abs(Double(cursor.x) - 733) < 0.5, "cursor \(cursor.x) is not pinned to the tap")
+    #expect(abs(Double(cursor.y) - 411) < 0.5, "cursor \(cursor.y) is not pinned to the tap")
 }
