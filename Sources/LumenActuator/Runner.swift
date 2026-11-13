@@ -189,6 +189,11 @@ public actor ScriptRunner {
             try await synth.type(type.text, cps: type.cps)
             return fallbackRect
 
+        case .paste(let paste):
+            // AGENT: long text goes in atomically instead of keystroke by keystroke.
+            try await synth.paste(paste.text)
+            return fallbackRect
+
         case .key(let key):
             try synth.press(key: key.key, modifiers: key.modifiers)
             return fallbackRect

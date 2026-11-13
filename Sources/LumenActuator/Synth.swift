@@ -101,13 +101,15 @@ public final class InputSynthesizer: @unchecked Sendable {
     public func type(_ text: String, cps: Double) async throws {
         let perChar = 1.0 / max(cps, 1)
         let clock = ContinuousClock()
-        let t0 = clock.now
+        var next = clock.now
         var index = 0
         for character in text {
             try gate?.assertFrontmost()
             let key = Self.virtualKey(for: character)
-            let delay = perChar * Self.jitter(for: index)
-            try await clock.sleep(until: t0.advanced(by: .seconds(perChar * Double(index))))
+            // AGENT: jitter was computed and thrown away, so every keystroke
+            // landed on a perfectly even grid. It now shapes the interval.
+            next = next.advanced(by: .seconds(perChar * Self.jitter(for: index)))
+            try await clock.sleep(until: next)
             if let key {
                 postKey(code: key.code, down: true, unicode: String(character), shift: key.shift)
                 postKey(code: key.code, down: false, unicode: String(character), shift: key.shift)
@@ -116,7 +118,37 @@ public final class InputSynthesizer: @unchecked Sendable {
                 postUnicode(String(character), down: false)
             }
             index += 1
-            _ = delay
+        }
+    }
+
+    /// Pastes text in one shot, then restores the clipboard.
+    ///
+    /// AGENT: key-by-key typing is slow and drops characters when the target
+    /// app is busy; long strings now go through the clipboard instead.
+    public func paste(_ text: String) async throws {
+        try gate?.assertFrontmost()
+        let board = NSPasteboard.general
+        // AGENT: the human's clipboard is theirs; put it back afterwards.
+        let saved = board.pasteboardItems?.map { item -> [NSPasteboard.PasteboardType: Data] in
+            var copy: [NSPasteboard.PasteboardType: Data] = [:]
+            for type in item.types {
+                if let data = item.data(forType: type) { copy[type] = data }
+            }
+            return copy
+        }
+        board.clearContents()
+        board.setString(text, forType: .string)
+        postKey(code: 9, down: true, unicode: nil, shift: false, flags: .maskCommand)
+        postKey(code: 9, down: false, unicode: nil, shift: false, flags: .maskCommand)
+        try await Task.sleep(for: .milliseconds(120))
+        board.clearContents()
+        if let saved, !saved.isEmpty {
+            let items = saved.map { copy -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, data) in copy { item.setData(data, forType: type) }
+                return item
+            }
+            board.writeObjects(items)
         }
     }
 
@@ -185,15 +217,18 @@ public final class InputSynthesizer: @unchecked Sendable {
     struct Key { let code: CGKeyCode, shift: Bool }
 
     /// ANSI virtual key codes for the characters an agent types.
+    ///
+    /// AGENT: letters were mapped to `ascii - 0x61`, which is not the ANSI
+    /// layout (a=0 but s=1, d=2, c=8 …), so typing produced gibberish.
     static func virtualKey(for character: Character) -> Key? {
         guard let ascii = character.asciiValue else { return nil }
+        let lower = ascii >= 0x41 && ascii <= 0x5A ? ascii + 0x20 : ascii
+        if let code = letterCodes[lower] {
+            return Key(code: code, shift: ascii != lower)
+        }
         switch ascii {
-        case 0x61...0x7A:  // a-z
-            return Key(code: CGKeyCode(ascii - 0x61), shift: false)
-        case 0x41...0x5A:  // A-Z
-            return Key(code: CGKeyCode(ascii - 0x41), shift: true)
         case 0x31...0x39:  // 1-9
-            return Key(code: CGKeyCode(ascii - 0x31 + 17), shift: false)
+            return Key(code: CGKeyCode(ascii - 0x31 + 18), shift: false)
         case 0x30:         // 0
             return Key(code: 29, shift: false)
         case 0x20: return Key(code: 49, shift: false)   // space
@@ -201,18 +236,47 @@ public final class InputSynthesizer: @unchecked Sendable {
         case 0x3D: return Key(code: 24, shift: false)   // =
         case 0x5B: return Key(code: 33, shift: false)   // [
         case 0x5D: return Key(code: 30, shift: false)   // ]
-        case 0x3B: return Key(code: 38, shift: false)   // ;
+        case 0x3B: return Key(code: 41, shift: false)   // ;
         case 0x27: return Key(code: 39, shift: false)   // '
         case 0x2C: return Key(code: 43, shift: false)   // ,
         case 0x2E: return Key(code: 47, shift: false)   // .
         case 0x2F: return Key(code: 44, shift: false)   // /
         case 0x5C: return Key(code: 42, shift: false)   // backslash
         case 0x60: return Key(code: 50, shift: false)   // `
-        case 0x21: return Key(code: 24, shift: true)    // !
-        case 0x3F: return Key(code: 27, shift: true)    // ?
+        // AGENT: shifted symbols were missing, so `@`, `:`, `_` and friends
+        // fell back to a bare unicode event the layout often swallows.
+        case 0x21: return Key(code: 18, shift: true)    // !
+        case 0x40: return Key(code: 19, shift: true)    // @
+        case 0x23: return Key(code: 20, shift: true)    // #
+        case 0x24: return Key(code: 21, shift: true)    // $
+        case 0x25: return Key(code: 23, shift: true)    // %
+        case 0x5E: return Key(code: 22, shift: true)    // ^
+        case 0x26: return Key(code: 26, shift: true)    // &
+        case 0x2A: return Key(code: 28, shift: true)    // *
+        case 0x28: return Key(code: 25, shift: true)    // (
+        case 0x29: return Key(code: 29, shift: true)    // )
+        case 0x5F: return Key(code: 27, shift: true)    // _
+        case 0x2B: return Key(code: 24, shift: true)    // +
+        case 0x7B: return Key(code: 33, shift: true)    // {
+        case 0x7D: return Key(code: 30, shift: true)    // }
+        case 0x7C: return Key(code: 42, shift: true)    // |
+        case 0x3A: return Key(code: 41, shift: true)    // :
+        case 0x22: return Key(code: 39, shift: true)    // "
+        case 0x3C: return Key(code: 43, shift: true)    // <
+        case 0x3E: return Key(code: 47, shift: true)    // >
+        case 0x3F: return Key(code: 44, shift: true)    // ?
+        case 0x7E: return Key(code: 50, shift: true)    // ~
         default: return nil
         }
     }
+
+    /// Lowercase ASCII letter to ANSI key code, the real Apple layout.
+    static let letterCodes: [UInt8: CGKeyCode] = [
+        0x61: 0, 0x73: 1, 0x64: 2, 0x66: 3, 0x68: 4, 0x67: 5, 0x7A: 6, 0x78: 7,
+        0x63: 8, 0x76: 9, 0x62: 11, 0x71: 12, 0x77: 13, 0x65: 14, 0x72: 15,
+        0x79: 16, 0x74: 17, 0x6F: 31, 0x75: 32, 0x69: 34, 0x70: 35, 0x6C: 37,
+        0x6A: 38, 0x6B: 40, 0x6E: 45, 0x6D: 46,
+    ]
 
     static func namedKey(_ name: String) -> CGKeyCode? {
         switch name.lowercased() {
@@ -229,7 +293,8 @@ public final class InputSynthesizer: @unchecked Sendable {
         }
     }
 
-    /// Human-like jitter between keystrokes: 60...140 ms.
+    /// Human-like jitter between keystrokes, as a multiplier of the base
+    /// interval. A fixed pattern, not `random`, so a run is reproducible.
     static func jitter(for index: Int) -> Double {
         let pattern: [Double] = [1.0, 0.82, 1.18, 0.94, 1.26, 0.88, 1.08, 0.96]
         return pattern[index % pattern.count]

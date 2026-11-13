@@ -127,7 +127,7 @@ public extension ToolRegistry {
             })
 
         register(ToolDefinition<RunScriptInput>(name: "run_script",
-            description: "Runs a demo script against an app and records a marker per step. The script is the source of truth: launch, wait_for, click, type, key, move, scroll, sleep. Each step may carry narration in `say`.",
+            description: "Runs a demo script against an app and records a marker per step. The script is the source of truth: launch, wait_for, click, type, paste, key, move, scroll, sleep. Each step may carry narration in `say`.",
             capability: .actuate, required: ["bundle_id", "script"], mutating: true) { input, ctx in
                 var script = input.script
                 if !input.bundleID.isEmpty { script.app.bundleID = input.bundleID }

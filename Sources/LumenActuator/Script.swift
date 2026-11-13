@@ -63,6 +63,7 @@ public struct DemoScript: Codable, Sendable, Equatable {
         case waitFor(WaitFor)
         case click(Click)
         case type(TypeText)
+        case paste(Paste)
         case key(KeyPress)
         case sleep(Sleep)
         case move(Move)
@@ -76,6 +77,7 @@ public struct DemoScript: Codable, Sendable, Equatable {
             case .waitFor: self = .waitFor(try WaitFor(from: decoder))
             case .click: self = .click(try Click(from: decoder))
             case .type: self = .type(try TypeText(from: decoder))
+            case .paste: self = .paste(try Paste(from: decoder))
             case .key: self = .key(try KeyPress(from: decoder))
             case .sleep: self = .sleep(try Sleep(from: decoder))
             case .move: self = .move(try Move(from: decoder))
@@ -91,6 +93,7 @@ public struct DemoScript: Codable, Sendable, Equatable {
             case .waitFor(let v): try c.encode(v, forKey: .waitFor); try c.encode(Operation.waitFor, forKey: .op)
             case .click(let v): try c.encode(v, forKey: .click); try c.encode(Operation.click, forKey: .op)
             case .type(let v): try c.encode(v, forKey: .type); try c.encode(Operation.type, forKey: .op)
+            case .paste(let v): try c.encode(v, forKey: .paste); try c.encode(Operation.paste, forKey: .op)
             case .key(let v): try c.encode(v, forKey: .key); try c.encode(Operation.key, forKey: .op)
             case .sleep(let v): try c.encode(v, forKey: .sleep); try c.encode(Operation.sleep, forKey: .op)
             case .move(let v): try c.encode(v, forKey: .move); try c.encode(Operation.move, forKey: .op)
@@ -100,11 +103,11 @@ public struct DemoScript: Codable, Sendable, Equatable {
         }
 
         public enum Operation: String, Codable, Sendable {
-            case launch, waitFor = "wait_for", click, type, key, sleep, move, scroll, screenshot
+            case launch, waitFor = "wait_for", click, type, paste, key, sleep, move, scroll, screenshot
         }
 
         enum CodingKeys: String, CodingKey {
-            case op, launch, waitFor = "wait_for", click, type, key, sleep, move, scroll, screenshot
+            case op, launch, waitFor = "wait_for", click, type, paste, key, sleep, move, scroll, screenshot
         }
     }
 
@@ -179,6 +182,18 @@ public struct DemoScript: Codable, Sendable, Equatable {
             let c = try decoder.container(keyedBy: CodingKeys.self)
         self.text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
         self.cps = try c.decodeIfPresent(Double.self, forKey: .cps) ?? 9
+        }
+}
+    public struct Paste: Codable, Sendable, Equatable {
+        public var text: String = ""
+        public init() {}
+
+        enum CodingKeys: String, CodingKey {
+        case text
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
         }
 }
     public struct KeyPress: Codable, Sendable, Equatable {
