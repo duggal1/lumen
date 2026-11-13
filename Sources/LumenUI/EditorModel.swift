@@ -154,6 +154,12 @@ enum TimelineSelection: Equatable {
          exportSettings: ExportSettings, transcript: Transcript?) {
         self.session = session; self.renderer = renderer; self.timeline = timeline; box = TimelineBox(timeline)
         self.exportSettings = exportSettings
+        // AGENT: tell the editor when its save lost a revision race so it cannot silently overwrite an agent edit.
+        session.setSaveConflictHandler { [weak self] _, actual in
+            Task { @MainActor [weak self] in
+                self?.notice = "Project updated by an agent (revision \(actual)). Close and reopen before editing further."
+            }
+        }
         renderer.setCustomCursors(session.cursors)
         // SMOOTHNESS: a background image that finishes decoding off the
         // render thread must trigger one more frame, otherwise the preview

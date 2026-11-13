@@ -38,7 +38,8 @@ struct TapMove: AsyncParsableCommand {
         var tl = tl0
         let ctx = ReduceContext(playhead: 0, selection: uuid, duration: tl.compositionDuration)
         _ = try reduce(&tl, .moveTap(tap: uuid, x: x, y: y, atSource: t), ctx: ctx)
-        try s.bundle.save(ProjectFile(meta: s.meta, timeline: tl))
+        // AGENT: CLI edits must honor the same on-disk revision lock as the editor and daemon.
+        try s.saveImmediately(tl)
         print("moved \(uuid.uuidString)")
     }
 }
