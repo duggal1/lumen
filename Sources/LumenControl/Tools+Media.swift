@@ -209,14 +209,18 @@ public struct ExportStartInput: ToolInput {
 
 public struct JobStatusInput: ToolInput {
     public var jobID: String = ""
+    // AGENT: bounded long polling prevents clients from hammering the daemon for progress.
+    public var waitMs: Int = 0
     public init() {}
 
     enum CodingKeys: String, CodingKey {
     case jobID = "job_id"
+    case waitMs = "wait_ms"
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.jobID = try c.decodeIfPresent(String.self, forKey: .jobID) ?? ""
+    self.waitMs = try c.decodeIfPresent(Int.self, forKey: .waitMs) ?? 0
     }
 }
 
@@ -384,8 +388,23 @@ public extension ToolRegistry {
         register(ToolDefinition<JobStatusInput>(name: "job_status",
             description: "Reports the progress and result of a job started by export_start, privacy_scan or captions_generate.",
             capability: .read, required: ["job_id"]) { input, ctx in
-                guard let job = ctx.jobs.job(input.jobID) else {
+                guard (0...25_000).contains(input.waitMs) else {
+                    throw ToolError.invalidArguments("wait_ms must be between 0 and 25000.")
+                }
+                guard let initial = ctx.jobs.job(input.jobID) else {
                     throw ToolError.failed("No job with id \(input.jobID).")
+                }
+                var job = initial
+                if input.waitMs > 0 && (job.state == .queued || job.state == .running) {
+                    let clock = ContinuousClock()
+                    let deadline = clock.now.advanced(by: .milliseconds(Int64(input.waitMs)))
+                    while clock.now < deadline {
+                        try Task.checkCancellation()
+                        try await Task.sleep(for: .milliseconds(200))
+                        guard let latest = ctx.jobs.job(input.jobID) else { break }
+                        job = latest
+                        if job.updated > initial.updated || (job.state != .queued && job.state != .running) { break }
+                    }
                 }
                 return .object([
                     "job_id": .string(job.id),

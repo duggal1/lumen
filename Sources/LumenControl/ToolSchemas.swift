@@ -182,7 +182,12 @@ public enum ToolSchemas {
                      "include_audio": J.bool("Include the audio mix.", def: true),
                      "export_stems": J.bool("Write separate audio stems.", def: false)]
         case "job_status", "export_cancel":
-            props = ["job_id": J.str("Job id returned by a long-running tool.")]
+            if name == "job_status" {
+                props = ["job_id": J.str("Job id returned by a long-running tool."),
+                         "wait_ms": J.int("Wait for a job update before responding.", min: 0, max: 25_000, def: 0)]
+            } else {
+                props = ["job_id": J.str("Job id returned by a long-running tool.")]
+            }
         case "export_presets":
             props = [:]
         default:
