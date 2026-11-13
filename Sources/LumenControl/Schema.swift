@@ -60,9 +60,9 @@ public enum SchemaGenerator {
         let type = type(of: value)
         let name = String(describing: type)
         if let optional = OptionalTypeInfo(name) {
+            // AGENT: Swift type names are not JSON Schema types; describe the wrapped schema and null separately.
             return .object([
-                "type": .array([.string(optional.wrapped), .string("null")]),
-                "x-lumen-type": .string(optional.wrapped),
+                "anyOf": .array([schema(forTypeName: optional.wrapped), .object(["type": .string("null")])]),
             ])
         }
         if let element = ArrayTypeInfo(name) {
@@ -153,8 +153,10 @@ struct OptionalTypeInfo {
 struct ArrayTypeInfo {
     let element: String
     init?(_ name: String) {
-        guard name.hasPrefix("["), name.hasSuffix("]") else { return nil }
-        element = String(name.dropFirst().dropLast())
+        // AGENT: reflection prints both Array<Element> and [Element] depending on the runtime.
+        if name.hasPrefix("Array<"), name.hasSuffix(">") { element = String(name.dropFirst(6).dropLast()) }
+        else if name.hasPrefix("["), name.hasSuffix("]") { element = String(name.dropFirst().dropLast()) }
+        else { return nil }
     }
 }
 
