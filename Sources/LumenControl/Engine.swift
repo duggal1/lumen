@@ -2,14 +2,14 @@ import Foundation
 import os
 import AppKit
 import Metal
-import AVFoundation
+@preconcurrency import AVFoundation
 import LumenCore
 import LumenProject
 import LumenDirector
 import LumenRender
 import LumenAudio
 import LumenAnalysis
-import LumenExport
+@preconcurrency import LumenExport
 import LumenActuator
 import LumenSpeech
 
