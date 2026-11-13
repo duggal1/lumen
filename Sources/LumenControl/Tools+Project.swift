@@ -26,9 +26,15 @@ public struct TimeRef: Codable, Sendable, Equatable {
 extension Timeline {
     /// Converts a caller-supplied time to the source seconds the timeline stores.
     func sourceSeconds(_ ref: TimeRef) throws -> Double {
+        // AGENT: reject invalid times before the time map can clamp them silently.
+        guard ref.seconds.isFinite, ref.seconds >= 0 else { throw ToolError.invalidArguments("Time must be finite and non-negative.") }
         switch ref.basis {
-        case "source": return ref.seconds
-        case "output": return timeMap.source(atOutput: ref.seconds)
+        case "source":
+            guard ref.seconds <= timeMap.sourceDuration + 0.001 else { throw ToolError.invalidArguments("Source time exceeds the recording duration.") }
+            return ref.seconds
+        case "output":
+            guard ref.seconds <= timeMap.outputDuration + 0.001 else { throw ToolError.invalidArguments("Output time exceeds the edited duration.") }
+            return timeMap.source(atOutput: ref.seconds)
         default:
             throw ToolError.invalidArguments("basis must be \"source\" or \"output\", not \(ref.basis).")
         }
@@ -400,7 +406,8 @@ public extension ToolRegistry {
                 let rows = library.map { url -> JSONValue in
                     let bundle = ProjectBundle(url: url)
                     let complete = FileManager.default.fileExists(atPath: bundle.projectURL.path)
-                    return .object(["project_id": .string(url.deletingPathExtension().lastPathComponent),
+                    // AGENT: list IDs must match the canonical IDs returned by project_open.
+                    return .object(["project_id": .string(Engine.projectID(url)),
                                     "path": .string(url.path),
                                     "complete": .bool(complete),
                                     "unfinished": .bool(!complete && bundle.isUnfinished)])
@@ -453,9 +460,11 @@ public extension ToolRegistry {
                     // AGENT: zoom times are stored in source seconds; honour the caller's basis.
                     let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
                     let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
-                    timeline.zoom.append(ZoomSegment(start: start, end: end, scale: input.scale,
-                                                    focus: self.focus(from: input.focusMode, x: input.focusX, y: input.focusY),
-                                                    origin: .manual))
+                    // AGENT: reject invalid ranges and route zoom edits through the editor reducer.
+                    guard end > start, input.scale.isFinite, (1.1...4).contains(input.scale) else { throw ToolError.invalidArguments("Need start < end and zoom scale 1.1…4.") }
+                    try applyCommand(.addZoom(ZoomSegment(start: start, end: end, scale: input.scale,
+                                                          focus: self.focus(from: input.focusMode, x: input.focusX, y: input.focusY),
+                                                          origin: .manual)), to: &timeline)
                 }
                 return .object(result)
             })
@@ -488,7 +497,10 @@ public extension ToolRegistry {
                                                       describe: "cut") { timeline in
                     let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
                     let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
-                    timeline.timeMap.cuts.append(CutRange(start: start, end: end, origin: .manual))
+                    // AGENT: the editor's output-range cut handles clips and overlaps consistently.
+                    let a = timeline.timeMap.output(atSource: start), b = timeline.timeMap.output(atSource: end)
+                    guard b > a else { throw ToolError.invalidArguments("Cut end must be after start in the edited timeline.") }
+                    try applyCommand(.cutOutputRange(start: a, end: b), to: &timeline)
                 }
                 return .object(result)
             })
@@ -500,8 +512,9 @@ public extension ToolRegistry {
                                                       describe: "speed ramp") { timeline in
                     let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
                     let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
-                    timeline.timeMap.ramps.append(SpeedRamp(start: start, end: end,
-                                                            speed: input.speed, origin: .manual))
+                    // AGENT: zero or negative ramp speed breaks time-map construction.
+                    guard end > start, input.speed.isFinite, (0.25...16).contains(input.speed) else { throw ToolError.invalidArguments("Need start < end and speed 0.25…16.") }
+                    try applyCommand(.addSpeedRamp(start: start, end: end, speed: input.speed), to: &timeline)
                 }
                 return .object(result)
             })
@@ -621,6 +634,8 @@ public extension ToolRegistry {
                 timeline.zoom[index].focus = focus(from: op.focusMode ?? "follow",
                                                    x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
             }
+            // AGENT: edited automatic zooms must survive the next planner pass.
+            timeline.zoom[index].origin = .manual
         case "zoom_remove":
             let id = try need(op.id, "id")
             // AGENT: deleting an auto zoom must survive the next replan.
@@ -639,13 +654,19 @@ public extension ToolRegistry {
             timeline.timeMap.cuts.removeAll { $0.id.uuidString == id }
         case "ramp_set":
             let start = try need(op.start, "start"), end = try need(op.end, "end")
-            guard end > start else {
+            // AGENT: validate speed before rebuilding the time map.
+            guard start.isFinite, end.isFinite, start >= 0, end > start,
+                  (op.speed ?? 2).isFinite, (0.25...16).contains(op.speed ?? 2) else {
                 throw ToolError.invalidArguments("ramp_set needs end after start, in source seconds.")
             }
             timeline.timeMap.ramps.append(SpeedRamp(start: start, end: end,
                                                     speed: op.speed ?? 2, origin: .manual))
         case "ramp_remove":
             let id = try need(op.id, "id")
+            // AGENT: remember deleted automatic ramps before the planner regenerates them.
+            for ramp in timeline.timeMap.ramps where ramp.id.uuidString == id && ramp.origin == .auto {
+                if !timeline.suppressedAuto.contains(id) { timeline.suppressedAuto.append(id) }
+            }
             timeline.timeMap.ramps.removeAll { $0.id.uuidString == id }
         case "style_set":
             let key = try need(op.key, "key")
