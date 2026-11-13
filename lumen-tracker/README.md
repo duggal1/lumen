@@ -5,8 +5,9 @@ This is the standalone, deployed engineering tracker for [duggal1/lumen](https:/
 ## Facts and source-of-truth
 
 - **Live GitHub issues** are fetched from the GitHub Issues REST API and shown separately from source-audit findings.
-- **Audit findings** are a labeled Nov 6, 2026 snapshot. They are not fabricated GitHub issue numbers or device test results.
-- **Merged**, **CI passed**, and **runtime verified** remain separate states. Github metadata is refreshed on demand.
+- **Audit findings** are primarily a Nov 6, 2026 snapshot; LUM-001 and CI status were refreshed on Nov 13. Findings are not fabricated GitHub issue numbers or device test results.
+- **Recent code activity** groups main-branch changes from Nov 12 evening through Nov 13 and links representative commits. Draft PR #22 is tracked separately with its own head and failing workflow; its 60 commits are not counted as merged.
+- **Merged**, **CI passed**, and **runtime verified** remain separate states. GitHub metadata is refreshed on demand.
 - The currently inspected native repository uses `Sources/`, not `studio/`. The tracker preserves real paths.
 - "Paste" in Lumen is an unverified feature boundary, not a confirmed bug.
 - Notes, custom audit entries and regression history are local to your browser. Export JSON to move them; no shared database exists.
