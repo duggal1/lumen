@@ -153,16 +153,29 @@ public extension ToolRegistry {
                         }
                     }
                 }
-                let mode: InputMode = input.mode == "virtual" ? .virtual : .physical
-                // AGENT: fail before posting input when macOS will discard it.
-                if mode == .physical, !AXIsProcessTrusted() { throw ToolError.permission("accessibility", pane: "Accessibility") }
+                let mode: InputMode
+                switch input.mode {
+                case "physical": mode = .physical
+                case "virtual": mode = .virtual
+                default: throw ToolError.invalidArguments("mode must be physical or virtual.")
+                }
+                // AGENT: both delivery modes use Accessibility to resolve and activate the approved target.
+                guard AXIsProcessTrusted() else { throw ToolError.permission("accessibility", pane: "Accessibility") }
+                let runtime = ctx.engine.runtime
                 let runner = ScriptRunner(mode: mode, sink: ctx.engine.markerSink(),
                                           allowedBundles: allowed,
+                                          inputInjector: { kind, point, button, keyCode, flags, scrollDelta in
+                                              try await runtime.injectInput(kind: kind, screenPoint: point, button: button,
+                                                                            keyCode: keyCode, flags: flags,
+                                                                            scrollDelta: scrollDelta)
+                                          },
                                           writablePath: { try ctx.paths.writablePath($0, ext: PathGuard.imageExt) })
                 do {
                     let markers = try await runner.run(script)
                     return .object(["markers": .array(markers.map { self.markerJSON($0) })])
                 } catch let e as ActuatorError {
+                    throw ToolError.failed(e.message)
+                } catch let e as RuntimeFailure {
                     throw ToolError.failed(e.message)
                 }
             })

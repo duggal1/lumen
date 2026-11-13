@@ -3,14 +3,14 @@ import CoreGraphics
 import ApplicationServices
 import AppKit
 import os
+import LumenCore
 
 /// How the actuator drives the machine.
 public enum InputMode: String, Sendable, Codable, CaseIterable {
     /// Real CGEvents. Best fidelity, hover states work — but it takes over the
     /// user's mouse and keyboard. Run it on a dedicated display or a spare Mac.
     case physical
-    /// Accessibility actions plus a synthesized cursor. No hijack, but no
-    /// hover states and some controls will not respond.
+    /// Process-targeted events and Accessibility actions. No global HID input.
     case virtual
 }
 
@@ -20,9 +20,11 @@ public enum InputMode: String, Sendable, Codable, CaseIterable {
 /// the whole script, so the gate is evaluated before every event batch.
 public struct ActuationGate: Sendable {
     public let allowed: Set<String>
+    public let expectedFrontmost: String?
 
-    public init(allowed: Set<String>) {
+    public init(allowed: Set<String>, expectedFrontmost: String? = nil) {
         self.allowed = allowed
+        self.expectedFrontmost = expectedFrontmost
     }
 
     public func assertFrontmost() throws {
@@ -30,6 +32,9 @@ public struct ActuationGate: Sendable {
         guard allowed.contains(id) else {
             throw ActuatorError.failed(
                 "Frontmost app \(id.isEmpty ? "(unknown)" : id) is not on the allow-list; run halted.")
+        }
+        if let expectedFrontmost, id != expectedFrontmost {
+            throw ActuatorError.failed("Frontmost app changed from \(expectedFrontmost) to \(id); run halted.")
         }
     }
 }
@@ -41,10 +46,16 @@ public struct ActuationGate: Sendable {
 /// path, not one jump. Every event it posts carries a tag, so the runner can
 /// tell "this was us" from "a human moved the mouse".
 public final class InputSynthesizer: @unchecked Sendable {
+    public enum Delivery: Sendable { case unavailable, hid, pid(pid_t) }
+    public typealias EventInjector = @Sendable (InputEvent.Kind, CGPoint, UInt8, UInt16, UInt16, Float) async throws -> Void
     public let mode: InputMode
     /// Marks our own events so a human takeover is detectable.
     public let tag: Int64
     private let source: CGEventSource?
+    /// AGENT: virtual actions target the approved process directly and never fall through to global HID.
+    public var delivery: Delivery
+    /// AGENT: process-targeted actions also enter Lumen's event log for cursor and typing analysis.
+    public var eventInjector: EventInjector?
     /// AGENT: every event batch re-checks that the frontmost app is still approved.
     public var gate: ActuationGate?
     // AGENT: track synthesized pointer positions so the watchdog can distinguish its own motion.
@@ -52,10 +63,19 @@ public final class InputSynthesizer: @unchecked Sendable {
     public var lastPosted: CGPoint? { posted.withLock { $0 } }
     public var checkpoint: (@Sendable () throws -> Void)?
 
+    /// Checks takeover and foreground app before an Accessibility action.
+    // AGENT: AXPress bypasses event posting, so it needs the same pre-action safety gate.
+    public func checkBeforeAction() throws {
+        try checkpoint?()
+        try gate?.assertFrontmost()
+    }
+
     public init(mode: InputMode = .physical, tag: Int64 = Int64.random(in: 1_000_000...9_000_000)) {
         self.mode = mode
         self.tag = tag
         self.source = CGEventSource(stateID: .hidSystemState)
+        // AGENT: virtual mode must fail closed until a target PID is assigned.
+        self.delivery = mode == .physical ? .hid : .unavailable
     }
 
     // MARK: Mouse
@@ -65,7 +85,7 @@ public final class InputSynthesizer: @unchecked Sendable {
     public func moveCursor(to target: CGPoint, ms: Int, dragging: Bool = false) async throws {
         let hz = 120.0
         let n = max(Int(Double(ms) / 1000 * hz), 2)
-        let start = Self.currentMouseLocation()
+        let start = lastPosted ?? Self.currentMouseLocation()
         let clock = ContinuousClock()
         let t0 = clock.now
         for i in 1...n {
@@ -76,7 +96,8 @@ public final class InputSynthesizer: @unchecked Sendable {
             let p = CGPoint(x: start.x + (target.x - start.x) * s,
                             y: start.y + (target.y - start.y) * s)
             // AGENT: dragging must send dragged events so the target sees the held button.
-            postMouse(type: dragging ? .leftMouseDragged : .mouseMoved, at: p, button: .left, clickState: dragging ? 1 : 0)
+            try await postMouse(type: dragging ? .leftMouseDragged : .mouseMoved, at: p,
+                                button: .left, clickState: dragging ? 1 : 0)
             try await clock.sleep(until: t0.advanced(by: .seconds(Double(i) / hz)))
         }
     }
@@ -89,17 +110,24 @@ public final class InputSynthesizer: @unchecked Sendable {
                       holdMs: Int = 60) async throws {
         try gate?.assertFrontmost()
         // AGENT: only left clicks existed, so context menus and selections were unreachable.
+        if let button, !["left", "right"].contains(button.lowercased()) {
+            throw ActuatorError.failed("Click button must be left or right.")
+        }
         let right = button?.lowercased() == "right"
         let cgButton: CGMouseButton = right ? .right : .left
         let down: CGEventType = right ? .rightMouseDown : .leftMouseDown
         let up: CGEventType = right ? .rightMouseUp : .leftMouseUp
         let clicks = max(count, 1)
         for i in 1...clicks {
-            postMouse(type: down, at: point, button: cgButton, clickState: Int64(i))
             // AGENT: cancellation during a hold must release the mouse button.
-            do { try await Task.sleep(for: .milliseconds(max(holdMs, 0))) }
-            catch { postMouse(type: up, at: point, button: cgButton, clickState: Int64(i)); throw error }
-            postMouse(type: up, at: point, button: cgButton, clickState: Int64(i))
+            do {
+                try await postMouse(type: down, at: point, button: cgButton, clickState: Int64(i))
+                try await Task.sleep(for: .milliseconds(max(holdMs, 0)))
+            } catch {
+                try? await postMouse(type: up, at: point, button: cgButton, clickState: Int64(i))
+                throw error
+            }
+            try await postMouse(type: up, at: point, button: cgButton, clickState: Int64(i))
             if i < clicks { try await Task.sleep(for: .milliseconds(60)) }
         }
     }
@@ -110,24 +138,37 @@ public final class InputSynthesizer: @unchecked Sendable {
     public func drag(from start: CGPoint, to end: CGPoint, ms: Int) async throws {
         try gate?.assertFrontmost()
         try await moveCursor(to: start, ms: max(ms / 3, 50))
-        postMouse(type: .leftMouseDown, at: start, button: .left, clickState: 1)
         // AGENT: release at the last posted position if a drag is interrupted.
-        do { try await moveCursor(to: end, ms: max(ms, 50), dragging: true) }
-        catch { postMouse(type: .leftMouseUp, at: lastPosted ?? start, button: .left, clickState: 1); throw error }
-        postMouse(type: .leftMouseUp, at: end, button: .left, clickState: 1)
+        do {
+            try await postMouse(type: .leftMouseDown, at: start, button: .left, clickState: 1)
+            try await moveCursor(to: end, ms: max(ms, 50), dragging: true)
+        } catch {
+            try? await postMouse(type: .leftMouseUp, at: lastPosted ?? start, button: .left, clickState: 1)
+            throw error
+        }
+        try await postMouse(type: .leftMouseUp, at: end, button: .left, clickState: 1)
     }
 
-    public func scroll(at point: CGPoint, dy: Double) throws {
+    public func scroll(at point: CGPoint, dy: Double) async throws {
         try checkpoint?()
         try gate?.assertFrontmost()
         // AGENT: place the wheel event over the requested target before scrolling.
-        postMouse(type: .mouseMoved, at: point, button: .left, clickState: 0)
+        try await postMouse(type: .mouseMoved, at: point, button: .left, clickState: 0)
         // AGENT: dy is in lines, but it was posted as 3 pixels of wheel travel,
         // which is invisible. Line units match what a trackpad sends.
         guard let event = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 1,
-                                  wheel1: Int32(dy.rounded()), wheel2: 0, wheel3: 0) else { return }
+                                  wheel1: Int32(dy.rounded()), wheel2: 0, wheel3: 0) else {
+            throw ActuatorError.failed("Could not synthesize a scroll event.")
+        }
         event.setIntegerValueField(.eventSourceUserData, value: tag)
-        event.post(tap: .cghidEventTap)
+        event.location = point
+        switch delivery {
+        case .unavailable: throw ActuatorError.failed("Virtual delivery has no approved target process.")
+        case .hid: event.post(tap: .cghidEventTap)
+        case .pid(let pid):
+            event.postToPid(pid)
+            try await eventInjector?(.scroll, point, 0, 0, 0, Float(dy))
+        }
     }
 
     // MARK: Keyboard
@@ -151,11 +192,9 @@ public final class InputSynthesizer: @unchecked Sendable {
             try checkpoint?()
             try gate?.assertFrontmost()
             if let key {
-                postKey(code: key.code, down: true, unicode: String(character), shift: key.shift)
-                postKey(code: key.code, down: false, unicode: String(character), shift: key.shift)
+                try await postKeyPair(code: key.code, unicode: String(character), shift: key.shift)
             } else {
-                postUnicode(String(character), down: true)
-                postUnicode(String(character), down: false)
+                try await postUnicodePair(String(character))
             }
             index += 1
         }
@@ -176,24 +215,26 @@ public final class InputSynthesizer: @unchecked Sendable {
             }
             return copy
         }
+        // AGENT: cancellation or event failure must not leave the human's clipboard replaced.
+        defer {
+            board.clearContents()
+            if let saved, !saved.isEmpty {
+                let items = saved.map { copy -> NSPasteboardItem in
+                    let item = NSPasteboardItem()
+                    for (type, data) in copy { item.setData(data, forType: type) }
+                    return item
+                }
+                board.writeObjects(items)
+            }
+        }
         board.clearContents()
         board.setString(text, forType: .string)
-        postKey(code: 9, down: true, unicode: nil, shift: false, flags: .maskCommand)
-        postKey(code: 9, down: false, unicode: nil, shift: false, flags: .maskCommand)
+        try await postKeyPair(code: 9, unicode: nil, shift: false, flags: .maskCommand)
         try await Task.sleep(for: .milliseconds(120))
-        board.clearContents()
-        if let saved, !saved.isEmpty {
-            let items = saved.map { copy -> NSPasteboardItem in
-                let item = NSPasteboardItem()
-                for (type, data) in copy { item.setData(data, forType: type) }
-                return item
-            }
-            board.writeObjects(items)
-        }
     }
 
     /// Presses a named key with optional modifiers.
-    public func press(key name: String, modifiers: [String]) throws {
+    public func press(key name: String, modifiers: [String]) async throws {
         try gate?.assertFrontmost()
         var flags: CGEventFlags = []
         for modifier in modifiers {
@@ -208,46 +249,108 @@ public final class InputSynthesizer: @unchecked Sendable {
         // AGENT: unknown keys must fail visibly and single-character shortcuts need ANSI key codes.
         let code = Self.namedKey(name) ?? (name.count == 1 ? name.first.flatMap { Self.virtualKey(for: $0)?.code } : nil)
         guard let code else { throw ActuatorError.failed("Unknown key ‘\(name)’. Use a character or a supported named key.") }
-        postKey(code: code, down: true, unicode: nil, shift: flags.contains(.maskShift), flags: flags)
-        postKey(code: code, down: false, unicode: nil, shift: flags.contains(.maskShift), flags: flags)
+        try await postKeyPair(code: code, unicode: nil, shift: flags.contains(.maskShift), flags: flags)
     }
 
     /// The kill switch: Escape always works, even mid-run.
-    public func emergencyStop() {
-        postKey(code: 53, down: true, unicode: nil, shift: false)
-        postKey(code: 53, down: false, unicode: nil, shift: false)
+    public func emergencyStop() async throws {
+        try await postKeyPair(code: 53, unicode: nil, shift: false)
+    }
+
+    /// Records a successful Accessibility press in the video event stream.
+    // AGENT: AXPress does not emit a global event, so its intended click must still appear in the recording.
+    public func recordPointer(kind: InputEvent.Kind, at point: CGPoint, button: UInt8 = 0) async throws {
+        try checkpoint?()
+        try gate?.assertFrontmost()
+        guard case .pid = delivery else {
+            throw ActuatorError.failed("Accessibility click recording requires virtual process delivery.")
+        }
+        posted.withLock { $0 = point }
+        try await eventInjector?(kind, point, button, 0, 0, 0)
     }
 
     // MARK: Posting
 
-    private func postMouse(type: CGEventType, at point: CGPoint, button: CGMouseButton, clickState: Int64) {
+    /// Posts a complete key press even when logging its down event fails.
+    // AGENT: a failed event-log write after key-down must not leave a key held in the target app.
+    private func postKeyPair(code: CGKeyCode, unicode: String?, shift: Bool,
+                             flags: CGEventFlags = []) async throws {
+        do { try await postKey(code: code, down: true, unicode: unicode, shift: shift, flags: flags) }
+        catch { try? await postKey(code: code, down: false, unicode: unicode, shift: shift, flags: flags); throw error }
+        try await postKey(code: code, down: false, unicode: unicode, shift: shift, flags: flags)
+    }
+
+    /// Posts a Unicode press and always follows it with a release.
+    // AGENT: process-targeted text needs a matching key-up even if event logging fails.
+    private func postUnicodePair(_ text: String) async throws {
+        do { try await postUnicode(text, down: true) }
+        catch { try? await postUnicode(text, down: false); throw error }
+        try await postUnicode(text, down: false)
+    }
+
+    private func postMouse(type: CGEventType, at point: CGPoint, button: CGMouseButton, clickState: Int64) async throws {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
-                                  mouseButton: button) else { return }
+                                  mouseButton: button) else {
+            throw ActuatorError.failed("Could not synthesize a mouse event.")
+        }
         event.setIntegerValueField(.mouseEventClickState, value: clickState)
         event.setIntegerValueField(.eventSourceUserData, value: tag)
         posted.withLock { $0 = point }
-        event.post(tap: .cghidEventTap)
+        switch delivery {
+        case .unavailable: throw ActuatorError.failed("Virtual delivery has no approved target process.")
+        case .hid:
+            event.post(tap: .cghidEventTap)
+        case .pid(let pid):
+            event.postToPid(pid)
+            let kind: InputEvent.Kind
+            switch type {
+            case .mouseMoved: kind = .move
+            case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged: kind = .drag
+            case .leftMouseDown, .rightMouseDown, .otherMouseDown: kind = .down
+            case .leftMouseUp, .rightMouseUp, .otherMouseUp: kind = .up
+            default: return
+            }
+            try await eventInjector?(kind, point, UInt8(truncatingIfNeeded: button.rawValue), 0, 0, 0)
+        }
     }
 
-    private func postKey(code: CGKeyCode, down: Bool, unicode: String?, shift: Bool, flags: CGEventFlags = []) {
+    private func postKey(code: CGKeyCode, down: Bool, unicode: String?, shift: Bool, flags: CGEventFlags = []) async throws {
         var eventFlags = flags
         if shift { eventFlags.insert(.maskShift) }
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { return }
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else {
+            throw ActuatorError.failed("Could not synthesize a keyboard event.")
+        }
         event.flags = eventFlags
         event.setIntegerValueField(.eventSourceUserData, value: tag)
         if let unicode, !unicode.isEmpty {
             var utf16 = Array(unicode.utf16)
             event.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
         }
-        event.post(tap: .cghidEventTap)
+        switch delivery {
+        case .unavailable: throw ActuatorError.failed("Virtual delivery has no approved target process.")
+        case .hid: event.post(tap: .cghidEventTap)
+        case .pid(let pid):
+            event.postToPid(pid)
+            let position = lastPosted ?? Self.currentMouseLocation()
+            try await eventInjector?(down ? .keyDown : .keyUp, position, 0, UInt16(code),
+                                     UInt16(truncatingIfNeeded: eventFlags.rawValue >> 16), 0)
+        }
     }
 
-    private func postUnicode(_ text: String, down: Bool) {
+    private func postUnicode(_ text: String, down: Bool) async throws {
         var utf16 = Array(text.utf16)
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { return }
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else {
+            throw ActuatorError.failed("Could not synthesize a Unicode keyboard event.")
+        }
         event.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
         event.setIntegerValueField(.eventSourceUserData, value: tag)
-        event.post(tap: .cghidEventTap)
+        switch delivery {
+        case .unavailable: throw ActuatorError.failed("Virtual delivery has no approved target process.")
+        case .hid: event.post(tap: .cghidEventTap)
+        case .pid(let pid):
+            event.postToPid(pid)
+            try await eventInjector?(down ? .keyDown : .keyUp, lastPosted ?? Self.currentMouseLocation(), 0, 0, 0, 0)
+        }
     }
 
     public static func currentMouseLocation() -> CGPoint {

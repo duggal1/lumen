@@ -87,6 +87,13 @@ extension AppModel: LumenRuntime {
         pendingMarkers.append(marker)
     }
 
+    // AGENT: virtual script events must be recorded without entering the user's global HID stream.
+    public func injectInput(kind: InputEvent.Kind, screenPoint: CGPoint, button: UInt8,
+                            keyCode: UInt16, flags: UInt16, scrollDelta: Float) async throws {
+        await session.injectInput(kind: kind, screenPoint: screenPoint, button: button,
+                                  keyCode: keyCode, flags: flags, scrollDelta: scrollDelta)
+    }
+
     /// The window id of an application's frontmost on-screen window.
     static func windowID(bundleID: String) async -> UInt32? {
         guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true) else {

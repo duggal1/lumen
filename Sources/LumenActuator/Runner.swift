@@ -40,7 +40,7 @@ public final class HumanWatchdog: @unchecked Sendable {
 
     /// Call while the script is running. Returns a takeover reason, if any.
     // AGENT: compare against the last synthesized position instead of the previous action's position.
-    public func check(expected: CGPoint? = nil) -> Takeover? {
+    public func check(expected: CGPoint? = nil, monitorsPointer: Bool = true) -> Takeover? {
         lock.lock(); defer { lock.unlock() }
         guard armed else { return nil }
         // Escape counting: the key bit is set while the key is held.
@@ -50,12 +50,14 @@ public final class HumanWatchdog: @unchecked Sendable {
             if escapeCount >= 3 { lastEscapeDown = escapeDown; return .escaped }
         }
         lastEscapeDown = escapeDown
-        let point = InputSynthesizer.currentMouseLocation()
-        if let last = expected ?? lastPoint {
-            let dx = point.x - last.x, dy = point.y - last.y
-            if (dx * dx + dy * dy).squareRoot() > 12 { return .humanMoved }
+        if monitorsPointer {
+            let point = InputSynthesizer.currentMouseLocation()
+            if let last = expected ?? lastPoint {
+                let dx = point.x - last.x, dy = point.y - last.y
+                if (dx * dx + dy * dy).squareRoot() > 12 { return .humanMoved }
+            }
+            lastPoint = point
         }
-        lastPoint = point
         return nil
     }
 }
@@ -79,44 +81,78 @@ public actor ScriptRunner {
     /// AGENT: LumenActuator cannot import LumenControl, so confinement arrives as
     /// a closure. Defaults to refusing writes so a forgotten caller is safe.
     private let writablePath: @Sendable (String) throws -> URL
+    /// AGENT: process-targeted events need a runtime seam to enter the recording event log.
+    private let inputInjector: InputSynthesizer.EventInjector?
 
     public init(mode: InputMode = .physical, sink: MarkerSink,
                 allowedBundles: Set<String> = [],
+                inputInjector: InputSynthesizer.EventInjector? = nil,
                 writablePath: @escaping @Sendable (String) throws -> URL = { _ in
                     throw ActuatorError.failed("Screenshot paths are not permitted for this run.")
                 }) {
         self.mode = mode
         self.sink = sink
         self.synth = InputSynthesizer(mode: mode)
+        self.synth.eventInjector = inputInjector
         self.allowedBundles = allowedBundles
+        self.inputInjector = inputInjector
         self.writablePath = writablePath
     }
 
     /// Runs the script and returns the markers it produced.
     @discardableResult
     public func run(_ script: DemoScript, checkpoint: Checkpoint? = nil) async throws -> [CaptureMarker] {
-        // AGENT: virtual delivery currently falls through to HID; refuse it until isolated delivery is implemented.
-        guard mode == .physical else { throw ActuatorError.failed("Virtual mode is unavailable; use physical mode after approving the target app.") }
         // AGENT: duplicate step IDs would make later marker references ambiguous.
         let ids = script.steps.enumerated().map { $0.element.id.isEmpty ? "step-\($0.offset + 1)" : $0.element.id }
         guard Set(ids).count == ids.count else { throw ActuatorError.failed("Script step IDs must be unique.") }
         bundleID = script.app.bundleID ?? bundleID
-        let allowed = allowedBundles.union([bundleID].compactMap { $0 })
-        if !allowed.isEmpty { synth.gate = ActuationGate(allowed: allowed) }
+        guard let bundleID, !bundleID.isEmpty, allowedBundles.contains(bundleID) else {
+            throw ActuatorError.failed("The script target must be a non-empty, approved bundle_id.")
+        }
+        for step in script.steps {
+            for action in step.do {
+                if case .launch(let launch) = action {
+                    let target = launch.bundleID ?? bundleID
+                    guard allowedBundles.contains(target) else {
+                        throw ActuatorError.failed("Launch target \(target) is not on the allow-list.")
+                    }
+                }
+            }
+        }
+        synth.gate = ActuationGate(allowed: allowedBundles, expectedFrontmost: bundleID)
         watchdog.arm()
+        let monitorsPointer = mode == .physical
         synth.checkpoint = { [watchdog, weak synth] in
-            if let takeover = watchdog.check(expected: synth?.lastPosted) { throw ActuatorError.humanTakeover(takeover) }
+            if let takeover = watchdog.check(expected: synth?.lastPosted, monitorsPointer: monitorsPointer) {
+                throw ActuatorError.humanTakeover(takeover)
+            }
         }
         defer { synth.checkpoint = nil; watchdog.disarm() }
+        if mode == .virtual {
+            guard inputInjector != nil else {
+                throw ActuatorError.failed("Virtual mode requires an active recording event sink.")
+            }
+        }
+        if let running = runningApplication(for: bundleID) {
+            if mode == .virtual { synth.delivery = .pid(running.processIdentifier) }
+            // AGENT: activate only the approved target before sending its events.
+            running.activate(options: [.activateAllWindows])
+            try await waitForFrontmost(bundleID, timeout: 5)
+        } else if mode == .virtual {
+            let launchesTarget = script.steps.contains { step in
+                step.do.contains { if case .launch(let launch) = $0 { return (launch.bundleID ?? bundleID) == bundleID }; return false }
+            }
+            if !launchesTarget {
+                throw ActuatorError.failed("The virtual target is not running; add a launch action for \(bundleID).")
+            }
+        }
         var markers: [CaptureMarker] = []
         for (index, step) in script.steps.enumerated() {
             try Task.checkCancellation()
             let start = HostClock.now()
             var resolved: CGRect?
             for action in step.do {
-                if let takeover = watchdog.check(expected: synth.lastPosted) {
-                    throw ActuatorError.humanTakeover(takeover)
-                }
+                try checkTakeover()
                 resolved = try await perform(action, fallbackRect: resolved)
             }
             let end = HostClock.now()
@@ -142,7 +178,8 @@ public actor ScriptRunner {
     private func nap(_ seconds: Double) async throws {
         var remaining = seconds
         while remaining > 0 {
-            if let takeover = watchdog.check(expected: synth.lastPosted) { throw ActuatorError.humanTakeover(takeover) }
+            try checkTakeover()
+            try Task.checkCancellation()
             let slice = min(remaining, 0.1)
             try await Task.sleep(for: .seconds(slice))
             remaining -= slice
@@ -153,14 +190,32 @@ public actor ScriptRunner {
         switch action {
         case .launch(let launch):
             let id = launch.bundleID ?? bundleID
-            if let id {
-                let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
-                    ?? URL(fileURLWithPath: "/Applications/\(id).app")
-                if FileManager.default.fileExists(atPath: url.path) {
-                    NSWorkspace.shared.open(url)
+            guard let id, allowedBundles.contains(id) else {
+                throw ActuatorError.failed("Launch target is not on the allow-list.")
+            }
+            bundleID = id
+            synth.gate = ActuationGate(allowed: allowedBundles, expectedFrontmost: id)
+            if let running = runningApplication(for: id) {
+                // AGENT: activate only the approved target before sending its events.
+                running.activate(options: [.activateAllWindows])
+            } else {
+                guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id),
+                      NSWorkspace.shared.open(url) else {
+                    throw ActuatorError.failed("Could not launch approved app \(id).")
                 }
             }
-            // AGENT: a launch wait could be minutes and ignored the kill switch.
+            // AGENT: virtual delivery needs the newly launched app's process id before sending input.
+            let deadline = Date().addingTimeInterval(10)
+            var targetPID = processID(for: id)
+            while targetPID == nil, Date() < deadline {
+                try checkTakeover()
+                try Task.checkCancellation()
+                try await Task.sleep(for: .milliseconds(100))
+                targetPID = processID(for: id)
+            }
+            guard let targetPID else { throw ActuatorError.timeout("launching \(id)") }
+            if mode == .virtual { synth.delivery = .pid(targetPID) }
+            try await waitForFrontmost(id, timeout: 5)
             try await nap(max(launch.waitS, 0.1))
             return fallbackRect
 
@@ -170,22 +225,27 @@ public actor ScriptRunner {
                 let matches = AXSupport.find(TargetRef(role: wait.role, title: wait.title,
                                                        identifier: wait.identifier, index: 0), bundleID: bundleID)
                 if !matches.isEmpty { return fallbackRect }
-                if let takeover = watchdog.check(expected: synth.lastPosted) { throw ActuatorError.humanTakeover(takeover) }
+                try checkTakeover()
+                try Task.checkCancellation()
                 try await Task.sleep(for: .milliseconds(120))
             }
             throw ActuatorError.timeout("No element matched \(wait.role ?? "any") / \(wait.title ?? "")")
 
         case .click(let click):
             let element = try resolve(click.target)
-            if mode == .virtual, let element = element, AXSupport.press(element) {
-                return AXSupport.rect(element)
-            }
             guard let point = targetPoint(click.target, x: click.x, y: click.y,
                                           element: element, fallback: fallbackRect) else {
                 throw ActuatorError.failed("Could not resolve the click target.")
             }
             try await synth.moveCursor(to: point, ms: max(click.moveMs, 50))
-            try await synth.click(at: point, button: click.button, count: click.count)
+            try synth.checkBeforeAction()
+            if mode == .virtual, max(click.count, 1) == 1, click.button?.lowercased() != "right",
+               let element, AXSupport.press(element) {
+                try await synth.recordPointer(kind: .down, at: point)
+                try await synth.recordPointer(kind: .up, at: point)
+            } else {
+                try await synth.click(at: point, button: click.button, count: click.count)
+            }
             return element.flatMap { AXSupport.rect($0) } ?? fallbackRect
 
         case .drag(let drag):
@@ -216,7 +276,7 @@ public actor ScriptRunner {
             return fallbackRect
 
         case .key(let key):
-            try synth.press(key: key.key, modifiers: key.modifiers)
+            try await synth.press(key: key.key, modifiers: key.modifiers)
             return fallbackRect
 
         case .sleep(let sleep):
@@ -226,7 +286,7 @@ public actor ScriptRunner {
         case .scroll(let scroll):
             let point = targetPoint(scroll.target, x: nil, y: nil,
                                     element: nil, fallback: fallbackRect) ?? InputSynthesizer.currentMouseLocation()
-            try synth.scroll(at: point, dy: scroll.dy)
+            try await synth.scroll(at: point, dy: scroll.dy)
             return fallbackRect
 
         case .screenshot(let shot):
@@ -243,6 +303,34 @@ public actor ScriptRunner {
         let matches = AXSupport.find(target, bundleID: bundleID)
         guard !matches.isEmpty else { return nil }
         return matches[min(max(target.index, 0), matches.count - 1)]
+    }
+
+    private func checkTakeover() throws {
+        if let takeover = watchdog.check(expected: synth.lastPosted, monitorsPointer: mode == .physical) {
+            throw ActuatorError.humanTakeover(takeover)
+        }
+    }
+
+    private func processID(for bundleID: String) -> pid_t? {
+        runningApplication(for: bundleID)?.processIdentifier
+    }
+
+    private func runningApplication(for bundleID: String) -> NSRunningApplication? {
+        NSWorkspace.shared.runningApplications.first {
+            $0.bundleIdentifier == bundleID && !$0.isTerminated
+        }
+    }
+
+    private func waitForFrontmost(_ bundleID: String, timeout: TimeInterval) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while NSWorkspace.shared.frontmostApplication?.bundleIdentifier != bundleID, Date() < deadline {
+            try checkTakeover()
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID else {
+            throw ActuatorError.timeout("bringing \(bundleID) to the front")
+        }
     }
 
     private func targetPoint(_ target: TargetRef?, x: Double?, y: Double?,
