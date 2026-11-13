@@ -27,78 +27,27 @@ struct MCP: AsyncParsableCommand {
         try client.connect()
         FileHandle.standardError.write(Data("lumen mcp: connected to the Lumen daemon\n".utf8))
 
-        // stdin is read on a worker thread and handed over one line at a
-        // time; the socket conversation stays on this thread so replies
-        // always match their request.
-        let inbox = Inbox()
+        // AGENT: read replies independently so long requests do not block subsequent requests.
+        let finished = DispatchSemaphore(value: 0)
         let reader = Thread {
-            while let line = readLine(strippingNewline: true) {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.isEmpty { continue }
-                inbox.put(trimmed)
+            defer { finished.signal() }
+            while let reply = try? client.receive() {
+                print(reply)
+                fflush(stdout)
             }
-            inbox.finish()
         }
         reader.start()
-
-        while let line = inbox.next() {
+        while let line = readLine(strippingNewline: true) {
+            if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
             do {
                 try client.send(line)
             } catch {
                 FileHandle.standardError.write(Data("lumen mcp: send failed: \(error)\n".utf8))
                 break
             }
-            // A notification has no reply; a request does.
-            guard needsReply(line) else { continue }
-            do {
-                let reply = try client.receive()
-                print(reply)
-                fflush(stdout)
-            } catch {
-                FileHandle.standardError.write(Data("lumen mcp: receive failed: \(error)\n".utf8))
-                break
-            }
         }
+        client.shutdownWrite()
+        finished.wait()
         client.disconnect()
-    }
-
-    /// True when the request carries an id, so a reply is expected.
-    private func needsReply(_ line: String) -> Bool {
-        guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return object["id"] != nil
-    }
-}
-
-/// A tiny line queue between the stdin reader and the socket loop.
-final class Inbox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var lines: [String] = []
-    private var done = false
-    private let semaphore = DispatchSemaphore(value: 0)
-
-    func put(_ line: String) {
-        lock.lock(); lines.append(line); lock.unlock()
-        semaphore.signal()
-    }
-
-    func finish() {
-        lock.lock(); done = true; lock.unlock()
-        semaphore.signal()
-    }
-
-    func next() -> String? {
-        while true {
-            lock.lock()
-            if !lines.isEmpty {
-                let line = lines.removeFirst()
-                lock.unlock()
-                return line
-            }
-            let finished = done
-            lock.unlock()
-            if finished { return nil }
-            semaphore.wait()
-        }
     }
 }
