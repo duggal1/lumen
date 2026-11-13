@@ -3,6 +3,7 @@ import os
 import AppKit
 import Metal
 @preconcurrency import AVFoundation
+@preconcurrency import CoreVideo
 import LumenCore
 import LumenProject
 import LumenDirector
