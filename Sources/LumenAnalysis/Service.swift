@@ -47,7 +47,7 @@ public struct TypingContextPolicy: Codable, Sendable, Equatable {
 
 /// Measured work counters, shared by every analyzer. Tests read these to prove
 /// the decode pass merged bursts instead of trusting a comment.
-public final class AnalysisMetrics {
+public final class AnalysisMetrics: @unchecked Sendable {
     public struct Counters: Sendable, Equatable {
         public var typingWindows: Int = 0
         public var typingReaderOpens: Int = 0
@@ -249,9 +249,9 @@ public actor AnalysisService {
     private let speech = MoonshineSpeechEngine()
     public init() {}
 
-    public func run(_ request: AnalysisRequest, onTyping: @Sendable (AnalysisResult) -> Void = { _ in },
-                    onPrivacy: @Sendable (AnalysisResult) -> Void = { _ in },
-                    onPrivacyStart: @Sendable () -> Void = {}) async -> AnalysisResult {
+    public func run(_ request: AnalysisRequest, onTyping: @escaping @Sendable (AnalysisResult) -> Void = { _ in },
+                    onPrivacy: @escaping @Sendable (AnalysisResult) -> Void = { _ in },
+                    onPrivacyStart: @escaping @Sendable () -> Void = {}) async -> AnalysisResult {
         // The privacy gate must always resolve: whatever ends this run — a
         // finished scan, a failure, a cancellation or a disabled plan — the
         // progress reaches 1 so the editor stops waiting for the masks.

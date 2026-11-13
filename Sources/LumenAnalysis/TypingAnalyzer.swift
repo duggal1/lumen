@@ -148,19 +148,24 @@ private final class TypingJob: @unchecked Sendable {
             let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
             guard time + 0.0001 >= wanted[wi].t else { continue }
             let grid = try lumaTiles(buffer)
-            AnalysisMetrics.shared.add(tiles: grid.mean.count)
+            AnalysisMetrics.shared.add(frames: 1, tiles: grid.mean.count)
             height = max(height, Double(CVPixelBufferGetHeight(buffer)))
-            let index = wanted[wi].burst
-            var slot = active[index] ?? (ts: [], grids: [])
-            slot.ts.append(time)
-            slot.grids.append(grid)
-            active[index] = slot
-            wi += 1
-            // A slow frame satisfies only the first pending time; the ones it
-            // passed are covered by it, not by a second copy of it.
-            while wi < wanted.count, wanted[wi].t <= time + 0.0001 { wi += 1 }
-            remaining[index, default: 0] -= 1
-            if remaining[index] == 0 { finish(index) }
+            // Every sample time this frame covers is answered by this frame,
+            // at most once per burst: two bursts that want the same instant
+            // share the decode instead of one starving the other.
+            var served: Set<Int> = []
+            while wi < wanted.count, wanted[wi].t <= time + 0.0001 {
+                let entry = wanted[wi]
+                if served.insert(entry.burst).inserted {
+                    var slot = active[entry.burst] ?? (ts: [], grids: [])
+                    slot.ts.append(time)
+                    slot.grids.append(grid)
+                    active[entry.burst] = slot
+                }
+                remaining[entry.burst, default: 0] -= 1
+                wi += 1
+            }
+            for index in served where remaining[index] == 0 { finish(index) }
             if wi >= wanted.count { break }
         }
         if reader.status == .failed { throw reader.error ?? AnalysisError.readerFailed }

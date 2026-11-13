@@ -118,7 +118,13 @@ private enum TypingGrid {
     var frames: [LumaTiles] = [TypingGrid.page([])]
     for n in 1...5 { frames.append(TypingGrid.page(TypingGrid.line(9, 5, n))) }
     let full = TypingGrid.line(9, 5, 5)
-    for i in 0..<6 { frames.append(TypingGrid.page(i.isMultiple(of: 2) ? full : full + [(10, 9)])) }
+    for i in 0..<6 {
+        // A caret bar is a thin mark: a much smaller luma change than a glyph.
+        var mean = [UInt8](repeating: 235, count: TypingGrid.cols * TypingGrid.rows)
+        for (c, r) in full { mean[r * TypingGrid.cols + c] = 40 }
+        if i % 2 == 1 { mean[9 * TypingGrid.cols + 10] = 185 }
+        frames.append(LumaTiles(cols: TypingGrid.cols, rows: TypingGrid.rows, tile: TypingGrid.tile, mean: mean))
+    }
     let tr = try #require(TypingGrid.trace(frames))
     let xs = tr.samples.map(\.x)
     let last = try #require(xs.last)
@@ -227,6 +233,24 @@ private enum TypingGrid {
     #expect(traces.count == 3)
     #expect(traces.allSatisfy { $0.samples.count >= 2 })
     #expect(traces.allSatisfy { abs(($0.rect?.origin.y ?? 0) - 14 * 16) < 24 })
+}
+
+@Test func analyzerTracesBurstAtStartAndEndOfClip() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let url = root.appendingPathComponent("edges.mov")
+    try await TypingVideo.write(to: url, seconds: 2.5, fps: 30) { frame in
+        TypingGrid.page(TypingGrid.line(12, 6, min(2 + frame / 3, 20)))
+    }
+    AnalysisMetrics.shared.reset()
+    // First key of the recording, and a burst that runs to the last frame.
+    let bursts = [(t0: 0.0, t1: 0.3), (t0: 2.2, t1: 2.45)]
+    let traces = try await TypingAnalyzer.analyze(url: url, bursts: bursts, anchors: [nil, nil])
+    print("edge traces: \(traces.map { "\($0.t0)...\($0.t1) n=\($0.samples.count)" })")
+    #expect(traces.count == 2, "expected a trace for the first and the last burst, got \(traces.count)")
+    #expect(traces.allSatisfy { $0.samples.count >= 3 })
+    #expect(traces.allSatisfy { abs(($0.rect?.origin.y ?? -1) - 12 * 16) < 24 })
 }
 
 // MARK: - 10. scheduler is bounded and priority ordered

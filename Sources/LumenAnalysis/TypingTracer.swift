@@ -72,9 +72,10 @@ public enum TypingTracer {
         func appeared(_ d: [Int], _ i: Int) -> Bool { d[i] * ink <= -threshold }
         func vanished(_ d: [Int], _ i: Int) -> Bool { d[i] * ink >= threshold }
 
+        /// `test` receives the tile index.
         func mask(_ d: [Int], _ test: (Int) -> Bool) -> [Bool] {
             var out = [Bool](repeating: false, count: d.count)
-            for i in d.indices where test(d[i]) { out[i] = true }
+            for i in d.indices where test(i) { out[i] = true }
             return out
         }
 
@@ -116,6 +117,11 @@ public enum TypingTracer {
             b.height <= maxLineRows && b.width <= max(cols / 3, 4)
         }
 
+        /// A typed glyph changes one tile; a page animation changes a block.
+        func seedPlausible(_ b: Region) -> Bool {
+            b.area <= max(4, cols / 8)
+        }
+
         // A left edge that held still on the previous sample is text; an edge
         // that moves every frame is page animation. The bonus is only used when
         // the tracker has to choose or re-choose a line.
@@ -123,7 +129,7 @@ public enum TypingTracer {
         var previousLefts: [Int: Int] = [:]
 
         func seed(_ regions: [Region], near: Double?) -> Region? {
-            let candidates = regions.filter(lineLike)
+            let candidates = regions.filter { lineLike($0) && seedPlausible($0) }
             guard !candidates.isEmpty else { return nil }
             if let near, near.isFinite {
                 return candidates.min { abs($0.centerY * tile - near) < abs($1.centerY * tile - near) }
@@ -146,7 +152,7 @@ public enum TypingTracer {
 
         func anyAt(_ d: [Int], column: Int, rows range: ClosedRange<Int>, _ test: (Int) -> Bool) -> Bool {
             guard column >= 0, column < cols else { return false }
-            for r in range where test(d[r * cols + column]) { return true }
+            for r in range where test(r * cols + column) { return true }
             return false
         }
 
@@ -154,9 +160,20 @@ public enum TypingTracer {
             let lo = max(columns.lowerBound, 0), hi = min(columns.upperBound, cols - 1)
             guard lo <= hi else { return nil }
             for c in stride(from: hi, through: lo, by: -1) {
-                for r in range where test(d[r * cols + c]) { return c }
+                for r in range where test(r * cols + c) { return c }
             }
             return nil
+        }
+
+        /// The largest signed change in one column of the band.
+        func strongest(_ d: [Int], column: Int, rows range: ClosedRange<Int>) -> Int {
+            guard column >= 0, column < cols else { return 0 }
+            var best = 0
+            for r in range {
+                let value = d[r * cols + column]
+                if abs(value) > abs(best) { best = value }
+            }
+            return best
         }
 
         func scrollShift(_ regions: [Region], top: Int, height: Int, left: Int, maxRows: Int) -> Int? {
@@ -175,6 +192,8 @@ public enum TypingTracer {
         var lineTop = -1, lineRows = 1, caret = -1, left = 0
         var miss = 0
         var unstable = 0
+        /// Typical |delta| of a typed glyph tile; a caret bar is a fraction of it.
+        var inkMagnitude = 0
         var lastY = 0.0
         var samples: [TypingTrace.Sample] = []
         // A caret step never jumps more than a few tiles; a moving page does.
@@ -212,7 +231,7 @@ public enum TypingTracer {
             }
 
             if lineTop < 0 {
-                let hot = mask(d) { abs($0) >= threshold }
+                let hot = mask(d) { abs(d[$0]) >= threshold }
                 guard let chosen = seed(components(hot), near: anchor?.y) else {
                     if !samples.isEmpty {
                         append(ts[k], x: Double(caret + 1) * tile, y: lastY, confidence: 0.15, evidence: .held)
@@ -222,6 +241,7 @@ public enum TypingTracer {
                 // Polarity is measured, not assumed: light-on-dark screens exist.
                 let sign = meanDelta(chosen, d)
                 if sign > 0 { ink = -1 } else if sign < 0 { ink = 1 }
+                inkMagnitude = max(Int(abs(sign)), threshold + 1)
                 adopt(chosen)
                 appendLine(ts[k], confidence: 0.90, evidence: .caret)
                 continue
@@ -237,12 +257,21 @@ public enum TypingTracer {
             var found = false
             var next = caret
 
-            if anyAt(d, column: caret, rows: range, { appeared(d, $0) }) {
+            // The signed change at a column decides what happened there: ink
+            // appearing is a glyph (or the caret), ink leaving is a deletion.
+            let atCaret = strongest(d, column: caret, rows: range)
+            let atPrev = caret - 1 >= 0 ? strongest(d, column: caret - 1, rows: range) : 0
+            let barLimit = max(Int(Double(inkMagnitude) * 0.45), 1)
+
+            if abs(atCaret) >= threshold, abs(atCaret) > barLimit, atCaret * ink < 0 {
                 next = caret + 1; confidence = 0.95; evidence = .caret; found = true
-            } else if caret - 1 >= 0, anyAt(d, column: caret - 1, rows: range, { appeared(d, $0) }) {
-                next = caret - 1; confidence = 0.70; evidence = .caret; found = true
-            } else if caret - 1 >= 0, anyAt(d, column: caret - 1, rows: range, { vanished(d, $0) }) {
+                inkMagnitude = Int(Double(inkMagnitude) * 0.7 + Double(abs(atCaret)) * 0.3)
+            } else if abs(atPrev) >= threshold, abs(atPrev) > barLimit, atPrev * ink < 0 {
+                next = caret - 1; confidence = 0.70; evidence = .caret; found = true   // caret moved left
+            } else if abs(atPrev) >= threshold, abs(atPrev) > barLimit {
                 next = caret - 1; confidence = 0.65; evidence = .backspace; found = true
+            } else if abs(atCaret) >= threshold {
+                confidence = 0.40; evidence = .blink; found = true      // the caret toggled in place
             } else if let columns = columnRange(left, caret - 2),
                       let mid = rightmost(d, rows: range, columns: columns, { appeared(d, $0) }) {
                 // A glyph appearing far from the caret is another surface
@@ -261,8 +290,6 @@ public enum TypingTracer {
                 } else {
                     next = min(caret, gone); confidence = 0.55; evidence = .backspace; found = true
                 }
-            } else if anyAt(d, column: caret, rows: range, { vanished(d, $0) }) {
-                confidence = 0.40; evidence = .blink; found = true      // caret toggled in place
             }
 
             // Three samples whose changes jump across the line mean this is not
