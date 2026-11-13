@@ -17,7 +17,7 @@ func cameraAt(_ tl: Timeline, _ t: Double) -> (cx: Double, cy: Double, scale: Do
     let axTiny = [AXFrame(x: 950, y: 530, w: 20, h: 20)]
     let outTiny = Director.derive(tl, input: DirectorInput(events: tiny, source: src, ax: axTiny), revision: 1)
     let big: [InputEvent] = [InputEvent(t: 2, kind: .down, x: 960, y: 540, axFrameIndex: 1)]
-    let axBig = [AXFrame(x: 400, y: 300, w: 800, h: 500)]
+    let axBig = [AXFrame(x: 710, y: 390, w: 500, h: 300)]
     let outBig = Director.derive(tl, input: DirectorInput(events: big, source: src, ax: axBig), revision: 1)
     let (cx, cy, sTiny) = cameraAt(outTiny, 2.0)
     let (cx2, cy2, sBig) = cameraAt(outBig, 2.0)

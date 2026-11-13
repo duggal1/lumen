@@ -1100,21 +1100,22 @@ public final class Renderer: @unchecked Sendable {
         guard let encoder = cb.makeComputeCommandEncoder() else { return nil }
         let regions = masks.prefix(128).map { mask -> SourceMaskGPU in
             let height = mask.rect.w
-            let cell = pixelSize > 0 ? pixelSize : min(max(height * 0.45, 6), 24)
+            let cell = pixelSize > 0 ? pixelSize : PrivacyMaskGeometry.cell(boxHeight: height)
             let mode: Float = switch mask.mode { case .pixelate: 0; case .solid: 1; case .blur: 2 }
-            return SourceMaskGPU(rect: mask.rect, block: SIMD4(cell, mode, height * 0.22, 0))
+            let rect = mask.mode == .pixelate ? PrivacyMaskGeometry.mosaicRegion(mask.rect, cell: cell) : mask.rect
+            return SourceMaskGPU(rect: rect, block: SIMD4(cell, mode, height * 0.22, 0))
         }
         var count = UInt32(regions.count)
         encoder.setComputePipelineState(pSourceMask)
         encoder.setTexture(source, index: 0); encoder.setTexture(target, index: 1)
         regions.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
         encoder.setBytes(&count, length: MemoryLayout<UInt32>.size, index: 1)
-        let pad: Float = 10                       // blur mode samples 8 px outside the rect
-        for mask in masks.prefix(128) {
-            let x0 = max(Int((mask.rect.x - pad).rounded(.down)), 0)
-            let y0 = max(Int((mask.rect.y - pad).rounded(.down)), 0)
-            let x1 = min(Int((mask.rect.x + mask.rect.z + pad).rounded(.up)), source.width)
-            let y1 = min(Int((mask.rect.y + mask.rect.w + pad).rounded(.up)), source.height)
+        for region in regions {
+            let pad: Float = region.block.y > 1.5 ? 10 : 0
+            let x0 = max(Int((region.rect.x - pad).rounded(.down)), 0)
+            let y0 = max(Int((region.rect.y - pad).rounded(.down)), 0)
+            let x1 = min(Int((region.rect.x + region.rect.z + pad).rounded(.up)), source.width)
+            let y1 = min(Int((region.rect.y + region.rect.w + pad).rounded(.up)), source.height)
             guard x1 > x0, y1 > y0 else { continue }
             var origin = SIMD2<UInt32>(UInt32(x0), UInt32(y0))
             encoder.setBytes(&origin, length: MemoryLayout<SIMD2<UInt32>>.size, index: 2)
