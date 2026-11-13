@@ -1,4 +1,49 @@
 import Foundation
+import Security
+
+// MARK: - Peer identity
+
+/// Who is on the other end of a connection, as the kernel reports it.
+///
+/// AGENT: a client used to name itself in `initialize`, so any local process
+/// could claim to be an approved one. Identity now comes from the peer.
+public struct PeerIdentity: Sendable {
+    public let pid: pid_t
+    public let path: String
+    public let signingID: String?
+
+    /// What grants are keyed on: the code signature, or the executable path.
+    public var key: String { signingID ?? path }
+
+    public init?(fd: Int32) {
+        var uid: uid_t = 0
+        var gid: gid_t = 0
+        // Same user only: a different user has no business on this socket.
+        guard getpeereid(fd, &uid, &gid) == 0, uid == getuid() else { return nil }
+        var pid: pid_t = 0
+        var length = socklen_t(MemoryLayout<pid_t>.size)
+        // SOL_LOCAL = 0 and LOCAL_PEERPID = 0x002 on macOS; Swift does not import them.
+        guard getsockopt(fd, 0, 0x002, &pid, &length) == 0, pid > 0 else { return nil }
+        var buffer = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        var signingID: String?
+        var code: SecCode?
+        let attributes = [kSecGuestAttributePid: pid] as CFDictionary
+        if SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess, let code {
+            var staticCode: SecStaticCode?
+            var information: CFDictionary?
+            if SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+               SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation),
+                                             &information) == errSecSuccess,
+               let information = information as? [String: Any] {
+                signingID = information[kSecCodeInfoIdentifier as String] as? String
+            }
+        }
+        self.pid = pid
+        self.path = String(cString: buffer)
+        self.signingID = signingID
+    }
+}
 
 // MARK: - Unix domain socket (the daemon's private transport)
 
@@ -89,14 +134,20 @@ public final class UnixSocketServer: @unchecked Sendable {
         // AGENT: a client that vanishes mid-reply must not raise SIGPIPE and kill the daemon.
         var one: Int32 = 1
         setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        // AGENT: grants are keyed on who the kernel says is calling, not on a
+        // name the client typed into its initialize request.
+        guard let peer = PeerIdentity(fd: client) else {
+            close(client)
+            return
+        }
         // One queue per connection: an idle client must never block another
         // client, and the replies on one connection stay in order.
         let connection = DispatchQueue(label: "lumen.agent.socket.conn", qos: .userInitiated)
-        connection.async { [weak self] in self?.serve(client, on: connection) }
+        connection.async { [weak self] in self?.serve(client, peer: peer, on: connection) }
     }
 
-    private func serve(_ fd: Int32, on connection: DispatchQueue) {
-        var clientID = "socket"
+    private func serve(_ fd: Int32, peer: PeerIdentity, on connection: DispatchQueue) {
+        let clientID = peer.key
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 64 * 1024)
         while running {
@@ -109,9 +160,6 @@ public final class UnixSocketServer: @unchecked Sendable {
                 let lineData = buffer[buffer.startIndex..<index]
                 buffer.removeSubrange(buffer.startIndex...index)
                 guard let line = String(data: lineData, encoding: .utf8), !line.isEmpty else { continue }
-                // The client introduces itself with the initialize request;
-                // its name is what capability grants are checked against.
-                if let name = MCPServer.clientName(from: line) { clientID = name }
                 let requestClient = clientID
                 // Handle it on this connection's own queue, in order. The
                 // read loop waits for the reply so replies never overtake

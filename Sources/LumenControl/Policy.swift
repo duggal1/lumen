@@ -9,7 +9,7 @@ import LumenCore
 /// move a mouse or reach the internet needs an explicit, revocable approval.
 public final class Policy: @unchecked Sendable {
     public struct Client: Codable, Sendable, Equatable {
-        public var capabilities: [String] = ["read", "record", "edit", "export"]
+        public var capabilities: [String] = ["read"]
         public var bundleIDs: [String] = []
         public var paths: [String] = []
         public init() {}
@@ -75,7 +75,7 @@ public final class Policy: @unchecked Sendable {
 
     public func allowed(_ capability: Capability, for client: String) -> Bool {
         refreshIfChanged()
-        return store.withLock { $0.clients[client]?.capabilities ?? ["read", "record", "edit", "export"] }
+        return store.withLock { $0.clients[client]?.capabilities ?? ["read"] }
             .contains(capability.rawValue)
     }
 
@@ -118,7 +118,7 @@ public final class Policy: @unchecked Sendable {
     /// The capabilities currently granted to a client.
     public func grantedCapabilities(for client: String) -> [String] {
         refreshIfChanged()
-        return store.withLock { $0.clients[client]?.capabilities ?? ["read", "record", "edit", "export"] }
+        return store.withLock { $0.clients[client]?.capabilities ?? ["read"] }
     }
 
     /// The bundle ids a client may act on.

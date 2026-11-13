@@ -12,25 +12,16 @@ public final class MCPServer: @unchecked Sendable {
     public let policy: Policy
     public let jobs: JobManager
     public let audit: AuditLog
+    public let approvals: ApprovalCenter
 
-    public init(registry: ToolRegistry, engine: Engine, policy: Policy, jobs: JobManager, audit: AuditLog) {
+    public init(registry: ToolRegistry, engine: Engine, policy: Policy, jobs: JobManager, audit: AuditLog,
+                approvals: ApprovalCenter = ApprovalCenter()) {
         self.registry = registry
         self.engine = engine
         self.policy = policy
         self.jobs = jobs
         self.audit = audit
-    }
-
-    /// The client identity from an initialize request. Capability grants are
-    /// per client, so the name the client introduces itself with is the name
-    /// the human approves.
-    public static func clientName(from line: String) -> String? {
-        guard let data = line.data(using: .utf8),
-              let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              request["method"] as? String == "initialize" else { return nil }
-        let params = request["params"] as? [String: Any] ?? [:]
-        let info = params["clientInfo"] as? [String: Any] ?? [:]
-        return info["name"] as? String
+        self.approvals = approvals
     }
 
     /// Handles one JSON-RPC line. Returns the reply line, or nil for a
@@ -78,7 +69,7 @@ public final class MCPServer: @unchecked Sendable {
             let ok: Bool
             let payload: JSONValue
             do {
-                try checkCapability(name, client: client)
+                try await checkCapability(name, client: client)
                 payload = try await registry.call(name, arguments: argValue, context: ctx)
                 ok = true
             } catch let e as ToolError {
@@ -124,9 +115,17 @@ public final class MCPServer: @unchecked Sendable {
         }
     }
 
-    private func checkCapability(_ name: String, client: String) throws {
+    private func checkCapability(_ name: String, client: String) async throws {
         guard let spec = registry.spec(name) else { throw ToolError.unknownTool(name) }
-        if !policy.allowed(spec.capability, for: client) {
+        if policy.allowed(spec.capability, for: client) { return }
+        // AGENT: a client cannot self-approve; only a human at the app can grant a capability.
+        switch await approvals.request(client: client, capability: spec.capability) {
+        case .once:
+            return
+        case .always:
+            let current = policy.grantedCapabilities(for: client)
+            policy.grant(client: client, capabilities: Array(Set(current + [spec.capability.rawValue])).sorted())
+        case .deny:
             throw ToolError.capabilityDenied(spec.capability)
         }
     }
