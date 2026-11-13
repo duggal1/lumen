@@ -95,7 +95,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<UIActInput>(name: "ui_act",
             description: "Performs a batch of actions on an app: click, type, key, move, scroll, wait. Targets are resolved by role, title or identifier.",
-            capability: .actuate, required: ["bundle_id", "actions"]) { input, ctx in
+            capability: .actuate, required: ["bundle_id", "actions"], mutating: true) { input, ctx in
                 // AGENT: an empty bundle_id used to bypass the allow-list entirely.
                 try self.requireBundle(input.bundleID, ctx)
                 var script = DemoScript()
@@ -128,7 +128,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<RunScriptInput>(name: "run_script",
             description: "Runs a demo script against an app and records a marker per step. The script is the source of truth: launch, wait_for, click, type, key, move, scroll, sleep. Each step may carry narration in `say`.",
-            capability: .actuate, required: ["bundle_id", "script"]) { input, ctx in
+            capability: .actuate, required: ["bundle_id", "script"], mutating: true) { input, ctx in
                 var script = input.script
                 if !input.bundleID.isEmpty { script.app.bundleID = input.bundleID }
                 let bundleID = script.app.bundleID ?? ""

@@ -378,7 +378,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<TimelinePatchInput>(name: "timeline_patch",
             description: "Applies typed operations to a timeline. Supported ops: zoom_add, zoom_set, zoom_remove, cut_add, cut_remove, ramp_set, ramp_remove, style_set, audio_lane_add, audio_lane_remove, music_set, captions_set, privacy_set. Pass the revision you read to be sure nobody else changed the project.",
-            capability: .edit, required: ["project_id"]) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let expect = input.revision > 0 ? input.revision : nil
                 if ctx.dryRun {
                     return .object(["dry_run": .bool(true), "ops": .int(input.ops.count),
@@ -393,14 +393,14 @@ public extension ToolRegistry {
 
         register(ToolDefinition<UndoInput>(name: "undo",
             description: "Undoes the last agent edit on a project.",
-            capability: .edit, required: ["project_id"]) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.undo(projectID: input.projectID)
                 return .object(result)
             })
 
         register(ToolDefinition<ZoomAddInput>(name: "zoom_add",
             description: "Adds a manual zoom. Manual zooms survive an auto replan.",
-            capability: .edit, required: ["project_id", "start", "end"]) { input, ctx in
+            capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "manual zoom") { timeline in
                     timeline.zoom.append(ZoomSegment(start: input.start, end: input.end, scale: input.scale,
@@ -412,7 +412,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<ZoomRemoveInput>(name: "zoom_remove",
             description: "Removes a zoom by its id.",
-            capability: .edit, required: ["project_id", "id"]) { input, ctx in
+            capability: .edit, required: ["project_id", "id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "remove zoom") { timeline in
                     timeline.zoom.removeAll { $0.id.uuidString == input.id }
@@ -422,14 +422,14 @@ public extension ToolRegistry {
 
         register(ToolDefinition<ZoomReplanInput>(name: "zoom_replan",
             description: "Re-runs the automatic zoom planner over the recorded input. Manual zooms are kept.",
-            capability: .edit, required: ["project_id"]) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.replanZoom(projectID: input.projectID)
                 return .object(result)
             })
 
         register(ToolDefinition<CutRangeInput>(name: "cut_range",
             description: "Cuts a span out of the recording, in source seconds.",
-            capability: .edit, required: ["project_id", "start", "end"]) { input, ctx in
+            capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "cut") { timeline in
                     timeline.timeMap.cuts.append(CutRange(start: input.start, end: input.end, origin: .manual))
@@ -439,7 +439,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<SpeedRampInput>(name: "speed_ramp_set",
             description: "Sets a speed ramp over a source range. 2.0 plays twice as fast.",
-            capability: .edit, required: ["project_id", "start", "end"]) { input, ctx in
+            capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "speed ramp") { timeline in
                     timeline.timeMap.ramps.append(SpeedRamp(start: input.start, end: input.end,
@@ -450,7 +450,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<StyleSetInput>(name: "style_set",
             description: "Sets the canvas style: padding, corner radius, shadow, aspect ratio, wallpaper blur and background.",
-            capability: .edit, required: ["project_id"]) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "style") { timeline in
                     if input.padding >= 0 { timeline.style.padding = input.padding }
@@ -480,7 +480,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<BackgroundSetInput>(name: "background_set",
             description: "Sets the background of a project: a generated kind or a local image.",
-            capability: .edit, required: ["project_id"]) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "background") { timeline in
                     if !input.imagePath.isEmpty {
@@ -496,14 +496,14 @@ public extension ToolRegistry {
 
         register(ToolDefinition<CaptionsGenerateInput>(name: "captions_generate",
             description: "Transcribes the recorded microphone and turns captions on. Needs the local speech model; returns a job id.",
-            capability: .edit, required: ["project_id"], longRunning: true) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true, longRunning: true) { input, ctx in
                 let job = try await ctx.engine.startTranscription(projectID: input.projectID, locale: input.locale)
                 return .object(["job_id": .string(job)])
             })
 
         register(ToolDefinition<CaptionsSetInput>(name: "captions_set",
             description: "Turns captions on or off and sets their locale.",
-            capability: .edit, required: ["project_id"]) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "captions") { timeline in
                     timeline.captions.enabled = input.enabled
@@ -514,14 +514,14 @@ public extension ToolRegistry {
 
         register(ToolDefinition<PrivacyScanInput>(name: "privacy_scan",
             description: "Runs the privacy scan over a recording and applies automatic masks. Returns a job id; poll it with job_status.",
-            capability: .edit, required: ["project_id"], longRunning: true) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true, longRunning: true) { input, ctx in
                 let job = try await ctx.engine.startPrivacyScan(projectID: input.projectID)
                 return .object(["job_id": .string(job)])
             })
 
         register(ToolDefinition<PrivacyApplyInput>(name: "privacy_apply",
             description: "Approves or rejects automatic masks by id. Approving a mask keeps it; rejecting removes it.",
-            capability: .edit, required: ["project_id"]) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "privacy decisions") { timeline in
                     for (id, approved) in input.decisions {

@@ -22,6 +22,20 @@ public enum SchemaGenerator {
         ])
     }
 
+    /// AGENT: a mutating tool's schema must declare dry_run, or strict clients
+    /// reject the argument because additionalProperties is false.
+    public static func injectingDryRun(_ schema: JSONValue) -> JSONValue {
+        guard case .object(var root) = schema,
+              case .object(var properties)? = root["properties"] else { return schema }
+        properties["dry_run"] = .object([
+            "type": .string("boolean"),
+            "default": .bool(false),
+            "description": .string("Validate and describe the call without changing anything."),
+        ])
+        root["properties"] = .object(properties)
+        return .object(root)
+    }
+
     /// Tool arguments use snake_case, the way an agent writes them.
     public static func snakeCase(_ name: String) -> String {
         var out = ""
@@ -159,5 +173,5 @@ enum InputModeCases { static let all = ["physical", "virtual"] }
 enum AudioRoleCases { static let all = ["music", "voiceover", "sfx"] }
 enum ZoomOriginCases { static let all = ["manual", "auto"] }
 enum PrivacyModeCases { static let all = ["blur", "pixelate", "solid"] }
-enum BackgroundKindCases { static let all = ["dither", "canvas", "wallpaper", "solid", "gradient", "mesh", "wave", "field", "image"] }
+enum BackgroundKindCases { static let all = ["dither", "canvas", "wallpaper", "solid", "gradient", "mesh", "image"] }
 enum MaskModeCases { static let all = ["blur", "pixelate", "solid"] }

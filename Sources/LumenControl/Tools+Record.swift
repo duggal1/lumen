@@ -89,7 +89,7 @@ public extension ToolRegistry {
     func registerRecordTools() {
         register(ToolDefinition<RecordStartInput>(name: "record_start",
             description: "Starts a recording. Target a display, a window (by bundle id or window id) or a region. Automatic privacy masking is on by default: agent recordings show emails and tokens.",
-            capability: .record, required: ["target"]) { input, ctx in
+            capability: .record, required: ["target"], mutating: true) { input, ctx in
                 var target = RecordingTarget(kind: .display)
                 switch input.target {
                 case "window":
@@ -124,21 +124,21 @@ public extension ToolRegistry {
 
         register(ToolDefinition<RecordPauseInput>(name: "record_pause",
             description: "Pauses the running recording. Frames and audio stop being captured; the paused span is cut out of the final video.",
-            capability: .record) { _, ctx in
+            capability: .record, mutating: true) { _, ctx in
                 try await ctx.engine.runtime.pauseRecording()
                 return .object(["paused": .bool(true)])
             })
 
         register(ToolDefinition<RecordResumeInput>(name: "record_resume",
             description: "Resumes a paused recording.",
-            capability: .record) { _, ctx in
+            capability: .record, mutating: true) { _, ctx in
                 try await ctx.engine.runtime.resumeRecording()
                 return .object(["paused": .bool(false)])
             })
 
         register(ToolDefinition<RecordMarkerInput>(name: "record_marker",
             description: "Drops a named marker into the running recording. Anchor edits and audio to markers instead of seconds.",
-            capability: .record, required: ["id"]) { input, ctx in
+            capability: .record, required: ["id"], mutating: true) { input, ctx in
                 let now = HostClock.now()
                 let marker = CaptureMarker(id: input.id, label: input.label.isEmpty ? nil : input.label,
                                            startHostSeconds: now, endHostSeconds: now, rect: nil)
@@ -148,7 +148,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<RecordStopInput>(name: "record_stop",
             description: "Stops the recording, finalizes the project and returns its project id. The project is written to the Lumen library.",
-            capability: .record) { _, ctx in
+            capability: .record, mutating: true) { _, ctx in
                 let url = try await ctx.engine.runtime.stopRecording()
                 let identifier = url.deletingPathExtension().lastPathComponent
                 _ = try? await ctx.engine.openProject(at: url.path)

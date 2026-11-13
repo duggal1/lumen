@@ -224,7 +224,7 @@ public extension ToolRegistry {
     func registerMediaTools() {
         register(ToolDefinition<AudioImportInput>(name: "audio_import",
             description: "Adds an MP3, WAV or M4A to a project: music, voice-over or a sound effect. Anchor it to a marker or to an output time.",
-            capability: .edit, required: ["project_id", "path"]) { input, ctx in
+            capability: .edit, required: ["project_id", "path"], mutating: true) { input, ctx in
                 // AGENT: audio paths are confined and must be audio files.
                 let url = try ctx.paths.path(input.path, ext: PathGuard.audioExt)
                 guard FileManager.default.fileExists(atPath: url.path) else {
@@ -254,7 +254,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<AudioMixSetInput>(name: "audio_mix_set",
             description: "Sets the mix: target loudness, music gain, microphone gain, output gain and how deep music ducks under speech.",
-            capability: .edit, required: ["project_id"]) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "mix settings") { timeline in
                     if input.targetLUFS != 0 { timeline.audio.targetLUFSOverride = input.targetLUFS }
@@ -269,7 +269,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<VoiceoverGenerateInput>(name: "voiceover_generate",
             description: "Generates narration with the configured voice provider and lays it on the timeline. This makes a network call and says so in the result. Needs the network capability.",
-            capability: .network, required: ["project_id", "text"]) { input, ctx in
+            capability: .network, required: ["project_id", "text"], mutating: true) { input, ctx in
                 let placement = try await self.resolvePlacement(projectID: input.projectID, ctx: ctx,
                                                           atMarker: input.atMarker, atOutput: input.atOutput,
                                                           offsetMs: input.offsetMs)
@@ -319,7 +319,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<ExportStartInput>(name: "export_start",
             description: "Exports the project to a file. Returns a job id; poll with job_status. Refuses to export while a privacy scan is unresolved.",
-            capability: .export, required: ["project_id"]) { input, ctx in
+            capability: .export, required: ["project_id"], mutating: true) { input, ctx in
                 let output = input.output.isEmpty
                     ? (ctx.engine.knownProjects().first { $0.identifier == input.projectID }?.url
                         .deletingLastPathComponent().appendingPathComponent(input.projectID + ".mp4").path ?? "")
@@ -353,7 +353,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<ExportCancelInput>(name: "export_cancel",
             description: "Cancels a running job.",
-            capability: .export, required: ["job_id"]) { input, ctx in
+            capability: .export, required: ["job_id"], mutating: true) { input, ctx in
                 let cancelled = ctx.jobs.cancel(input.jobID)
                 return .object(["job_id": .string(input.jobID), "cancelled": .bool(cancelled)])
             })

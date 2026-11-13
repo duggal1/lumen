@@ -49,7 +49,8 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
     /// The erased form the registry stores.
     func erase() -> ErasedTool {
         let sample = Input()
-        let schema = SchemaGenerator.schema(for: sample, required: required)
+        var schema = SchemaGenerator.schema(for: sample, required: required)
+        if mutating { schema = SchemaGenerator.injectingDryRun(schema) }
         return ErasedTool(spec: ToolSpec(name: name, description: description, capability: capability,
                                           inputSchema: schema, required: required,
                                           mutating: mutating, longRunning: longRunning),
@@ -88,6 +89,15 @@ public final class ToolRegistry: @unchecked Sendable {
     public func call(_ name: String, arguments: JSONValue, context: ToolContext) async throws -> JSONValue {
         let tool = tools.withLock { $0[name] }
         guard let tool else { throw ToolError.unknownTool(name) }
+        // AGENT: dry_run was honoured by two tools out of twenty, so enforce it centrally.
+        if context.dryRun && tool.spec.mutating {
+            return .object([
+                "dry_run": .bool(true),
+                "tool": .string(name),
+                "would_run_with": arguments,
+                "note": .string("Nothing was changed."),
+            ])
+        }
         return try await tool.invoke(arguments, context)
     }
 }
