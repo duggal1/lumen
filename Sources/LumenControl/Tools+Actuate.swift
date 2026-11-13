@@ -2,6 +2,7 @@ import Foundation
 import LumenCore
 import LumenProject
 import LumenActuator
+import ApplicationServices
 
 // MARK: - Actuation tools
 
@@ -105,7 +106,9 @@ public extension ToolRegistry {
                 try self.requireBundle(input.bundleID, ctx)
                 var script = DemoScript()
                 script.app.bundleID = input.bundleID
-                script.steps = [DemoScript.Step(id: "ui_act", do: input.actions)]
+                // AGENT: Accessibility permission is required and batch markers must be unique.
+                guard AXIsProcessTrusted() else { throw ToolError.permission("accessibility", pane: "Accessibility") }
+                script.steps = [DemoScript.Step(id: "ui_act-\(UUID().uuidString)", do: input.actions)]
                 let runner = ScriptRunner(mode: .physical, sink: ctx.engine.markerSink(),
                                           allowedBundles: [input.bundleID],
                                           writablePath: { try ctx.paths.writablePath($0, ext: PathGuard.imageExt) })
@@ -133,7 +136,8 @@ public extension ToolRegistry {
 
         register(ToolDefinition<RunScriptInput>(name: "run_script",
             description: "Runs a demo script against an app and records a marker per step. The script is the source of truth: launch, wait_for, click, type, paste, key, move, scroll, sleep. Each step may carry narration in `say`.",
-            capability: .actuate, required: ["bundle_id", "script"], mutating: true) { input, ctx in
+            // AGENT: advertise the script and action fields that the decoder actually accepts.
+            capability: .actuate, required: ["bundle_id", "script"], mutating: true, schema: ToolSchemas.runScript) { input, ctx in
                 var script = input.script
                 if !input.bundleID.isEmpty { script.app.bundleID = input.bundleID }
                 let bundleID = script.app.bundleID ?? ""
@@ -150,6 +154,8 @@ public extension ToolRegistry {
                     }
                 }
                 let mode: InputMode = input.mode == "virtual" ? .virtual : .physical
+                // AGENT: fail before posting input when macOS will discard it.
+                if mode == .physical, !AXIsProcessTrusted() { throw ToolError.permission("accessibility", pane: "Accessibility") }
                 let runner = ScriptRunner(mode: mode, sink: ctx.engine.markerSink(),
                                           allowedBundles: allowed,
                                           writablePath: { try ctx.paths.writablePath($0, ext: PathGuard.imageExt) })
