@@ -198,6 +198,43 @@ public actor Engine {
         return h.timeline.timeMap.output(atSource: sourceSeconds)
     }
 
+    // AGENT: audio and editing tools must resolve all time references through the same project clock.
+    /// Resolves a source, output, or marker reference onto the source clock.
+    public func sourceSeconds(projectID: String, time: TimeRef) async throws -> Double {
+        let h = try await requireHandle(projectID)
+        return try resolveSourceSeconds(time, handle: h)
+    }
+
+    /// Resolves a source, output, or marker reference onto the edited output clock.
+    public func outputSeconds(projectID: String, time: TimeRef) async throws -> Double {
+        let h = try await requireHandle(projectID)
+        switch time {
+        case .output(let seconds):
+            guard seconds.isFinite, seconds >= 0, seconds <= h.timeline.timeMap.outputDuration + 0.001 else {
+                throw ToolError.invalidArguments("Output time must be within the edited duration.")
+            }
+            return seconds
+        default:
+            return h.timeline.timeMap.output(atSource: try resolveSourceSeconds(time, handle: h))
+        }
+    }
+
+    private func resolveSourceSeconds(_ time: TimeRef, handle h: Handle) throws -> Double {
+        guard case .marker(let id, let offsetMs) = time else { return try h.timeline.sourceSeconds(time) }
+        guard !id.isEmpty, offsetMs.isFinite else {
+            throw ToolError.invalidArguments("Marker id and offset_ms must be valid.")
+        }
+        let markers = h.bundle.loadMarkers().markers
+        guard let marker = markers.first(where: { $0.id == id }) else {
+            throw ToolError.invalidArguments("No marker named \(id). Read the project markers and retry.")
+        }
+        let source = max(marker.startHostSeconds - h.meta.clock.originHostSeconds, 0) + offsetMs / 1000
+        guard source.isFinite, source >= 0, source <= h.timeline.timeMap.sourceDuration + 0.001 else {
+            throw ToolError.invalidArguments("The marker offset falls outside the recorded source.")
+        }
+        return source
+    }
+
     /// The Timeline as JSON: the agent patches the same fields the UI edits.
     func encode(timeline: Timeline, revision: Int) -> JSONValue {
         var out: [String: JSONValue] = [

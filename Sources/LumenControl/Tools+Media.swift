@@ -436,26 +436,19 @@ public extension ToolRegistry {
     private func resolvePlacement(projectID: String, ctx: ToolContext, atMarker: String?, atOutput: Double?,
                                   offsetMs: Double) async throws -> Double {
         guard offsetMs.isFinite else { throw ToolError.invalidArguments("offset_ms must be finite.") }
-        if let atMarker, !atMarker.isEmpty, let atOutput {
+        if let atMarker, !atMarker.isEmpty, atOutput != nil {
             throw ToolError.invalidArguments("Choose either at_marker or at_output, not both.")
         }
         if let atMarker, !atMarker.isEmpty {
-            let markers = try await ctx.engine.markersValue(projectID: projectID)
-            let rows = markers["markers"]?.arrayValue ?? []
-            for row in rows {
-                if row["id"]?.stringValue == atMarker {
-                    let source = row["source_start"]?.doubleValue ?? 0
-                    // AGENT: audio placement is output time, so cuts and speed ramps must be applied.
-                    return try await ctx.engine.outputTime(projectID: projectID, sourceSeconds: source + offsetMs / 1000)
-                }
-            }
-            throw ToolError.failed("No marker named \(atMarker). Call timeline_get markers first.")
+            // AGENT: every anchored audio placement now uses the shared marker-aware clock resolver.
+            return try await ctx.engine.outputSeconds(projectID: projectID,
+                time: .marker(id: atMarker, offsetMs: offsetMs))
         }
         if let atOutput {
             guard atOutput.isFinite, atOutput >= 0 else { throw ToolError.invalidArguments("at_output must be finite and non-negative.") }
             let placement = atOutput + offsetMs / 1000
             guard placement.isFinite, placement >= 0 else { throw ToolError.invalidArguments("The resulting audio placement must be finite and non-negative.") }
-            return placement
+            return try await ctx.engine.outputSeconds(projectID: projectID, time: .output(placement))
         }
         let placement = offsetMs / 1000
         guard placement >= 0 else { throw ToolError.invalidArguments("An unanchored audio placement cannot be negative.") }

@@ -13,13 +13,46 @@ import LumenSpeech
 /// AGENT: `start` and `end` were bare numbers, so an agent could not tell the
 /// source seconds a zoom or cut lives in from the output seconds the preview
 /// and QA report speak. Callers now name the basis.
-public struct TimeRef: Codable, Sendable, Equatable {
-    public var seconds: Double
-    /// "source" (the recording) or "output" (after cuts and ramps).
-    public var basis: String
-    public init(seconds: Double, basis: String = "source") {
-        self.seconds = seconds
-        self.basis = basis
+public enum TimeRef: Codable, Sendable, Equatable {
+    case source(Double)
+    case output(Double)
+    case marker(id: String, offsetMs: Double)
+
+    // AGENT: a tagged time reference makes source, edited output, and marker clocks unambiguous.
+    public static func legacy(seconds: Double, basis: String) throws -> TimeRef {
+        switch basis {
+        case "source": return .source(seconds)
+        case "output": return .output(seconds)
+        default: throw ToolError.invalidArguments("basis must be \"source\" or \"output\", not \(basis).")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case source, output, marker, offsetMs = "offset_ms" }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let hasSource = c.contains(.source), hasOutput = c.contains(.output), hasMarker = c.contains(.marker)
+        guard [hasSource, hasOutput, hasMarker].filter({ $0 }).count == 1 else {
+            throw DecodingError.dataCorruptedError(forKey: .source, in: c,
+                debugDescription: "Use exactly one of source, output, or marker.")
+        }
+        if hasSource { self = .source(try c.decode(Double.self, forKey: .source)) }
+        else if hasOutput { self = .output(try c.decode(Double.self, forKey: .output)) }
+        else {
+            self = .marker(id: try c.decode(String.self, forKey: .marker),
+                           offsetMs: try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .source(let value): try c.encode(value, forKey: .source)
+        case .output(let value): try c.encode(value, forKey: .output)
+        case .marker(let id, let offset):
+            try c.encode(id, forKey: .marker)
+            try c.encode(offset, forKey: .offsetMs)
+        }
     }
 }
 
@@ -27,16 +60,19 @@ extension Timeline {
     /// Converts a caller-supplied time to the source seconds the timeline stores.
     func sourceSeconds(_ ref: TimeRef) throws -> Double {
         // AGENT: reject invalid times before the time map can clamp them silently.
-        guard ref.seconds.isFinite, ref.seconds >= 0 else { throw ToolError.invalidArguments("Time must be finite and non-negative.") }
-        switch ref.basis {
-        case "source":
-            guard ref.seconds <= timeMap.sourceDuration + 0.001 else { throw ToolError.invalidArguments("Source time exceeds the recording duration.") }
-            return ref.seconds
-        case "output":
-            guard ref.seconds <= timeMap.outputDuration + 0.001 else { throw ToolError.invalidArguments("Output time exceeds the edited duration.") }
-            return timeMap.source(atOutput: ref.seconds)
-        default:
-            throw ToolError.invalidArguments("basis must be \"source\" or \"output\", not \(ref.basis).")
+        switch ref {
+        case .source(let seconds):
+            guard seconds.isFinite, seconds >= 0, seconds <= timeMap.sourceDuration + 0.001 else {
+                throw ToolError.invalidArguments("Source time must be within the recording duration.")
+            }
+            return seconds
+        case .output(let seconds):
+            guard seconds.isFinite, seconds >= 0, seconds <= timeMap.outputDuration + 0.001 else {
+                throw ToolError.invalidArguments("Output time must be within the edited duration.")
+            }
+            return timeMap.source(atOutput: seconds)
+        case .marker:
+            throw ToolError.invalidArguments("Marker times must be resolved by the project engine.")
         }
     }
 }
@@ -477,8 +513,8 @@ public extension ToolRegistry {
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "manual zoom") { timeline in
                     // AGENT: zoom times are stored in source seconds; honour the caller's basis.
-                    let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
-                    let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
+                    let start = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.start, basis: input.basis))
+                    let end = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.end, basis: input.basis))
                     // AGENT: reject invalid ranges and route zoom edits through the editor reducer.
                     guard end > start, input.scale.isFinite, (1.1...4).contains(input.scale) else { throw ToolError.invalidArguments("Need start < end and zoom scale 1.1…4.") }
                     try applyCommand(.addZoom(ZoomSegment(start: start, end: end, scale: input.scale,
@@ -518,8 +554,8 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id", "start", "end"], mutating: true, destructive: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "cut") { timeline in
-                    let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
-                    let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
+                    let start = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.start, basis: input.basis))
+                    let end = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.end, basis: input.basis))
                     // AGENT: the editor's output-range cut handles clips and overlaps consistently.
                     let a = timeline.timeMap.output(atSource: start), b = timeline.timeMap.output(atSource: end)
                     guard b > a else { throw ToolError.invalidArguments("Cut end must be after start in the edited timeline.") }
@@ -533,8 +569,8 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "speed ramp") { timeline in
-                    let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
-                    let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
+                    let start = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.start, basis: input.basis))
+                    let end = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.end, basis: input.basis))
                     // AGENT: zero or negative ramp speed breaks time-map construction.
                     guard end > start, input.speed.isFinite, (0.25...16).contains(input.speed) else { throw ToolError.invalidArguments("Need start < end and speed 0.25…16.") }
                     try applyCommand(.addSpeedRamp(start: start, end: end, speed: input.speed), to: &timeline)
