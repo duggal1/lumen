@@ -511,6 +511,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             cfg.mic = options.microphone && Permissions.mic
             cfg.systemAudio = options.systemAudio
             cfg.webcamDeviceID = options.webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
+            // AGENT: the option existed but was never copied, so auto-mask did nothing.
+            cfg.privacyAutoMask = options.privacyAutoMask
         }
         phase = .preparing
         let sourceDisplay: CGDirectDisplayID?

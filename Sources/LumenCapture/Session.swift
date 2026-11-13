@@ -437,6 +437,11 @@ public actor RecordingSession {
         }
         tl.timeMap.cuts = pauses.sorted { $0.start < $1.start }
         if meta.webcam != nil { tl.webcam = WebcamLayout() }
+        // AGENT: an agent recording asked for auto-masking; enable the plan here.
+        if cfg?.privacyAutoMask == true {
+            tl.overlays.privacy.enabled = true
+            tl.overlays.privacy.autoDetect = true
+        }
         let infoCopy = info
         let baseTimeline = tl
         let finalMeta = meta

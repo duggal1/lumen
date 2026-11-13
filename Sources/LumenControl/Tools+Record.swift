@@ -150,9 +150,16 @@ public extension ToolRegistry {
             description: "Stops the recording, finalizes the project and returns its project id. The project is written to the Lumen library.",
             capability: .record, mutating: true) { _, ctx in
                 let url = try await ctx.engine.runtime.stopRecording()
-                let identifier = url.deletingPathExtension().lastPathComponent
-                _ = try? await ctx.engine.openProject(at: url.path)
-                return .object(["project_id": .string(identifier), "path": .string(url.path)])
+                // AGENT: a failed open used to be swallowed, so every later tool said "no Metal device".
+                let ref = try await ctx.engine.openProject(at: url.path)
+                var payload: [String: JSONValue] = ["project_id": .string(ref.identifier),
+                                                    "path": .string(url.path)]
+                // AGENT: agent recordings auto-mask, so the scan starts without being asked.
+                if (try? await ctx.engine.privacyAutoMasked(projectID: ref.identifier)) == true,
+                   let job = try? await ctx.engine.startPrivacyScan(projectID: ref.identifier) {
+                    payload["privacy_scan_job"] = .string(job)
+                }
+                return .object(payload)
             })
     }
 }

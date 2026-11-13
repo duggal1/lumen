@@ -54,6 +54,8 @@ public struct RecordingConfig: Sendable {
     public var systemAudio = false
     public var webcamDeviceID: String?
     public var webcamQuality: String = "auto"
+    /// AGENT: carries the agent's auto-mask choice from the tool into finalize.
+    public var privacyAutoMask = false
     public init(source: Source) { self.source = source }
 }
 

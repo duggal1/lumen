@@ -33,6 +33,17 @@ public actor Engine {
         var undoStack: [Timeline] = []
         var redoStack: [Timeline] = []
         var session: ProjectSession?
+        /// AGENT: an empty scan used to look identical to a clean one, so privacy
+        /// failed open. The state is now explicit and gates export and QA.
+        var privacy: PrivacyState = .notScanned
+    }
+
+    enum PrivacyState: Sendable, Equatable {
+        case notRequired
+        case notScanned
+        case scanning
+        case scanned(detections: Int)
+        case failed(String)
     }
 
     public let runtime: LumenRuntime
@@ -84,6 +95,9 @@ public actor Engine {
             if let opened = try? await ProjectSession.open(bundle, device: device) {
                 handle.session = opened.0
                 handle.timeline = opened.1
+                // AGENT: a project that already carries detections counts as scanned.
+                let count = opened.0.input.ocr.count
+                handle.privacy = count > 0 ? .scanned(detections: count) : .notScanned
             }
         }
         handles[identifier] = handle
@@ -350,21 +364,32 @@ public actor Engine {
         }
         let loudnessOK = loudness <= -14 && loudness >= -24 && truePeak <= -1.0
 
-        // Privacy: detections that no mask covers.
-        let detections = session.input.ocr
-        let autoMasks = timeline.derived?.autoMasks ?? []
+        // Privacy: only a completed scan can pass, and a mask must actually cover.
+        let plan = timeline.overlays.privacy
         let W = Double(h.meta.source.width), H = Double(h.meta.source.height)
-        let unmasked = detections.filter { d in
-            let dx = d.x * W, dy = d.y * H, dw = d.w * W, dh = d.h * H
-            return !autoMasks.contains { m in
-                m.keys.contains { k in
-                    abs(k.t - d.t) < 1.0
-                        && k.x < dx + dw && k.x + k.w > dx
-                        && k.y < dy + dh && k.y + k.h > dy
+        var privacyOK = true
+        var privacyDetail = "not required"
+        if plan.enabled && plan.autoDetect {
+            switch h.privacy {
+            case .scanned(let count):
+                // AGENT: containment, not a 1 px overlap, decides whether a mask covers.
+                let unmasked = session.input.ocr.filter { d in
+                    !covered(rect(d, W: W, H: H), by: maskRects(at: d.t, timeline: timeline))
                 }
+                privacyOK = unmasked.isEmpty
+                privacyDetail = "\(count) detections, \(unmasked.count) unmasked"
+            case .scanning:
+                privacyOK = false
+                privacyDetail = "privacy scan still running"
+            case .failed(let message):
+                privacyOK = false
+                privacyDetail = "privacy scan failed: \(message)"
+            case .notRequired, .notScanned:
+                // AGENT: never report OK when the scan simply never ran.
+                privacyOK = false
+                privacyDetail = "not scanned: run privacy_scan, then retry"
             }
         }
-        let privacyOK = unmasked.isEmpty
 
         // Dropped frames — from the capture metadata.
         let dropped = h.meta.droppedFrames
@@ -381,8 +406,7 @@ public actor Engine {
             "checks": .array([
                 check("zoom_targets", zoomTargetsMet,
                       "clicks=\(accuracy.clicks) zoomed=\(accuracy.zoomedClicks) settled=\(accuracy.settled) centered=\(accuracy.centeredClicks) arrival=\(String(format: "%.3f", accuracy.medianArrival))"),
-                check("privacy_masked", privacyOK,
-                      "\(detections.count) detections, \(unmasked.count) unmasked"),
+                check("privacy_masked", privacyOK, privacyDetail),
                 check("loudness", loudnessOK,
                       String(format: "%.1f LUFS, true peak %.2f dBTP", loudness, truePeak)),
                 check("not_silent", silenceOK, String(format: "%.1f LUFS", loudness)),
@@ -415,22 +439,24 @@ public actor Engine {
         let timeline = session.derive(h.timeline, revision: h.revision)
         // The export gate: never ship a video whose masks are unresolved.
         if timeline.overlays.privacy.enabled && timeline.overlays.privacy.autoDetect {
-            let detections = session.input.ocr
-            let autoMasks = timeline.derived?.autoMasks ?? []
-            let W = Double(h.meta.source.width), H = Double(h.meta.source.height)
-            let unmasked = detections.filter { d in
-                let dx = d.x * W, dy = d.y * H, dw = d.w * W, dh = d.h * H
-                return !autoMasks.contains { m in
-                    m.keys.contains { k in
-                        abs(k.t - d.t) < 1.0
-                            && k.x < dx + dw && k.x + k.w > dx
-                            && k.y < dy + dh && k.y + k.h > dy
-                    }
+            switch h.privacy {
+            case .scanned:
+                let W = Double(h.meta.source.width), H = Double(h.meta.source.height)
+                let unmasked = session.input.ocr.filter { d in
+                    !covered(rect(d, W: W, H: H), by: maskRects(at: d.t, timeline: timeline))
                 }
-            }
-            if !unmasked.isEmpty {
-                throw ToolError(code: "PRIVACY_SCAN_PENDING",
-                                hint: "\(unmasked.count) sensitive detections are not masked yet. Run privacy_scan, review the masks, then export.")
+                if !unmasked.isEmpty {
+                    throw ToolError(code: "PRIVACY_SCAN_PENDING",
+                                    hint: "\(unmasked.count) sensitive detections are not masked yet. Run privacy_scan, review the masks, then export.")
+                }
+            case .scanning:
+                // AGENT: exporting mid-scan shipped unmasked frames.
+                throw ToolError(code: "PRIVACY_SCAN_RUNNING",
+                                hint: "Wait for the privacy_scan job to finish (job_status), then retry.")
+            case .notRequired, .notScanned, .failed:
+                // AGENT: an unscanned project used to export because the detection list was empty.
+                throw ToolError(code: "PRIVACY_SCAN_REQUIRED",
+                                hint: "Run privacy_scan, then retry. Export refuses to run unscanned.")
             }
         }
         let output = URL(fileURLWithPath: (outputPath as NSString).expandingTildeInPath)
@@ -452,14 +478,55 @@ public actor Engine {
             throw ToolError.failed("This project cannot be opened for scanning (no Metal device).")
         }
         let timeline = h.timeline
-        return jobs.start(kind: "privacy_scan") { reporter in
+        // AGENT: record that a scan is in flight so export and QA stop guessing.
+        handles[projectID]?.privacy = .scanning
+        return jobs.start(kind: "privacy_scan") { [weak self] reporter in
             let result = await session.analyze(timeline,
                                                privacyProgress: { p in reporter.progress(p * 0.9, "Scanning") },
                                                onPrivacy: { error in reporter.progress(0.95, error) })
             let detections = result.ocr.count
             reporter.progress(1, nil)
+            // AGENT: the completed scan is the only thing that can make privacy pass.
+            if let error = result.errors["privacy"] {
+                await self?.setPrivacy(.failed(error), for: projectID)
+            } else {
+                await self?.setPrivacy(.scanned(detections: detections), for: projectID)
+            }
             return .object(["detections": .int(detections),
                             "errors": .object(result.errors.mapValues { .string($0) })])
+        }
+    }
+
+    private func setPrivacy(_ state: PrivacyState, for projectID: String) {
+        handles[projectID]?.privacy = state
+    }
+
+    /// AGENT: auto-masking means the scan must start on stop, not when the agent remembers.
+    public func privacyAutoMasked(projectID: String) async throws -> Bool {
+        let h = try await requireHandle(projectID)
+        return h.timeline.overlays.privacy.enabled && h.timeline.overlays.privacy.autoDetect
+    }
+
+    private func rect(_ d: OCRDetection, W: Double, H: Double) -> CGRect {
+        CGRect(x: d.x * W, y: d.y * H, width: d.w * W, height: d.h * H)
+    }
+
+    private func maskRects(at t: Double, timeline: Timeline) -> [CGRect] {
+        var rects: [CGRect] = []
+        for mask in timeline.derived?.autoMasks ?? [] {
+            for key in mask.keys where abs(key.t - t) < 1.0 {
+                rects.append(CGRect(x: key.x, y: key.y, width: key.w, height: key.h))
+            }
+        }
+        return rects
+    }
+
+    /// AGENT: "covered" used to mean any 1 px overlap; require 90% containment.
+    private func covered(_ d: CGRect, by masks: [CGRect]) -> Bool {
+        guard d.width > 0, d.height > 0 else { return false }
+        return masks.contains { m in
+            let i = d.intersection(m)
+            return !i.isNull && i.width * i.height >= 0.9 * d.width * d.height
         }
     }
 
