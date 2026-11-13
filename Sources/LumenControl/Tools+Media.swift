@@ -368,7 +368,8 @@ public extension ToolRegistry {
             for row in rows {
                 if row["id"]?.stringValue == atMarker {
                     let source = row["source_start"]?.doubleValue ?? 0
-                    return source + offsetMs / 1000
+                    // AGENT: audio placement is output time, so cuts and speed ramps must be applied.
+                    return try await ctx.engine.outputTime(projectID: projectID, sourceSeconds: source + offsetMs / 1000)
                 }
             }
             throw ToolError.failed("No marker named \(atMarker). Call timeline_get markers first.")

@@ -621,6 +621,8 @@ public extension ToolRegistry {
                 timeline.zoom[index].focus = focus(from: op.focusMode ?? "follow",
                                                    x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
             }
+            // AGENT: edited automatic zooms must survive the next planner pass.
+            timeline.zoom[index].origin = .manual
         case "zoom_remove":
             let id = try need(op.id, "id")
             // AGENT: deleting an auto zoom must survive the next replan.
@@ -646,6 +648,10 @@ public extension ToolRegistry {
                                                     speed: op.speed ?? 2, origin: .manual))
         case "ramp_remove":
             let id = try need(op.id, "id")
+            // AGENT: remember deleted automatic ramps before the planner regenerates them.
+            for ramp in timeline.timeMap.ramps where ramp.id.uuidString == id && ramp.origin == .auto {
+                if !timeline.suppressedAuto.contains(id) { timeline.suppressedAuto.append(id) }
+            }
             timeline.timeMap.ramps.removeAll { $0.id.uuidString == id }
         case "style_set":
             let key = try need(op.key, "key")

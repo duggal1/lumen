@@ -155,9 +155,21 @@ public actor Engine {
                      "host_end": .number(m.endHostSeconds),
                      "source_start": .number(max(m.startHostSeconds - origin, 0)),
                      "source_end": .number(max(m.endHostSeconds - origin, 0)),
+                     // AGENT: marker consumers need output times after cuts and speed ramps.
+                     "output_start": .number(h.timeline.timeMap.output(atSource: max(m.startHostSeconds - origin, 0))),
+                     "output_end": .number(h.timeline.timeMap.output(atSource: max(m.endHostSeconds - origin, 0))),
                      "rect": m.rect.map { .array([.number($0.origin.x), .number($0.origin.y), .number($0.size.width), .number($0.size.height)]) } ?? .null])
         }
         return .object(["markers": .array(rows), "origin_host_seconds": .number(origin)])
+    }
+
+    // AGENT: convert marker offsets on the source clock before mapping them onto the edited timeline.
+    public func outputTime(projectID: String, sourceSeconds: Double) async throws -> Double {
+        guard sourceSeconds.isFinite, sourceSeconds >= 0 else {
+            throw ToolError.invalidArguments("Marker time must be finite and non-negative.")
+        }
+        let h = try await requireHandle(projectID)
+        return h.timeline.timeMap.output(atSource: sourceSeconds)
     }
 
     /// The Timeline as JSON: the agent patches the same fields the UI edits.
@@ -622,14 +634,15 @@ public actor Engine {
             }
             switch result {
             case .success(let transcript):
-                try? bundle.saveTranscript(TranscriptFile(engine: "moonshine-streaming", complete: true,
+                // AGENT: surface persistence and edit failures instead of reporting a successful transcription.
+                try bundle.saveTranscript(TranscriptFile(engine: "moonshine-streaming", complete: true,
                                                            transcript: transcript))
                 let aligned = transcript.shifted(by: offset)
                 // AGENT: the words were saved to disk but never handed to the
                 // session, so caption planning ran on an empty transcript until
                 // the project was reopened.
                 session.updateTranscript(aligned)
-                _ = try? await self.edit(projectID: projectID, expectRevision: nil,
+                _ = try await self.edit(projectID: projectID, expectRevision: nil,
                                          describe: "captions") { timeline in
                     timeline.captions.enabled = true
                     if !locale.isEmpty { timeline.captions.locale = locale }
