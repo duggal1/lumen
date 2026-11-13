@@ -40,6 +40,8 @@ public struct RecordingOptions: Codable, Sendable, Equatable {
     public var microphone = true
     public var systemAudio = false
     public var webcam = false
+    // AGENT: agent recordings can start immediately while human recordings retain their countdown.
+    public var countdownSeconds = 0
     /// Automatic privacy masking is ON by default for agent recordings: they
     /// show emails, tokens and the like.
     public var privacyAutoMask = true
