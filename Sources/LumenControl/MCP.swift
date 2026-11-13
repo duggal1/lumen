@@ -36,11 +36,16 @@ public final class MCPServer: @unchecked Sendable {
         if id == nil { return nil }   // notification
         switch method {
         case "initialize":
+            // AGENT: negotiate only protocol revisions this server actually implements.
+            let params = request["params"] as? [String: Any] ?? [:]
+            let requested = params["protocolVersion"] as? String
+            let supported = [Self.protocolVersion]
+            let selected = requested.flatMap { supported.contains($0) ? $0 : nil } ?? Self.protocolVersion
             return result(id: id, [
-                "protocolVersion": Self.protocolVersion,
+                "protocolVersion": selected,
                 "capabilities": ["tools": ["listChanged": false],
                                  "resources": ["subscribe": false],
-                                 "prompts": [Any]()],
+                                 "prompts": ["listChanged": false]],
                 "serverInfo": ["name": "lumen", "version": "1.0.0"],
                 "instructions": Self.instructions,
             ])
@@ -51,6 +56,9 @@ public final class MCPServer: @unchecked Sendable {
                 [
                     "name": spec.name,
                     "description": spec.description,
+                    // AGENT: expose the tool's read-only and external-world properties to clients.
+                    "annotations": ["readOnlyHint": !spec.mutating,
+                                    "openWorldHint": spec.capability == .network || spec.capability == .actuate],
                     "inputSchema": (try? JSONSerialization.jsonObject(with: Data(spec.inputSchema.jsonText.utf8))) ?? [:],
                 ]
             }
@@ -73,6 +81,11 @@ public final class MCPServer: @unchecked Sendable {
                 payload = try await registry.call(name, arguments: argValue, context: ctx)
                 ok = true
             } catch let e as ToolError {
+                // AGENT: unknown tools and invalid arguments are JSON-RPC parameter errors.
+                if e.code == "UNKNOWN_TOOL" || e.code == "INVALID_ARGUMENTS" {
+                    audit.record(client: client, tool: name, arguments: argValue, ok: false, detail: e.code)
+                    return error(id: id, code: -32602, message: e.hint)
+                }
                 payload = e.json
                 ok = false
             } catch {
