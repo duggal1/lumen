@@ -20,7 +20,8 @@ public struct AudioImportInput: ToolInput {
     /// Or to an absolute output time.
     public var atOutput: Double?
     public var offsetMs: Double = 0
-    public var gainDb: Double = 0
+    // AGENT: zero is a valid gain, so omission cannot use it as an unset sentinel.
+    public var gainDb: Double?
     public var loop: Bool = false
     public init() {}
 
@@ -42,7 +43,7 @@ public struct AudioImportInput: ToolInput {
     self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker)
     self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput)
     self.offsetMs = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
-    self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb) ?? 0
+    self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb)
     self.loop = try c.decodeIfPresent(Bool.self, forKey: .loop) ?? false
     }
 }
@@ -88,7 +89,8 @@ public struct VoiceoverGenerateInput: ToolInput {
     public var atMarker: String?
     public var atOutput: Double?
     public var offsetMs: Double = 0
-    public var gainDb: Double = 0
+    // AGENT: zero is a valid gain, so omission cannot use it as an unset sentinel.
+    public var gainDb: Double?
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -110,7 +112,7 @@ public struct VoiceoverGenerateInput: ToolInput {
     self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker)
     self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput)
     self.offsetMs = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
-    self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb) ?? 0
+    self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb)
     }
 }
 
@@ -242,6 +244,9 @@ public extension ToolRegistry {
                     throw ToolError.failed("No file at \(url.path).")
                 }
                 let role = input.role
+                guard ["music", "voiceover", "sfx"].contains(role) else {
+                    throw ToolError.invalidArguments("role must be music, voiceover, or sfx.")
+                }
                 let placement = try await self.resolvePlacement(projectID: input.projectID, ctx: ctx,
                                                           atMarker: input.atMarker, atOutput: input.atOutput,
                                                           offsetMs: input.offsetMs)
@@ -251,14 +256,16 @@ public extension ToolRegistry {
                 }
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "import \(role)") { timeline in
+                    var audio = timeline.audio
                     if role == "music" {
-                        timeline.audio.musicPath = url.path
-                        if input.gainDb != 0 { timeline.audio.musicGainDb = input.gainDb }
+                        audio.musicPath = url.path
+                        if let gainDb = input.gainDb { audio.musicGainDb = try Self.validated(gainDb, name: "gain_db", range: -60 ... 12) }
                     } else {
-                        timeline.audio.lanes.append(AudioLane(role: role == "sfx" ? .sfx : .voiceover,
-                                                              path: url.path, placement: placement,
-                                                              gainDb: input.gainDb))
+                        let laneRole: AudioLane.Role = role == "sfx" ? .sfx : .voiceover
+                        let gain = try Self.validated(input.gainDb ?? 0, name: "gain_db", range: -60 ... 12)
+                        audio.lanes.append(AudioLane(role: laneRole, path: url.path, placement: placement, gainDb: gain))
                     }
+                    try applyCommand(.setAudio(audio), to: &timeline)
                 }
                 return .object(result)
             })
@@ -268,12 +275,14 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "mix settings") { timeline in
-                    if let value = input.targetLUFS { timeline.audio.targetLUFSOverride = try Self.validated(value, name: "target_lufs", range: -24 ... -10) }
-                    if let value = input.musicGainDb { timeline.audio.musicGainDb = try Self.validated(value, name: "music_gain_db", range: -60 ... 12) }
-                    if let value = input.micGainDb { timeline.audio.micGainDb = try Self.validated(value, name: "mic_gain_db", range: -60 ... 12) }
-                    if let value = input.outputGainDb { timeline.audio.outputGainDb = try Self.validated(value, name: "output_gain_db", range: -60 ... 12) }
-                    if let value = input.duckDepthDb { timeline.audio.duckDepthDb = try Self.validated(value, name: "duck_depth_db", range: 0 ... 36) }
-                    if let normalize = input.normalize { timeline.audio.normalize = normalize }
+                    var audio = timeline.audio
+                    if let value = input.targetLUFS { audio.targetLUFSOverride = try Self.validated(value, name: "target_lufs", range: -24 ... -10) }
+                    if let value = input.musicGainDb { audio.musicGainDb = try Self.validated(value, name: "music_gain_db", range: -60 ... 12) }
+                    if let value = input.micGainDb { audio.micGainDb = try Self.validated(value, name: "mic_gain_db", range: -60 ... 12) }
+                    if let value = input.outputGainDb { audio.outputGainDb = try Self.validated(value, name: "output_gain_db", range: -60 ... 12) }
+                    if let value = input.duckDepthDb { audio.duckDepthDb = try Self.validated(value, name: "duck_depth_db", range: 0 ... 36) }
+                    if let normalize = input.normalize { audio.normalize = normalize }
+                    try applyCommand(.setAudio(audio), to: &timeline)
                 }
                 return .object(result)
             })
@@ -291,8 +300,11 @@ public extension ToolRegistry {
                 try generated.data.write(to: url)
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "voice-over") { timeline in
-                    timeline.audio.lanes.append(AudioLane(role: .voiceover, path: url.path,
-                                                          placement: placement, gainDb: input.gainDb))
+                    var audio = timeline.audio
+                    let gain = try Self.validated(input.gainDb ?? 0, name: "gain_db", range: -60 ... 12)
+                    audio.lanes.append(AudioLane(role: .voiceover, path: url.path,
+                                                 placement: placement, gainDb: gain))
+                    try applyCommand(.setAudio(audio), to: &timeline)
                 }
                 var payload = result
                 payload["network"] = .string(generated.disclosure)

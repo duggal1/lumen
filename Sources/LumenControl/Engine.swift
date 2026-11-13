@@ -17,8 +17,9 @@ import LumenSpeech
 /// AGENT: the agent mutated the timeline directly, so it skipped the
 /// validation, the effect tracking and the manual-origin rules that every UI
 /// edit obeys. Both paths now end in `reduce`.
-func applyCommand(_ command: Command, to timeline: inout Timeline) throws {
-    let context = ReduceContext(playhead: 0, duration: timeline.timeMap.sourceDuration)
+func applyCommand(_ command: Command, to timeline: inout Timeline, fps: Double = 60) throws {
+    // AGENT: the reducer's playhead and duration use output time, while it derives source time from the map.
+    let context = ReduceContext(playhead: 0, duration: timeline.timeMap.outputDuration, fps: fps)
     do {
         _ = try reduce(&timeline, command, ctx: context)
     } catch let error as CommandError {

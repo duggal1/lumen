@@ -475,11 +475,15 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id", "id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "remove zoom") { timeline in
-                    // AGENT: deleting an auto zoom must survive the next replan.
-                    for zoom in timeline.zoom where zoom.id.uuidString == input.id && zoom.origin == .auto {
-                        timeline.suppressedAuto.append(zoom.id.uuidString)
+                    guard let id = UUID(uuidString: input.id),
+                          let zoom = timeline.zoom.first(where: { $0.id == id }) else {
+                        throw ToolError.invalidArguments("id must be an existing zoom UUID.")
                     }
-                    timeline.zoom.removeAll { $0.id.uuidString == input.id }
+                    // AGENT: suppress planner-owned zooms before deleting through the reducer.
+                    if zoom.origin == .auto, !timeline.suppressedAuto.contains(id.uuidString) {
+                        timeline.suppressedAuto.append(id.uuidString)
+                    }
+                    try applyCommand(.deleteZoom(id), to: &timeline)
                 }
                 return .object(result)
             })
@@ -525,30 +529,32 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "style") { timeline in
+                    var style = timeline.style
                     func checked(_ value: Double, _ name: String, _ bounds: ClosedRange<Double>) throws -> Double {
                         guard value.isFinite, bounds.contains(value) else {
                             throw ToolError.invalidArguments("\(name) must be in \(bounds.lowerBound)…\(bounds.upperBound).")
                         }
                         return value
                     }
-                    if let padding = input.padding { timeline.style.padding = try checked(padding, "padding", 0 ... 0.2) }
-                    if let radius = input.cornerRadius { timeline.style.cornerRadius = try checked(radius, "corner_radius", 0 ... 80) }
-                    if let shadow = input.shadow { timeline.style.shadow = try checked(shadow, "shadow", 0 ... 1) }
+                    if let padding = input.padding { style.padding = try checked(padding, "padding", 0 ... 0.2) }
+                    if let radius = input.cornerRadius { style.cornerRadius = try checked(radius, "corner_radius", 0 ... 80) }
+                    if let shadow = input.shadow { style.shadow = try checked(shadow, "shadow", 0 ... 1) }
                     if let aspect = input.aspect {
                         guard aspect.isFinite, aspect > 0.2, aspect < 5 else {
                             throw ToolError.invalidArguments("aspect must be greater than 0.2 and less than 5.")
                         }
-                        timeline.style.customAspect = aspect
+                        style.customAspect = aspect
                     }
-                    if let blur = input.wallpaperBlur { timeline.style.wallpaperBlur = try checked(blur, "wallpaper_blur", 0 ... 60) }
+                    if let blur = input.wallpaperBlur { style.wallpaperBlur = try checked(blur, "wallpaper_blur", 0 ... 60) }
                     if let background = input.background, !background.isEmpty {
-                        timeline.style.background = try self.backgroundKind(background)
+                        style.background = try self.backgroundKind(background)
                     }
                     if let imagePath = input.backgroundImagePath, !imagePath.isEmpty {
                         // AGENT: an unconfined image path let an agent read any file the user owns.
                         let url = try ctx.paths.path(imagePath, ext: PathGuard.imageExt)
-                        timeline.style.setPhotoBackground(url.path)
+                        style.setPhotoBackground(url.path)
                     }
+                    try applyCommand(.setStyle(style), to: &timeline)
                 }
                 return .object(result)
             })
@@ -570,13 +576,15 @@ public extension ToolRegistry {
                 }
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "background") { timeline in
+                    var style = timeline.style
                     if !input.imagePath.isEmpty {
                         // AGENT: confine the image to the client's approved folders.
                         let url = try ctx.paths.path(input.imagePath, ext: PathGuard.imageExt)
-                        timeline.style.setPhotoBackground(url.path)
+                        style.setPhotoBackground(url.path)
                     } else if !input.background.isEmpty {
-                        timeline.style.background = try self.backgroundKind(input.background)
+                        style.background = try self.backgroundKind(input.background)
                     }
+                    try applyCommand(.setStyle(style), to: &timeline)
                 }
                 return .object(result)
             })
@@ -593,8 +601,10 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "captions") { timeline in
-                    timeline.captions.enabled = input.enabled
-                    if !input.locale.isEmpty { timeline.captions.locale = input.locale }
+                    var captions = timeline.captions
+                    captions.enabled = input.enabled
+                    if !input.locale.isEmpty { captions.locale = input.locale }
+                    try applyCommand(.setCaptions(captions), to: &timeline)
                 }
                 return .object(result)
             })
@@ -611,15 +621,24 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "privacy decisions") { timeline in
-                    for (id, approved) in input.decisions {
-                        timeline.overlays.privacy.decisions[id] = approved
+                    var approvedIDs: [UUID] = []
+                    var rejectedIDs: [UUID] = []
+                    for (id, isApproved) in input.decisions {
+                        guard let uuid = UUID(uuidString: id), timeline.overlays.masks.contains(where: { $0.id == uuid }) else {
+                            throw ToolError.invalidArguments("Every decision key must be an existing mask UUID.")
+                        }
+                        if isApproved { approvedIDs.append(uuid) } else { rejectedIDs.append(uuid) }
                     }
+                    if !approvedIDs.isEmpty { try applyCommand(.approveMasks(approvedIDs), to: &timeline) }
+                    if !rejectedIDs.isEmpty { try applyCommand(.rejectMasks(rejectedIDs), to: &timeline) }
                 }
                 return .object(result)
             })
     }
 
-    /// Applies one typed operation to a timeline.
+    /// Applies a timeline operation through the editor's command reducer.
+    ///
+    /// AGENT: direct field edits skipped the same validation and magnetic-lane rules the editor applies.
     func apply(_ op: PatchOp, to timeline: inout Timeline, paths: PathGuard) throws {
         func need<T>(_ value: T?, _ name: String) throws -> T {
             guard let value else {
@@ -627,137 +646,173 @@ public extension ToolRegistry {
             }
             return value
         }
-        // AGENT: reject non-finite or out-of-range values before they enter the timeline.
         func range(_ value: Double, _ name: String, _ bounds: ClosedRange<Double>) throws -> Double {
-            guard value.isFinite, bounds.contains(value) else { throw ToolError.invalidArguments("\(name) must be in \(bounds).") }
+            guard value.isFinite, bounds.contains(value) else {
+                throw ToolError.invalidArguments("\(name) must be in \(bounds.lowerBound)…\(bounds.upperBound).")
+            }
+            return value
+        }
+        func uuid(_ raw: String, _ name: String) throws -> UUID {
+            guard let value = UUID(uuidString: raw) else {
+                throw ToolError.invalidArguments("\(name) must be a UUID.")
+            }
             return value
         }
         switch op.op {
         case "zoom_add":
             let start = try need(op.start, "start"), end = try need(op.end, "end")
-            guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else { throw ToolError.invalidArguments("zoom_add requires a valid source-time span.") }
+            guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else {
+                throw ToolError.invalidArguments("zoom_add requires a valid source-time span.")
+            }
             let scale = try range(op.scale ?? 2, "scale", 1.1...4)
             try applyCommand(.addZoom(ZoomSegment(start: start, end: end, scale: scale,
                                                   focus: try focus(from: op.focusMode ?? "follow",
                                                                    x: op.focusX ?? 0.5, y: op.focusY ?? 0.5),
                                                   origin: .manual)), to: &timeline)
         case "zoom_set":
-            let id = try need(op.id, "id")
-            guard let index = timeline.zoom.firstIndex(where: { $0.id.uuidString == id }) else {
-                throw ToolError.failed("No zoom with id \(id).")
+            let id = try uuid(try need(op.id, "id"), "id")
+            guard let zoom = timeline.zoom.first(where: { $0.id == id }) else {
+                throw ToolError.failed("No zoom with id \(id.uuidString).")
             }
             if let start = op.start, let end = op.end {
-                guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else { throw ToolError.invalidArguments("zoom_set requires a valid source-time span.") }
-                timeline.zoom[index].start = start
-                timeline.zoom[index].end = end
+                guard start.isFinite, end.isFinite, start >= 0, end > start,
+                      end <= timeline.timeMap.sourceDuration + 0.001 else {
+                    throw ToolError.invalidArguments("zoom_set requires a valid source-time span.")
+                }
+                try applyCommand(.moveZoom(id, start: start, end: end), to: &timeline)
             } else if (op.start == nil) != (op.end == nil) {
                 throw ToolError.invalidArguments("zoom_set needs both start and end, or neither.")
             }
-            if let scale = op.scale { timeline.zoom[index].scale = try range(scale, "scale", 1.1...4) }
-            // AGENT: changing only focus coordinates must preserve the existing focus mode and other coordinates.
-            // AGENT: normalized focus coordinates outside the frame produce invalid camera geometry.
+            if let scale = op.scale {
+                try applyCommand(.setZoomScale(id, try range(scale, "scale", 1.1...4)), to: &timeline)
+            }
             if let x = op.focusX { _ = try range(x, "focus_x", 0...1) }
             if let y = op.focusY { _ = try range(y, "focus_y", 0...1) }
             if let mode = op.focusMode {
-                guard ["follow", "fixed", "element"].contains(mode) else { throw ToolError.invalidArguments("focus_mode must be follow, fixed, or element.") }
-                timeline.zoom[index].focus = try focus(from: mode, x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
+                let updated = try focus(from: mode, x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
+                try applyCommand(.setZoomFocus(id, updated), to: &timeline)
             } else if op.focusX != nil || op.focusY != nil {
-                switch timeline.zoom[index].focus {
-                case .fixed(let x, let y): timeline.zoom[index].focus = .fixed(x: op.focusX ?? x, y: op.focusY ?? y)
-                case .element(let x, let y, let w, let h): timeline.zoom[index].focus = .element(x: op.focusX ?? x, y: op.focusY ?? y, w: w, h: h)
-                case .follow: throw ToolError.invalidArguments("Specify focus_mode when changing coordinates on a follow zoom.")
+                let updated: Focus
+                switch zoom.focus {
+                case .fixed(let x, let y): updated = .fixed(x: op.focusX ?? x, y: op.focusY ?? y)
+                case .element(let x, let y, let w, let h):
+                    updated = .element(x: op.focusX ?? x, y: op.focusY ?? y, w: w, h: h)
+                case .follow:
+                    throw ToolError.invalidArguments("Specify focus_mode when changing coordinates on a follow zoom.")
                 }
+                try applyCommand(.setZoomFocus(id, updated), to: &timeline)
             }
-            // AGENT: edited automatic zooms must survive the next planner pass.
-            timeline.zoom[index].origin = .manual
         case "zoom_remove":
-            let id = try need(op.id, "id")
-            // AGENT: deleting an auto zoom must survive the next replan.
-            for zoom in timeline.zoom where zoom.id.uuidString == id && zoom.origin == .auto {
-                timeline.suppressedAuto.append(zoom.id.uuidString)
+            let id = try uuid(try need(op.id, "id"), "id")
+            guard let zoom = timeline.zoom.first(where: { $0.id == id }) else {
+                throw ToolError.failed("No zoom with id \(id.uuidString).")
             }
-            timeline.zoom.removeAll { $0.id.uuidString == id }
+            if zoom.origin == .auto, !timeline.suppressedAuto.contains(id.uuidString) {
+                timeline.suppressedAuto.append(id.uuidString)
+            }
+            try applyCommand(.deleteZoom(id), to: &timeline)
         case "cut_add":
             let start = try need(op.start, "start"), end = try need(op.end, "end")
-            guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else {
+            guard start.isFinite, end.isFinite, start >= 0, end > start,
+                  end <= timeline.timeMap.sourceDuration + 0.001 else {
                 throw ToolError.invalidArguments("cut_add needs end after start, in source seconds.")
             }
-            let a = timeline.timeMap.output(atSource: start), b = timeline.timeMap.output(atSource: end)
-            try applyCommand(.cutOutputRange(start: a, end: b), to: &timeline)
+            let outputStart = timeline.timeMap.output(atSource: start)
+            let outputEnd = timeline.timeMap.output(atSource: end)
+            guard outputEnd > outputStart else { throw ToolError.invalidArguments("Cut is outside the edited timeline.") }
+            try applyCommand(.cutOutputRange(start: outputStart, end: outputEnd), to: &timeline)
         case "cut_remove":
-            let id = try need(op.id, "id")
-            timeline.timeMap.cuts.removeAll { $0.id.uuidString == id }
+            let id = try uuid(try need(op.id, "id"), "id")
+            guard timeline.timeMap.cuts.contains(where: { $0.id == id }) else {
+                throw ToolError.failed("No cut with id \(id.uuidString).")
+            }
+            try applyCommand(.deleteCut(id), to: &timeline)
         case "ramp_set":
             let start = try need(op.start, "start"), end = try need(op.end, "end")
-            // AGENT: validate speed before rebuilding the time map.
-            guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001,
-                  (op.speed ?? 2).isFinite, (0.25...16).contains(op.speed ?? 2) else {
-                throw ToolError.invalidArguments("ramp_set needs end after start, in source seconds.")
+            let speed = try range(op.speed ?? 2, "speed", 0.25...16)
+            guard start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else {
+                throw ToolError.invalidArguments("ramp_set needs a valid source-time span.")
             }
-            try applyCommand(.addSpeedRamp(start: start, end: end, speed: op.speed ?? 2), to: &timeline)
+            try applyCommand(.addSpeedRamp(start: start, end: end, speed: speed), to: &timeline)
         case "ramp_remove":
-            let id = try need(op.id, "id")
-            // AGENT: remember deleted automatic ramps before the planner regenerates them.
-            for ramp in timeline.timeMap.ramps where ramp.id.uuidString == id && ramp.origin == .auto {
-                if !timeline.suppressedAuto.contains(id) { timeline.suppressedAuto.append(id) }
+            let id = try uuid(try need(op.id, "id"), "id")
+            guard let ramp = timeline.timeMap.ramps.first(where: { $0.id == id }) else {
+                throw ToolError.failed("No speed ramp with id \(id.uuidString).")
             }
-            timeline.timeMap.ramps.removeAll { $0.id.uuidString == id }
+            if ramp.origin == .auto, !timeline.suppressedAuto.contains(id.uuidString) {
+                timeline.suppressedAuto.append(id.uuidString)
+            }
+            try applyCommand(.deleteSpeedRamp(id), to: &timeline)
         case "style_set":
             let key = try need(op.key, "key")
+            var style = timeline.style
             switch key {
-            case "padding": timeline.style.padding = try range(need(op.value, "value"), "padding", 0...0.2)
-            case "corner_radius": timeline.style.cornerRadius = try range(need(op.value, "value"), "corner_radius", 0...80)
-            case "shadow": timeline.style.shadow = try range(need(op.value, "value"), "shadow", 0...1)
+            case "padding": style.padding = try range(need(op.value, "value"), "padding", 0...0.2)
+            case "corner_radius": style.cornerRadius = try range(need(op.value, "value"), "corner_radius", 0...80)
+            case "shadow": style.shadow = try range(need(op.value, "value"), "shadow", 0...1)
             case "aspect":
                 let aspect = try need(op.value, "value")
-                guard aspect.isFinite, aspect > 0.2, aspect < 5 else { throw ToolError.invalidArguments("aspect must be greater than 0.2 and less than 5.") }
-                timeline.style.customAspect = aspect
-            case "wallpaper_blur": timeline.style.wallpaperBlur = try range(need(op.value, "value"), "wallpaper_blur", 0...60)
-            case "background": timeline.style.background = try backgroundKind(try need(op.text, "text"))
+                guard aspect.isFinite, aspect > 0.2, aspect < 5 else {
+                    throw ToolError.invalidArguments("aspect must be greater than 0.2 and less than 5.")
+                }
+                style.customAspect = aspect
+            case "wallpaper_blur": style.wallpaperBlur = try range(need(op.value, "value"), "wallpaper_blur", 0...60)
+            case "background": style.background = try backgroundKind(try need(op.text, "text"))
             case "background_image":
-                // AGENT: unconfined, this read any image on disk and shipped it in the export.
                 let path = try need(op.text, "text")
-                timeline.style.setPhotoBackground(try paths.path(path, ext: PathGuard.imageExt).path)
+                style.setPhotoBackground(try paths.path(path, ext: PathGuard.imageExt).path)
             default:
-                throw ToolError.invalidArguments(
-                    "Unknown style key \(key). Use padding, corner_radius, shadow, aspect, wallpaper_blur, background or background_image.")
+                throw ToolError.invalidArguments("Unknown style key \(key). Use padding, corner_radius, shadow, aspect, wallpaper_blur, background or background_image.")
             }
+            try applyCommand(.setStyle(style), to: &timeline)
         case "audio_lane_add":
-            // AGENT: an unconfined audio path leaked any local file into the project.
+            let roleName = op.text ?? "voiceover"
+            guard let role = AudioLane.Role(rawValue: roleName) else {
+                throw ToolError.invalidArguments("role must be one of mic, system, voiceover, music, sfx.")
+            }
             let lanePath = try op.key.map { try paths.path($0, ext: PathGuard.audioExt).path }
-            timeline.audio.lanes.append(AudioLane(role: AudioLane.Role(rawValue: op.text ?? "") ?? .voiceover,
-                                                  path: lanePath,
-                                                  placement: op.start ?? 0, gainDb: op.value ?? 0))
+            let placement = try range(op.start ?? 0, "placement", 0...max(timeline.timeMap.outputDuration, 0))
+            let gain = try range(op.value ?? 0, "gain_db", -60...12)
+            var audio = timeline.audio
+            audio.lanes.append(AudioLane(role: role, path: lanePath, placement: placement, gainDb: gain))
+            try applyCommand(.setAudio(audio), to: &timeline)
         case "audio_lane_remove":
-            let id = try need(op.id, "id")
-            timeline.audio.lanes.removeAll { $0.id.uuidString == id }
+            let id = try uuid(try need(op.id, "id"), "id")
+            var audio = timeline.audio
+            guard audio.lanes.contains(where: { $0.id == id }) else {
+                throw ToolError.failed("No audio lane with id \(id.uuidString).")
+            }
+            audio.lanes.removeAll { $0.id == id }
+            try applyCommand(.setAudio(audio), to: &timeline)
         case "music_set":
-            // AGENT: confine music to the approved folders and audio extensions.
-            let text = try need(op.text, "text")
-            timeline.audio.musicPath = text.isEmpty ? nil : try paths.path(text, ext: PathGuard.audioExt).path
-            if let value = op.value { timeline.audio.musicGainDb = value }
+            let rawPath = try need(op.text, "text")
+            var audio = timeline.audio
+            audio.musicPath = rawPath.isEmpty ? nil : try paths.path(rawPath, ext: PathGuard.audioExt).path
+            if let gain = op.value { audio.musicGainDb = try range(gain, "music_gain_db", -60...12) }
+            try applyCommand(.setAudio(audio), to: &timeline)
         case "captions_set":
-            timeline.captions.enabled = try need(op.flag, "flag")
-            if let locale = op.text, !locale.isEmpty { timeline.captions.locale = locale }
+            var captions = timeline.captions
+            captions.enabled = try need(op.flag, "flag")
+            if let locale = op.text, !locale.isEmpty { captions.locale = locale }
+            try applyCommand(.setCaptions(captions), to: &timeline)
         case "privacy_set":
             let key = try need(op.key, "key")
+            var privacy = timeline.overlays.privacy
             switch key {
-            case "enabled": timeline.overlays.privacy.enabled = try need(op.flag, "flag")
-            case "auto_detect": timeline.overlays.privacy.autoDetect = try need(op.flag, "flag")
+            case "enabled": privacy.enabled = try need(op.flag, "flag")
+            case "auto_detect": privacy.autoDetect = try need(op.flag, "flag")
             case "mode":
-                let text = try need(op.text, "text")
-                guard let mode = MaskMode(rawValue: text) else {
-                    throw ToolError.invalidArguments(
-                        "Unknown privacy mode \(text). Valid values: \(MaskMode.allCases.map(\.rawValue).joined(separator: ", ")).")
+                let rawMode = try need(op.text, "text")
+                guard let mode = MaskMode(rawValue: rawMode) else {
+                    throw ToolError.invalidArguments("Unknown privacy mode \(rawMode). Valid values: \(MaskMode.allCases.map(\.rawValue).joined(separator: ", ")).")
                 }
-                timeline.overlays.privacy.mode = mode
-            case "padding": timeline.overlays.privacy.padding = try range(need(op.value, "value"), "privacy padding", 0...80)
-            default:
-                throw ToolError.invalidArguments(
-                    "Unknown privacy key \(key). Use enabled, auto_detect, mode or padding.")
+                privacy.mode = mode
+            case "padding": privacy.padding = try range(need(op.value, "value"), "privacy padding", 0...80)
+            default: throw ToolError.invalidArguments("Unknown privacy key \(key). Use enabled, auto_detect, mode or padding.")
             }
+            try applyCommand(.setPrivacy(privacy), to: &timeline)
         default:
-            throw ToolError.invalidArguments("Unknown timeline op \(op.op).")
+            throw ToolError.invalidArguments("Unknown timeline op \(op.op). Valid ops: zoom_add, zoom_set, zoom_remove, cut_add, cut_remove, ramp_set, ramp_remove, style_set, audio_lane_add, audio_lane_remove, music_set, captions_set, privacy_set.")
         }
     }
 

@@ -104,7 +104,7 @@ public enum ToolSchemas {
                      "at_marker": J.str("Marker id to anchor this lane."),
                      "at_output": J.num("Absolute output time.", min: 0),
                      "offset_ms": J.num("Offset from marker in milliseconds.", def: 0),
-                     "gain_db": J.num("Lane gain in decibels.", def: 0),
+                     "gain_db": J.num("Optional lane gain in decibels."),
                      "loop": J.bool("Loop the lane.", def: false)]
         case "audio_mix_set":
             props = ["project_id": project,
