@@ -92,16 +92,17 @@ private final class PreviewDriver: NSObject, @unchecked Sendable {
         let now = l.targetTimestamp
         let (tl, version) = box.get()
         let ds = shared.drawable
-        let animated = tl.style.background == .dither && !shared.reduceMotion
+        let animatedBackground = tl.style.background == .dither || tl.style.background == .canvas
+        let animated = animatedBackground && !shared.reduceMotion
         let dt = lastPointerTime > 0 ? min(max(now - lastPointerTime, 0), 0.1) : 0
         lastPointerTime = now
         pointer += (shared.pointerTarget - pointer) * (1 - exp(-dt * 7))
         let playing = clock.playing
         let t = clock.time(at: present)
         let uiTime = animated ? (playing ? t : now - t0) : 0
-        // SMOOTHNESS: a paused animated backdrop only needs 30 Hz phase; 240 Hz
+        // SMOOTHNESS: a paused animated backdrop uses 60 Hz phase; 240 Hz
         // re-renders an otherwise static frame every tick.
-        let phase = animated ? Int(uiTime * (playing ? 240 : 30)) : 0
+        let phase = animated ? Int(uiTime * (playing ? 240 : 60)) : 0
         // SMOOTHNESS: the pointer only reaches the Dither shader,
         // so it must not invalidate the frame key (and re-render) otherwise.
         let dither = animated && tl.style.background == .dither

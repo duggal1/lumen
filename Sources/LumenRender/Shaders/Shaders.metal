@@ -113,7 +113,14 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
         value = clamp(value - touch * 0.55, 0.0, 1.0);
         int2 cellIndex = int2(grid) & 7;
         float threshold = kBayer8[cellIndex.y * 8 + cellIndex.x];
-        c = value > threshold ? cols[1].rgb : cols[0].rgb;
+        if (u.count < 2) {
+            c = cols[0].rgb;
+        } else {
+            float ramp = value * float(u.count - 1);
+            int lower = min(int(ramp), u.count - 2);
+            int upper = min(lower + 1, u.count - 1);
+            c = ramp - float(lower) > threshold ? cols[upper].rgb : cols[lower].rgb;
+        }
     } else if (u.kind == 5) {
         // AGENT: Studio canvas presets need real render styles, not thumbnail-only palette changes.
         float aspect = u.canvas.x / u.canvas.y;
@@ -121,37 +128,44 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
         if (u.canvasStyle == 0) {
             float3 acc = float3(0.0); float ws = 0.0;
             for (int i = 0; i < 6; ++i) {
-                float2 d = (uv - cols[6 + i].xy) * float2(aspect, 1.0);
+                float phase = u.time * 0.35 + float(i) * 1.31;
+                float2 center = cols[6 + i].xy + float2(sin(phase), cos(phase * 0.79)) * 0.08;
+                float2 d = (uv - center) * float2(aspect, 1.0);
                 float w = exp(-dot(d, d) * 7.0);
                 acc += cols[i % max(u.count, 1)].rgb * w; ws += w;
             }
             c = acc / max(ws, 1e-4);
         } else if (u.canvasStyle == 1) {
-            float warp = fieldFbm(p * 1.7 + float2(1.4, -0.8));
-            float field = fieldFbm(p * 2.5 + (warp - 0.5) * 1.8);
+            float2 drift = float2(sin(u.time * 0.27), cos(u.time * 0.23)) * 0.14;
+            float warp = fieldFbm((p + drift) * 1.7 + float2(1.4, -0.8));
+            float field = fieldFbm((p + drift * 1.5) * 2.5 + (warp - 0.5) * 1.8);
             c = canvasRamp(smoothstep(0.08, 0.92, field), cols, u.count);
         } else if (u.canvasStyle == 2) {
             float2 direction = float2(cos(u.angle), sin(u.angle));
             float along = dot(p, direction), across = dot(p, float2(-direction.y, direction.x));
-            float wave = sin(across * 12.0 + sin(along * 5.0) * 2.0 + fieldNoise(p * 2.0) * 1.2);
+            float wave = sin(across * 12.0 + sin(along * 5.0) * 2.0 + fieldNoise(p * 2.0) * 1.2 + u.time * 0.5);
             c = canvasRamp(smoothstep(-0.95, 0.95, wave), cols, u.count);
         } else if (u.canvasStyle == 3) {
             float3 acc = float3(0.0); float ws = 0.0;
             for (int i = 0; i < 6; ++i) {
-                float2 d = (uv - cols[6 + i].xy) * float2(aspect, 1.0);
+                float phase = u.time * 0.35 + float(i) * 1.31;
+                float2 center = cols[6 + i].xy + float2(sin(phase), cos(phase * 0.79)) * 0.08;
+                float2 d = (uv - center) * float2(aspect, 1.0);
                 float w = exp(-dot(d, d) * 22.0);
                 acc += cols[i % max(u.count, 1)].rgb * w; ws += w;
             }
             c = mix(u.canvasGround.rgb, acc / max(ws, 1e-4), clamp(ws * 0.55, 0.0, 1.0));
         } else if (u.canvasStyle == 4) {
             float2 direction = float2(cos(u.angle), sin(u.angle));
-            float t = dot(uv - 0.5, direction) / (abs(direction.x) + abs(direction.y)) + 0.5;
+            float t = dot(uv - 0.5, direction) / (abs(direction.x) + abs(direction.y)) + 0.5
+                + sin(u.time * 0.3) * 0.10;
             c = canvasRamp(t, cols, u.count);
         } else if (u.canvasStyle == 5) {
-            float radius = length((uv - u.canvasCenter) * float2(aspect, 1.0));
+            float2 center = u.canvasCenter + float2(sin(u.time * 0.25), cos(u.time * 0.27)) * 0.10;
+            float radius = length((uv - center) * float2(aspect, 1.0));
             c = canvasRamp(1.0 - clamp(radius / 1.05, 0.0, 1.0), cols, u.count);
         } else {
-            float phase = atan2(p.y, p.x) / 6.28318530718 + 0.5;
+            float phase = atan2(p.y, p.x) / 6.28318530718 + 0.5 + u.time * 0.025;
             c = canvasWheel(phase, cols, u.count);
         }
     } else if (u.kind == 4 && u.hasWall == 1) {

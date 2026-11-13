@@ -192,12 +192,16 @@ public enum Director {
         if cancelled() { return nil }
 
         var cues: [SFXCue] = []
-        if t.audio.clickSounds { cues += clicks.map { SFXCue(t: $0.t, kind: .click, gainDb: 0) } }
-        if t.audio.keySounds {
-            cues += input.events.filter { $0.kind == .keyDown && !tm.isCut($0.t) }
-                .map { SFXCue(t: tm.output(atSource: $0.t), kind: .key, gainDb: 0, keyCode: $0.keyCode) }
+        if t.audio.soundEffectsEnabled {
+            if t.audio.clickSounds {
+                cues += clicks.map { SFXCue(t: $0.t, kind: .click, gainDb: t.audio.clickGainDb) }
+            }
+            if t.audio.keySounds {
+                cues += input.events.filter { $0.kind == .keyDown && !tm.isCut($0.t) }
+                    .map { SFXCue(t: tm.output(atSource: $0.t), kind: .key, gainDb: 0, keyCode: $0.keyCode) }
+            }
         }
-        if t.audio.whooshes {
+        if t.audio.soundEffectsEnabled && t.audio.whooshes {
             // SMOOTHNESS: one whoosh pair per SCENE, not per segment. A
             // retarget produces abutting segments, and a whoosh-out right on
             // top of a whoosh-in reads as a stutter in the middle of one
@@ -217,7 +221,8 @@ public enum Director {
                 // Small zooms still need an audible whoosh: floor at -9 dB,
                 // rise gently with zoom magnitude, never above -2 dB.
                 let g = clamp(-9 + 5 * (s.scale - 1), -9, -2)
-                cues.append(SFXCue(t: a, kind: .whooshIn, gainDb: g)); cues.append(SFXCue(t: b, kind: .whooshOut, gainDb: g))
+                cues.append(SFXCue(t: a, kind: .whooshIn, gainDb: g + t.audio.zoomInGainDb))
+                cues.append(SFXCue(t: b, kind: .whooshOut, gainDb: g + t.audio.zoomOutGainDb))
             }
         }
         cues.sort { $0.t < $1.t }

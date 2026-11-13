@@ -250,9 +250,11 @@ private final class SpyEmailTransport: EmailTransport, @unchecked Sendable {
     #expect(BackgroundKind.offered.contains(.solid))
     #expect(BackgroundKind.offered.contains(.wallpaper))
     #expect(BackgroundKind.offered.contains(.image))
-    #expect(DitherPalettes.all.count == 4)
+    #expect(["Orange", "Green", "Purple", "Blue", "Red", "Yellow", "Cyan", "Pink"].allSatisfy { color in
+        DitherPalettes.all.contains { $0.0.hasPrefix(color) }
+    })
     #expect(Set(DitherPalettes.all.map(\.0)).count == DitherPalettes.all.count)
-    #expect(DitherPalettes.all.allSatisfy { $0.1.count == 2 })
+    #expect(DitherPalettes.all.allSatisfy { (2...6).contains($0.1.count) })
     #expect(ZoomPreset.cinematic.maxScale == 2.2)
     var camera = CameraParams()
     camera.apply(preset: .cinematic)

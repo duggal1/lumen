@@ -21,7 +21,7 @@ public struct RenderRequest: @unchecked Sendable {
     public var canvas: SIMD2<Int>, fps: Double, backingScale: Double, quality: RenderQuality
     /// The analysis cache, if this recording has generated on-device person mattes.
     public var personMaskDirectory: URL?
-    /// Preview-only animation phase for the pixel-dither backdrop. Always 0 for export, so output stays deterministic.
+    /// Preview clock for generated backdrops; export uses the timeline clock for deterministic motion.
     public var uiTime: Double
     public var pointer: SIMD4<Float>
     /// Keep the scene premultiplied and leave the canvas transparent. Used by
@@ -639,8 +639,9 @@ public final class Renderer: @unchecked Sendable {
         // SMOOTHNESS: one lock snapshot per frame; the decode tasks publish into
         // this same struct, so the render thread never blocks on disk or AppKit.
         let a = assets.withLock { $0 }
+        let animatedBackground = tl.style.background == .dither || tl.style.background == .canvas
+        let backgroundTime = animatedBackground ? (r.quality == .export ? r.t : r.uiTime) : 0
         let dither = tl.style.background == .dither
-        let backgroundTime = dither ? (r.quality == .export ? r.t : r.uiTime) : 0
         let pointer = dither && r.quality == .preview ? r.pointer : .zero
         let key = BackdropKey(style: tl.style, size: cs,
                               wall: tl.style.background == .wallpaper ? a.wallID : (tl.style.background == .image ? a.styleImageID : ""),

@@ -845,6 +845,7 @@ struct Inspector: View {
 
     private var audio: some View {
         let m = model
+        let soundEffectsEnabled = m.timeline.audio.soundEffectsEnabled
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
                 SliderRow(label: "Noise reduction", v: Binding(
@@ -856,6 +857,21 @@ struct Inspector: View {
                 LButton(title: "Voice Isolation…", icon: "mic.badge.plus", kind: .quiet) {
                     MicrophoneModes.showVoiceIsolationControls()
                 }
+            }.card(padding: 16)
+            VStack(spacing: 0) {
+                ToggleRow(label: "Sound effects", on: m.bind(\.audio.soundEffectsEnabled))
+                SliderRow(label: "Zoom in", v: m.bind(\.audio.zoomInGainDb), range: -24...6,
+                          fmt: { "\(Int($0)) dB" })
+                    .disabled(!soundEffectsEnabled)
+                SliderRow(label: "Zoom out", v: m.bind(\.audio.zoomOutGainDb), range: -24...6,
+                          fmt: { "\(Int($0)) dB" })
+                    .disabled(!soundEffectsEnabled)
+                SliderRow(label: "Cursor click", v: m.bind(\.audio.clickGainDb), range: -24...6,
+                          fmt: { "\(Int($0)) dB" })
+                    .disabled(!soundEffectsEnabled)
+                SliderRow(label: "Typing", v: m.bind(\.audio.typingLevelDb), range: -18...0,
+                          fmt: { "\(Int($0)) dB" })
+                    .disabled(!soundEffectsEnabled)
             }.card(padding: 16)
         }
     }

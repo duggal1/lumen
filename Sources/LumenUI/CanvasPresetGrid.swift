@@ -21,13 +21,10 @@ struct CanvasPresetGrid: View {
                     model.dispatch(.setStyle(style))
                 } label: {
                     VStack(spacing: 6) {
-                        ZStack {
-                            CanvasPresetPreview(preset: preset)
-                                .padding(4)
-                            if selected {
-                                CornerBrackets(color: Tok.accent)
-                            }
-                        }
+                        CanvasPresetPreview(preset: preset)
+                            .padding(2)
+                            .overlay(RoundedRectangle(cornerRadius: Radius.field)
+                                .strokeBorder(selected ? Tok.accent : .clear, lineWidth: 2))
                         .aspectRatio(1.6, contentMode: .fit)
                         Text(preset.name)
                             .font(AppType.caption)
@@ -50,67 +47,78 @@ struct CanvasPresetGrid: View {
 
 private struct CanvasPresetPreview: View {
     let preset: CanvasPreset
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Canvas(opaque: true, rendersAsynchronously: true) { context, size in
-            guard size.width > 0, size.height > 0 else { return }
-            let cell: CGFloat = 2
-            let columns = max(Int(ceil(size.width / cell)), 1)
-            let rows = max(Int(ceil(size.height / cell)), 1)
-            for y in 0..<rows {
-                for x in 0..<columns {
-                    let u = (Double(x) + 0.5) / Double(columns)
-                    let v = (Double(y) + 0.5) / Double(rows)
-                    let color = Self.color(Self.sample(preset, u: u, v: v, aspect: Double(size.width / size.height)))
-                    context.fill(Path(CGRect(x: CGFloat(x) * cell, y: CGFloat(y) * cell,
-                                             width: cell, height: cell)),
-                                    with: .color(color), style: FillStyle(antialiased: false))
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
+            let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: 10_000)
+            Canvas(opaque: true, rendersAsynchronously: true) { context, size in
+                guard size.width > 0, size.height > 0 else { return }
+                let cell: CGFloat = 3
+                let columns = max(Int(ceil(size.width / cell)), 1)
+                let rows = max(Int(ceil(size.height / cell)), 1)
+                let aspect = Double(size.width / size.height)
+                for y in 0..<rows {
+                    for x in 0..<columns {
+                        let u = (Double(x) + 0.5) / Double(columns)
+                        let v = (Double(y) + 0.5) / Double(rows)
+                        let color = Self.color(Self.sample(preset, u: u, v: v, aspect: aspect, time: time))
+                        context.fill(Path(CGRect(x: CGFloat(x) * cell, y: CGFloat(y) * cell,
+                                                 width: cell, height: cell)),
+                                        with: .color(color), style: FillStyle(antialiased: false))
+                    }
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: Radius.field))
         }
-        .clipShape(RoundedRectangle(cornerRadius: Radius.field))
         .accessibilityHidden(true)
     }
 
-    private static func sample(_ preset: CanvasPreset, u: Double, v: Double, aspect: Double) -> RGBA {
+    private static func sample(_ preset: CanvasPreset, u: Double, v: Double, aspect: Double, time: Double) -> RGBA {
         let p = SIMD2((u - 0.5) * aspect, v - 0.5)
         switch preset.style {
         case .mesh:
-            return weighted(preset, u: u, v: v, aspect: aspect, factor: 7)
+            return weighted(preset, u: u, v: v, aspect: aspect, factor: 7, time: time)
         case .fluid:
-            let warp = fbm(p.x * 1.7 + 1.4, p.y * 1.7 - 0.8)
-            let field = fbm(p.x * 2.5 + (warp - 0.5) * 1.8,
-                            p.y * 2.5 + (warp - 0.5) * 1.8)
+            let drift = SIMD2(sin(time * 0.27), cos(time * 0.23)) * 0.14
+            let warp = fbm((p.x + drift.x) * 1.7 + 1.4, (p.y + drift.y) * 1.7 - 0.8)
+            let field = fbm((p.x + drift.x * 1.5) * 2.5 + (warp - 0.5) * 1.8,
+                            (p.y + drift.y * 1.5) * 2.5 + (warp - 0.5) * 1.8)
             return ramp(preset.colors, at: smoothstep(0.08, 0.92, field))
         case .waves:
             let angle = preset.angle * .pi / 180
             let along = p.x * cos(angle) + p.y * sin(angle)
             let across = -p.x * sin(angle) + p.y * cos(angle)
-            let wave = sin(across * 12 + sin(along * 5) * 2 + noise(p.x * 2, p.y * 2) * 1.2)
+            let wave = sin(across * 12 + sin(along * 5) * 2 + noise(p.x * 2, p.y * 2) * 1.2 + time * 0.5)
             return ramp(preset.colors, at: smoothstep(-0.95, 0.95, wave))
         case .orbs:
-            return weighted(preset, u: u, v: v, aspect: aspect, factor: 22, ground: true)
+            return weighted(preset, u: u, v: v, aspect: aspect, factor: 22, ground: true, time: time)
         case .linear:
             let angle = preset.angle * .pi / 180
             let directionX = cos(angle), directionY = sin(angle)
             let t = ((u - 0.5) * directionX + (v - 0.5) * directionY)
                 / (abs(directionX) + abs(directionY)) + 0.5
-            return ramp(preset.colors, at: t)
+            return ramp(preset.colors, at: t + sin(time * 0.3) * 0.10)
         case .radial:
-            let dx = (u - preset.center.x) * aspect, dy = v - preset.center.y
+            let centerX = preset.center.x + sin(time * 0.25) * 0.10
+            let centerY = preset.center.y + cos(time * 0.27) * 0.10
+            let dx = (u - centerX) * aspect, dy = v - centerY
             return ramp(preset.colors, at: 1 - min(hypot(dx, dy) / 1.05, 1))
         case .conic:
-            let phase = atan2(p.y, p.x) / (2 * .pi) + 0.5
+            let phase = atan2(p.y, p.x) / (2 * .pi) + 0.5 + time * 0.025
             return wheel(preset.colors, at: phase)
         }
     }
 
     private static func weighted(_ preset: CanvasPreset, u: Double, v: Double, aspect: Double,
-                                 factor: Double, ground: Bool = false) -> RGBA {
+                                 factor: Double, ground: Bool = false, time: Double) -> RGBA {
         var red = 0.0, green = 0.0, blue = 0.0, total = 0.0
         guard !preset.colors.isEmpty, !preset.points.isEmpty else { return RGBA(0x000000) }
         for index in 0..<6 {
-            let point = preset.points[index % preset.points.count]
+            let base = preset.points[index % preset.points.count]
+            let phase = time * 0.35 + Double(index) * 1.31
+            let point = SIMD2(base.x + sin(phase) * 0.08, base.y + cos(phase * 0.79) * 0.08)
             let dx = (u - point.x) * aspect, dy = v - point.y
             let weight = exp(-(dx * dx + dy * dy) * factor)
             let color = preset.colors[index % preset.colors.count]

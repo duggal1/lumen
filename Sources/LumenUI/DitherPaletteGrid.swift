@@ -66,7 +66,6 @@ private struct PalettePreview: View {
             let columns = max(Int(ceil(size.width / cell)), 1)
             let rows = max(Int(ceil(size.height / cell)), 1)
             let base = Self.color(colors[0], saturated: saturation)
-            let ink = Self.color(colors[1], saturated: saturation)
             let weave = Self.blend(colors[0], colors[1], amount: 0.14, saturated: saturation)
             for y in 0..<rows {
                 for x in 0..<columns {
@@ -78,7 +77,11 @@ private struct PalettePreview: View {
                         let field = Self.field(u + warp, v + warp)
                         let value = min(max(0.5 + (field - 0.45) * 2.4, 0), 1)
                         let threshold = Double(Self.bayer[(y & 7) * 8 + (x & 7)]) / 64
-                        color = value > threshold ? ink : base
+                        let scaled = value * Double(colors.count - 1)
+                        let lower = min(Int(scaled), colors.count - 2)
+                        let fraction = scaled - Double(lower)
+                        let index = fraction > threshold ? lower + 1 : lower
+                        color = Self.color(colors[index], saturated: saturation)
                     } else {
                         color = (x + y).isMultiple(of: 2) ? base : weave
                     }

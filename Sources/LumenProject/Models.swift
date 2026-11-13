@@ -18,13 +18,27 @@ public struct RGBA: Codable, Equatable, Sendable {
     public var simd: SIMD4<Float> { [r, g, b, a] }
 }
 
-/// Two flat tones, ordered-dithered into a pixel field. Base first, ink second.
+/// Ordered color ramps, dithered into a pixel field from the first tone to the last.
 public enum DitherPalettes {
     public static let all: [(String, [RGBA])] = [
         ("Orange / black", [RGBA(0x0A0A0A), RGBA(0xFF6A00)]),
         ("Orange / white", [RGBA(0xFFFFFF), RGBA(0xFF6A00)]),
         ("Green / white", [RGBA(0xFFFFFF), RGBA(0x39D353)]),
         ("Green / black", [RGBA(0x0A0A0A), RGBA(0x39D353)]),
+        ("Purple / black", [RGBA(0x0A0A0A), RGBA(0x8B5CF6)]),
+        ("Purple / white", [RGBA(0xFFFFFF), RGBA(0x8B5CF6)]),
+        ("Blue / black", [RGBA(0x0A0A0A), RGBA(0x3B82F6)]),
+        ("Blue / white", [RGBA(0xFFFFFF), RGBA(0x3B82F6)]),
+        ("Red / black", [RGBA(0x0A0A0A), RGBA(0xEF4444)]),
+        ("Red / white", [RGBA(0xFFFFFF), RGBA(0xEF4444)]),
+        ("Yellow / black", [RGBA(0x0A0A0A), RGBA(0xFACC15)]),
+        ("Yellow / white", [RGBA(0xFFFFFF), RGBA(0xEAB308)]),
+        ("Cyan / black", [RGBA(0x0A0A0A), RGBA(0x06B6D4)]),
+        ("Cyan / white", [RGBA(0xFFFFFF), RGBA(0x06B6D4)]),
+        ("Pink / black", [RGBA(0x0A0A0A), RGBA(0xEC4899)]),
+        ("Pink / white", [RGBA(0xFFFFFF), RGBA(0xEC4899)]),
+        ("White / black", [RGBA(0x0A0A0A), RGBA(0xFFFFFF)]),
+        ("Spectrum", [RGBA(0x0A0A0A), RGBA(0xF97316), RGBA(0x22C55E), RGBA(0x8B5CF6), RGBA(0x3B82F6), RGBA(0xFACC15)]),
     ]
     public static func colors(named name: String) -> [RGBA] {
         all.first { $0.0 == name }?.1 ?? all[0].1
@@ -332,12 +346,15 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var targetLUFSOverride: Double?
     public var targetLUFS: Double { targetLUFSOverride ?? micMode.targetLUFS }
     public var studioMode: StudioMode = .standard
+    public var soundEffectsEnabled = true
     public var clickSounds = true, whooshes = true, keySounds = true
     public var typingModel = 2
     public var typingPackId: String = "mechvibes-default"
-    public var typingLevelDb: Double = -12.0
+    public var typingLevelDb: Double = -9.0
     public var clickTone: ClickSound = .fresh
     public var sfxGainDb = -9.0
+    public var zoomInGainDb = 0.0, zoomOutGainDb = 0.0, clickGainDb = 0.0
+    public var sfxSettingsVersion = 1
     public var musicPath: String?
     public var musicGainDb = -18.0
     public var duckDepthDb = -14.0, duckAttack = 0.05, duckRelease = 0.4
@@ -348,7 +365,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     private enum LegacyKeys: String, CodingKey { case studioAmount }
     private enum LegacyLUFSKeys: String, CodingKey { case targetLUFS }
     enum CodingKeys: String, CodingKey {
-        case noiseReductionStrength, voiceClarity, outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFSOverride, clickSounds, whooshes, keySounds, typingPackId, typingLevelDb, clickTone, sfxGainDb, musicPath
+        case noiseReductionStrength, voiceClarity, outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFSOverride, soundEffectsEnabled, clickSounds, whooshes, keySounds, typingPackId, typingLevelDb, clickTone, sfxGainDb, zoomInGainDb, zoomOutGainDb, clickGainDb, sfxSettingsVersion, musicPath
         case dereverb, normalize, studioMode, typingModel
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
@@ -379,11 +396,16 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         let legacyLUFS = (try? d.container(keyedBy: LegacyLUFSKeys.self).decodeIfPresent(Double.self, forKey: .targetLUFS)) ?? nil
         targetLUFSOverride = AudioPlan.migrateLUFS(override: (try? c.decode(Double.self, forKey: .targetLUFSOverride)), legacy: legacyLUFS, mode: micMode); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = c.opt(.whooshes, whooshes)
         studioMode = c.opt(.studioMode, studioMode)
+        soundEffectsEnabled = c.opt(.soundEffectsEnabled, soundEffectsEnabled)
         keySounds = c.opt(.keySounds, keySounds); typingPackId = c.opt(.typingPackId, typingPackId); typingLevelDb = c.opt(.typingLevelDb, typingLevelDb); clickTone = c.opt(.clickTone, clickTone); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)
+        zoomInGainDb = c.opt(.zoomInGainDb, zoomInGainDb); zoomOutGainDb = c.opt(.zoomOutGainDb, zoomOutGainDb); clickGainDb = c.opt(.clickGainDb, clickGainDb)
         typingModel = c.opt(.typingModel, 1)
         if typingModel < 2 {
-            keySounds = true; typingLevelDb = -12; typingPackId = "mechvibes-default"; typingModel = 2
+            keySounds = true; typingLevelDb = -9; typingPackId = "mechvibes-default"; typingModel = 2
         }
+        let oldSFXSettings = c.opt(.sfxSettingsVersion, 0)
+        if oldSFXSettings < 1 && abs(typingLevelDb + 12) < 0.001 { typingLevelDb = -9 }
+        sfxSettingsVersion = 1
         musicPath = try? c.decodeIfPresent(String.self, forKey: .musicPath)
         musicGainDb = c.opt(.musicGainDb, musicGainDb); duckDepthDb = c.opt(.duckDepthDb, duckDepthDb); duckAttack = c.opt(.duckAttack, duckAttack)
         duckRelease = c.opt(.duckRelease, duckRelease); muteMicInRamps = c.opt(.muteMicInRamps, muteMicInRamps)
