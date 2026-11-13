@@ -51,6 +51,8 @@ public func registerAllTools(in registry: ToolRegistry) {
     registry.registerProjectTools()
     registry.registerMediaTools()
     registry.registerActuateTools()
+    // AGENT: one tool composes the existing record, edit, privacy, QA and export operations.
+    registry.registerDemoTools()
 }
 
 /// Starts the daemon on demand from the CLI.

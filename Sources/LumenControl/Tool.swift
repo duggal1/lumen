@@ -29,7 +29,7 @@ public struct ToolOutput: Sendable {
 
     /// Migrates existing renderer results into MCP image blocks before serialization.
     static func extractingPreview(from value: JSONValue, tool: String) -> ToolOutput {
-        guard tool == "preview_frame" || tool == "preview_sheet",
+        guard tool == "preview_frame" || tool == "preview_sheet" || tool == "screen_look",
               case .object(var fields) = value,
               case .string(let encoded)? = fields.removeValue(forKey: "image_base64"),
               case .string(let mime)? = fields.removeValue(forKey: "mime_type"),
@@ -49,6 +49,8 @@ public struct ToolSpec: Sendable {
     public let title: String
     public let description: String          // when to use, when NOT to, what it returns
     public let capability: Capability
+    /// AGENT: composite tools must ask for every capability their stages exercise.
+    public let additionalCapabilities: [Capability]
     public let inputSchema: JSONValue       // derived from the Codable input type
     public let required: [String]
     public let mutating: Bool
@@ -73,6 +75,8 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
     public let name: String
     public let description: String
     public let capability: Capability
+    /// AGENT: one-shot workflows need grants for their complete operation chain.
+    public let additionalCapabilities: [Capability]
     public let required: [String]
     public let mutating: Bool
     public let longRunning: Bool
@@ -88,12 +92,14 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
 
     public init(name: String, description: String, capability: Capability, required: [String] = [],
                 mutating: Bool = false, longRunning: Bool = false, schema: JSONValue? = nil,
+                additionalCapabilities: [Capability] = [],
                 title: String? = nil, destructive: Bool = false, idempotent: Bool? = nil,
                 outputSchema: JSONValue? = nil, customDryRun: Bool = false,
                 run: @escaping @Sendable (Input, ToolContext) async throws -> JSONValue) {
         self.name = name
         self.description = description
         self.capability = capability
+        self.additionalCapabilities = additionalCapabilities
         self.required = required
         self.mutating = mutating
         self.longRunning = longRunning
@@ -112,6 +118,7 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
         if mutating { inputSchema = J.injectingDryRun(inputSchema) }
         return ErasedTool(spec: ToolSpec(name: name, title: title ?? name.replacingOccurrences(of: "_", with: " "),
                                           description: description, capability: capability,
+                                          additionalCapabilities: additionalCapabilities,
                                           inputSchema: inputSchema, required: required,
                                           mutating: mutating, longRunning: longRunning,
                                           destructive: destructive, idempotent: idempotent ?? !mutating,

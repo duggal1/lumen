@@ -317,16 +317,18 @@ public struct DemoScript: Codable, Sendable, Equatable {
 
 /// How an element is addressed.
 public struct TargetRef: Codable, Sendable, Equatable {
+    public var ref: String?
     public var role: String?
     public var title: String?
     public var identifier: String?
     /// Which match to take when several elements match.
     public var index: Int = 0
-    public init(role: String? = nil, title: String? = nil, identifier: String? = nil, index: Int = 0) {
-        self.role = role; self.title = title; self.identifier = identifier; self.index = index
+    public init(role: String? = nil, title: String? = nil, identifier: String? = nil, index: Int = 0, ref: String? = nil) {
+        self.ref = ref; self.role = role; self.title = title; self.identifier = identifier; self.index = index
     }
 
     enum CodingKeys: String, CodingKey {
+    case ref
     case role
     case title
     case identifier
@@ -334,6 +336,7 @@ public struct TargetRef: Codable, Sendable, Equatable {
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.ref = try c.decodeIfPresent(String.self, forKey: .ref)
     self.role = try c.decodeIfPresent(String.self, forKey: .role)
     self.title = try c.decodeIfPresent(String.self, forKey: .title)
     self.identifier = try c.decodeIfPresent(String.self, forKey: .identifier)

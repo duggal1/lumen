@@ -212,6 +212,8 @@ public extension ToolRegistry {
                  "width": node.width.map { .number($0) } ?? .null,
                  "height": node.height.map { .number($0) } ?? .null,
                  "children": .array(node.children.map { nodeJSON($0) })]
+        // AGENT: agents need to act on the same observed element without relying on match order.
+        payload["ref"] = node.ref.map { .string($0) } ?? .null
         // AGENT: icon-only buttons have no title or value; description is their only label.
         payload["description"] = node.descriptionText.map { .string($0) } ?? .null
         // AGENT: the screen rect lets an agent click a target instead of guessing from fractions.

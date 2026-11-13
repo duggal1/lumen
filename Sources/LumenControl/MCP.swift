@@ -65,7 +65,8 @@ public final class MCPServer: @unchecked Sendable {
                     "annotations": ["readOnlyHint": !spec.mutating,
                                     "destructiveHint": spec.destructive,
                                     "idempotentHint": spec.idempotent,
-                                    "openWorldHint": spec.capability == .network || spec.capability == .actuate],
+                                    "openWorldHint": spec.capability == .network || spec.capability == .actuate
+                                        || spec.additionalCapabilities.contains(.network) || spec.name == "produce_demo"],
                     "inputSchema": (try? JSONSerialization.jsonObject(with: Data(spec.inputSchema.jsonText.utf8))) ?? [:],
                 ]
                 if let outputSchema = spec.outputSchema {
@@ -100,7 +101,7 @@ public final class MCPServer: @unchecked Sendable {
             let ok: Bool
             let payload: JSONValue
             do {
-                try await checkCapability(name, client: client)
+                try await checkCapability(name, client: client, arguments: arguments)
                 payload = try await registry.call(name, arguments: argValue, context: ctx)
                 ok = true
             } catch let e as ToolError {
@@ -161,18 +162,24 @@ public final class MCPServer: @unchecked Sendable {
         registry.spec(name)?.outputSchema != nil
     }
 
-    private func checkCapability(_ name: String, client: String) async throws {
+    private func checkCapability(_ name: String, client: String, arguments: [String: Any]) async throws {
         guard let spec = registry.spec(name) else { throw ToolError.unknownTool(name) }
-        if policy.allowed(spec.capability, for: client) { return }
-        // AGENT: a client cannot self-approve; only a human at the app can grant a capability.
-        switch await approvals.request(client: client, capability: spec.capability) {
-        case .once:
-            return
-        case .always:
-            let current = policy.grantedCapabilities(for: client)
-            policy.grant(client: client, capabilities: Array(Set(current + [spec.capability.rawValue])).sorted())
-        case .deny:
-            throw ToolError.capabilityDenied(spec.capability)
+        var requested = [spec.capability] + spec.additionalCapabilities
+        if name == "produce_demo", arguments["narration"] as? String == "from_script" {
+            requested.append(.network)
+        }
+        // AGENT: a composite call cannot inherit authorization for only its first stage.
+        var checked = Set<Capability>()
+        for capability in requested where checked.insert(capability).inserted && !policy.allowed(capability, for: client) {
+            switch await approvals.request(client: client, capability: capability) {
+            case .once:
+                continue
+            case .always:
+                let current = policy.grantedCapabilities(for: client)
+                policy.grant(client: client, capabilities: Array(Set(current + [capability.rawValue])).sorted())
+            case .deny:
+                throw ToolError.capabilityDenied(capability)
+            }
         }
     }
 

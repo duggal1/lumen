@@ -110,6 +110,43 @@ public extension ToolRegistry {
                 return .object(["windows": .array(rows)])
             })
 
+        register(ToolDefinition<ScreenLookInput>(name: "screen_look",
+            description: "Captures the currently visible window for an approved app as an image. Requires that app's bundle id to be allow-listed.",
+            capability: .actuate, required: [], outputSchema: ToolSchemas.outputSchema(for: "screen_look")) { input, ctx in
+                let bundleID = input.bundleID.isEmpty
+                    ? (NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "")
+                    : input.bundleID
+                guard !bundleID.isEmpty else {
+                    throw ToolError.invalidArguments("bundle_id is required unless an approved app is frontmost.")
+                }
+                guard ctx.policy.bundleAllowed(bundleID, for: ctx.clientID) else {
+                    throw ToolError(code: "BUNDLE_NOT_ALLOWED",
+                                    hint: "Approve this app in Lumen Settings > Agents before capturing its window.")
+                }
+                guard (await ctx.engine.runtime.runtimeStatus()).permissions.screenRecording else {
+                    throw ToolError.permission("screen recording", pane: "ScreenCapture")
+                }
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                guard let window = content.windows.first(where: {
+                    $0.owningApplication?.bundleIdentifier == bundleID && $0.frame.width > 0 && $0.frame.height > 0
+                }) else {
+                    throw ToolError(code: "WINDOW_NOT_FOUND", hint: "Bring an on-screen window for \(bundleID) forward, then retry.")
+                }
+                let filter = SCContentFilter(desktopIndependentWindow: window)
+                let configuration = SCStreamConfiguration()
+                configuration.width = max(Int(window.frame.width.rounded()), 1)
+                configuration.height = max(Int(window.frame.height.rounded()), 1)
+                configuration.showsCursor = true
+                let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+                let bitmap = NSBitmapImageRep(cgImage: image)
+                guard let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
+                    throw ToolError.failed("The app window could not be encoded as JPEG.")
+                }
+                // AGENT: return pixels through MCP image content instead of a text-encoded screenshot.
+                return .object(["image_base64": .string(data.base64EncodedString()), "mime_type": .string("image/jpeg"),
+                                "bundle_id": .string(bundleID), "width": .int(image.width), "height": .int(image.height)])
+            })
+
         register(ToolDefinition<ListDisplaysInput>(name: "list_displays",
             description: "Connected displays with their ids, names and bounds. Use it to pick a display to record.",
             capability: .read) { _, _ in
@@ -125,5 +162,17 @@ public extension ToolRegistry {
                 }
                 return .object(["displays": .array(rows)])
             })
+    }
+}
+
+public struct ScreenLookInput: ToolInput {
+    public var bundleID: String = ""
+    public init() {}
+
+    enum CodingKeys: String, CodingKey { case bundleID = "bundle_id" }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        bundleID = try container.decodeIfPresent(String.self, forKey: .bundleID) ?? ""
     }
 }

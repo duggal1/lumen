@@ -6,6 +6,9 @@ import Foundation
 /// had no way to learn the shape of a script, an action or a patch op. These
 /// three tools publish the real shape.
 public enum ToolSchemas {
+    /// AGENT: scripts and UI batches share one declared action schema so clients can compose both surfaces.
+    static var actionArray: JSONValue { J.arr(action, "Actions for one app target.") }
+
     /// AGENT: MCP clients can validate the stable result shapes they consume most often.
     static func outputSchema(for name: String) -> JSONValue? {
         switch name {
@@ -32,6 +35,12 @@ public enum ToolSchemas {
                 "version": J.str("Lumen version."),
             ], required: ["phase", "paused", "recording", "permissions", "permission_links", "library",
                           "projects", "active_project", "version"])
+        case "screen_look":
+            return J.obj(["bundle_id": J.str("Approved application bundle id."),
+                          "width": J.int("Captured pixel width.", min: 1),
+                          "height": J.int("Captured pixel height.", min: 1),
+                          "bytes": J.int("JPEG payload byte count.", min: 0)],
+                         required: ["bundle_id", "width", "height", "bytes"])
         case "edit_apply":
             return J.obj([
                 "project_id": J.str("Project identifier."),
@@ -92,6 +101,8 @@ public enum ToolSchemas {
         let time = J.num("Time in seconds.", min: 0)
         let props: [String: JSONValue]
         switch name {
+        case "screen_look":
+            props = ["bundle_id": J.str("Approved app bundle id; omit to use the approved frontmost app.")]
         case "lumen_status", "list_apps", "list_displays", "project_list", "background_list",
              "record_pause", "record_resume", "record_stop":
             props = [:]
@@ -245,6 +256,7 @@ public enum ToolSchemas {
         .object([
             "type": .string("object"),
             "properties": .object([
+                "ref": .object(["type": .string("string"), "description": .string("Reference from the latest ui_snapshot for this app.")]),
                 "role": .object(["type": .string("string"), "description": .string("AX role, e.g. AXButton")]),
                 "title": .object(["type": .string("string")]),
                 "identifier": .object(["type": .string("string")]),
