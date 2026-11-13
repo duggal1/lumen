@@ -698,6 +698,39 @@ public struct ProjectFile: Codable, Sendable {
 public enum ProjectError: Error, Sendable {
     case conflict(expected: Int, actual: Int)
 }
+/// Provenance and freshness of one accessibility sample.
+///
+/// Capture owns it; consumers (Director, privacy policy) only read it. A
+/// sample is usable only when `epoch` matches the focused element the event
+/// resolved to and `sampledAt` is recent — otherwise it is stale evidence and
+/// must not aim a camera or place a mask.
+///
+/// `host` is a verified registrable host only (`mail.google.com`). A full URL
+/// is never stored: paths and query strings carry the very content privacy
+/// exists to protect.
+public struct FocusAnchor: Codable, Sendable, Equatable {
+    /// Increments whenever the focused element changes identity. A sample from
+    /// a different epoch describes a different field and must be discarded.
+    public var epoch: UInt32
+    /// Host seconds of the accessibility sample (same clock as AXFrame.sampledAt).
+    public var sampledAt: Double
+    /// Verified browser host, when the focused app is a known browser and the
+    /// host could be established from legitimate AX evidence. Never a URL.
+    public var host: String?
+    /// Captured window id, so a mask can reset at a window change.
+    public var windowID: Int?
+    /// Captured application name, for diagnostics and legacy-context decisions.
+    public var appName: String?
+    /// True when the sample came from a successful AX query rather than an estimate.
+    public var resolved: Bool
+
+    public init(epoch: UInt32 = 0, sampledAt: Double = 0, host: String? = nil, windowID: Int? = nil,
+                appName: String? = nil, resolved: Bool = false) {
+        self.epoch = epoch; self.sampledAt = sampledAt; self.host = host
+        self.windowID = windowID; self.appName = appName; self.resolved = resolved
+    }
+}
+
 public struct AXFrame: Codable, Sendable {
     public struct Rect: Codable, Sendable {
         public var x: Double, y: Double, w: Double, h: Double
@@ -713,15 +746,20 @@ public struct AXFrame: Codable, Sendable {
     public var secure: Bool
     /// Best-effort AX title/description so labels like "Password" mask too.
     public var label: String?
-    public init(x: Double, y: Double, w: Double, h: Double, secure: Bool = false, label: String? = nil) {
+    /// Provenance/freshness/context of this sample. Absent on projects written
+    /// before it existed: those samples are treated as unknown context.
+    public var anchor: FocusAnchor? = nil
+    public init(x: Double, y: Double, w: Double, h: Double, secure: Bool = false, label: String? = nil,
+                anchor: FocusAnchor? = nil) {
         self.x = x
         self.y = y
         self.w = w
         self.h = h
         self.secure = secure
         self.label = label
+        self.anchor = anchor
     }
-    enum CodingKeys: String, CodingKey { case x, y, w, h, secure, label, caret, sampledAt }
+    enum CodingKeys: String, CodingKey { case x, y, w, h, secure, label, caret, sampledAt, anchor }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         x = (try? c.decodeIfPresent(Double.self, forKey: .x)) ?? 0
@@ -731,6 +769,7 @@ public struct AXFrame: Codable, Sendable {
         caret = try c.decodeIfPresent(Rect.self, forKey: .caret)
         sampledAt = try c.decodeIfPresent(Double.self, forKey: .sampledAt)
         secure = c.opt(.secure, false); label = (try? c.decodeIfPresent(String.self, forKey: .label)) ?? nil
+        anchor = try c.decodeIfPresent(FocusAnchor.self, forKey: .anchor)
     }
 }
 
