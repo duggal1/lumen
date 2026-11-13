@@ -56,6 +56,8 @@ public struct ToolSpec: Sendable {
     /// AGENT: MCP annotations must distinguish reversible edits from destructive actions.
     public let destructive: Bool
     public let idempotent: Bool
+    /// AGENT: timeline dry runs need validation against a copied draft, not a generic no-op envelope.
+    public let customDryRun: Bool
     /// AGENT: stable small outputs can be described separately from their input schemas.
     public let outputSchema: JSONValue?
 }
@@ -80,13 +82,14 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
     public let title: String?
     public let destructive: Bool
     public let idempotent: Bool?
+    public let customDryRun: Bool
     public let outputSchema: JSONValue?
     let run: @Sendable (Input, ToolContext) async throws -> JSONValue
 
     public init(name: String, description: String, capability: Capability, required: [String] = [],
                 mutating: Bool = false, longRunning: Bool = false, schema: JSONValue? = nil,
                 title: String? = nil, destructive: Bool = false, idempotent: Bool? = nil,
-                outputSchema: JSONValue? = nil,
+                outputSchema: JSONValue? = nil, customDryRun: Bool = false,
                 run: @escaping @Sendable (Input, ToolContext) async throws -> JSONValue) {
         self.name = name
         self.description = description
@@ -99,6 +102,7 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
         self.destructive = destructive
         self.idempotent = idempotent
         self.outputSchema = outputSchema
+        self.customDryRun = customDryRun
         self.run = run
     }
 
@@ -111,6 +115,7 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
                                           inputSchema: inputSchema, required: required,
                                           mutating: mutating, longRunning: longRunning,
                                           destructive: destructive, idempotent: idempotent ?? !mutating,
+                                          customDryRun: customDryRun,
                                           outputSchema: outputSchema ?? ToolSchemas.outputSchema(for: name)),
                           invoke: { args, ctx in
                               // AGENT: decoding failures must identify the invalid input instead of leaking a Swift debug dump.
@@ -164,7 +169,7 @@ public final class ToolRegistry: @unchecked Sendable {
             throw ToolError.invalidArguments("Missing required argument: \(key).")
         }
         // AGENT: dry_run was honoured by two tools out of twenty, so enforce it centrally.
-        if context.dryRun && tool.spec.mutating {
+        if context.dryRun && tool.spec.mutating && !tool.spec.customDryRun {
             return .object([
                 "dry_run": .bool(true),
                 "tool": .string(name),
