@@ -594,6 +594,10 @@ public actor Engine {
                 try? bundle.saveTranscript(TranscriptFile(engine: "moonshine-streaming", complete: true,
                                                            transcript: transcript))
                 let aligned = transcript.shifted(by: offset)
+                // AGENT: the words were saved to disk but never handed to the
+                // session, so caption planning ran on an empty transcript until
+                // the project was reopened.
+                session.updateTranscript(aligned)
                 _ = try? await self.edit(projectID: projectID, expectRevision: nil,
                                          describe: "captions") { timeline in
                     timeline.captions.enabled = true
