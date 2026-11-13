@@ -32,10 +32,13 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
     public let required: [String]
     public let mutating: Bool
     public let longRunning: Bool
+    /// AGENT: nested inputs cannot be described by reflection, so a tool with a
+    /// script or a batch of ops publishes a hand-written schema instead.
+    public let schema: JSONValue?
     let run: @Sendable (Input, ToolContext) async throws -> JSONValue
 
     public init(name: String, description: String, capability: Capability, required: [String] = [],
-                mutating: Bool = false, longRunning: Bool = false,
+                mutating: Bool = false, longRunning: Bool = false, schema: JSONValue? = nil,
                 run: @escaping @Sendable (Input, ToolContext) async throws -> JSONValue) {
         self.name = name
         self.description = description
@@ -43,13 +46,14 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
         self.required = required
         self.mutating = mutating
         self.longRunning = longRunning
+        self.schema = schema
         self.run = run
     }
 
     /// The erased form the registry stores.
     func erase() -> ErasedTool {
         let sample = Input()
-        var schema = SchemaGenerator.schema(for: sample, required: required)
+        var schema = schema ?? SchemaGenerator.schema(for: sample, required: required)
         if mutating { schema = SchemaGenerator.injectingDryRun(schema) }
         return ErasedTool(spec: ToolSpec(name: name, description: description, capability: capability,
                                           inputSchema: schema, required: required,

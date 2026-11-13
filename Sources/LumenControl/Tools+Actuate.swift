@@ -70,11 +70,15 @@ public struct RunScriptInput: ToolInput {
     public init() {}
 
     enum CodingKeys: String, CodingKey {
+    case script
     case mode
     case bundleID = "bundle_id"
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+    // AGENT: `script` was missing from CodingKeys, so run_script silently ran an
+    // empty script no matter what the agent sent.
+    self.script = try c.decodeIfPresent(DemoScript.self, forKey: .script) ?? DemoScript()
     self.mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "physical"
     self.bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID) ?? ""
     }
@@ -95,7 +99,8 @@ public extension ToolRegistry {
 
         register(ToolDefinition<UIActInput>(name: "ui_act",
             description: "Performs a batch of actions on an app: click (left or right, single or double), drag, type, paste, key, move, scroll, wait. Targets are resolved by role, title or identifier; x/y are fractions of the target.",
-            capability: .actuate, required: ["bundle_id", "actions"], mutating: true) { input, ctx in
+            capability: .actuate, required: ["bundle_id", "actions"], mutating: true,
+            schema: ToolSchemas.uiAct) { input, ctx in
                 // AGENT: an empty bundle_id used to bypass the allow-list entirely.
                 try self.requireBundle(input.bundleID, ctx)
                 var script = DemoScript()

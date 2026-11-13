@@ -11,7 +11,7 @@ import CoreGraphics
 // the agent drives exactly the same capture start/stop the UI buttons drive.
 
 /// What to record.
-public enum RecordingTargetKind: String, Codable, Sendable, Equatable {
+public enum RecordingTargetKind: String, Codable, Sendable, Equatable, CaseIterable {
     case display, window, region
 }
 

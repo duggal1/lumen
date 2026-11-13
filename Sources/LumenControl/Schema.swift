@@ -1,4 +1,7 @@
 import Foundation
+import LumenCore
+import LumenProject
+import LumenActuator
 
 /// JSON Schema generation for tool inputs.
 ///
@@ -119,18 +122,19 @@ public enum SchemaGenerator {
         return .object(["type": .string("object")])
     }
 
-    /// Enum case names, read from the type's metadata through a fresh value.
+    /// Enum case names, read from the real `CaseIterable` type.
+    ///
+    /// AGENT: a hand-kept table of case lists drifted from the enums (it still
+    /// advertised backgrounds that no longer exist), so the lists now come
+    /// from `allCases` and cannot lie.
     private static func enumCases(of rawName: String) -> [String] {
         let name = rawName.split(separator: ".").last.map(String.init) ?? rawName
         switch name {
-        case "RecordingTargetKind": return RecordingTargetKindCases.all
-        case "Capability": return CapabilityCases.all
-        case "InputMode": return InputModeCases.all
-        case "AudioRole": return AudioRoleCases.all
-        case "ZoomOrigin": return ZoomOriginCases.all
-        case "PrivacyMode": return PrivacyModeCases.all
-        case "BackgroundKind": return BackgroundKindCases.all
-        case "MaskMode": return MaskModeCases.all
+        case "RecordingTargetKind": return RecordingTargetKind.allCases.map(\.rawValue)
+        case "Capability": return Capability.allCases.map(\.rawValue)
+        case "InputMode": return InputMode.allCases.map(\.rawValue)
+        case "BackgroundKind": return BackgroundKind.allCases.map(\.rawValue)
+        case "MaskMode": return MaskMode.allCases.map(\.rawValue)
         default: return []
         }
     }
@@ -164,14 +168,3 @@ struct DictionaryTypeInfo {
         value = String(parts[1]).trimmingCharacters(in: .whitespaces)
     }
 }
-
-// MARK: - Case lists (kept next to the generator so the schema stays honest)
-
-enum RecordingTargetKindCases { static let all = ["display", "window", "region"] }
-enum CapabilityCases { static let all = ["read", "record", "actuate", "edit", "export", "network"] }
-enum InputModeCases { static let all = ["physical", "virtual"] }
-enum AudioRoleCases { static let all = ["music", "voiceover", "sfx"] }
-enum ZoomOriginCases { static let all = ["manual", "auto"] }
-enum PrivacyModeCases { static let all = ["blur", "pixelate", "solid"] }
-enum BackgroundKindCases { static let all = ["dither", "canvas", "wallpaper", "solid", "gradient", "mesh", "image"] }
-enum MaskModeCases { static let all = ["blur", "pixelate", "solid"] }

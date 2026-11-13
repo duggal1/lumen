@@ -419,7 +419,8 @@ public extension ToolRegistry {
 
         register(ToolDefinition<TimelinePatchInput>(name: "timeline_patch",
             description: "Applies typed operations to a timeline. Supported ops: zoom_add, zoom_set, zoom_remove, cut_add, cut_remove, ramp_set, ramp_remove, style_set, audio_lane_add, audio_lane_remove, music_set, captions_set, privacy_set. Pass the revision you read to be sure nobody else changed the project.",
-            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
+            capability: .edit, required: ["project_id", "ops"], mutating: true,
+            schema: ToolSchemas.timelinePatch) { input, ctx in
                 let expect = input.revision > 0 ? input.revision : nil
                 if ctx.dryRun {
                     return .object(["dry_run": .bool(true), "ops": .int(input.ops.count),
