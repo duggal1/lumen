@@ -6,6 +6,48 @@ import Foundation
 /// had no way to learn the shape of a script, an action or a patch op. These
 /// three tools publish the real shape.
 public enum ToolSchemas {
+    /// AGENT: MCP clients can validate the stable result shapes they consume most often.
+    static func outputSchema(for name: String) -> JSONValue? {
+        switch name {
+        case "job_status":
+            return J.obj([
+                "job_id": J.str("Stable job identifier."),
+                "kind": J.str("Job type."),
+                "state": J.str("Current state.", enum: ["queued", "running", "done", "failed", "cancelled"]),
+                "progress": J.num("Progress fraction.", min: 0, max: 1),
+                "message": .object(["type": .array([.string("string"), .string("null")])]),
+                "result": .object(["type": .array([.string("object"), .string("array"), .string("string"), .string("number"), .string("boolean"), .string("null")])]),
+                "error": .object(["type": .array([.string("string"), .string("null")])]),
+            ], required: ["job_id", "kind", "state", "progress", "message", "result", "error"])
+        case "qa_report":
+            return J.obj([
+                "project_id": J.str("Project identifier."),
+                "checks": J.arr(J.obj([
+                    "name": J.str("Check identifier."),
+                    "ok": J.bool("Whether the check passed."),
+                    "detail": J.str("Measured result or next action."),
+                ], required: ["name", "ok", "detail"]), "Quality checks."),
+                "zoom_accuracy": .object(["type": .string("object")]),
+            ], required: ["project_id", "checks", "zoom_accuracy"])
+        case "timeline_get":
+            return J.obj([
+                "revision": J.int("Current project revision.", min: 0),
+                "duration": J.num("Edited output duration in seconds.", min: 0),
+                "time_basis": .object(["type": .string("object")]),
+                "zoom": J.arr(.object(["type": .string("object")]), "Zoom segments."),
+                "cuts": J.arr(.object(["type": .string("object")]), "Removed source ranges."),
+                "ramps": J.arr(.object(["type": .string("object")]), "Playback speed ramps."),
+                "style": .object(["type": .string("object")]),
+                "cursor": .object(["type": .string("object")]),
+                "audio": .object(["type": .string("object")]),
+                "captions": .object(["type": .string("object")]),
+                "privacy": .object(["type": .string("object")]),
+            ], required: ["revision", "duration", "time_basis", "zoom", "cuts", "ramps", "style", "cursor", "audio", "captions", "privacy"])
+        default:
+            return nil
+        }
+    }
+
     /// The complete declared schema for a flat tool input.
     ///
     /// AGENT: callers were relying on runtime reflection, which lost field constraints and nested element shapes.

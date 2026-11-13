@@ -433,7 +433,7 @@ public extension ToolRegistry {
         register(ToolDefinition<TimelinePatchInput>(name: "timeline_patch",
             description: "Applies typed operations to a timeline. Supported ops: zoom_add, zoom_set, zoom_remove, cut_add, cut_remove, ramp_set, ramp_remove, style_set, audio_lane_add, audio_lane_remove, music_set, captions_set, privacy_set. Pass the revision you read to be sure nobody else changed the project.",
             capability: .edit, required: ["project_id", "ops"], mutating: true,
-            schema: ToolSchemas.timelinePatch) { input, ctx in
+            schema: ToolSchemas.timelinePatch, destructive: true) { input, ctx in
                 let expect = input.revision
                 if ctx.dryRun {
                     return .object(["dry_run": .bool(true), "ops": .int(input.ops.count),
@@ -448,7 +448,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<UndoInput>(name: "undo",
             description: "Undoes the last agent edit on a project.",
-            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true, destructive: true) { input, ctx in
                 let result = try await ctx.engine.undo(projectID: input.projectID)
                 return .object(result)
             })
@@ -472,7 +472,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<ZoomRemoveInput>(name: "zoom_remove",
             description: "Removes a zoom by its id.",
-            capability: .edit, required: ["project_id", "id"], mutating: true) { input, ctx in
+            capability: .edit, required: ["project_id", "id"], mutating: true, destructive: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "remove zoom") { timeline in
                     guard let id = UUID(uuidString: input.id),
@@ -497,7 +497,7 @@ public extension ToolRegistry {
 
         register(ToolDefinition<CutRangeInput>(name: "cut_range",
             description: "Cuts a span out of the recording. start and end are in source seconds unless basis is \"output\".",
-            capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
+            capability: .edit, required: ["project_id", "start", "end"], mutating: true, destructive: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "cut") { timeline in
                     let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))

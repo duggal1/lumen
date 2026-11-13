@@ -318,10 +318,16 @@ public extension ToolRegistry {
                 let (image, name) = try await ctx.engine.previewFrame(projectID: input.projectID,
                                                                     time: input.time,
                                                                     maxWidth: input.maxWidth, png: input.png)
-                return .object(["image_base64": .string(image.base64EncodedString()),
-                                "mime_type": .string(input.png ? "image/png" : "image/jpeg"),
-                                "name": .string(name),
-                                "time": .number(input.time)])
+                var output: [String: JSONValue] = ["image_base64": .string(image.base64EncodedString()),
+                                                   "mime_type": .string(input.png ? "image/png" : "image/jpeg"),
+                                                   "name": .string(name),
+                                                   "time": .number(input.time)]
+                // AGENT: frame metadata tells the agent what it received without embedding pixels in JSON.
+                if let size = Self.pixelSize(image) {
+                    output["width"] = .int(size.width)
+                    output["height"] = .int(size.height)
+                }
+                return .object(output)
             })
 
         register(ToolDefinition<PreviewSheetInput>(name: "preview_sheet",
@@ -330,9 +336,14 @@ public extension ToolRegistry {
                 let sheet = try await ctx.engine.previewSheet(projectID: input.projectID, frames: input.frames,
                                                               duration: input.duration, maxWidth: input.maxWidth, png: input.png)
                 // AGENT: the protocol layer needs the MIME type to return the sheet as an image block.
-                return .object(["image_base64": .string(sheet.base64EncodedString()),
-                                "mime_type": .string(input.png ? "image/png" : "image/jpeg"),
-                                "frames": .int(input.frames)])
+                var output: [String: JSONValue] = ["image_base64": .string(sheet.base64EncodedString()),
+                                                   "mime_type": .string(input.png ? "image/png" : "image/jpeg"),
+                                                   "frames": .int(input.frames)]
+                if let size = Self.pixelSize(sheet) {
+                    output["width"] = .int(size.width)
+                    output["height"] = .int(size.height)
+                }
+                return .object(output)
             })
 
         register(ToolDefinition<QAReportInput>(name: "qa_report",
@@ -377,10 +388,17 @@ public extension ToolRegistry {
 
         register(ToolDefinition<ExportCancelInput>(name: "export_cancel",
             description: "Cancels a running job.",
-            capability: .export, required: ["job_id"], mutating: true) { input, ctx in
+            capability: .export, required: ["job_id"], mutating: true, destructive: true) { input, ctx in
                 let cancelled = ctx.jobs.cancel(input.jobID)
                 return .object(["job_id": .string(input.jobID), "cancelled": .bool(cancelled)])
             })
+    }
+
+    // AGENT: read actual encoded dimensions instead of assuming the requested render width was honored.
+    private static func pixelSize(_ data: Data) -> (width: Int, height: Int)? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        return (image.width, image.height)
     }
 
     /// Marker- or time-based placement, in output seconds.

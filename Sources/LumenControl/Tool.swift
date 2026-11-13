@@ -6,15 +6,58 @@ public enum Capability: String, Sendable, CaseIterable {
     case read, record, actuate, edit, export, network
 }
 
+/// A protocol result can carry text data and separate binary image content.
+/// AGENT: screenshots were duplicated as base64 text and structured JSON, so MCP clients could not render them as images.
+public struct ToolOutput: Sendable {
+    public struct Image: Sendable {
+        public let data: Data
+        public let mime: String
+
+        public init(data: Data, mime: String) {
+            self.data = data
+            self.mime = mime
+        }
+    }
+
+    public let json: JSONValue
+    public let images: [Image]
+
+    public init(json: JSONValue, images: [Image] = []) {
+        self.json = json
+        self.images = images
+    }
+
+    /// Migrates existing renderer results into MCP image blocks before serialization.
+    static func extractingPreview(from value: JSONValue, tool: String) -> ToolOutput {
+        guard tool == "preview_frame" || tool == "preview_sheet",
+              case .object(var fields) = value,
+              case .string(let encoded)? = fields.removeValue(forKey: "image_base64"),
+              case .string(let mime)? = fields.removeValue(forKey: "mime_type"),
+              let data = Data(base64Encoded: encoded) else {
+            return ToolOutput(json: value)
+        }
+        // AGENT: expose encoded size as ordinary metadata while keeping pixels in a binary image block.
+        fields["bytes"] = .int(data.count)
+        return ToolOutput(json: .object(fields), images: [Image(data: data, mime: mime)])
+    }
+}
+
 /// Agent-facing description of one tool.
 public struct ToolSpec: Sendable {
     public let name: String                 // verb_noun, snake_case
+    /// AGENT: clients need a human-readable label for every listed tool.
+    public let title: String
     public let description: String          // when to use, when NOT to, what it returns
     public let capability: Capability
     public let inputSchema: JSONValue       // derived from the Codable input type
     public let required: [String]
     public let mutating: Bool
     public let longRunning: Bool
+    /// AGENT: MCP annotations must distinguish reversible edits from destructive actions.
+    public let destructive: Bool
+    public let idempotent: Bool
+    /// AGENT: stable small outputs can be described separately from their input schemas.
+    public let outputSchema: JSONValue?
 }
 
 /// Every tool input gives every property a default so partial JSON can decode.
@@ -34,10 +77,16 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
     /// AGENT: nested inputs cannot be described by reflection, so a tool with a
     /// script or a batch of ops publishes a hand-written schema instead.
     public let schema: JSONValue?
+    public let title: String?
+    public let destructive: Bool
+    public let idempotent: Bool?
+    public let outputSchema: JSONValue?
     let run: @Sendable (Input, ToolContext) async throws -> JSONValue
 
     public init(name: String, description: String, capability: Capability, required: [String] = [],
                 mutating: Bool = false, longRunning: Bool = false, schema: JSONValue? = nil,
+                title: String? = nil, destructive: Bool = false, idempotent: Bool? = nil,
+                outputSchema: JSONValue? = nil,
                 run: @escaping @Sendable (Input, ToolContext) async throws -> JSONValue) {
         self.name = name
         self.description = description
@@ -46,6 +95,10 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
         self.mutating = mutating
         self.longRunning = longRunning
         self.schema = schema
+        self.title = title
+        self.destructive = destructive
+        self.idempotent = idempotent
+        self.outputSchema = outputSchema
         self.run = run
     }
 
@@ -53,9 +106,12 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
     func erase() -> ErasedTool {
         var inputSchema = schema ?? ToolSchemas.schema(for: name, required: required)
         if mutating { inputSchema = J.injectingDryRun(inputSchema) }
-        return ErasedTool(spec: ToolSpec(name: name, description: description, capability: capability,
+        return ErasedTool(spec: ToolSpec(name: name, title: title ?? name.replacingOccurrences(of: "_", with: " "),
+                                          description: description, capability: capability,
                                           inputSchema: inputSchema, required: required,
-                                          mutating: mutating, longRunning: longRunning),
+                                          mutating: mutating, longRunning: longRunning,
+                                          destructive: destructive, idempotent: idempotent ?? !mutating,
+                                          outputSchema: outputSchema ?? ToolSchemas.outputSchema(for: name)),
                           invoke: { args, ctx in
                               // AGENT: decoding failures must identify the invalid input instead of leaking a Swift debug dump.
                               let input: Input
