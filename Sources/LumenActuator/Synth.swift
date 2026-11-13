@@ -78,17 +78,40 @@ public final class InputSynthesizer: @unchecked Sendable {
     ///
     /// AGENT: `Thread.sleep` blocked the whole runner actor, so nothing else
     /// could observe the run or cancel it during the hold.
-    public func click(at point: CGPoint, holdMs: Int = 60) async throws {
+    public func click(at point: CGPoint, button: String? = nil, count: Int = 1,
+                      holdMs: Int = 60) async throws {
         try gate?.assertFrontmost()
-        postMouse(type: .leftMouseDown, at: point, button: .left, clickState: 1)
-        try await Task.sleep(for: .milliseconds(max(holdMs, 0)))
-        postMouse(type: .leftMouseUp, at: point, button: .left, clickState: 1)
+        // AGENT: only left clicks existed, so context menus and selections were unreachable.
+        let right = button?.lowercased() == "right"
+        let cgButton: CGMouseButton = right ? .right : .left
+        let down: CGEventType = right ? .rightMouseDown : .leftMouseDown
+        let up: CGEventType = right ? .rightMouseUp : .leftMouseUp
+        let clicks = max(count, 1)
+        for i in 1...clicks {
+            postMouse(type: down, at: point, button: cgButton, clickState: Int64(i))
+            try await Task.sleep(for: .milliseconds(max(holdMs, 0)))
+            postMouse(type: up, at: point, button: cgButton, clickState: Int64(i))
+            if i < clicks { try await Task.sleep(for: .milliseconds(60)) }
+        }
+    }
+
+    /// Presses, moves and releases: selection, sliders, drag and drop.
+    ///
+    /// AGENT: a script could not drag anything, which rules out most editors.
+    public func drag(from start: CGPoint, to end: CGPoint, ms: Int) async throws {
+        try gate?.assertFrontmost()
+        try await moveCursor(to: start, ms: max(ms / 3, 50))
+        postMouse(type: .leftMouseDown, at: start, button: .left, clickState: 1)
+        try await moveCursor(to: end, ms: max(ms, 50))
+        postMouse(type: .leftMouseUp, at: end, button: .left, clickState: 1)
     }
 
     public func scroll(at point: CGPoint, dy: Double) throws {
         try gate?.assertFrontmost()
-        guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1,
-                                  wheel1: Int32(dy), wheel2: 0, wheel3: 0) else { return }
+        // AGENT: dy is in lines, but it was posted as 3 pixels of wheel travel,
+        // which is invisible. Line units match what a trackpad sends.
+        guard let event = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 1,
+                                  wheel1: Int32(dy.rounded()), wheel2: 0, wheel3: 0) else { return }
         event.setIntegerValueField(.eventSourceUserData, value: tag)
         event.post(tap: .cghidEventTap)
     }

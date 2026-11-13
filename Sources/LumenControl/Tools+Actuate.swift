@@ -94,7 +94,7 @@ public extension ToolRegistry {
             })
 
         register(ToolDefinition<UIActInput>(name: "ui_act",
-            description: "Performs a batch of actions on an app: click, type, key, move, scroll, wait. Targets are resolved by role, title or identifier.",
+            description: "Performs a batch of actions on an app: click (left or right, single or double), drag, type, paste, key, move, scroll, wait. Targets are resolved by role, title or identifier; x/y are fractions of the target.",
             capability: .actuate, required: ["bundle_id", "actions"], mutating: true) { input, ctx in
                 // AGENT: an empty bundle_id used to bypass the allow-list entirely.
                 try self.requireBundle(input.bundleID, ctx)

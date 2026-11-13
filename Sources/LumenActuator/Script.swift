@@ -62,6 +62,7 @@ public struct DemoScript: Codable, Sendable, Equatable {
         case launch(Launch)
         case waitFor(WaitFor)
         case click(Click)
+        case drag(Drag)
         case type(TypeText)
         case paste(Paste)
         case key(KeyPress)
@@ -76,6 +77,7 @@ public struct DemoScript: Codable, Sendable, Equatable {
             case .launch: self = .launch(try Launch(from: decoder))
             case .waitFor: self = .waitFor(try WaitFor(from: decoder))
             case .click: self = .click(try Click(from: decoder))
+            case .drag: self = .drag(try Drag(from: decoder))
             case .type: self = .type(try TypeText(from: decoder))
             case .paste: self = .paste(try Paste(from: decoder))
             case .key: self = .key(try KeyPress(from: decoder))
@@ -92,6 +94,7 @@ public struct DemoScript: Codable, Sendable, Equatable {
             case .launch(let v): try c.encode(v, forKey: .launch); try c.encode(Operation.launch, forKey: .op)
             case .waitFor(let v): try c.encode(v, forKey: .waitFor); try c.encode(Operation.waitFor, forKey: .op)
             case .click(let v): try c.encode(v, forKey: .click); try c.encode(Operation.click, forKey: .op)
+            case .drag(let v): try c.encode(v, forKey: .drag); try c.encode(Operation.drag, forKey: .op)
             case .type(let v): try c.encode(v, forKey: .type); try c.encode(Operation.type, forKey: .op)
             case .paste(let v): try c.encode(v, forKey: .paste); try c.encode(Operation.paste, forKey: .op)
             case .key(let v): try c.encode(v, forKey: .key); try c.encode(Operation.key, forKey: .op)
@@ -103,11 +106,11 @@ public struct DemoScript: Codable, Sendable, Equatable {
         }
 
         public enum Operation: String, Codable, Sendable {
-            case launch, waitFor = "wait_for", click, type, paste, key, sleep, move, scroll, screenshot
+            case launch, waitFor = "wait_for", click, drag, type, paste, key, sleep, move, scroll, screenshot
         }
 
         enum CodingKeys: String, CodingKey {
-            case op, launch, waitFor = "wait_for", click, type, paste, key, sleep, move, scroll, screenshot
+            case op, launch, waitFor = "wait_for", click, drag, type, paste, key, sleep, move, scroll, screenshot
         }
     }
 
@@ -153,6 +156,10 @@ public struct DemoScript: Codable, Sendable, Equatable {
         public var x: Double?
         public var y: Double?
         public var moveMs: Int = 600
+        /// "left" or "right".
+        public var button: String?
+        /// 1 for a click, 2 for a double click.
+        public var count: Int = 1
         public init() {}
 
         enum CodingKeys: String, CodingKey {
@@ -160,12 +167,46 @@ public struct DemoScript: Codable, Sendable, Equatable {
         case x
         case y
         case moveMs = "move_ms"
+        case button
+        case count
         }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
         self.target = try c.decodeIfPresent(TargetRef.self, forKey: .target)
         self.x = try c.decodeIfPresent(Double.self, forKey: .x)
         self.y = try c.decodeIfPresent(Double.self, forKey: .y)
+        self.moveMs = try c.decodeIfPresent(Int.self, forKey: .moveMs) ?? 600
+        self.button = try c.decodeIfPresent(String.self, forKey: .button)
+        self.count = try c.decodeIfPresent(Int.self, forKey: .count) ?? 1
+        }
+}
+    public struct Drag: Codable, Sendable, Equatable {
+        public var from: TargetRef?
+        public var fromX: Double?
+        public var fromY: Double?
+        public var to: TargetRef?
+        public var toX: Double?
+        public var toY: Double?
+        public var moveMs: Int = 600
+        public init() {}
+
+        enum CodingKeys: String, CodingKey {
+        case from
+        case fromX = "from_x"
+        case fromY = "from_y"
+        case to
+        case toX = "to_x"
+        case toY = "to_y"
+        case moveMs = "move_ms"
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.from = try c.decodeIfPresent(TargetRef.self, forKey: .from)
+        self.fromX = try c.decodeIfPresent(Double.self, forKey: .fromX)
+        self.fromY = try c.decodeIfPresent(Double.self, forKey: .fromY)
+        self.to = try c.decodeIfPresent(TargetRef.self, forKey: .to)
+        self.toX = try c.decodeIfPresent(Double.self, forKey: .toX)
+        self.toY = try c.decodeIfPresent(Double.self, forKey: .toY)
         self.moveMs = try c.decodeIfPresent(Int.self, forKey: .moveMs) ?? 600
         }
 }
@@ -246,6 +287,7 @@ public struct DemoScript: Codable, Sendable, Equatable {
 }
     public struct Scroll: Codable, Sendable, Equatable {
         public var target: TargetRef?
+        /// Wheel lines; negative scrolls down, matching a trackpad.
         public var dy: Double = -3
         public init() {}
 

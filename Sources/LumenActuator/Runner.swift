@@ -171,15 +171,27 @@ public actor ScriptRunner {
             if mode == .virtual, let element = element, AXSupport.press(element) {
                 return AXSupport.rect(element)
             }
-            guard let point = targetPoint(click.target, element: element, fallback: fallbackRect) else {
+            guard let point = targetPoint(click.target, x: click.x, y: click.y,
+                                          element: element, fallback: fallbackRect) else {
                 throw ActuatorError.failed("Could not resolve the click target.")
             }
             try await synth.moveCursor(to: point, ms: max(click.moveMs, 50))
-            try await synth.click(at: point)
+            try await synth.click(at: point, button: click.button, count: click.count)
             return element.flatMap { AXSupport.rect($0) } ?? fallbackRect
 
+        case .drag(let drag):
+            guard let start = targetPoint(drag.from, x: drag.fromX, y: drag.fromY,
+                                          element: nil, fallback: fallbackRect),
+                  let end = targetPoint(drag.to, x: drag.toX, y: drag.toY,
+                                        element: nil, fallback: fallbackRect) else {
+                throw ActuatorError.failed("Could not resolve the drag endpoints.")
+            }
+            try await synth.drag(from: start, to: end, ms: max(drag.moveMs, 100))
+            return fallbackRect
+
         case .move(let move):
-            guard let point = targetPoint(move.target, element: nil, fallback: fallbackRect) else {
+            guard let point = targetPoint(move.target, x: move.x, y: move.y,
+                                          element: nil, fallback: fallbackRect) else {
                 throw ActuatorError.failed("Could not resolve the move target.")
             }
             try await synth.moveCursor(to: point, ms: max(move.moveMs, 50))
@@ -203,7 +215,8 @@ public actor ScriptRunner {
             return fallbackRect
 
         case .scroll(let scroll):
-            let point = targetPoint(scroll.target, element: nil, fallback: fallbackRect) ?? InputSynthesizer.currentMouseLocation()
+            let point = targetPoint(scroll.target, x: nil, y: nil,
+                                    element: nil, fallback: fallbackRect) ?? InputSynthesizer.currentMouseLocation()
             try synth.scroll(at: point, dy: scroll.dy)
             return fallbackRect
 
@@ -223,16 +236,23 @@ public actor ScriptRunner {
         return matches[min(max(target.index, 0), matches.count - 1)]
     }
 
-    private func targetPoint(_ target: TargetRef?, element: AXUIElement?, fallback: CGRect?) -> CGPoint? {
-        if let element, let center = AXSupport.center(of: element) { return center }
-        if let target {
-            let matches = AXSupport.find(target, bundleID: bundleID)
-            if let first = matches.first, let center = AXSupport.center(of: first) { return center }
+    private func targetPoint(_ target: TargetRef?, x: Double?, y: Double?,
+                             element: AXUIElement?, fallback: CGRect?) -> CGPoint? {
+        var frame: CGRect?
+        if let element, let rect = AXSupport.rect(element) { frame = rect }
+        if frame == nil, let target,
+           let match = AXSupport.find(target, bundleID: bundleID).first {
+            frame = AXSupport.rect(match)
         }
-        if let fallback {
-            return CGPoint(x: fallback.midX, y: fallback.midY)
+        if frame == nil { frame = fallback }
+        guard let frame else { return nil }
+        // AGENT: x/y were parsed and then ignored, so every click landed on the
+        // centre. They are fractions of the target, clamped to its bounds.
+        if let x, let y {
+            let fx = min(max(x, 0), 1), fy = min(max(y, 0), 1)
+            return CGPoint(x: frame.minX + frame.width * fx, y: frame.minY + frame.height * fy)
         }
-        return nil
+        return CGPoint(x: frame.midX, y: frame.midY)
     }
 
     private func captureScreen(to path: String) async throws {
