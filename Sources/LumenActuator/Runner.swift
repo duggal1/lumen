@@ -67,11 +67,18 @@ public actor ScriptRunner {
     private let synth: InputSynthesizer
     private let watchdog = HumanWatchdog()
     private var bundleID: String?
+    /// AGENT: LumenActuator cannot import LumenControl, so confinement arrives as
+    /// a closure. Defaults to refusing writes so a forgotten caller is safe.
+    private let writablePath: @Sendable (String) throws -> URL
 
-    public init(mode: InputMode = .physical, sink: MarkerSink) {
+    public init(mode: InputMode = .physical, sink: MarkerSink,
+                writablePath: @escaping @Sendable (String) throws -> URL = { _ in
+                    throw ActuatorError.failed("Screenshot paths are not permitted for this run.")
+                }) {
         self.mode = mode
         self.sink = sink
         self.synth = InputSynthesizer(mode: mode)
+        self.writablePath = writablePath
     }
 
     /// Runs the script and returns the markers it produced.
@@ -167,8 +174,9 @@ public actor ScriptRunner {
             return fallbackRect
 
         case .screenshot(let shot):
-            if let path = shot.path {
-                try await captureScreen(to: path)
+            if let raw = shot.path {
+                // AGENT: a screenshot could write a PNG anywhere the user could write.
+                try await captureScreen(to: try writablePath(raw).path)
             }
             return fallbackRect
         }

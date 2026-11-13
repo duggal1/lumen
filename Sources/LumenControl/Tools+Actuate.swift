@@ -102,7 +102,8 @@ public extension ToolRegistry {
                 var script = DemoScript()
                 script.app.bundleID = input.bundleID.isEmpty ? nil : input.bundleID
                 script.steps = [DemoScript.Step(id: "ui_act", do: input.actions)]
-                let runner = ScriptRunner(mode: .physical, sink: ctx.engine.markerSink())
+                let runner = ScriptRunner(mode: .physical, sink: ctx.engine.markerSink(),
+                                          writablePath: ctx.paths.writablePath)
                 let markers = try await runner.run(script)
                 return .object(["markers": .array(markers.map { self.markerJSON($0) })])
             })
@@ -134,7 +135,8 @@ public extension ToolRegistry {
                                     hint: "\(bundleID) is not on the allow-list. A human must grant it in Lumen > Settings > Agents.")
                 }
                 let mode: InputMode = input.mode == "virtual" ? .virtual : .physical
-                let runner = ScriptRunner(mode: mode, sink: ctx.engine.markerSink())
+                let runner = ScriptRunner(mode: mode, sink: ctx.engine.markerSink(),
+                                          writablePath: ctx.paths.writablePath)
                 do {
                     let markers = try await runner.run(script)
                     return .object(["markers": .array(markers.map { self.markerJSON($0) })])

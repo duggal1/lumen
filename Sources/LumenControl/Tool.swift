@@ -105,6 +105,19 @@ public struct ToolContext: Sendable {
     /// `dry_run` was requested: the tool must describe what it would do and
     /// change nothing.
     public let dryRun: Bool
+    /// AGENT: one guard for every path argument, so no tool can forget confinement.
+    public let paths: PathGuard
+
+    public init(engine: Engine, policy: Policy, jobs: JobManager, audit: AuditLog,
+                clientID: String, dryRun: Bool) {
+        self.engine = engine
+        self.policy = policy
+        self.jobs = jobs
+        self.audit = audit
+        self.clientID = clientID
+        self.dryRun = dryRun
+        self.paths = PathGuard(policy: policy, client: clientID)
+    }
 }
 
 /// Machine-readable failures. Every error tells the agent what to do next.

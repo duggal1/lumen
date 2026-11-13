@@ -225,7 +225,8 @@ public extension ToolRegistry {
         register(ToolDefinition<AudioImportInput>(name: "audio_import",
             description: "Adds an MP3, WAV or M4A to a project: music, voice-over or a sound effect. Anchor it to a marker or to an output time.",
             capability: .edit, required: ["project_id", "path"]) { input, ctx in
-                let url = try ctx.policy.resolvePath(input.path, for: ctx.clientID)
+                // AGENT: audio paths are confined and must be audio files.
+                let url = try ctx.paths.path(input.path, ext: PathGuard.audioExt)
                 guard FileManager.default.fileExists(atPath: url.path) else {
                     throw ToolError.failed("No file at \(url.path).")
                 }
@@ -324,7 +325,8 @@ public extension ToolRegistry {
                         .deletingLastPathComponent().appendingPathComponent(input.projectID + ".mp4").path ?? "")
                     : input.output
                 guard !output.isEmpty else { throw ToolError.invalidArguments("Give an output path.") }
-                let resolved = try ctx.policy.resolvePath(output, for: ctx.clientID)
+                // AGENT: the file does not exist yet, so confine its parent instead of the path.
+                let resolved = try ctx.paths.writablePath(output, ext: PathGuard.videoExt)
                 let job = try await ctx.engine.startExport(projectID: input.projectID, presetName: input.preset,
                                                           outputPath: resolved.path,
                                                           includeAudio: input.includeAudio,

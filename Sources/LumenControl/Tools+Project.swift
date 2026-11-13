@@ -386,7 +386,7 @@ public extension ToolRegistry {
                 }
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: expect,
                                                       describe: "\(input.ops.count) timeline operations") { timeline in
-                    for op in input.ops { try self.apply(op, to: &timeline) }
+                    for op in input.ops { try self.apply(op, to: &timeline, paths: ctx.paths) }
                 }
                 return .object(result)
             })
@@ -458,11 +458,13 @@ public extension ToolRegistry {
                     if input.shadow >= 0 { timeline.style.shadow = input.shadow }
                     if input.aspect > 0 { timeline.style.customAspect = input.aspect }
                     if input.wallpaperBlur >= 0 { timeline.style.wallpaperBlur = input.wallpaperBlur }
-                    if !input.background.isEmpty, let kind = BackgroundKind(rawValue: input.background) {
-                        timeline.style.background = kind
+                    if !input.background.isEmpty {
+                        timeline.style.background = try self.backgroundKind(input.background)
                     }
                     if !input.backgroundImagePath.isEmpty {
-                        timeline.style.setPhotoBackground(input.backgroundImagePath)
+                        // AGENT: an unconfined image path let an agent read any file the user owns.
+                        let url = try ctx.paths.path(input.backgroundImagePath, ext: PathGuard.imageExt)
+                        timeline.style.setPhotoBackground(url.path)
                     }
                 }
                 return .object(result)
@@ -482,9 +484,11 @@ public extension ToolRegistry {
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "background") { timeline in
                     if !input.imagePath.isEmpty {
-                        timeline.style.setPhotoBackground(input.imagePath)
-                    } else if let kind = BackgroundKind(rawValue: input.background) {
-                        timeline.style.background = kind
+                        // AGENT: confine the image to the client's approved folders.
+                        let url = try ctx.paths.path(input.imagePath, ext: PathGuard.imageExt)
+                        timeline.style.setPhotoBackground(url.path)
+                    } else if !input.background.isEmpty {
+                        timeline.style.background = try self.backgroundKind(input.background)
                     }
                 }
                 return .object(result)
@@ -529,7 +533,7 @@ public extension ToolRegistry {
     }
 
     /// Applies one typed operation to a timeline.
-    func apply(_ op: PatchOp, to timeline: inout Timeline) throws {
+    func apply(_ op: PatchOp, to timeline: inout Timeline, paths: PathGuard) throws {
         switch op.op {
         case "zoom_add":
             timeline.zoom.append(ZoomSegment(start: op.start, end: op.end, scale: op.scale,
@@ -558,16 +562,22 @@ public extension ToolRegistry {
             else if op.key == "shadow" { timeline.style.shadow = op.value }
             else if op.key == "aspect" { timeline.style.customAspect = op.value }
             else if op.key == "wallpaper_blur" { timeline.style.wallpaperBlur = op.value }
-            else if op.key == "background", let kind = BackgroundKind(rawValue: op.text) { timeline.style.background = kind }
-            else if op.key == "background_image" { timeline.style.setPhotoBackground(op.text) }
+            else if op.key == "background" { timeline.style.background = try backgroundKind(op.text) }
+            else if op.key == "background_image" {
+                // AGENT: unconfined, this read any image on disk and shipped it in the export.
+                timeline.style.setPhotoBackground(try paths.path(op.text, ext: PathGuard.imageExt).path)
+            }
         case "audio_lane_add":
+            // AGENT: an unconfined audio path leaked any local file into the project.
+            let lanePath = op.key.isEmpty ? nil : try paths.path(op.key, ext: PathGuard.audioExt).path
             timeline.audio.lanes.append(AudioLane(role: AudioLane.Role(rawValue: op.text) ?? .voiceover,
-                                                  path: op.key.isEmpty ? nil : op.key,
+                                                  path: lanePath,
                                                   placement: op.start, gainDb: op.value))
         case "audio_lane_remove":
             timeline.audio.lanes.removeAll { $0.id.uuidString == op.id }
         case "music_set":
-            timeline.audio.musicPath = op.text.isEmpty ? nil : op.text
+            // AGENT: confine music to the approved folders and audio extensions.
+            timeline.audio.musicPath = op.text.isEmpty ? nil : try paths.path(op.text, ext: PathGuard.audioExt).path
             if op.value != 0 { timeline.audio.musicGainDb = op.value }
         case "captions_set":
             timeline.captions.enabled = op.flag
@@ -588,5 +598,15 @@ public extension ToolRegistry {
         case "element": return .element(x: x, y: y, w: 0, h: 0)
         default: return .follow
         }
+    }
+
+    /// AGENT: an unknown background name used to be ignored silently; now it is
+    /// a structured error that lists the valid values.
+    func backgroundKind(_ name: String) throws -> BackgroundKind {
+        guard let kind = BackgroundKind(rawValue: name) else {
+            throw ToolError.invalidArguments(
+                "Unknown background “\(name)”. Valid values: \(BackgroundKind.allCases.map(\.rawValue).joined(separator: ", ")).")
+        }
+        return kind
     }
 }

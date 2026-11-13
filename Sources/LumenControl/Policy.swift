@@ -170,3 +170,51 @@ public final class Policy: @unchecked Sendable {
         AgentCredentials.constantTimeEquals(a, b)
     }
 }
+
+/// The single funnel every agent-supplied path must pass through.
+///
+/// AGENT: tools used to accept raw paths, so a background image could read any
+/// file the user owns and `screenshot` could write anywhere. Confinement now
+/// lives in one place instead of being remembered per tool.
+public struct PathGuard: Sendable {
+    public let policy: Policy
+    public let client: String
+
+    public static let imageExt: Set<String> = ["png", "jpg", "jpeg", "heic", "webp"]
+    public static let audioExt: Set<String> = ["mp3", "wav", "m4a", "aac", "flac", "aiff", "caf"]
+    public static let videoExt: Set<String> = ["mov", "mp4", "m4v"]
+
+    public init(policy: Policy, client: String) {
+        self.policy = policy
+        self.client = client
+    }
+
+    /// Resolves and confines a path, optionally checking its extension.
+    public func path(_ p: String, ext: Set<String>? = nil) throws -> URL {
+        let url = try policy.resolvePath(p, for: client)
+        if let ext, !ext.contains(url.pathExtension.lowercased()) {
+            throw ToolError.invalidArguments(
+                "\(url.lastPathComponent): expected one of \(ext.sorted().joined(separator: ", ")).")
+        }
+        return url
+    }
+
+    /// A path the tool is about to CREATE (the file need not exist yet).
+    public func writablePath(_ p: String, ext: Set<String>? = nil) throws -> URL {
+        let expanded = (p as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded).standardizedFileURL
+        let parent = url.deletingLastPathComponent().resolvingSymlinksInPath()
+        let roots = policy.allowedPaths(for: client).map {
+            URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+                .standardizedFileURL.resolvingSymlinksInPath()
+        }
+        guard roots.contains(where: { parent.path == $0.path || parent.path.hasPrefix($0.path + "/") }) else {
+            throw ToolError.pathNotAllowed(p)
+        }
+        if let ext, !ext.contains(url.pathExtension.lowercased()) {
+            throw ToolError.invalidArguments(
+                "\(url.lastPathComponent): expected one of \(ext.sorted().joined(separator: ", ")).")
+        }
+        return url
+    }
+}
