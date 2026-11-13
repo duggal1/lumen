@@ -96,8 +96,48 @@ enum DirtyRects {
 /// 16 source-px tiles, stride-2 sampling, one pass over the buffer.
 /// Shared by the typing tracer and the sensitive-text scan so both measure
 /// change against the very same grid.
+///
+/// The tiles-only path skips the per-pixel signature the OCR scan needs: a
+/// typed glyph is measured for the typing tracer alone, and the signature is
+/// the single most expensive part of the pass.
 func lumaTiles(_ buffer: CVPixelBuffer) throws -> LumaTiles {
-    try lumaSnapshot(buffer).tiles
+    let started = DispatchTime.now().uptimeNanoseconds
+    defer { AnalysisMetrics.shared.add(luma: Int(DispatchTime.now().uptimeNanoseconds - started)) }
+    guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { throw AnalysisError.pixelBuffer }
+    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+    guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { throw AnalysisError.pixelBuffer }
+    let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
+    let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+    let tile = 16
+    let cols = max(1, (width + tile - 1) / tile), rows = max(1, (height - 1) / tile + 1)
+    var sum = [UInt32](repeating: 0, count: cols * rows)
+    var count = [UInt32](repeating: 0, count: cols * rows)
+    for y in stride(from: 0, to: height, by: 2) {
+        let row = base + y * rowBytes
+        let base_index = (y / tile) * cols
+        var x = 0, column = 0
+        while x < width {
+            let end = min(x + tile, width)
+            var s = 0, c = 0
+            var xx = x
+            while xx < end {
+                let i = xx * 4
+                s += (29 * Int(row[i]) + 150 * Int(row[i + 1]) + 77 * Int(row[i + 2])) >> 8
+                c += 1
+                xx += 2
+            }
+            let index = base_index + column
+            sum[index] += UInt32(s)
+            count[index] += UInt32(c)
+            x = end
+            column += 1
+        }
+    }
+    var mean = [UInt8](repeating: 0, count: cols * rows)
+    for i in mean.indices where count[i] > 0 {
+        mean[i] = UInt8(min(255, sum[i] / count[i]))
+    }
+    return LumaTiles(cols: cols, rows: rows, tile: tile, mean: mean)
 }
 
 /// The luma grid plus a per-tile pixel signature. The signature catches tiles
