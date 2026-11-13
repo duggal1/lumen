@@ -117,18 +117,22 @@ public struct PreviewFrameInput: ToolInput {
     public var projectID: String = ""
     public var time: Double = 0
     public var maxWidth: Int = 960
+    // AGENT: compact JPEG is the default; callers can request lossless PNG.
+    public var png = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
     case projectID = "project_id"
     case time
     case maxWidth = "max_width"
+    case png
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
     self.time = try c.decodeIfPresent(Double.self, forKey: .time) ?? 0
     self.maxWidth = try c.decodeIfPresent(Int.self, forKey: .maxWidth) ?? 960
+    self.png = try c.decodeIfPresent(Bool.self, forKey: .png) ?? false
     }
 }
 
@@ -137,6 +141,8 @@ public struct PreviewSheetInput: ToolInput {
     public var frames: Int = 6
     public var duration: Double = 0
     public var maxWidth: Int = 480
+    // AGENT: let callers request a lossless sheet when necessary.
+    public var png = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -144,6 +150,7 @@ public struct PreviewSheetInput: ToolInput {
     case frames
     case duration
     case maxWidth = "max_width"
+    case png
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -151,6 +158,7 @@ public struct PreviewSheetInput: ToolInput {
     self.frames = try c.decodeIfPresent(Int.self, forKey: .frames) ?? 6
     self.duration = try c.decodeIfPresent(Double.self, forKey: .duration) ?? 0
     self.maxWidth = try c.decodeIfPresent(Int.self, forKey: .maxWidth) ?? 480
+    self.png = try c.decodeIfPresent(Bool.self, forKey: .png) ?? false
     }
 }
 
@@ -290,24 +298,25 @@ public extension ToolRegistry {
             })
 
         register(ToolDefinition<PreviewFrameInput>(name: "preview_frame",
-            description: "Renders one frame of the project and returns it as a PNG so you can SEE what you are editing.",
+            description: "Renders one frame as an image. JPEG is the default; set png for lossless output.",
             capability: .read, required: ["project_id"]) { input, ctx in
-                let (png, name) = try await ctx.engine.previewFrame(projectID: input.projectID,
+                let (image, name) = try await ctx.engine.previewFrame(projectID: input.projectID,
                                                                     time: input.time,
-                                                                    maxWidth: input.maxWidth)
-                return .object(["image_base64": .string(png.base64EncodedString()),
-                                "mime_type": .string("image/png"),
+                                                                    maxWidth: input.maxWidth, png: input.png)
+                return .object(["image_base64": .string(image.base64EncodedString()),
+                                "mime_type": .string(input.png ? "image/png" : "image/jpeg"),
                                 "name": .string(name),
                                 "time": .number(input.time)])
             })
 
         register(ToolDefinition<PreviewSheetInput>(name: "preview_sheet",
-            description: "Renders N frames across the project as one contact sheet PNG.",
+            description: "Renders frames across the project as a JPEG contact sheet; set png for lossless output.",
             capability: .read, required: ["project_id"]) { input, ctx in
                 let sheet = try await ctx.engine.previewSheet(projectID: input.projectID, frames: input.frames,
-                                                              duration: input.duration, maxWidth: input.maxWidth)
+                                                              duration: input.duration, maxWidth: input.maxWidth, png: input.png)
+                // AGENT: the protocol layer needs the MIME type to return the sheet as an image block.
                 return .object(["image_base64": .string(sheet.base64EncodedString()),
-                                "mime_type": .string("image/png"),
+                                "mime_type": .string(input.png ? "image/png" : "image/jpeg"),
                                 "frames": .int(input.frames)])
             })
 
@@ -368,7 +377,8 @@ public extension ToolRegistry {
             for row in rows {
                 if row["id"]?.stringValue == atMarker {
                     let source = row["source_start"]?.doubleValue ?? 0
-                    return source + offsetMs / 1000
+                    // AGENT: audio placement is output time, so cuts and speed ramps must be applied.
+                    return try await ctx.engine.outputTime(projectID: projectID, sourceSeconds: source + offsetMs / 1000)
                 }
             }
             throw ToolError.failed("No marker named \(atMarker). Call timeline_get markers first.")
