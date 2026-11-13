@@ -59,7 +59,18 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
                                           inputSchema: schema, required: required,
                                           mutating: mutating, longRunning: longRunning),
                           invoke: { args, ctx in
-                              let input = try JSONDecoder().decode(Input.self, from: Data(args.jsonText.utf8))
+                              // AGENT: decoding failures must identify the invalid input instead of leaking a Swift debug dump.
+                              let input: Input
+                              do { input = try JSONDecoder().decode(Input.self, from: Data(args.jsonText.utf8)) }
+                              catch let error as DecodingError {
+                                  let context: DecodingError.Context
+                                  switch error {
+                                  case .typeMismatch(_, let c), .valueNotFound(_, let c), .keyNotFound(_, let c), .dataCorrupted(let c): context = c
+                                  @unknown default: throw ToolError.invalidArguments("Invalid tool arguments.")
+                                  }
+                                  let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+                                  throw ToolError.invalidArguments("\(path.isEmpty ? "arguments" : path): \(context.debugDescription)")
+                              }
                               return try await self.run(input, ctx)
                           })
     }
@@ -93,6 +104,11 @@ public final class ToolRegistry: @unchecked Sendable {
     public func call(_ name: String, arguments: JSONValue, context: ToolContext) async throws -> JSONValue {
         let tool = tools.withLock { $0[name] }
         guard let tool else { throw ToolError.unknownTool(name) }
+        // AGENT: required fields must be present before defaults can conceal missing input.
+        guard case .object(let fields) = arguments else { throw ToolError.invalidArguments("Arguments must be an object.") }
+        for key in tool.spec.required where fields[key] == nil || fields[key] == .null {
+            throw ToolError.invalidArguments("Missing required argument: \(key).")
+        }
         // AGENT: dry_run was honoured by two tools out of twenty, so enforce it centrally.
         if context.dryRun && tool.spec.mutating {
             return .object([
