@@ -76,7 +76,7 @@ private struct ContentU {
     var upRegion: SIMD4<Float>; var upTexSize: SIMD2<Float>; var upFactor: Float; var upBlend: Float
 }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
-private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float> }
+private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var fade: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float> }
 private struct SourceMaskGPU { var rect: SIMD4<Float>; var block: SIMD4<Float> }
 private struct WebU {
     var crop: SIMD4<Float>; var bubble: SIMD4<Float>
@@ -891,11 +891,15 @@ public final class Renderer: @unchecked Sendable {
         if tl.cursor.clickRing != nil, !st.clickFX.isEmpty {
             let ringSize = min(max(tl.cursor.clickSize, 0.5), 2.0)
             let R = 70 * g.ui * pow(sc, 0.5) * ringSize
-            let centers = st.clickFX.map { g.toCanvas(SIMD2(Double($0.position.x), Double($0.position.y)), cam: cam, scale: sc) }
+            // A ring at exactly 0 or 1 carries no motion: at 0 it would pop at
+            // full strength, at 1 it would leave a hard edge. Both are skipped
+            // so the wave always starts and ends on nothing.
+            let live = st.clickFX.filter { $0.progress > 0 && $0.progress < 1 }
+            let centers = live.map { g.toCanvas(SIMD2(Double($0.position.x), Double($0.position.y)), cam: cam, scale: sc) }
             var ringSource: MTLTexture?
             // SMOOTHNESS: copy only the union of the ring quads (plus the wave's
             // displacement), not the whole canvas, once per frame.
-            if tl.cursor.clickEffect != .none, let cap = sceneCopyTexture(slot: slot, canvas: r.canvas) {
+            if tl.cursor.clickEffect != .none, !live.isEmpty, let cap = sceneCopyTexture(slot: slot, canvas: r.canvas) {
                 let pad = 20.0
                 var x0 = Double.greatestFiniteMagnitude, y0 = x0
                 var x1 = -Double.greatestFiniteMagnitude, y1 = x1
@@ -935,11 +939,11 @@ public final class Renderer: @unchecked Sendable {
             case .burst: 2
             case .glass: 3
             }
-            for (i, ring) in st.clickFX.enumerated() {
+            for (i, ring) in live.enumerated() {
                 let c = centers[i]
                 quad(enc, SIMD4<Float>(Float(c.x - R), Float(c.y - R), Float(2 * R), Float(2 * R)), canvasF)
                 frag(enc, RingU(content: content, color: ringColor, center: SIMD2<Float>(c), radius: Float(R),
-                              progress: ring.progress, cr: Float(g.radius), mode: mode,
+                              progress: ring.progress, fade: ClickEnvelope.amplitude(Double(ring.progress)), cr: Float(g.radius), mode: mode,
                               cam: SIMD2<Float>(cam), scale: Float(sc),
                               srcSize: ringSource != nil ? canvasF : SIMD2<Float>(g.src)))
                 enc.setFragmentTexture(ringSource ?? src, index: 0)

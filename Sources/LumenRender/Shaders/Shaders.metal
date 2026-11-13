@@ -393,13 +393,18 @@ fragment float4 cursorFS(VO in [[stage_in]], constant CursorU &u [[buffer(0)]], 
 }
 
 // ---- Click ripple: expanding front refracts the source video under it,
-// no flat fill. Front radius eases out; amplitude decays (critically damped,
-// no overshoot). Center is the exact corrected click position from Part 1.
-struct RingU { float4 content; float4 color; float2 center; float radius; float progress; float cr; int mode;
+// no flat fill. The CPU supplies the temporal envelope (`fade`: 0 at onset,
+// 0 at completion, one hump between), so every mode starts and ends on
+// nothing instead of popping at full strength and cutting off. The front
+// radius grows from the true hotspot outward with no overshoot.
+struct RingU { float4 content; float4 color; float2 center; float radius; float progress; float fade; float cr; int mode;
                float2 cam; float scale; float2 srcSize; };
 fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]],
                        texture2d<float> src [[texture(0)]]) {
-    float p = clamp(u.progress, 0.0, 1.0), e = 1.0 - pow(1.0 - p, 3.0);
+    float p = clamp(u.progress, 0.0, 1.0);
+    float fade = clamp(u.fade, 0.0, 1.0);
+    if (fade <= 0.001) return float4(0.0);
+    float e = 1.0 - pow(1.0 - p, 3.0);
     float r = mix(0.25, 1.0, e) * u.radius * 0.9, wd = mix(0.16, 0.025, e) * u.radius;
     float2 delta = in.px - u.center;
     float distance = length(delta);
@@ -417,16 +422,15 @@ fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]],
         float rim = ring * 0.5;
         float glow = exp(-distance * distance / max(r * r * 0.4, 1.0));
         ink = clamp(bloom * 0.35 + rim * 0.65 + glow * 0.25, 0.0, 1.0);
-        float a = ink * pow(1.0 - p, 1.2) * u.color.a * rectMask(in.px, u.content, u.cr);
-        return float4(mix(float3(1.0), u.color.rgb, 0.25) * a + float3(0.15) * glow * pow(1.0 - p, 2.0) * u.color.a, a);
+        float a = ink * fade * u.color.a * rectMask(in.px, u.content, u.cr);
+        return float4(mix(float3(1.0), u.color.rgb, 0.25) * a + float3(0.15) * glow * fade * fade * u.color.a, a);
     } else if (u.mode == 0) {
         // Liquid-glass ripple. A travelling wave refracts the already-composited
         // frame (masks included — never the raw source) with a soft specular
         // crest. No hard ring, no flat fill, no full-disc tint.
         float x = 6.5 * p;
-        float e = 1.0 - exp(-x) * (1.0 + x);                 // 0 → ~0.99, no overshoot
-        float R = u.radius * (0.18 + 0.82 * e);
-        float fade = pow(1.0 - p, 1.25);
+        float e2 = 1.0 - exp(-x) * (1.0 + x);                // 0 → ~0.99, no overshoot
+        float R = u.radius * e2;                             // emerges from the hotspot
         float2 d = in.px - u.center;
         float r = max(length(d), 1e-3);
         float2 dir = d / r;
@@ -450,7 +454,7 @@ fragment float4 ringFS(VO in [[stage_in]], constant RingU &u [[buffer(0)]],
         a *= rectMask(in.px, u.content, u.cr);
         return float4(col * a, a);
     }
-    float a = ink * pow(1.0 - p, 1.5) * u.color.a * rectMask(in.px, u.content, u.cr);
+    float a = ink * fade * u.color.a * rectMask(in.px, u.content, u.cr);
     return float4(u.color.rgb * a, a);
 }
 
