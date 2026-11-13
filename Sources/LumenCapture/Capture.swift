@@ -1,5 +1,5 @@
 import Foundation
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 import AVFoundation
 import CoreMedia
 import VideoToolbox
