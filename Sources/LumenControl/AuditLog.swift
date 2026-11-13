@@ -28,9 +28,8 @@ public final class AuditLog: @unchecked Sendable {
         let entry = Entry(timestamp: Date().timeIntervalSince1970, client: client, tool: tool,
                           argsHash: Self.hash(arguments.jsonText), ok: ok, detail: detail)
         guard let data = try? JSONEncoder().encode(entry) else { return }
-        var line = data
-        line.append(0x0A)
-        // AGENT: serialize rotation and the entire append so concurrent audit entries cannot interleave.
+        let line = data + Data([0x0A])
+        // AGENT: freeze the record before serialized I/O so Swift 6 can safely capture it while appends stay atomic.
         lock.withLock { _ in
             let files = FileManager.default
             try? files.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
