@@ -75,6 +75,19 @@ extension Timeline {
             throw ToolError.invalidArguments("Marker times must be resolved by the project engine.")
         }
     }
+
+    // AGENT: edit commands consume output-clock playheads, so source references must map through TimeMap.
+    func outputSeconds(_ ref: TimeRef) throws -> Double {
+        switch ref {
+        case .output(let seconds):
+            guard seconds.isFinite, seconds >= 0, seconds <= timeMap.outputDuration + 0.001 else {
+                throw ToolError.invalidArguments("Output time must be within the edited duration.")
+            }
+            return seconds
+        default:
+            return timeMap.output(atSource: try sourceSeconds(ref))
+        }
+    }
 }
 
 // MARK: - Project and timeline tools
@@ -141,6 +154,10 @@ public struct PatchOp: Codable, Sendable {
     public var value: Double?
     public var text: String?
     public var flag: Bool?
+    // AGENT: edit_apply needs typed clip and multi-clip payloads for editor reducer commands.
+    public var ids: [String]?
+    public var clip: TimelineClip?
+    public var basis: String?
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -157,6 +174,9 @@ public struct PatchOp: Codable, Sendable {
     case value
     case text
     case flag
+    case ids
+    case clip
+    case basis
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -173,6 +193,9 @@ public struct PatchOp: Codable, Sendable {
     self.value = try c.decodeIfPresent(Double.self, forKey: .value)
     self.text = try c.decodeIfPresent(String.self, forKey: .text)
     self.flag = try c.decodeIfPresent(Bool.self, forKey: .flag)
+    self.ids = try c.decodeIfPresent([String].self, forKey: .ids)
+    self.clip = try c.decodeIfPresent(TimelineClip.self, forKey: .clip)
+    self.basis = try c.decodeIfPresent(String.self, forKey: .basis)
     }
 }
 
@@ -487,15 +510,35 @@ public extension ToolRegistry {
         register(ToolDefinition<TimelinePatchInput>(name: "timeline_patch",
             description: "Applies typed operations to a timeline. Supported ops: zoom_add, zoom_set, zoom_remove, cut_add, cut_remove, ramp_set, ramp_remove, style_set, audio_lane_add, audio_lane_remove, music_set, captions_set, privacy_set. Pass the revision you read to be sure nobody else changed the project.",
             capability: .edit, required: ["project_id", "ops"], mutating: true,
-            schema: ToolSchemas.timelinePatch, destructive: true) { input, ctx in
+            schema: ToolSchemas.timelinePatch, destructive: true, customDryRun: true) { input, ctx in
                 let expect = input.revision
                 if ctx.dryRun {
-                    return .object(["dry_run": .bool(true), "ops": .int(input.ops.count),
-                                    "project_id": .string(input.projectID)])
+                    let result = try await ctx.engine.previewEdit(projectID: input.projectID, expectRevision: expect) { timeline in
+                        for op in input.ops { try self.apply(op, to: &timeline, paths: ctx.paths) }
+                    }
+                    return .object(result)
                 }
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: expect,
                                                       describe: "\(input.ops.count) timeline operations") { timeline in
                     for op in input.ops { try self.apply(op, to: &timeline, paths: ctx.paths) }
+                }
+                return .object(result)
+            })
+
+        register(ToolDefinition<TimelinePatchInput>(name: "edit_apply",
+            description: "Applies one batch of validated timeline operations and returns its revision and diff.",
+            capability: .edit, required: ["project_id", "ops"], mutating: true,
+            schema: ToolSchemas.timelinePatch, destructive: true, customDryRun: true) { input, ctx in
+                let result: [String: JSONValue]
+                if ctx.dryRun {
+                    result = try await ctx.engine.previewEdit(projectID: input.projectID, expectRevision: input.revision) { timeline in
+                        for op in input.ops { try self.apply(op, to: &timeline, paths: ctx.paths) }
+                    }
+                } else {
+                    result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: input.revision,
+                                                      describe: "\(input.ops.count) timeline operations") { timeline in
+                        for op in input.ops { try self.apply(op, to: &timeline, paths: ctx.paths) }
+                    }
                 }
                 return .object(result)
             })
@@ -865,8 +908,37 @@ public extension ToolRegistry {
             default: throw ToolError.invalidArguments("Unknown privacy key \(key). Use enabled, auto_detect, mode or padding.")
             }
             try applyCommand(.setPrivacy(privacy), to: &timeline)
+        case "split_clip":
+            let at = try timeline.outputSeconds(TimeRef.legacy(seconds: try need(op.start, "start"),
+                                                               basis: op.basis ?? "output"))
+            try applyCommand(.splitClip(atOutput: at), to: &timeline)
+        case "split_recording":
+            let at = try timeline.outputSeconds(TimeRef.legacy(seconds: try need(op.start, "start"),
+                                                               basis: op.basis ?? "output"))
+            try applyCommand(.splitRecording(atOutput: at), to: &timeline)
+        case "delete_clip":
+            let id = try uuid(try need(op.id, "id"), "id")
+            try applyCommand(.rippleDeleteClip(id: id), to: &timeline)
+        case "duplicate_clip":
+            let id = try uuid(try need(op.id, "id"), "id")
+            try applyCommand(.duplicateClip(id: id), to: &timeline)
+        case "join_clips":
+            let rawIDs = try need(op.ids, "ids")
+            guard rawIDs.count >= 2 else { throw ToolError.invalidArguments("join_clips needs at least two clip ids.") }
+            let ids = try rawIDs.map { try uuid($0, "ids") }
+            try applyCommand(.joinClips(ids: ids), to: &timeline)
+        case "add_clip":
+            var clip = try need(op.clip, "clip")
+            clip.path = try paths.path(clip.path, ext: PathGuard.videoExt).path
+            try applyCommand(.addClip(clip), to: &timeline)
+        case "paste_clip":
+            var clip = try need(op.clip, "clip")
+            clip.path = try paths.path(clip.path, ext: PathGuard.videoExt).path
+            let at = try timeline.outputSeconds(TimeRef.legacy(seconds: try need(op.start, "start"),
+                                                               basis: op.basis ?? "output"))
+            try applyCommand(.pasteClip(clip: clip, atOutput: at), to: &timeline)
         default:
-            throw ToolError.invalidArguments("Unknown timeline op \(op.op). Valid ops: zoom_add, zoom_set, zoom_remove, cut_add, cut_remove, ramp_set, ramp_remove, style_set, audio_lane_add, audio_lane_remove, music_set, captions_set, privacy_set.")
+            throw ToolError.invalidArguments("Unknown timeline op \(op.op). Valid ops: zoom_add, zoom_set, zoom_remove, cut_add, cut_remove, ramp_set, ramp_remove, style_set, audio_lane_add, audio_lane_remove, music_set, captions_set, privacy_set, split_clip, split_recording, delete_clip, duplicate_clip, join_clips, add_clip, paste_clip.")
         }
     }
 

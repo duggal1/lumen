@@ -32,6 +32,18 @@ public enum ToolSchemas {
                 "version": J.str("Lumen version."),
             ], required: ["phase", "paused", "recording", "permissions", "permission_links", "library",
                           "projects", "active_project", "version"])
+        case "edit_apply":
+            return J.obj([
+                "project_id": J.str("Project identifier."),
+                "revision": J.int("Revision after applying the operation batch.", min: 0),
+                "dry_run": J.bool("Whether the batch was only previewed."),
+                "diff": J.arr(J.obj([
+                    "field": J.str("Changed timeline field."),
+                    "before": .object(["type": .array([.string("object"), .string("array"), .string("string"), .string("number"), .string("boolean"), .string("null")])]),
+                    "after": .object(["type": .array([.string("object"), .string("array"), .string("string"), .string("number"), .string("boolean"), .string("null")])]),
+                ], required: ["field", "before", "after"]), "Changed fields."),
+                "warnings": J.arr(J.str("Validation warning."), "Warnings."),
+            ], required: ["project_id", "revision"])
         case "job_status":
             return J.obj([
                 "job_id": J.str("Stable job identifier."),
@@ -134,7 +146,7 @@ public enum ToolSchemas {
             } else {
                 props = ["project_id": project]
             }
-        case "timeline_patch":
+        case "timeline_patch", "edit_apply":
             return timelinePatch
         case "zoom_add":
             props = ["project_id": project, "start": time, "end": time,
@@ -367,7 +379,9 @@ public enum ToolSchemas {
                     "type": .string("string"),
                     "enum": .array(["zoom_add", "zoom_set", "zoom_remove", "cut_add", "cut_remove",
                                     "ramp_set", "ramp_remove", "style_set", "audio_lane_add",
-                                    "audio_lane_remove", "music_set", "captions_set", "privacy_set"]
+                                    "audio_lane_remove", "music_set", "captions_set", "privacy_set",
+                                    "split_clip", "split_recording", "delete_clip", "duplicate_clip",
+                                    "join_clips", "add_clip", "paste_clip"]
                                     .map { .string($0) }),
                 ]),
                 "id": .object(["type": .string("string")]),
@@ -383,6 +397,9 @@ public enum ToolSchemas {
                 "value": .object(["type": .string("number")]),
                 "text": .object(["type": .string("string")]),
                 "flag": .object(["type": .string("boolean"), "default": .bool(true)]),
+                "basis": .object(["type": .string("string"), "enum": .array([.string("source"), .string("output")])]),
+                "ids": J.arr(J.str("Clip UUID."), "Clip ids to join."),
+                "clip": .object(["type": .string("object"), "description": .string("Clip payload; its path must be in an approved folder.")]),
             ]),
             "required": .array([.string("op")]),
             "additionalProperties": .bool(true),

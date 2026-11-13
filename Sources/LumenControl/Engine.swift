@@ -332,8 +332,10 @@ public actor Engine {
         var updated = h.timeline
         try body(&updated)
         if updated == old {
-            return ["project_id": .string(projectID), "revision": .int(h.revision), "changed": .bool(false)]
+            return ["project_id": .string(projectID), "revision": .int(h.revision), "changed": .bool(false),
+                    "diff": .array([]), "warnings": .array([])]
         }
+        let changes = timelineDiff(before: old, after: updated, revision: h.revision + 1)
         h.undoStack.append(old)
         if h.undoStack.count > 100 { h.undoStack.removeFirst() }
         h.redoStack.removeAll()
@@ -344,7 +346,38 @@ public actor Engine {
         return ["project_id": .string(projectID),
                 "revision": .int(h.revision),
                 "changed": .bool(true),
+                "diff": .array(changes),
+                "warnings": .array([]),
                 "summary": .string(describe)]
+    }
+
+    /// Validates edits against a copied timeline and returns changed fields without persistence.
+    // AGENT: timeline dry runs must execute validation on a draft while leaving revision, undo, and disk untouched.
+    public func previewEdit(projectID: String, expectRevision: Int?,
+                            _ body: @escaping @Sendable (inout Timeline) throws -> Void) async throws -> [String: JSONValue] {
+        let h = try await requireHandle(projectID)
+        if let expectRevision, expectRevision != h.revision {
+            throw ToolError.revisionConflict(expected: expectRevision, actual: h.revision)
+        }
+        var draft = h.timeline
+        try body(&draft)
+        let diff = timelineDiff(before: h.timeline, after: draft, revision: h.revision)
+        return ["project_id": .string(projectID), "revision": .int(h.revision),
+                "dry_run": .bool(true), "diff": .array(diff), "warnings": .array([])]
+    }
+
+    // AGENT: edit_apply reports field-level before/after values for real edits and dry runs alike.
+    private func timelineDiff(before: Timeline, after: Timeline, revision: Int) -> [JSONValue] {
+        let oldFields = encode(timeline: before, revision: revision).objectValue ?? [:]
+        let newFields = encode(timeline: after, revision: revision).objectValue ?? [:]
+        return Set(oldFields.keys).union(newFields.keys)
+            .filter { oldFields[$0] != newFields[$0] }
+            .sorted()
+            .map { key in
+                .object(["field": .string(key),
+                         "before": oldFields[key] ?? .null,
+                         "after": newFields[key] ?? .null])
+            }
     }
 
     /// Undoes the last agent edit.
