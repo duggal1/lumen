@@ -126,7 +126,8 @@ public enum ToolSchemas {
                                  "default": .string("physical")]),
                 "bundle_id": .object(["type": .string("string")]),
             ]),
-            "required": .array([.string("script")]),
+            // AGENT: a declared, approved target is required for every script.
+            "required": .array([.string("bundle_id"), .string("script")]),
             "additionalProperties": .bool(false),
         ])
     }
