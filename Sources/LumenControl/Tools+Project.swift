@@ -133,6 +133,21 @@ public struct ProjectCloseInput: ToolInput {
     }
 }
 
+/// AGENT: clip imports need an explicit output position and confined source path.
+public struct ClipImportInput: ToolInput {
+    public var projectID: String = ""
+    public var path: String = ""
+    public var at: Double?
+    public init() {}
+    enum CodingKeys: String, CodingKey { case projectID = "project_id", path, at }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+        path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+        at = try c.decodeIfPresent(Double.self, forKey: .at)
+    }
+}
+
 /// One typed timeline operation. Flat and explicit so an agent cannot send
 /// an expression it does not understand.
 ///
@@ -505,6 +520,13 @@ public extension ToolRegistry {
             capability: .read, required: ["project_id"], mutating: true) { input, ctx in
                 let closed = await ctx.engine.closeProject(projectID: input.projectID)
                 return .object(["project_id": .string(input.projectID), "closed": .bool(closed)])
+            })
+
+        register(ToolDefinition<ClipImportInput>(name: "clip_import",
+            description: "Imports a video clip into the project at an output time, or appends it to the end.",
+            capability: .edit, required: ["project_id", "path"], mutating: true) { input, ctx in
+                let url = try ctx.paths.path(input.path, ext: PathGuard.videoExt)
+                return .object(try await ctx.engine.importClip(projectID: input.projectID, path: url, at: input.at))
             })
 
         register(ToolDefinition<TimelinePatchInput>(name: "timeline_patch",
