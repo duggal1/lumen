@@ -75,10 +75,13 @@ public final class InputSynthesizer: @unchecked Sendable {
     }
 
     /// A click: down, a short hold, up.
-    public func click(at point: CGPoint, holdMs: Int = 60) throws {
+    ///
+    /// AGENT: `Thread.sleep` blocked the whole runner actor, so nothing else
+    /// could observe the run or cancel it during the hold.
+    public func click(at point: CGPoint, holdMs: Int = 60) async throws {
         try gate?.assertFrontmost()
         postMouse(type: .leftMouseDown, at: point, button: .left, clickState: 1)
-        Thread.sleep(forTimeInterval: Double(holdMs) / 1000)
+        try await Task.sleep(for: .milliseconds(max(holdMs, 0)))
         postMouse(type: .leftMouseUp, at: point, button: .left, clickState: 1)
     }
 

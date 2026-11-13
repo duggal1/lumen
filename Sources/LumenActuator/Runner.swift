@@ -62,6 +62,12 @@ public final class HumanWatchdog: @unchecked Sendable {
 /// Runs a demo script: launches an app, drives it, and writes a marker for
 /// every step.
 public actor ScriptRunner {
+    /// Called as soon as a marker is posted.
+    ///
+    /// AGENT: a run that stopped mid-script used to lose every marker it had
+    /// already produced; the caller can now persist each one as it lands.
+    public typealias Checkpoint = @Sendable (CaptureMarker) async -> Void
+
     public let mode: InputMode
     private let sink: MarkerSink
     private let synth: InputSynthesizer
@@ -87,7 +93,7 @@ public actor ScriptRunner {
 
     /// Runs the script and returns the markers it produced.
     @discardableResult
-    public func run(_ script: DemoScript) async throws -> [CaptureMarker] {
+    public func run(_ script: DemoScript, checkpoint: Checkpoint? = nil) async throws -> [CaptureMarker] {
         bundleID = script.app.bundleID ?? bundleID
         let allowed = allowedBundles.union([bundleID].compactMap { $0 })
         if !allowed.isEmpty { synth.gate = ActuationGate(allowed: allowed) }
@@ -111,12 +117,27 @@ public actor ScriptRunner {
                                        endHostSeconds: end,
                                        rect: resolved)
             await sink.record(marker: marker)
+            await checkpoint?(marker)
             markers.append(marker)
             if step.padAfterS > 0 {
-                try await Task.sleep(for: .seconds(step.padAfterS))
+                try await nap(step.padAfterS)
             }
         }
         return markers
+    }
+
+    /// Waits, but keeps listening for the kill switch.
+    ///
+    /// AGENT: a `sleep: 30` step used to be uninterruptible, so Escape did
+    /// nothing until it finished. Long waits are sliced and re-checked.
+    private func nap(_ seconds: Double) async throws {
+        var remaining = seconds
+        while remaining > 0 {
+            if let takeover = watchdog.check() { throw ActuatorError.humanTakeover(takeover) }
+            let slice = min(remaining, 0.1)
+            try await Task.sleep(for: .seconds(slice))
+            remaining -= slice
+        }
     }
 
     private func perform(_ action: DemoScript.Action, fallbackRect: CGRect?) async throws -> CGRect? {
@@ -130,7 +151,8 @@ public actor ScriptRunner {
                     NSWorkspace.shared.open(url)
                 }
             }
-            try await Task.sleep(for: .seconds(max(launch.waitS, 0.1)))
+            // AGENT: a launch wait could be minutes and ignored the kill switch.
+            try await nap(max(launch.waitS, 0.1))
             return fallbackRect
 
         case .waitFor(let wait):
@@ -139,6 +161,7 @@ public actor ScriptRunner {
                 let matches = AXSupport.find(TargetRef(role: wait.role, title: wait.title,
                                                        identifier: wait.identifier, index: 0), bundleID: bundleID)
                 if !matches.isEmpty { return fallbackRect }
+                if let takeover = watchdog.check() { throw ActuatorError.humanTakeover(takeover) }
                 try await Task.sleep(for: .milliseconds(120))
             }
             throw ActuatorError.timeout("No element matched \(wait.role ?? "any") / \(wait.title ?? "")")
@@ -152,7 +175,7 @@ public actor ScriptRunner {
                 throw ActuatorError.failed("Could not resolve the click target.")
             }
             try await synth.moveCursor(to: point, ms: max(click.moveMs, 50))
-            try synth.click(at: point)
+            try await synth.click(at: point)
             return element.flatMap { AXSupport.rect($0) } ?? fallbackRect
 
         case .move(let move):
@@ -171,7 +194,7 @@ public actor ScriptRunner {
             return fallbackRect
 
         case .sleep(let sleep):
-            try await Task.sleep(for: .seconds(max(sleep.seconds, 0)))
+            try await nap(max(sleep.seconds, 0))
             return fallbackRect
 
         case .scroll(let scroll):
