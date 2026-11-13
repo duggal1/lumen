@@ -101,7 +101,8 @@ private func rpc(_ object: [String: Any]) throws -> String {
     let names = Set(tools.compactMap { $0["name"] as? String })
     #expect(names.contains("lumen_status"))
     #expect(names.contains("list_apps"))
-    #expect(names.count == 4)
+    #expect(names.contains("screen_look"))
+    #expect(names.count == 5)
 
     let statusLine = try rpc(["jsonrpc": "2.0", "id": 3, "method": "tools/call",
                               "params": ["name": "lumen_status", "arguments": [:]]])
