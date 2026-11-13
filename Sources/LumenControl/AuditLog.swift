@@ -30,13 +30,22 @@ public final class AuditLog: @unchecked Sendable {
         guard let data = try? JSONEncoder().encode(entry) else { return }
         var line = data
         line.append(0x0A)
-        lock.withLock { _ in }
-        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let handle = try? FileHandle(forWritingTo: fileURL) {
-            handle.seekToEndOfFile(); handle.write(line); try? handle.close()
-        } else {
-            try? line.write(to: fileURL, options: .atomic)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        // AGENT: serialize rotation and the entire append so concurrent audit entries cannot interleave.
+        lock.withLock { _ in
+            let files = FileManager.default
+            try? files.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let size = (try? files.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+            if size + Int64(line.count) > 10 * 1024 * 1024 {
+                let previous = fileURL.appendingPathExtension("1")
+                try? files.removeItem(at: previous)
+                try? files.moveItem(at: fileURL, to: previous)
+            }
+            if let handle = try? FileHandle(forWritingTo: fileURL) {
+                handle.seekToEndOfFile(); handle.write(line); try? handle.close()
+            } else {
+                try? line.write(to: fileURL, options: .atomic)
+                try? files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            }
         }
     }
 
