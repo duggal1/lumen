@@ -235,7 +235,8 @@ private final class OCRJob: @unchecked Sendable {
                 for x in stride(from: 0.0, to: x1 - x0, by: Double(step)) {
                     let tw = min(Double(tile), x1 - x0 - x), th = min(Double(tile), y1 - y0 - y)
                     guard tw > 0, th > 0 else { continue }
-                    guard let tileImage = cropped.cropping(to: CGRect(x: x, y: y, width: tw, height: th)) else { continue }
+                    guard let rawTile = cropped.cropping(to: CGRect(x: x, y: y, width: tw, height: th)) else { continue }
+                    guard let tileImage = Self.normalizedImage(rawTile) else { continue }
                     work.append(OCRTile(image: tileImage, rect: CGRect(x: x0 + x, y: y0 + y, width: tw, height: th)))
                 }
             }
@@ -305,6 +306,17 @@ private final class OCRJob: @unchecked Sendable {
         CGRect(x: (tile.minX + rect.minX * tile.width) / Double(width),
             y: (tile.minY + (1 - rect.maxY) * tile.height) / Double(height),
             width: rect.width * tile.width / Double(width), height: rect.height * tile.height / Double(height))
+    }
+
+    private static func normalizedImage(_ cgImage: CGImage) -> CGImage? {
+        let width = cgImage.width, height = cgImage.height
+        guard width > 0, height > 0 else { return nil }
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                     bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo) else { return nil }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     private func deduplicate(_ detections: [OCRDetection]) -> [OCRDetection] {
