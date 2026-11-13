@@ -223,6 +223,7 @@ public enum ToolSchemas {
                      "output": J.str("Output path inside an approved folder."),
                      "include_audio": J.bool("Include the audio mix.", def: true),
                      "export_stems": J.bool("Write separate audio stems.", def: false),
+                     "overwrite": J.bool("Replace the named file only when explicitly true.", def: false),
                      "wait": J.bool("Wait for export completion and receive progress notifications.", def: false)]
         case "job_status", "export_cancel":
             if name == "job_status" {

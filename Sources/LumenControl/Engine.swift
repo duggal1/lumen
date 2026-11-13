@@ -68,6 +68,38 @@ private actor ProjectDerivationLane {
     }
 }
 
+/// Keeps preview renders and exports from competing for Metal resources.
+private actor GPULane {
+    private var occupied = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    // AGENT: Metal rendering and export share one serialized lane instead of racing for GPU resources.
+    func withPermit<Value: Sendable>(_ operation: @Sendable () async throws -> Value) async throws -> Value {
+        if occupied {
+            await withCheckedContinuation { waiters.append($0) }
+        } else {
+            occupied = true
+        }
+        do {
+            try Task.checkCancellation()
+            let value = try await operation()
+            release()
+            return value
+        } catch {
+            release()
+            throw error
+        }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            occupied = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 /// The command layer. Every capture, edit, verify and export action the agent
 /// can take goes through here, and every one of them calls the SAME existing
 /// code the UI calls: `Director.derive`, `ProjectSession`, `Exporter`,
@@ -111,6 +143,8 @@ public actor Engine {
     private var handles: [String: Handle] = [:]
     // AGENT: a single actor-owned renderer serializes Metal access across all preview frames.
     private let renderService = RenderService()
+    // AGENT: previews and exports use the same GPU lane to prevent concurrent Metal work.
+    private let gpuLane = GPULane()
     // AGENT: a dedicated serial lane keeps edits, status and marker reads responsive during derivation.
     private let derivationLane = ProjectDerivationLane()
     // AGENT: decoded sessions retain audio and frame readers, so the daemon needs a small LRU bound.
@@ -545,7 +579,10 @@ public actor Engine {
             throw ToolError.failed("This project cannot be opened for rendering (no Metal device).")
         }
         let timeline = await derivationLane.derive(session, timeline: h.timeline, revision: h.revision)
-        return try await renderService.frame(session: session, timeline: timeline, time: time, maxWidth: maxWidth)
+        let renderer = renderService
+        return try await gpuLane.withPermit {
+            try await renderer.frame(session: session, timeline: timeline, time: time, maxWidth: maxWidth)
+        }
     }
 
     /// The QA report an agent loops on.
@@ -635,7 +672,7 @@ public actor Engine {
 
     /// Starts an export as a job. Uses the existing exporter, unchanged.
     public func startExport(projectID: String, presetName: String, outputPath: String,
-                            includeAudio: Bool, exportStems: Bool) async throws -> String {
+                            includeAudio: Bool, exportStems: Bool, overwrite: Bool = false) async throws -> String {
         // AGENT: capture and export compete for the same GPU and must not run together.
         guard !RecordingGate.isRecordingActive else {
             throw ToolError(code: "RECORDING_ACTIVE", hint: "Stop recording before exporting.")
@@ -672,14 +709,36 @@ public actor Engine {
             }
         }
         let output = URL(fileURLWithPath: (outputPath as NSString).expandingTildeInPath)
+        if FileManager.default.fileExists(atPath: output.path) && !overwrite {
+            throw ToolError(code: "EXPORT_OUTPUT_EXISTS", hint: "Choose a different output path or set overwrite=true.")
+        }
+        let gpuLane = self.gpuLane
         return jobs.start(kind: "export") { reporter in
-            await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
-            try await Exporter.run(session: session, timeline: timeline, preset: preset, to: output,
-                                   includeAudio: includeAudio, exportStems: exportStems) { progress in
-                reporter.progress(progress.total > 0 ? Double(progress.frame) / Double(progress.total) : 0,
-                                  progress.notice)
+            try await gpuLane.withPermit {
+                var finished = false
+                let staging = output.deletingLastPathComponent()
+                    .appendingPathComponent(".lumen-\(UUID().uuidString)-\(output.lastPathComponent)")
+                defer {
+                    // AGENT: a cancelled or failed export must not leave a partial movie that looks complete.
+                    if !finished || Task.isCancelled { try? FileManager.default.removeItem(at: staging) }
+                }
+                await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
+                try await Exporter.run(session: session, timeline: timeline, preset: preset, to: staging,
+                                       includeAudio: includeAudio, exportStems: exportStems) { progress in
+                    reporter.progress(progress.total > 0 ? Double(progress.frame) / Double(progress.total) : 0,
+                                      progress.notice)
+                }
+                if FileManager.default.fileExists(atPath: output.path) {
+                    guard overwrite else {
+                        throw ToolError(code: "EXPORT_OUTPUT_EXISTS", hint: "The output path appeared during export; choose another path.")
+                    }
+                    _ = try FileManager.default.replaceItemAt(output, withItemAt: staging)
+                } else {
+                    try FileManager.default.moveItem(at: staging, to: output)
+                }
+                finished = true
+                return .object(["output": .string(output.path)])
             }
-            return .object(["output": .string(output.path)])
         }
     }
 
