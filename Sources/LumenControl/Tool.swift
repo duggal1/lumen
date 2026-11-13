@@ -17,9 +17,8 @@ public struct ToolSpec: Sendable {
     public let longRunning: Bool
 }
 
-/// Every tool input gives every property a default, so the schema can be
-/// derived by reflection and the arguments can be decoded from a partial JSON
-/// object.
+/// Every tool input gives every property a default so partial JSON can decode.
+/// AGENT: tool schemas are declared explicitly, because runtime reflection hid the shape clients need.
 public protocol ToolInput: Codable, Sendable {
     init()
 }
@@ -52,11 +51,10 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
 
     /// The erased form the registry stores.
     func erase() -> ErasedTool {
-        let sample = Input()
-        var schema = schema ?? SchemaGenerator.schema(for: sample, required: required)
-        if mutating { schema = SchemaGenerator.injectingDryRun(schema) }
+        var inputSchema = schema ?? ToolSchemas.schema(for: name, required: required)
+        if mutating { inputSchema = J.injectingDryRun(inputSchema) }
         return ErasedTool(spec: ToolSpec(name: name, description: description, capability: capability,
-                                          inputSchema: schema, required: required,
+                                          inputSchema: inputSchema, required: required,
                                           mutating: mutating, longRunning: longRunning),
                           invoke: { args, ctx in
                               // AGENT: decoding failures must identify the invalid input instead of leaking a Swift debug dump.
