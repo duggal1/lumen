@@ -20,15 +20,18 @@ public struct AXNode: Sendable, Codable, Equatable {
     public var height: Double?
     /// Screen rect in points.
     public var frame: CGRect?
+    /// AGENT: a secure text field's contents must never leave the machine.
+    public var redacted: Bool = false
     public var children: [AXNode] = []
     public init(role: String = "AXUnknown", title: String? = nil, value: String? = nil,
                 identifier: String? = nil, descriptionText: String? = nil, enabled: Bool = true,
                 focused: Bool = false, x: Double? = nil, y: Double? = nil, width: Double? = nil,
-                height: Double? = nil, frame: CGRect? = nil, children: [AXNode] = []) {
+                height: Double? = nil, frame: CGRect? = nil, redacted: Bool = false,
+                children: [AXNode] = []) {
         self.role = role; self.title = title; self.value = value; self.identifier = identifier
         self.descriptionText = descriptionText; self.enabled = enabled; self.focused = focused
         self.x = x; self.y = y; self.width = width; self.height = height
-        self.frame = frame; self.children = children
+        self.frame = frame; self.redacted = redacted; self.children = children
     }
 
     public var label: String {
@@ -82,7 +85,18 @@ public enum AXSupport {
         AXUIElementSetMessagingTimeout(element, 0.1)
         node.role = attribute(element, kAXRoleAttribute) as? String ?? "AXUnknown"
         node.title = attribute(element, kAXTitleAttribute) as? String
-        node.value = attribute(element, kAXValueAttribute) as? String
+        // AGENT: a secure field's value is a password; never return it.
+        let subrole = attribute(element, kAXSubroleAttribute) as? String
+        if subrole == "AXSecureTextField" {
+            node.value = nil
+            node.redacted = true
+        } else {
+            node.value = attribute(element, kAXValueAttribute) as? String
+            // AGENT: cap long values so a document cannot flood the agent's context.
+            if let value = node.value, value.count > 300 {
+                node.value = String(value.prefix(300)) + "…"
+            }
+        }
         node.identifier = attribute(element, kAXIdentifierAttribute) as? String
         node.descriptionText = attribute(element, kAXDescriptionAttribute) as? String
         node.enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true

@@ -13,6 +13,26 @@ public enum InputMode: String, Sendable, Codable, CaseIterable {
     case virtual
 }
 
+/// Refuses to send events when the frontmost app is not one the human approved.
+///
+/// AGENT: checking only the declared target let a stray frontmost app receive
+/// the whole script, so the gate is evaluated before every event batch.
+public struct ActuationGate: Sendable {
+    public let allowed: Set<String>
+
+    public init(allowed: Set<String>) {
+        self.allowed = allowed
+    }
+
+    public func assertFrontmost() throws {
+        let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+        guard allowed.contains(id) else {
+            throw ActuatorError.failed(
+                "Frontmost app \(id.isEmpty ? "(unknown)" : id) is not on the allow-list; run halted.")
+        }
+    }
+}
+
 /// Builds mouse and keyboard events.
 ///
 /// Lumen records the event stream and rebuilds the cursor from it, so the
@@ -24,6 +44,8 @@ public final class InputSynthesizer: @unchecked Sendable {
     /// Marks our own events so a human takeover is detectable.
     public let tag: Int64
     private let source: CGEventSource?
+    /// AGENT: every event batch re-checks that the frontmost app is still approved.
+    public var gate: ActuationGate?
 
     public init(mode: InputMode = .physical, tag: Int64 = Int64.random(in: 1_000_000...9_000_000)) {
         self.mode = mode
@@ -42,6 +64,7 @@ public final class InputSynthesizer: @unchecked Sendable {
         let clock = ContinuousClock()
         let t0 = clock.now
         for i in 1...n {
+            try gate?.assertFrontmost()
             let u = Double(i) / Double(n)
             let s = u * u * u * (10 + u * (-15 + 6 * u))   // minimum jerk
             let p = CGPoint(x: start.x + (target.x - start.x) * s,
@@ -53,12 +76,14 @@ public final class InputSynthesizer: @unchecked Sendable {
 
     /// A click: down, a short hold, up.
     public func click(at point: CGPoint, holdMs: Int = 60) throws {
+        try gate?.assertFrontmost()
         postMouse(type: .leftMouseDown, at: point, button: .left, clickState: 1)
         Thread.sleep(forTimeInterval: Double(holdMs) / 1000)
         postMouse(type: .leftMouseUp, at: point, button: .left, clickState: 1)
     }
 
     public func scroll(at point: CGPoint, dy: Double) throws {
+        try gate?.assertFrontmost()
         guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1,
                                   wheel1: Int32(dy), wheel2: 0, wheel3: 0) else { return }
         event.setIntegerValueField(.eventSourceUserData, value: tag)
@@ -76,6 +101,7 @@ public final class InputSynthesizer: @unchecked Sendable {
         let t0 = clock.now
         var index = 0
         for character in text {
+            try gate?.assertFrontmost()
             let key = Self.virtualKey(for: character)
             let delay = perChar * Self.jitter(for: index)
             try await clock.sleep(until: t0.advanced(by: .seconds(perChar * Double(index))))
@@ -93,6 +119,7 @@ public final class InputSynthesizer: @unchecked Sendable {
 
     /// Presses a named key with optional modifiers.
     public func press(key name: String, modifiers: [String]) throws {
+        try gate?.assertFrontmost()
         var flags: CGEventFlags = []
         for modifier in modifiers {
             switch modifier.lowercased() {

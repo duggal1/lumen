@@ -67,17 +67,21 @@ public actor ScriptRunner {
     private let synth: InputSynthesizer
     private let watchdog = HumanWatchdog()
     private var bundleID: String?
+    /// AGENT: the frontmost app must stay inside this set for the whole run.
+    private let allowedBundles: Set<String>
     /// AGENT: LumenActuator cannot import LumenControl, so confinement arrives as
     /// a closure. Defaults to refusing writes so a forgotten caller is safe.
     private let writablePath: @Sendable (String) throws -> URL
 
     public init(mode: InputMode = .physical, sink: MarkerSink,
+                allowedBundles: Set<String> = [],
                 writablePath: @escaping @Sendable (String) throws -> URL = { _ in
                     throw ActuatorError.failed("Screenshot paths are not permitted for this run.")
                 }) {
         self.mode = mode
         self.sink = sink
         self.synth = InputSynthesizer(mode: mode)
+        self.allowedBundles = allowedBundles
         self.writablePath = writablePath
     }
 
@@ -85,6 +89,8 @@ public actor ScriptRunner {
     @discardableResult
     public func run(_ script: DemoScript) async throws -> [CaptureMarker] {
         bundleID = script.app.bundleID ?? bundleID
+        let allowed = allowedBundles.union([bundleID].compactMap { $0 })
+        if !allowed.isEmpty { synth.gate = ActuationGate(allowed: allowed) }
         watchdog.arm()
         defer { watchdog.disarm() }
         var markers: [CaptureMarker] = []
