@@ -10,7 +10,7 @@
 
   const AREAS = ["All", "Build", "Recording", "Transcription", "Paste", "Recovery", "Audio", "Zoom", "Motion", "Framing", "Export"];
   const RANK = { P0: 0, P1: 1, P2: 2, P3: 3 };
-  const PRIORITY_COLOR = { P0: "rose", P1: "orange", P2: "sky", P3: "neutral" };
+  const PRIORITY_COLOR = { P0: "orange", P1: "orange", P2: "neutral", P3: "neutral" };
   const TITLES = { overview: "Reliability", issues: "Issue map", agent: "Agent workspace", regressions: "Regression log" };
   const SUBS = {
     overview: "What ships, what breaks, and what is still a hypothesis.",
@@ -72,15 +72,15 @@
   function codeStatus(i) {
     const p = i.pr != null && state.prs && state.prs[i.pr];
     if (p) return p.merged_at
-      ? { label: "Merged (live)", color: "green", merged: true, source: "GitHub live" }
-      : { label: p.state === "open" ? "PR open" : "Closed unmerged", color: p.state === "open" ? "blue" : "rose", merged: false, source: "GitHub live" };
-    if (i.pr != null && i.code === "merged") return { label: "Merged (snapshot)", color: "green", merged: true, source: "GitHub snapshot" };
-    if (i.code === "merged" && i.commit) return { label: "On main (snapshot)", color: "green", merged: true, source: "Git history snapshot" };
+      ? { label: "Merged (live)", color: "neutral", merged: true, source: "GitHub live" }
+      : { label: p.state === "open" ? "PR open" : "Closed unmerged", color: p.state === "open" ? "neutral" : "orange", merged: false, source: "GitHub live" };
+    if (i.pr != null && i.code === "merged") return { label: "Merged (snapshot)", color: "neutral", merged: true, source: "GitHub snapshot" };
+    if (i.code === "merged" && i.commit) return { label: "On main (snapshot)", color: "neutral", merged: true, source: "Git history snapshot" };
     if (i.code === "unknown") return { label: "Scope unknown", color: "neutral", merged: false, source: "unverified" };
     return { label: "Plan only", color: "neutral", merged: false, source: "not merged" };
   }
 
-  const causeOf = i => i.confidence === "confirmed" ? ["Cause confirmed", "green"] : i.confidence === "tentative" ? ["Cause tentative", "orange"] : ["Cause unknown", "neutral"];
+  const causeOf = i => i.confidence === "confirmed" ? ["Cause confirmed", "neutral"] : i.confidence === "tentative" ? ["Cause tentative", "orange"] : ["Cause unknown", "neutral"];
 
   function ciInfo() {
     const ci = state.ci || seed.ci, s = ci.status;
@@ -90,7 +90,7 @@
     return { ...ci, kind, word: { ok: "Passed", bad: "Failed", run: "Running", unk: "Unknown" }[kind], foot: { ok: "passing", bad: "failing", run: "running", unk: "unknown" }[kind] };
   }
 
-  const testColor = k => k === "failed" ? "rose" : k === "historical-pass" ? "green" : "neutral";
+  const testColor = k => k === "failed" ? "orange" : "neutral";
 
   function filtered() {
     const q = state.query.trim().toLowerCase();
@@ -212,8 +212,8 @@
     const pullRequest = activity.pullRequest;
     const activityTime = activity.updatedAt.slice(0, 16).replace("T", " ") + " UTC";
     const activityStates = '<div class="activity-state">' +
-      '<div class="activity-state-row"><div class="activity-state-head"><span>main</span><a class="activity-sha" href="' + GH + '/commit/' + esc(seed.sourceSha) + '" target="_blank" rel="noopener">' + esc(seed.sourceSha.slice(0, 7)) + '</a>' + badge("Build failed", "rose") + '</div><p>SCShareableContent sendability error at Runner.swift:266 <a class="activity-run" href="' + GH + '/actions/runs/' + esc(seed.ci.run) + '" target="_blank" rel="noopener">Workflow</a></p></div>' +
-      '<div class="activity-state-row"><div class="activity-state-head"><a href="' + GH + '/pull/' + pullRequest.number + '" target="_blank" rel="noopener">Draft PR #' + pullRequest.number + '</a><a class="activity-sha" href="' + GH + '/commit/' + esc(pullRequest.headSha) + '" target="_blank" rel="noopener">' + esc(pullRequest.headSha.slice(0, 7)) + '</a>' + badge("Tests failed", "rose") + '</div><p>Agent3Tests expected 4 tools and received 5 <a class="activity-run" href="' + GH + '/actions/runs/' + esc(pullRequest.ci.run) + '" target="_blank" rel="noopener">Workflow</a></p></div>' +
+      '<div class="activity-state-row"><div class="activity-state-head"><span>main</span><a class="activity-sha" href="' + GH + '/commit/' + esc(seed.sourceSha) + '" target="_blank" rel="noopener">' + esc(seed.sourceSha.slice(0, 7)) + '</a>' + badge("Build failed", "orange") + '</div><p>SCShareableContent sendability error at Runner.swift:266 <a class="activity-run" href="' + GH + '/actions/runs/' + esc(seed.ci.run) + '" target="_blank" rel="noopener">Workflow</a></p></div>' +
+      '<div class="activity-state-row"><div class="activity-state-head"><a href="' + GH + '/pull/' + pullRequest.number + '" target="_blank" rel="noopener">Draft PR #' + pullRequest.number + '</a><a class="activity-sha" href="' + GH + '/commit/' + esc(pullRequest.headSha) + '" target="_blank" rel="noopener">' + esc(pullRequest.headSha.slice(0, 7)) + '</a>' + badge("Tests failed", "orange") + '</div><p>Agent3Tests expected 4 tools and received 5 <a class="activity-run" href="' + GH + '/actions/runs/' + esc(pullRequest.ci.run) + '" target="_blank" rel="noopener">Workflow</a></p></div>' +
       '</div>';
     const activityEntries = activity.groups.map(group => '<li class="activity-entry"><time class="activity-time">' + esc(group.time) + '</time><div class="activity-body"><div class="activity-title-row"><h3>' + esc(group.title) + '</h3><span class="activity-source">' + esc(group.source) + '</span></div><p>' + esc(group.summary) + '</p><div class="activity-links">' + group.commits.map(sha => '<a href="' + GH + '/commit/' + encodeURIComponent(sha) + '" target="_blank" rel="noopener">' + esc(sha) + '</a>').join("") + '</div></div></li>').join("");
     return '<div class="ledger">' + stats.map(s => '<div class="stat"><span class="stat-k">' + esc(s[0]) + '</span><strong class="stat-v' + (s[3] === "bad" ? " bad" : s[3] === "run" ? " shimmer" : "") + '">' + esc(s[1]) + '</strong><span class="stat-n">' + esc(s[2]) + "</span></div>").join("") + "</div>" +
@@ -231,8 +231,8 @@
       : list === null ? '<div class="empty">Loading issues from GitHub…</div>'
       : !list.length ? '<div class="empty">No GitHub issues in ' + esc(REPO) + ". Audit findings are tracked separately.</div>"
       : list.slice(0, 5).map(x => '<a class="row" href="' + issueUrl(x.number) + '" target="_blank" rel="noopener">' + GH_MARK + '<span class="row-m"><span class="row-t">#' + esc(x.number) + " " + esc(x.title) + '</span><span class="row-s">@' + esc(x.user || "unknown") + ", " +
-        esc(new Date(x.updated_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })) + ", " + esc(x.comments || 0) + " comments</span></span>" + badge(x.state === "open" ? "Open" : "Closed", x.state === "open" ? "green" : "neutral") + "</a>").join("");
-    return '<section class="block"><div class="block-h"><h2>GitHub issues' + (list === null && !state.issuesError ? "" : badge(state.issuesError ? "Error" : list.length + " live", state.issuesError ? "rose" : "green")) +
+        esc(new Date(x.updated_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })) + ", " + esc(x.comments || 0) + " comments</span></span>" + badge(x.state === "open" ? "Open" : "Closed", "neutral") + "</a>").join("");
+    return '<section class="block"><div class="block-h"><h2>GitHub issues' + (list === null && !state.issuesError ? "" : badge(state.issuesError ? "Error" : list.length + " live", state.issuesError ? "orange" : "neutral")) +
       '</h2><button class="btn sm" data-a="refresh" type="button">Refresh</button></div><div class="card list">' + body + "</div></section>";
   }
 
@@ -345,14 +345,14 @@
   /* ───────── regressions ───────── */
   function regressions() {
     const logs = [...store.logs, ...SYSTEM_LOGS].sort((a, b) => new Date(b.date) - new Date(a.date));
-    const color = r => r === "FAIL" ? "rose" : r === "PASS" ? "green" : "neutral";
+    const color = r => r === "FAIL" ? "orange" : "neutral";
     return '<div class="split reg"><section class="card form"><div class="p-head"><h2 class="p-title">Log an observation</h2>' + badge("Local only") + "</div>" +
       '<form id="reg-form"><div><span class="lbl">Linked issue</span>' + dd("reg-issue", state.selected, all().map(x => [x.id, x.id + " / " + x.area]), "issue") + "</div>" +
       '<div><span class="lbl">Outcome</span>' + dd("reg-result", "FAIL", [["FAIL", "Failure reproduced"], ["PASS", "Observed pass"], ["INCONCLUSIVE", "Inconclusive"]], "result") + "</div>" +
       '<div><label class="lbl" for="reg-text">Environment and actual result</label><textarea class="field" id="reg-text" name="text" style="min-height:150px" required placeholder="Device, OS, commit SHA, setup, exact failure, log link"></textarea></div>' +
       '<button class="btn primary" type="submit">Append observation</button><p class="notice">Manual logs never change merge state or the official CI status.</p></form></section>' +
       '<section class="card"><div class="p-head"><h2 class="p-title">History<span class="n">' + logs.length + '</span></h2><div class="tools"><button class="btn sm" data-a="import" type="button">Import</button><button class="btn sm" data-a="export" type="button">Export</button></div></div><div class="list">' +
-      (logs.length ? logs.map(l => '<article class="log"><div class="log-top"><div class="log-tags">' + badge(l.result, color(l.result)) + '<span class="log-issue">' + esc(l.issue) + "</span>" + (l.system ? badge("CI evidence", "sky") : badge("Local")) + '</div><span class="muted">' + esc(stamp(l.date)) + "</span></div>" +
+      (logs.length ? logs.map(l => '<article class="log"><div class="log-top"><div class="log-tags">' + badge(l.result, color(l.result)) + '<span class="log-issue">' + esc(l.issue) + "</span>" + (l.system ? badge("CI evidence", "neutral") : badge("Local")) + '</div><span class="muted">' + esc(stamp(l.date)) + "</span></div>" +
         '<p class="log-note">' + esc(l.text) + '</p><div class="log-foot"><span class="muted">' + esc(l.id) + "</span>" +
         (l.url ? '<a class="link" href="' + esc(l.url) + '" target="_blank" rel="noopener">Workflow</a>' : !l.system ? '<button class="btn sm quiet" data-a="delete-log" data-id="' + esc(l.id) + '" type="button">Remove</button>' : "") + "</div></article>").join("") : '<div class="empty">No regression entries yet.</div>') +
       '</div></section></div><input type="file" id="import-file" accept="application/json,.json" hidden>';
