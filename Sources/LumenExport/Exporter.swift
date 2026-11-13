@@ -57,6 +57,15 @@ public enum FrameImage {
         guard renderer.render(req, into: pb, completion: { latch.fire() }) else { throw ExportError.render }
         await latch.wait(); return pb
     }
+    /// Renders one frame and returns it as a CGImage so callers in isolated contexts
+    /// never have to receive a non-Sendable CVPixelBuffer across an actor boundary.
+    public static func renderCGImage(renderer: Renderer, session: ProjectSession, timeline tl: Timeline, t: Double, canvas: SIMD2<Int>,
+                                    fps: Double = 60, transparent: Bool = false, cursorOnly: Bool = false) async throws -> CGImage {
+        let buffer = try await render(renderer: renderer, session: session, timeline: tl, t: t, canvas: canvas,
+                                     fps: fps, transparent: transparent, cursorOnly: cursorOnly)
+        guard let image = cgImage(buffer) else { throw ExportError.render }
+        return image
+    }
     public static func writePNG(_ pb: CVPixelBuffer, to url: URL) throws {
         guard let img = cgImage(pb), let d = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else { throw ExportError.render }
         CGImageDestinationAddImage(d, img, nil); CGImageDestinationFinalize(d)

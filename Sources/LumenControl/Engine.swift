@@ -369,12 +369,9 @@ public actor Engine {
         let aspect = timeline.style.aspectRatio
         let width = max(maxWidth, 160)
         let height = Int((Double(width) / max(aspect, 0.1)).rounded())
-        let buffer = try await FrameImage.render(renderer: renderer, session: session, timeline: timeline,
-                                                t: time, canvas: SIMD2<Int>(width, height),
-                                                fps: session.meta.source.fps)
-        guard let image = FrameImage.cgImage(buffer) else {
-            throw ToolError.failed("The frame could not be rendered.")
-        }
+        let image = try await FrameImage.renderCGImage(renderer: renderer, session: session, timeline: timeline,
+                                                     t: time, canvas: SIMD2<Int>(width, height),
+                                                     fps: session.meta.source.fps)
         return image
     }
 
