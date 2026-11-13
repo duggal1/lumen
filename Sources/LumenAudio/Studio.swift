@@ -125,6 +125,63 @@ enum Leveler {
     }
 }
 
+/// A soft downward expander for non-voiced frames. The VAD keeps speech open;
+/// the signal envelope lets room tails fade naturally instead of being gated.
+enum SoftExpander {
+    static func process(_ x: [Float], vad: [ClosedRange<Double>], fs: Double,
+                        thresholdDb: Double, ratio: Double, maxAttenuationDb: Double) -> [Float] {
+        let frameSize = max(Int(0.01 * fs), 1)
+        let frameCount = (x.count + frameSize - 1) / frameSize
+        guard frameCount > 0 else { return x }
+        let kneeDb = 4.0
+        var target = [Double](repeating: 0, count: frameCount)
+        for frame in 0..<frameCount {
+            let start = frame * frameSize
+            let end = min(start + frameSize, x.count)
+            let centerTime = (Double(start + end) * 0.5) / fs
+            guard !vad.contains(where: { $0.contains(centerTime) }) else { continue }
+            var energy = 0.0
+            for sample in start..<end {
+                let value = Double(x[sample])
+                energy += value * value
+            }
+            let level = 10 * log10(energy / Double(max(end - start, 1)) + 1e-12)
+            let over = level - thresholdDb
+            let reduction: Double
+            if over >= kneeDb / 2 {
+                reduction = 0
+            } else if over <= -kneeDb / 2 {
+                reduction = (ratio - 1) * over
+            } else {
+                let distance = kneeDb / 2 - over
+                reduction = -(ratio - 1) * distance * distance / (2 * kneeDb)
+            }
+            target[frame] = max(-maxAttenuationDb, min(reduction, 0))
+        }
+
+        let duration = Double(frameSize)
+        let attack = exp(-duration / (0.025 * fs))
+        let release = exp(-duration / (0.14 * fs))
+        var gains = [Double](repeating: 0, count: frameCount)
+        var gain = target[0]
+        for frame in 0..<frameCount {
+            let coefficient = target[frame] < gain ? attack : release
+            gain = target[frame] + coefficient * (gain - target[frame])
+            gains[frame] = gain
+        }
+
+        var out = x
+        for sample in x.indices {
+            let frame = sample / frameSize
+            let next = min(frame + 1, frameCount - 1)
+            let fraction = Double(sample % frameSize) / Double(frameSize)
+            let gainDb = lerp(gains[frame], gains[next], fraction)
+            out[sample] *= Float(pow(10, gainDb / 20))
+        }
+        return out
+    }
+}
+
 /// Feed-forward compressor, soft knee, mean-square detector, attack/release in the dB domain.
 struct VoiceCompressor {
     var thresholdDb: Double
@@ -197,9 +254,24 @@ enum VoiceStudio {
         let s = min(max(plan.studio * 4, 0), 1)
 
         // 1. gain staging: speech body at -21 dBFS so the thresholds below mean something
-        if let level = speechLevelDb(voice, vad: vad, fs: fs) {
+        let stagedSpeechLevel = speechLevelDb(voice, vad: vad, fs: fs)
+        if let level = stagedSpeechLevel {
             let g = Float(pow(10, clamp(-21 - level, -30, 30) / 20))
             voice = voice.map { $0 * g }
+        }
+        if stagedSpeechLevel != nil {
+            let standard = SoftExpander.process(voice, vad: vad, fs: fs,
+                                                thresholdDb: -23, ratio: 4.8, maxAttenuationDb: 30)
+            if plan.studioMode == .optimized {
+                let optimized = SoftExpander.process(voice, vad: vad, fs: fs,
+                                                     thresholdDb: -21, ratio: 5.6, maxAttenuationDb: 44)
+                let optimizedDelta = 44.0 - 30.0
+                voice = optimizedDelta > 12
+                    ? zip(optimized, standard).map { $0 * 0.85 + $1 * 0.15 }
+                    : optimized
+            } else {
+                voice = standard
+            }
         }
         // 2. tone: fuller (body), cleaner (mud cut), closer (presence), open (air)
         voice = Cascade.apply(voice, [

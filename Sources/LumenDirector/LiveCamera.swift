@@ -105,6 +105,12 @@ public struct LiveCamera: Sendable {
         let lz = max(zoom1.x.x, 0), margin = 0.5 - 0.5 / exp(lz)
         let c = SIMD2(0.5 + clamp(pan.x, -1, 1) * margin,
                       0.5 + clamp(pan.y, -1, 1) * margin)
+        let scale = Float(exp(lz))
+        let half = SIMD2(Float(src.x / 2) / scale, Float(src.y / 2) / scale)
+        let center = SIMD2(
+            min(max(Float(c.x * src.x), half.x), Float(src.x) - half.x),
+            min(max(Float(c.y * src.y), half.y), Float(src.y) - half.y)
+        )
         let cs = CursorSample(position: SIMD2(Float(cur2.x.x), Float(cur2.x.y)), velocity: SIMD2(Float(cur2.v.x), Float(cur2.v.y)),
                               opacity: Float(smoothstep(opacity)), press: Float(press.x.x), shape: shape)
         var fx: [ClickRing] = []
@@ -115,7 +121,7 @@ public struct LiveCamera: Sendable {
             fx = rings.filter { now >= $0.t && now - $0.t <= dur }
                 .map { ClickRing(position: SIMD2($0.x, $0.y), progress: Float((now - $0.t) / dur)) }
         }
-        return FrameState(cameraCenter: SIMD2(Float(c.x * src.x), Float(c.y * src.y)), cameraScale: Float(exp(lz)), cursor: cs,
+        return FrameState(cameraCenter: center, cameraScale: scale, cursor: cs,
                           clickFX: fx, webcamCrop: SIMD4(0, 0, 1, 1), sourceTime: now)
     }
 }

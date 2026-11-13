@@ -344,15 +344,16 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
         ctx.setFillColor(CGColor(gray: 0.22, alpha: 1))
         let top = CGFloat(300), fieldH: CGFloat = 34
         let y = CGFloat(h) - top - fieldH
-        var x = CGFloat(360)
-        while x < 640 {
-            let w = CGFloat(9 + (Int(x) % 3) * 5)
-            ctx.fill(CGRect(x: x, y: y, width: w, height: fieldH))
-            x += w + CGFloat(7 + (Int(x) % 4) * 3)
+        let glyphs: [(x: CGFloat, width: CGFloat)] = [
+            (360, 20), (384, 6), (408, 22), (432, 8), (456, 16), (480, 5),
+            (504, 21), (528, 9), (552, 18), (576, 6), (600, 21), (624, 10),
+        ]
+        for glyph in glyphs {
+            ctx.fill(CGRect(x: glyph.x, y: y, width: glyph.width, height: fieldH))
         }
     }
     try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-    let region = Mask(start: 0, end: 1, mode: .blur,
+    let region = Mask(start: 0, end: 1, mode: .pixelate,
                       keys: [MaskKey(t: 0, x: 360, y: 300, w: 280, h: 34)],
                       origin: .auto, approved: true, category: "email", padding: 6)
     f.timeline.overlays.masks = [region]
@@ -362,7 +363,8 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
 
     // The field must be covered by cells, and the cells must be small enough
     // that the row still reads as many blocks: about one cell per 24 px.
-    let cell = PrivacyMaskGeometry.cell(boxHeight: 34 + 12)
+    let padding = max(Float(6), Float(34) * 0.35)
+    let cell = PrivacyMaskGeometry.cell(boxHeight: 34 + 2 * padding)
     #expect(cell <= 26, "mosaic cell \(cell) is too coarse for a single-line field")
     // How many distinct tones a row shows depends on the encoder that produced
     // the fixture frame, so the assertion is geometric: every colour change
@@ -401,7 +403,7 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
         }
     }
     try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-    let region = Mask(start: 0, end: 1, mode: .blur,
+    let region = Mask(start: 0, end: 1, mode: .pixelate,
                       keys: [MaskKey(t: 0, x: 380, y: 40, w: 220, h: 40)],
                       origin: .auto, approved: true, category: "email", padding: 6)
     f.timeline.overlays.masks = [region]
@@ -422,7 +424,7 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
     // The treated region is the padded field snapped outward to whole mosaic
     // cells, so the quad edge always lands on a cell boundary. Nothing may
     // change outside it, and the field itself must be fully covered.
-    let pad: Float = 6
+    let pad: Float = max(6, 0.35 * 40)
     let padded = SIMD4<Float>(380 - pad, 40 - pad, 220 + 2 * pad, 40 + 2 * pad)
     let treated = PrivacyMaskGeometry.mosaicRegion(padded, cell: PrivacyMaskGeometry.cell(boxHeight: padded.w))
     diff(clean, masked) { x, y, d in

@@ -187,7 +187,7 @@ enum ZoomPlanner {
         let sorted = events.sorted { $0.t < $1.t }
         func ok(_ t: Double) -> Bool { t.isFinite && t >= tm.trimStart + 0.3 && t <= tm.trimEnd - 0.8 && !tm.isCut(t) }
         let hi = clamp(p.maxScale, 1.3, 2.6), lo = clamp(p.minScale, 1.2, hi)
-        let hold = min(p.hold, max(p.zoomOutGap - 0.2, 0.3))
+        let hold = min(max(p.hold, p.minHold), max(p.zoomOutGap - 0.2, 0.3))
 
         // ---- 1. intents: ONLY clicks and typing bursts ----
         var intents: [Intent] = []
@@ -262,7 +262,7 @@ enum ZoomPlanner {
         func ensureVisible(_ pt: SIMD2<Double>, at t: Double) {          // clicks only
             guard let o = cur else { return }
             let d = (pt - o.c) / half(o.scale)
-            let zone = clamp(p.safeZone.isFinite ? p.safeZone : 0.03, 0.005, 0.03)
+            let zone = clamp(p.safeZone.isFinite ? p.safeZone : 0.62, 0.005, 0.8)
             guard abs(d.x) > zone || abs(d.y) > zone else { return }
             retarget(pt, at: t, minMove: 0.03, minimumDuration: 0.02)    // click anchor is the exact pixel
         }
@@ -296,7 +296,7 @@ enum ZoomPlanner {
                 let h = half(o.scale), d = (s.p - o.c) / h
                 // The caret only pulls the camera once it leaves the tight window.
                 let outside = d.x > 0.06 || d.x < -0.34 || abs(d.y) > 0.22
-                guard outside, s.t - lastMove >= 0.45 else { continue }
+                guard outside, s.t - lastMove >= 2.4 else { continue }
                 let target = typingCenter(s.p, o.scale)
                 let moved = (target - o.c) / h
                 guard hypot(moved.x, moved.y) >= 0.12 else { continue }  // clamped to the same view: nothing to do
@@ -318,7 +318,13 @@ enum ZoomPlanner {
                 if fit < 1.2 { return 1 }                                // element already fills the view
                 s = clamp(min(fit, 1.7), lo, hi)
             } else {
-                s = clamp(1.5, lo, hi)
+                s = clamp(1.7, lo, hi)
+            }
+            if i.kind == .click {
+                let xInset = max(min(i.x, W - i.x), 1)
+                let yInset = max(min(i.y, H - i.y), 1)
+                let centerFit = max(W / (2 * xInset), H / (2 * yInset))
+                s = min(max(s, centerFit), hi)
             }
             guard let prev, prev > 1.001 else { return s }
             return abs(log(s / prev)) < log(1.12) ? clamp(prev, lo, hi) : s

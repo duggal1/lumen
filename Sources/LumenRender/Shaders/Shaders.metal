@@ -315,13 +315,7 @@ kernel void pixelateMask(texture2d<float, access::read> source [[texture(0)]],
             fill = mix(mix(cellMean(source, rect, cell, i0), cellMean(source, rect, cell, i0 + float2(1, 0)), fraction.x),
                        mix(cellMean(source, rect, cell, i0 + float2(0, 1)), cellMean(source, rect, cell, i0 + float2(1, 1)), fraction.x), fraction.y);
         } else if (masks[index].block.y > 0.5) {
-            float2 offset = float2(8.0);
-            float4 background = (readPx(source, rect.xy - offset)
-                + readPx(source, float2(rect.x + rect.z + offset.x, rect.y - offset.y))
-                + readPx(source, float2(rect.x - offset.x, rect.y + rect.w + offset.y))
-                + readPx(source, rect.xy + rect.zw + offset)) * 0.25;
-            float rim = 1.0 - smoothstep(0.0, 1.5, abs(distance + 0.75));
-            fill = float4(background.rgb * (0.88 - 0.10 * rim), 1.0);
+            fill = float4(0.0, 0.0, 0.0, 1.0);
         } else {
             fill = cellMean(source, rect, cell, floor((p - rect.xy) / cell));
         }

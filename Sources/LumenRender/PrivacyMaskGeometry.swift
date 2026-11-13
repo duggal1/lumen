@@ -27,7 +27,7 @@ public enum PrivacyMaskGeometry {
     /// reads as many crisp cells instead of a slab and every glyph is
     /// averaged away rather than outlined.
     public static func cell(boxHeight: Float) -> Float {
-        max(8, max(boxHeight, 1) * 0.55)
+        min(24, max(8, max(boxHeight, 1) * 0.55))
     }
 
     /// Snap the treated rect outward to whole cells. The quad edge must land
