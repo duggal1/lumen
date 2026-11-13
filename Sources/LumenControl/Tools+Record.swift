@@ -88,7 +88,7 @@ public struct RecordStopInput: ToolInput {
 public extension ToolRegistry {
     func registerRecordTools() {
         register(ToolDefinition<RecordStartInput>(name: "record_start",
-            description: "Starts a recording. Target a display, a window (by bundle id or window id) or a region. Automatic privacy masking is on by default: agent recordings show emails and tokens.",
+            description: "Starts a recording. Target a display, a window (by bundle id or window id) or a region (region_x, region_y, region_width, region_height are 0...1 fractions of the display). Automatic privacy masking is on by default: agent recordings show emails and tokens.",
             capability: .record, required: ["target"], mutating: true) { input, ctx in
                 var target = RecordingTarget(kind: .display)
                 switch input.target {
@@ -98,9 +98,24 @@ public extension ToolRegistry {
                     target.windowID = input.windowID > 0 ? UInt32(input.windowID) : nil
                 case "region":
                     target.kind = .region
-                    target.displayID = input.displayID > 0 ? UInt32(input.displayID) : CGMainDisplayID()
-                    target.rect = CGRect(x: input.regionX, y: input.regionY,
-                                         width: input.regionWidth, height: input.regionHeight)
+                    let display = input.displayID > 0 ? UInt32(input.displayID) : CGMainDisplayID()
+                    target.displayID = display
+                    // AGENT: region_x/y/w/h are documented as 0...1 fractions but
+                    // were passed straight through as points, so a "half screen"
+                    // region was a half-pixel square.
+                    let w = min(max(input.regionWidth, 0), 1)
+                    let h = min(max(input.regionHeight, 0), 1)
+                    guard w > 0.01, h > 0.01 else {
+                        throw ToolError.invalidArguments(
+                            "region_width and region_height are fractions of the display (0...1). 0.5 is half the screen.")
+                    }
+                    let bounds = CGDisplayBounds(display)
+                    let originX = min(max(input.regionX, 0), 1 - w)
+                    let originY = min(max(input.regionY, 0), 1 - h)
+                    target.rect = CGRect(x: bounds.minX + bounds.width * originX,
+                                         y: bounds.minY + bounds.height * originY,
+                                         width: bounds.width * w,
+                                         height: bounds.height * h)
                 default:
                     target.kind = .display
                     target.displayID = input.displayID > 0 ? UInt32(input.displayID) : CGMainDisplayID()
