@@ -1,10 +1,25 @@
-/* Snapshot: GitHub main af807d3, inspected 2026-11-06. Entries distinguish source inspection, CI and hypotheses. */
+/* Source activity and CI snapshot: GitHub main d8d32ff, updated 2026-11-13. */
 window.LUMEN_SEED = {
   repository: "duggal1/lumen",
-  sourceSha: "af807d31303f1ea8f7b98c77fe55552c37b51e9f",
-  sourceTime: "2026-11-06T10:33:00Z",
-  ci: {status:"failure",run:42203513453,stage:"Build debug",sha:"af807d31303f1ea8f7b98c77fe55552c37b51e9f",
-    detail:"Swift 6 concurrency error: non-Sendable [AVAssetTrack] crosses an isolation boundary at Sources/LumenUI/EditorModel.swift:381. Test and packaging steps skipped."},
+  sourceSha: "d8d32ffc2208b43a6e2c58eb33837ce942cf52b1",
+  sourceTime: "2026-11-13T09:32:34Z",
+  ci: {status:"failure",run:43402399453,stage:"Build debug",sha:"d8d32ffc2208b43a6e2c58eb33837ce942cf52b1",
+    detail:"Swift 6 rejects the non-Sendable SCShareableContent result at Sources/LumenActuator/Runner.swift:266. Tests and packaging are skipped."},
+  activity: {
+    updatedAt: "2026-11-13T12:43:36Z",
+    mainCommitCount: 115,
+    pullRequest: {number:22,state:"open",draft:true,headSha:"1b8fe64036d8b861f8c16f4c797140df8239e59b",commitCount:60,
+      ci:{status:"failure",run:43413001450,stage:"Tests",detail:"Agent3Tests expects 4 registered tools but receives 5; the 219-test run ended with one failure."}},
+    groups: [
+      {time:"Nov 13 · 3:20–4:26 PM IST",source:"PR #22 · draft",title:"Agent workflow and editor tools",summary:"Added bounded job polling, explicit marker time anchors, reducer-backed draft edits, approved clip import, renderer reuse, revision-safe saves, local grants, and a one-call demo workflow.",commits:["10ebc99","df19149","6cda8da","07031df","e3f69fc","1b8fe64"]},
+      {time:"Nov 13 · 2:23–3:02 PM IST",source:"main",title:"Main branch fixes and merged agent work",summary:"Merged PRs #20 and #21, added preview-frame support, ignored the local Filmcraft clone, corrected verification guidance, and updated privacy-mask, test, and studio-audio paths.",commits:["c5744ab","3312683","d8d32ff"]},
+      {time:"Nov 13 · 12:12–1:54 PM IST",source:"main",title:"Agent safety and transport",summary:"Confined file access, required approved app targets and privacy scans, made dry runs no-ops, hardened socket handling, gated virtual input, and recorded useful audit context.",commits:["498d32f","e98f0f9","cf9ecc1","c5744ab"]},
+      {time:"Nov 13 · 1:22–2:31 AM IST",source:"main",title:"In-app MCP runtime",summary:"Added the agent runtime seam and marker sidecar, authenticated the in-app server, shipped the CLI, and added smoke coverage and grant reset behavior.",commits:["9480e79","83f5364","ddeb1fe"]},
+      {time:"Nov 13 · 12:03 AM IST",source:"main",title:"Open-access wallpaper catalog",summary:"Added catalog metadata and 20 bundled public-domain painting wallpapers, then replaced the background dropdown with source tabs.",commits:["8a26bd5","1ac8f28"]},
+      {time:"Nov 12 · 10:02–11:18 PM IST",source:"main",title:"Preview throughput and continuous camera motion",summary:"Moved preview timing and asset decode off the main thread, bounded GPU work, reused mip chains, narrowed privacy-mask work, and kept camera movement continuous along caret paths.",commits:["ba5d1cf","24fcab4","f04ada7"]},
+      {time:"Nov 12 · 7:32–9:10 PM IST",source:"main",title:"Camera timing and click precision",summary:"Added C2 camera motion, tracked capture scale and window origin, scheduled arrivals before clicks, measured centering tolerance, and reported zoom-target accuracy.",commits:["f2986e5","77ea1ce","02eb162","d93974f"]}
+    ]
+  },
   notes: ["Live repository root is Sources/, not studio/. This tracker does not rename production directories.", "PR merge proves code integration, not user-visible runtime behavior.", "Lumen is a screen recorder. Text paste-to-app behavior is not established as a Lumen feature."],
   issues: [
     {id:"LUM-001",area:"Build",title:"Latest Swift build fails on AVAssetTrack isolation",priority:"P0",state:"blocked",evidence:"ci",confidence:"confirmed",code:"plan",pr:null,impact:"Blocks all later CI gates on main",summary:"The newest macOS workflow stops at swift build. swift test, app packaging and signature verification are skipped.",repro:["Checkout main at af807d3 on macOS 15 with the CI toolchain.","Run swift build with Swift strict concurrency enabled.","Inspect the error at EditorModel.swift:381 and verify tests never start."],cause:"A non-Sendable [AVAssetTrack] is crossing the concurrency boundary in an async loadTracks(withMediaType:) call. The precise actor-safe repair must follow source inspection.",files:["Sources/LumenUI/EditorModel.swift",".github/workflows/swift-verify.yml"],tests:{kind:"failed",text:"Build debug failed; downstream gates skipped",url:"https://github.com/duggal1/lumen/actions/runs/42203513453"},fix:["Inspect enclosing actor isolation and AVFoundation async usage at line 381.","Apply the smallest concurrency-correct change without blanket @unchecked Sendable.","Run swift build, swift test, release packaging and codesign on macOS CI."]},
