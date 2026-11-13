@@ -39,20 +39,21 @@ public final class HumanWatchdog: @unchecked Sendable {
     }
 
     /// Call while the script is running. Returns a takeover reason, if any.
-    public func check() -> Takeover? {
+    // AGENT: compare against the last synthesized position instead of the previous action's position.
+    public func check(expected: CGPoint? = nil) -> Takeover? {
         lock.lock(); defer { lock.unlock() }
         guard armed else { return nil }
         // Escape counting: the key bit is set while the key is held.
         let escapeDown = CGEventSource.keyState(.combinedSessionState, key: 53)
         if escapeDown && !lastEscapeDown {
             escapeCount += 1
-            if escapeCount >= 3 { return .escaped }
+            if escapeCount >= 3 { lastEscapeDown = escapeDown; return .escaped }
         }
         lastEscapeDown = escapeDown
         let point = InputSynthesizer.currentMouseLocation()
-        if let last = lastPoint {
+        if let last = expected ?? lastPoint {
             let dx = point.x - last.x, dy = point.y - last.y
-            if (dx * dx + dy * dy).squareRoot() > 30 { return .humanMoved }
+            if (dx * dx + dy * dy).squareRoot() > 12 { return .humanMoved }
         }
         lastPoint = point
         return nil
@@ -94,18 +95,23 @@ public actor ScriptRunner {
     /// Runs the script and returns the markers it produced.
     @discardableResult
     public func run(_ script: DemoScript, checkpoint: Checkpoint? = nil) async throws -> [CaptureMarker] {
+        // AGENT: virtual delivery currently falls through to HID; refuse it until isolated delivery is implemented.
+        guard mode == .physical else { throw ActuatorError.failed("Virtual mode is unavailable; use physical mode after approving the target app.") }
         bundleID = script.app.bundleID ?? bundleID
         let allowed = allowedBundles.union([bundleID].compactMap { $0 })
         if !allowed.isEmpty { synth.gate = ActuationGate(allowed: allowed) }
         watchdog.arm()
-        defer { watchdog.disarm() }
+        synth.checkpoint = { [watchdog, weak synth] in
+            if let takeover = watchdog.check(expected: synth?.lastPosted) { throw ActuatorError.humanTakeover(takeover) }
+        }
+        defer { synth.checkpoint = nil; watchdog.disarm() }
         var markers: [CaptureMarker] = []
         for (index, step) in script.steps.enumerated() {
             try Task.checkCancellation()
             let start = HostClock.now()
             var resolved: CGRect?
             for action in step.do {
-                if let takeover = watchdog.check() {
+                if let takeover = watchdog.check(expected: synth.lastPosted) {
                     throw ActuatorError.humanTakeover(takeover)
                 }
                 resolved = try await perform(action, fallbackRect: resolved)
@@ -133,7 +139,7 @@ public actor ScriptRunner {
     private func nap(_ seconds: Double) async throws {
         var remaining = seconds
         while remaining > 0 {
-            if let takeover = watchdog.check() { throw ActuatorError.humanTakeover(takeover) }
+            if let takeover = watchdog.check(expected: synth.lastPosted) { throw ActuatorError.humanTakeover(takeover) }
             let slice = min(remaining, 0.1)
             try await Task.sleep(for: .seconds(slice))
             remaining -= slice
@@ -161,7 +167,7 @@ public actor ScriptRunner {
                 let matches = AXSupport.find(TargetRef(role: wait.role, title: wait.title,
                                                        identifier: wait.identifier, index: 0), bundleID: bundleID)
                 if !matches.isEmpty { return fallbackRect }
-                if let takeover = watchdog.check() { throw ActuatorError.humanTakeover(takeover) }
+                if let takeover = watchdog.check(expected: synth.lastPosted) { throw ActuatorError.humanTakeover(takeover) }
                 try await Task.sleep(for: .milliseconds(120))
             }
             throw ActuatorError.timeout("No element matched \(wait.role ?? "any") / \(wait.title ?? "")")
