@@ -313,10 +313,13 @@ struct Inspector: View {
 
     @ViewBuilder
     private var generatedBackgroundControls: some View {
-        let m = model
-        VStack(spacing: 0) {
-            DitherPaletteGrid(model: m, kind: wallpaperSource == .canvas ? .canvas : .dither)
-            ToggleRow(label: "Saturation", on: m.bind(\.style.ditherSaturation))
+        if wallpaperSource == .canvas {
+            CanvasPresetGrid(model: model)
+        } else {
+            VStack(spacing: 0) {
+                DitherPaletteGrid(model: model, kind: .dither)
+                ToggleRow(label: "Saturation", on: model.bind(\.style.ditherSaturation))
+            }
         }
     }
 
@@ -332,12 +335,23 @@ struct Inspector: View {
                 if let choice { style.style.setPhotoBackground(choice.url.path) }
                 else { style.style.background = .image }
             }
-        case .canvas, .dither:
-            let kind: BackgroundKind = source == .canvas ? .canvas : .dither
-            let paletteExists = DitherPalettes.all.contains { $0.1 == model.timeline.style.colors }
-            guard model.timeline.style.background != kind || !paletteExists else { return }
+        case .canvas:
+            let currentStyle = model.timeline.style
+            let selectedPreset = CanvasPresets.all.first { $0.id == currentStyle.canvasPresetID }
+            let hasCanvasPreset = selectedPreset != nil
+            guard currentStyle.background != .canvas || !hasCanvasPreset else { return }
+            let preset = selectedPreset ?? CanvasPresets.all[0]
             model.edit { style in
-                style.style.background = kind
+                style.style.background = .canvas
+                style.style.canvasPresetID = preset.id
+                style.style.colors = preset.colors
+                style.style.gradientAngle = preset.angle
+            }
+        case .dither:
+            let paletteExists = DitherPalettes.all.contains { $0.1 == model.timeline.style.colors }
+            guard model.timeline.style.background != .dither || !paletteExists else { return }
+            model.edit { style in
+                style.style.background = .dither
                 if !paletteExists { style.style.colors = DitherPalettes.all[0].1 }
             }
         }

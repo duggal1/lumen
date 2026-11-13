@@ -66,9 +66,9 @@ public struct Geometry: Sendable {
 
 private struct QuadU { var rect: SIMD4<Float>; var canvas: SIMD2<Float> }
 private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; var angle: Float; var count: Int32; var kind: Int32
-                           var radius: Float; var shadow: Float; var scale: Float; var cell: Float; var density: Float; var hasWall: Int32
+                           var canvasStyle: Int32; var radius: Float; var shadow: Float; var scale: Float; var cell: Float; var density: Float; var hasWall: Int32
                            var time: Float; var pointer: SIMD4<Float>; var wallBlur: Float; var imgAlpha: Float; var imgContrast: Float; var imgBright: Float
-                           var saturation: Float }
+                           var saturation: Float; var canvasCenter: SIMD2<Float>; var canvasGround: SIMD4<Float> }
 private struct ContentU {
     var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>
     var scale: Float; var radius: Float; var border: Float; var p: Float
@@ -654,8 +654,16 @@ public final class Renderer: @unchecked Sendable {
                 e.setRenderPipelineState(pBackdrop)
                 quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
                 let st = tl.style
-                var cols = st.colors.isEmpty ? [SIMD4<Float>(0, 0, 0, 1)] : st.colors.map(\.simd)
+                let canvasPreset = CanvasPresets.all.first { $0.id == st.canvasPresetID }
+                let colorCount = max(min(st.colors.count, 6), 1)
+                var cols = st.colors.prefix(6).map(\.simd)
+                if cols.isEmpty { cols = [SIMD4<Float>(0, 0, 0, 1)] }
                 if cols.count < 6 { cols += [SIMD4<Float>](repeating: cols[0], count: 6 - cols.count) }
+                let meshPoints = canvasPreset?.points ?? CanvasPreset.defaultPoints
+                for index in 0..<6 {
+                    let point = meshPoints[index % meshPoints.count]
+                    cols.append(SIMD4<Float>(Float(point.x), Float(point.y), 0, 0))
+                }
                 let kind: Int32 = switch st.background {
                 case .gradient: 0
                 case .mesh: 1
@@ -665,18 +673,30 @@ public final class Renderer: @unchecked Sendable {
                 case .solid: 2
                 case .image: 8
                 }
+                // AGENT: the Studio preset selects the shader family persisted in Style.
+                let canvasStyle: Int32 = switch canvasPreset?.style ?? .mesh {
+                case .mesh: 0
+                case .fluid: 1
+                case .waves: 2
+                case .orbs: 3
+                case .linear: 4
+                case .radial: 5
+                case .conic: 6
+                }
                 let hasStyleImage = st.background == .image && a.styleImage != nil
                 if st.background == .wallpaper, let wallTex = a.wall?.tex { e.setFragmentTexture(wallTex, index: 0) }
                 if hasStyleImage, let styleImage = a.styleImage?.tex { e.setFragmentTexture(styleImage, index: 0) }
                 frag(e, BackdropU(content: SIMD4<Float>(g.content), canvas: canvasF, angle: Float(st.gradientAngle * .pi / 180),
-                                  count: Int32(max(st.colors.count, 1)), kind: kind,
+                                  count: Int32(colorCount), kind: kind, canvasStyle: canvasStyle,
                                   radius: Float(g.radius), shadow: Float(st.shadow), scale: Float(g.ui * 1.33),
                                   cell: Float(max(2, st.ditherCell * g.ui)), density: Float(st.ditherDensity),
                                   hasWall: (st.background == .wallpaper && a.wall != nil) || hasStyleImage ? 1 : 0,
                                   time: Float(backgroundTime), pointer: pointer,
                                   wallBlur: Float(st.wallpaperBlur), imgAlpha: Float(st.imageOpacity),
                                   imgContrast: Float(st.imageContrast), imgBright: Float(st.imageBrightness),
-                                  saturation: st.ditherSaturation ? 1 : 0))
+                                  saturation: st.ditherSaturation ? 1 : 0,
+                                  canvasCenter: SIMD2<Float>(Float(canvasPreset?.center.x ?? 0.5), Float(canvasPreset?.center.y ?? 0.5)),
+                                  canvasGround: (canvasPreset?.groundColor ?? st.colors.first ?? RGBA(0x000000)).simd))
                 cols.withUnsafeBytes { e.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()

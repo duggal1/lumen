@@ -34,4 +34,5 @@
 - `MainThreadWatchdog` hashes stall stage names, not stack bytes, so `hangs.json` stays stable across builds.
 - Activity uses absolute minute buckets (1 video light, 5+ brightest) and dot cells, not squares or quantiles.
 - Activity dots use Ramp.heat mixed tokens with neutral controlPressed for zero.
+- Studio Canvas keeps Gradii's 27 named palettes and seven families as fixed, deterministic Metal presets; its web editor's effect controls and loop animation are omitted so the picker stays click-first.
 - Activity empty days are neutral dust dots, never white or BG.

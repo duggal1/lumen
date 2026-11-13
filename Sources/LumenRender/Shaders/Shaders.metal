@@ -34,9 +34,9 @@ static float rectMask(float2 px, float4 rect, float r) {
 }
 
 // ---- Backdrop (cached): dither / wallpaper / gradient / mesh / solid + two-layer shadow
-struct BackdropU { float4 content; float2 canvas; float angle; int count; int kind;
+struct BackdropU { float4 content; float2 canvas; float angle; int count; int kind; int canvasStyle;
                    float radius; float shadow; float scale; float cell; float density; int hasWall; float time; float4 pointer;
-                   float wallBlur; float imgAlpha; float imgContrast; float imgBright; float saturation; };
+                   float wallBlur; float imgAlpha; float imgContrast; float imgBright; float saturation; float2 canvasCenter; float4 canvasGround; };
 
 float3 blurredWall(texture2d<float> tex, float2 uv, float2 texSize, float radiusPx) {
     if (radiusPx <= 0.5) return tex.sample(linClamp, uv).rgb;
@@ -84,6 +84,19 @@ static float fieldFbm(float2 p) {
     return value / max(weight, 1e-4);
 }
 
+static float3 canvasRamp(float t, constant float4 *cols, int count) {
+    float f = clamp(t, 0.0, 1.0) * float(max(count - 1, 1));
+    int i = min(int(f), max(count - 2, 0));
+    return mix(cols[i].rgb, cols[min(i + 1, count - 1)].rgb, f - float(i));
+}
+
+static float3 canvasWheel(float t, constant float4 *cols, int count) {
+    float f = fract(t) * float(max(count, 1));
+    int i = min(int(f), count - 1);
+    int j = (i + 1) % count;
+    return mix(cols[i].rgb, cols[j].rgb, smoothstep(0.0, 1.0, fract(f)));
+}
+
 fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)]], constant float4 *cols [[buffer(1)]],
                            texture2d<float> wall [[texture(0)]]) {
     float2 uv = in.px / u.canvas;
@@ -102,11 +115,45 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
         float threshold = kBayer8[cellIndex.y * 8 + cellIndex.x];
         c = value > threshold ? cols[1].rgb : cols[0].rgb;
     } else if (u.kind == 5) {
-        // Canvas: a flat two-tone pixel weave. Static, so it reads as paper rather than motion.
-        float cell = max(4.0, u.cell);
-        float2 g = floor(in.px / cell);
-        float alt = fmod(g.x + g.y, 2.0);
-        c = mix(cols[0].rgb, cols[1].rgb, alt * 0.14);
+        // AGENT: Studio canvas presets need real render styles, not thumbnail-only palette changes.
+        float aspect = u.canvas.x / u.canvas.y;
+        float2 p = (uv - 0.5) * float2(aspect, 1.0);
+        if (u.canvasStyle == 0) {
+            float3 acc = float3(0.0); float ws = 0.0;
+            for (int i = 0; i < 6; ++i) {
+                float2 d = (uv - cols[6 + i].xy) * float2(aspect, 1.0);
+                float w = exp(-dot(d, d) * 7.0);
+                acc += cols[i % max(u.count, 1)].rgb * w; ws += w;
+            }
+            c = acc / max(ws, 1e-4);
+        } else if (u.canvasStyle == 1) {
+            float warp = fieldFbm(p * 1.7 + float2(1.4, -0.8));
+            float field = fieldFbm(p * 2.5 + (warp - 0.5) * 1.8);
+            c = canvasRamp(smoothstep(0.08, 0.92, field), cols, u.count);
+        } else if (u.canvasStyle == 2) {
+            float2 direction = float2(cos(u.angle), sin(u.angle));
+            float along = dot(p, direction), across = dot(p, float2(-direction.y, direction.x));
+            float wave = sin(across * 12.0 + sin(along * 5.0) * 2.0 + fieldNoise(p * 2.0) * 1.2);
+            c = canvasRamp(smoothstep(-0.95, 0.95, wave), cols, u.count);
+        } else if (u.canvasStyle == 3) {
+            float3 acc = float3(0.0); float ws = 0.0;
+            for (int i = 0; i < 6; ++i) {
+                float2 d = (uv - cols[6 + i].xy) * float2(aspect, 1.0);
+                float w = exp(-dot(d, d) * 22.0);
+                acc += cols[i % max(u.count, 1)].rgb * w; ws += w;
+            }
+            c = mix(u.canvasGround.rgb, acc / max(ws, 1e-4), clamp(ws * 0.55, 0.0, 1.0));
+        } else if (u.canvasStyle == 4) {
+            float2 direction = float2(cos(u.angle), sin(u.angle));
+            float t = dot(uv - 0.5, direction) / (abs(direction.x) + abs(direction.y)) + 0.5;
+            c = canvasRamp(t, cols, u.count);
+        } else if (u.canvasStyle == 5) {
+            float radius = length((uv - u.canvasCenter) * float2(aspect, 1.0));
+            c = canvasRamp(1.0 - clamp(radius / 1.05, 0.0, 1.0), cols, u.count);
+        } else {
+            float phase = atan2(p.y, p.x) / 6.28318530718 + 0.5;
+            c = canvasWheel(phase, cols, u.count);
+        }
     } else if (u.kind == 4 && u.hasWall == 1) {
         // macOS wallpaper, filled like cover.
         float2 ts = float2(wall.get_width(), wall.get_height());
@@ -138,7 +185,7 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
         }
         c = acc / max(ws, 1e-4);
     }
-    if (u.kind == 3 || u.kind == 5) {
+    if (u.kind == 3) {
         float luminance = dot(c, float3(0.2126, 0.7152, 0.0722));
         c = mix(float3(luminance), c, clamp(u.saturation, 0.0, 1.0));
     }

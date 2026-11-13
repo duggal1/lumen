@@ -93,6 +93,8 @@ public struct Style: Codable, Equatable, Sendable {
     public var background: BackgroundKind = .image
     public var colors: [RGBA] = [RGBA(0xF4F4F4), RGBA(0xDADADA)]
     public var gradientAngle: Double = 35
+    // AGENT: the preset id preserves its palette and geometry when a project is reopened.
+    public var canvasPresetID = ""
     public var ditherCell: Double = 4, ditherDensity: Double = 0.55, contentScale: Double = 1
     public var ditherSaturation = true
     public var padding: Double = 0.025
@@ -117,12 +119,13 @@ public struct Style: Codable, Equatable, Sendable {
     public var insets: EdgeInsetsN { paddingInsets ?? EdgeInsetsN(all: padding) }
     public var radii: CornerRadii { cornerRadii ?? CornerRadii(all: cornerRadius) }
     enum CodingKeys: String, CodingKey {
-        case background, colors, gradientAngle, ditherCell, ditherDensity, contentScale, ditherSaturation, padding, cornerRadius, shadow, innerBorder, canvas, paddingInsets, cornerRadii, customAspect, wallpaperBlur, backgroundImagePath, imageOpacity, imageContrast, imageBrightness, frameWeight
+        case background, colors, gradientAngle, canvasPresetID, ditherCell, ditherDensity, contentScale, ditherSaturation, padding, cornerRadius, shadow, innerBorder, canvas, paddingInsets, cornerRadii, customAspect, wallpaperBlur, backgroundImagePath, imageOpacity, imageContrast, imageBrightness, frameWeight
     }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         background = c.opt(.background, background); colors = c.opt(.colors, colors); gradientAngle = c.opt(.gradientAngle, gradientAngle)
+        canvasPresetID = c.opt(.canvasPresetID, canvasPresetID)
         ditherCell = c.opt(.ditherCell, ditherCell); ditherDensity = c.opt(.ditherDensity, ditherDensity); contentScale = c.opt(.contentScale, contentScale)
         ditherSaturation = c.opt(.ditherSaturation, ditherSaturation)
         padding = c.opt(.padding, padding); cornerRadius = c.opt(.cornerRadius, cornerRadius); shadow = c.opt(.shadow, shadow)
