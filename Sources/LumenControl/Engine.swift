@@ -71,6 +71,8 @@ public actor Engine {
     public let jobs: JobManager
     public let policy: Policy
     private var handles: [String: Handle] = [:]
+    // AGENT: decoded sessions retain audio and frame readers, so the daemon needs a small LRU bound.
+    private var handleOrder: [String] = []
     private let refs = OSAllocatedUnfairLock<[ProjectRef]>(initialState: [])
 
     public init(runtime: LumenRuntime, jobs: JobManager, policy: Policy) {
@@ -120,8 +122,22 @@ public actor Engine {
         // AGENT: cached detections alone cannot prove that a complete privacy scan ran.
         handle.privacy = .notScanned
         handles[identifier] = handle
+        handleOrder.removeAll { $0 == identifier }
+        handleOrder.append(identifier)
+        while handleOrder.count > 4 {
+            let evicted = handleOrder.removeFirst()
+            handles[evicted] = nil
+        }
         remember(ref)
         return ref
+    }
+
+    /// Closes an open project session and releases its decoded media resources.
+    public func closeProject(projectID: String) -> Bool {
+        let removed = handles.removeValue(forKey: projectID) != nil
+        handleOrder.removeAll { $0 == projectID }
+        refs.withLock { $0.removeAll { $0.identifier == projectID } }
+        return removed
     }
 
     // AGENT: the same canonical project path always yields the same agent identifier.
@@ -131,7 +147,11 @@ public actor Engine {
 
     /// Ensures a project is open, opening it from the library when needed.
     private func requireHandle(_ projectID: String) async throws -> Handle {
-        if let h = handles[projectID] { return h }
+        if let h = handles[projectID] {
+            handleOrder.removeAll { $0 == projectID }
+            handleOrder.append(projectID)
+            return h
+        }
         let library = await runtime.recordingLibrary()
         if let match = library.first(where: { Self.projectID($0) == projectID }) {
             let ref = try await openProject(at: match.path)

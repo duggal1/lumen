@@ -73,6 +73,17 @@ public struct TimelineGetInput: ToolInput {
     }
 }
 
+/// AGENT: agents need to release cached project sessions when they finish a project.
+public struct ProjectCloseInput: ToolInput {
+    public var projectID: String = ""
+    public init() {}
+    enum CodingKeys: String, CodingKey { case projectID = "project_id" }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    }
+}
+
 /// One typed timeline operation. Flat and explicit so an agent cannot send
 /// an expression it does not understand.
 ///
@@ -428,6 +439,13 @@ public extension ToolRegistry {
             description: "Reads the editable timeline of a project: zooms, cuts, ramps, style, cursor, audio, captions and privacy, plus the current revision.",
             capability: .read, required: ["project_id"]) { input, ctx in
                 try await ctx.engine.timelineValue(projectID: input.projectID)
+            })
+
+        register(ToolDefinition<ProjectCloseInput>(name: "project_close",
+            description: "Closes an open project session and releases its decoded media resources.",
+            capability: .read, required: ["project_id"], mutating: true) { input, ctx in
+                let closed = await ctx.engine.closeProject(projectID: input.projectID)
+                return .object(["project_id": .string(input.projectID), "closed": .bool(closed)])
             })
 
         register(ToolDefinition<TimelinePatchInput>(name: "timeline_patch",

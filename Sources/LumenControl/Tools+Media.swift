@@ -233,8 +233,20 @@ public struct ExportCancelInput: ToolInput {
     }
 }
 
+/// AGENT: preset discovery avoids making agents infer valid export names from errors.
+public struct ExportPresetsInput: ToolInput {
+    public init() {}
+}
+
 public extension ToolRegistry {
     func registerMediaTools() {
+        register(ToolDefinition<ExportPresetsInput>(name: "export_presets",
+            description: "Lists supported export preset names and the default preset.",
+            capability: .read) { _, _ in
+                return .object(["presets": .array(ExportPresets.all.map { .string($0.name) }),
+                                "default": .string("1080p30-h264")])
+            })
+
         register(ToolDefinition<AudioImportInput>(name: "audio_import",
             description: "Adds an MP3, WAV or M4A to a project: music, voice-over or a sound effect. Anchor it to a marker or to an output time.",
             capability: .edit, required: ["project_id", "path"], mutating: true) { input, ctx in
