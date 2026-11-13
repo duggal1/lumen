@@ -8,7 +8,7 @@ import LumenCapture
 
 struct Inspector: View {
     let model: EditorModel
-    enum Tab: String, CaseIterable { case background = "Background", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
+    enum Tab: String, CaseIterable { case background = "Studio", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
 
 
     static func visibleFor(model: EditorModel) -> [Inspector.Tab] {
@@ -40,6 +40,7 @@ struct Inspector: View {
             .onAppear {
                 if let saved = UserDefaults.standard.string(forKey: "lumen.inspector.tab") {
                     if saved == "Transcript" { tab = .captions }
+                    else if saved == "Background" { tab = .background }
                     else if let t = Inspector.Tab(rawValue: saved) { tab = t }
                 } else {
                     tab = .background
@@ -314,22 +315,8 @@ struct Inspector: View {
     private var generatedBackgroundControls: some View {
         let m = model
         VStack(spacing: 0) {
-            Row(label: "Palette") {
-                LDropdown(sel: paletteName(m),
-                          options: DitherPalettes.all.map { ($0.0, $0.0, "circle.lefthalf.filled") }
-                            + (DitherPalettes.all.contains { $0.1 == m.timeline.style.colors } ? [] : [("Custom", "Custom", "paintpalette")]))
-                    .frame(width: 130)
-            }
-            Row(label: "Canvas color") {
-                ColorPicker("Canvas color", selection: canvasColor(m, index: 0), supportsOpacity: false).labelsHidden()
-            }
-            Row(label: "Pattern color") {
-                ColorPicker("Pattern color", selection: canvasColor(m, index: 1), supportsOpacity: false).labelsHidden()
-            }
-            if wallpaperSource == .dither {
-                SliderRow(label: "Cell", v: m.bind(\.style.ditherCell), range: 2...24, fmt: { "\(Int($0)) pt" })
-                SliderRow(label: "Ink", v: m.bind(\.style.ditherDensity), range: 0.15...0.9, fmt: { "\(Int($0 * 100))%" })
-            }
+            DitherPaletteGrid(model: m, kind: wallpaperSource == .canvas ? .canvas : .dither)
+            ToggleRow(label: "Saturation", on: m.bind(\.style.ditherSaturation))
         }
     }
 
@@ -347,8 +334,12 @@ struct Inspector: View {
             }
         case .canvas, .dither:
             let kind: BackgroundKind = source == .canvas ? .canvas : .dither
-            guard model.timeline.style.background != kind else { return }
-            model.edit { $0.style.background = kind }
+            let paletteExists = DitherPalettes.all.contains { $0.1 == model.timeline.style.colors }
+            guard model.timeline.style.background != kind || !paletteExists else { return }
+            model.edit { style in
+                style.style.background = kind
+                if !paletteExists { style.style.colors = DitherPalettes.all[0].1 }
+            }
         }
     }
 
@@ -368,6 +359,7 @@ struct Inspector: View {
     private var backgroundPage: some View {
         let m = model
         return VStack(spacing: 16) {
+            MusicPicker(model: m).card(padding: 16)
             VStack(spacing: 0) {
                 if m.session.webcam != nil {
                     ToggleRow(label: "Show face cam", on: Binding(get: { m.timeline.webcam != nil }, set: { m.setWebcam($0) }))
@@ -499,25 +491,6 @@ struct Inspector: View {
                     set: { m.snapEnabled = $0 }))
             }.card(padding: 16)
         }
-    }
-
-    private func paletteName(_ m: EditorModel) -> Binding<String> {
-        Binding(get: { DitherPalettes.all.first { $0.1 == m.timeline.style.colors }?.0 ?? "Custom" },
-                set: { name in if name != "Custom" { m.edit { $0.style.colors = DitherPalettes.colors(named: name) } } })
-    }
-
-    private func canvasColor(_ m: EditorModel, index: Int) -> Binding<Color> {
-        Binding(get: {
-            let colors = m.timeline.style.colors
-            let c = colors.indices.contains(index) ? colors[index] : RGBA(0xF4F4F4)
-            return Color(.sRGB, red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
-        }, set: { color in
-            guard let c = NSColor(color).usingColorSpace(.sRGB) else { return }
-            m.edit(coalesce: true) { timeline in
-                while timeline.style.colors.count <= index { timeline.style.colors.append(RGBA(0xF4F4F4)) }
-                timeline.style.colors[index] = RGBA(r: Float(c.redComponent), g: Float(c.greenComponent), b: Float(c.blueComponent))
-            }
-        })
     }
 
     private func clickColor(_ m: EditorModel) -> Binding<Color> {

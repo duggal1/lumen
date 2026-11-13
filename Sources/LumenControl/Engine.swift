@@ -12,12 +12,32 @@ import LumenExport
 import LumenActuator
 import LumenSpeech
 
+/// Applies a user-intent command through the one reducer the UI uses.
+///
+/// AGENT: the agent mutated the timeline directly, so it skipped the
+/// validation, the effect tracking and the manual-origin rules that every UI
+/// edit obeys. Both paths now end in `reduce`.
+func applyCommand(_ command: Command, to timeline: inout Timeline) throws {
+    let context = ReduceContext(playhead: 0, duration: timeline.timeMap.sourceDuration)
+    do {
+        _ = try reduce(&timeline, command, ctx: context)
+    } catch let error as CommandError {
+        switch error {
+        case .invalid(let message): throw ToolError.invalidArguments(message)
+        case .notFound(let id): throw ToolError.failed("No element with id \(id.uuidString).")
+        }
+    }
+}
+
 /// The command layer. Every capture, edit, verify and export action the agent
 /// can take goes through here, and every one of them calls the SAME existing
 /// code the UI calls: `Director.derive`, `ProjectSession`, `Exporter`,
 /// `AudioMixer`, `AccuracyReport` and the privacy scan.
 ///
 /// The engine is an actor. Long work runs in jobs, never on the main actor.
+
+// MARK: - Engine
+
 public actor Engine {
     public struct ProjectRef: Sendable, Equatable {
         public let identifier: String

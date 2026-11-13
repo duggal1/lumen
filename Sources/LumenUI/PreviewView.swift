@@ -92,8 +92,7 @@ private final class PreviewDriver: NSObject, @unchecked Sendable {
         let now = l.targetTimestamp
         let (tl, version) = box.get()
         let ds = shared.drawable
-        let animated = (tl.style.background == .dither || tl.style.background == .wave || tl.style.background == .field)
-            && !shared.reduceMotion
+        let animated = tl.style.background == .dither && !shared.reduceMotion
         let dt = lastPointerTime > 0 ? min(max(now - lastPointerTime, 0), 0.1) : 0
         lastPointerTime = now
         pointer += (shared.pointerTarget - pointer) * (1 - exp(-dt * 7))
@@ -103,18 +102,18 @@ private final class PreviewDriver: NSObject, @unchecked Sendable {
         // SMOOTHNESS: a paused animated backdrop only needs 30 Hz phase; 240 Hz
         // re-renders an otherwise static frame every tick.
         let phase = animated ? Int(uiTime * (playing ? 240 : 30)) : 0
-        // SMOOTHNESS: the pointer only reaches the shader for the wave backdrop,
+        // SMOOTHNESS: the pointer only reaches the Dither shader,
         // so it must not invalidate the frame key (and re-render) otherwise.
-        let wave = animated && tl.style.background == .wave
+        let dither = animated && tl.style.background == .dither
         let key = FrameKey(version: version, t: t, width: Int(ds.width), height: Int(ds.height), phase: phase,
-                           px: wave ? Int(pointer.x * 1000) : 0,
-                           py: wave ? Int(pointer.y * 1000) : 0,
-                           pz: wave ? Int(pointer.z * 1000) : 0)
+                           px: dither ? Int(pointer.x * 1000) : 0,
+                           py: dither ? Int(pointer.y * 1000) : 0,
+                           pz: dither ? Int(pointer.z * 1000) : 0)
         guard key != lastKey, ds.width > 2 else { return }
         lastKey = key
         feed.yield(Tick(timeline: tl, t: t, size: SIMD2(Int(ds.width), Int(ds.height)), present: present,
                         fps: 1 / interval, uiTime: uiTime,
-                        pointer: wave ? SIMD4(Float(pointer.x), Float(pointer.y), Float(pointer.z), 0) : .zero,
+                        pointer: dither ? SIMD4(Float(pointer.x), Float(pointer.y), Float(pointer.z), 0) : .zero,
                         backingScale: backingScale, maskDirectory: maskDirectory))
     }
 }

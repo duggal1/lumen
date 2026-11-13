@@ -266,15 +266,22 @@ public final class AudioMixer: @unchecked Sendable {
             guard let path = lane.path, let track = importTrack(path) else { continue }
             let offset = Int(max(0, lane.placement) * fs)
             guard offset < n else { continue }
-            let count = min(n - offset, track.l.count)
+            let sourceCount = min(track.l.count, track.r.count)
+            let trimStart = lane.trimStart.flatMap { $0.isFinite ? max($0, 0) : nil } ?? 0
+            let sourceOffset = Int(min(trimStart * fs, Double(sourceCount)))
+            let available = sourceCount - sourceOffset
+            let duration = lane.trimDuration.flatMap { $0.isFinite ? max($0, 0) : nil }
+            let trimmedCount = duration.map { Int(min($0 * fs, Double(available))) } ?? available
+            let count = min(n - offset, trimmedCount)
+            guard count > 0 else { continue }
             let gain = Float(pow(10, clamp(lane.gainDb, -60, 24) / 20))
             let fadeLength = min(Int(0.01 * fs), count / 2)
             for i in 0..<count {
                 let fadeIn = fadeLength > 0 ? min(1, Float(i) / Float(fadeLength)) : 1
                 let fadeOut = fadeLength > 0 ? min(1, Float(count - i - 1) / Float(fadeLength)) : 1
                 let g = gain * min(fadeIn, fadeOut)
-                L[offset + i] += track.l[i] * g
-                R[offset + i] += track.r[i] * g
+                L[offset + i] += track.l[sourceOffset + i] * g
+                R[offset + i] += track.r[sourceOffset + i] * g
             }
             hasProgram = true
         }

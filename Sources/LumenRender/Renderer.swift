@@ -67,7 +67,8 @@ public struct Geometry: Sendable {
 private struct QuadU { var rect: SIMD4<Float>; var canvas: SIMD2<Float> }
 private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; var angle: Float; var count: Int32; var kind: Int32
                            var radius: Float; var shadow: Float; var scale: Float; var cell: Float; var density: Float; var hasWall: Int32
-                           var time: Float; var pointer: SIMD4<Float>; var wallBlur: Float; var imgAlpha: Float; var imgContrast: Float; var imgBright: Float }
+                           var time: Float; var pointer: SIMD4<Float>; var wallBlur: Float; var imgAlpha: Float; var imgContrast: Float; var imgBright: Float
+                           var saturation: Float }
 private struct ContentU {
     var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>
     var scale: Float; var radius: Float; var border: Float; var p: Float
@@ -638,10 +639,9 @@ public final class Renderer: @unchecked Sendable {
         // SMOOTHNESS: one lock snapshot per frame; the decode tasks publish into
         // this same struct, so the render thread never blocks on disk or AppKit.
         let a = assets.withLock { $0 }
-        let patterned = tl.style.background == .wave || tl.style.background == .field
-        let backgroundTime = patterned ? (r.quality == .export ? r.t : r.uiTime)
-            : (tl.style.background == .dither && r.quality == .preview ? r.uiTime : 0)
-        let pointer = tl.style.background == .wave && r.quality == .preview ? r.pointer : .zero
+        let dither = tl.style.background == .dither
+        let backgroundTime = dither ? (r.quality == .export ? r.t : r.uiTime) : 0
+        let pointer = dither && r.quality == .preview ? r.pointer : .zero
         let key = BackdropKey(style: tl.style, size: cs,
                               wall: tl.style.background == .wallpaper ? a.wallID : (tl.style.background == .image ? a.styleImageID : ""),
                               phase: backgroundTime, pointer: pointer)
@@ -663,8 +663,6 @@ public final class Renderer: @unchecked Sendable {
                 case .wallpaper: 4
                 case .canvas: 5
                 case .solid: 2
-                case .wave: 6
-                case .field: 7
                 case .image: 8
                 }
                 let hasStyleImage = st.background == .image && a.styleImage != nil
@@ -677,7 +675,8 @@ public final class Renderer: @unchecked Sendable {
                                   hasWall: (st.background == .wallpaper && a.wall != nil) || hasStyleImage ? 1 : 0,
                                   time: Float(backgroundTime), pointer: pointer,
                                   wallBlur: Float(st.wallpaperBlur), imgAlpha: Float(st.imageOpacity),
-                                  imgContrast: Float(st.imageContrast), imgBright: Float(st.imageBrightness)))
+                                  imgContrast: Float(st.imageContrast), imgBright: Float(st.imageBrightness),
+                                  saturation: st.ditherSaturation ? 1 : 0))
                 cols.withUnsafeBytes { e.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()

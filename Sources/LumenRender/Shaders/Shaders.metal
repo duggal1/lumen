@@ -36,7 +36,7 @@ static float rectMask(float2 px, float4 rect, float r) {
 // ---- Backdrop (cached): dither / wallpaper / gradient / mesh / solid + two-layer shadow
 struct BackdropU { float4 content; float2 canvas; float angle; int count; int kind;
                    float radius; float shadow; float scale; float cell; float density; int hasWall; float time; float4 pointer;
-                   float wallBlur; float imgAlpha; float imgContrast; float imgBright; };
+                   float wallBlur; float imgAlpha; float imgContrast; float imgBright; float saturation; };
 
 float3 blurredWall(texture2d<float> tex, float2 uv, float2 texSize, float radiusPx) {
     if (radiusPx <= 0.5) return tex.sample(linClamp, uv).rgb;
@@ -52,65 +52,55 @@ float3 blurredWall(texture2d<float> tex, float2 uv, float2 texSize, float radius
     return sum / ws;
 }
 
-constant float kBayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
+constant float kBayer8[64] = {
+    0.0 / 64.0, 48.0 / 64.0, 12.0 / 64.0, 60.0 / 64.0, 3.0 / 64.0, 51.0 / 64.0, 15.0 / 64.0, 63.0 / 64.0,
+    32.0 / 64.0, 16.0 / 64.0, 44.0 / 64.0, 28.0 / 64.0, 35.0 / 64.0, 19.0 / 64.0, 47.0 / 64.0, 31.0 / 64.0,
+    8.0 / 64.0, 56.0 / 64.0, 4.0 / 64.0, 52.0 / 64.0, 11.0 / 64.0, 59.0 / 64.0, 7.0 / 64.0, 55.0 / 64.0,
+    40.0 / 64.0, 24.0 / 64.0, 36.0 / 64.0, 20.0 / 64.0, 43.0 / 64.0, 27.0 / 64.0, 39.0 / 64.0, 23.0 / 64.0,
+    2.0 / 64.0, 50.0 / 64.0, 14.0 / 64.0, 62.0 / 64.0, 1.0 / 64.0, 49.0 / 64.0, 13.0 / 64.0, 61.0 / 64.0,
+    34.0 / 64.0, 18.0 / 64.0, 46.0 / 64.0, 30.0 / 64.0, 33.0 / 64.0, 17.0 / 64.0, 45.0 / 64.0, 29.0 / 64.0,
+    10.0 / 64.0, 58.0 / 64.0, 6.0 / 64.0, 54.0 / 64.0, 9.0 / 64.0, 57.0 / 64.0, 5.0 / 64.0, 53.0 / 64.0,
+    42.0 / 64.0, 26.0 / 64.0, 38.0 / 64.0, 22.0 / 64.0, 41.0 / 64.0, 25.0 / 64.0, 37.0 / 64.0, 21.0 / 64.0
+};
 
-static float bayer2(float2 a) { a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
-static float bayer4(float2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
-static float bayer8(float2 a) { return bayer4(0.5 * a) * 0.25 + bayer2(a); }
-static float fieldHash(int x, int y, int z) {
-    uint h = uint(x) * 0x27d4eb2du ^ uint(y) * 0x165667b1u ^ uint(z) * 0x1b873593u;
-    h = (h ^ (h >> 15)) * 0x85ebca6bu;
-    h = (h ^ (h >> 13)) * 0xc2b2ae35u;
-    return float(h ^ (h >> 16)) * (1.0 / 4294967296.0);
+static float noiseHash(float2 p) {
+    return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
 }
-static float fieldNoise(float3 p) {
-    int3 i = int3(floor(p));
-    float3 f = fract(p); f = f * f * (3.0 - 2.0 * f);
-    float a = mix(mix(fieldHash(i.x, i.y, i.z), fieldHash(i.x + 1, i.y, i.z), f.x),
-                  mix(fieldHash(i.x, i.y + 1, i.z), fieldHash(i.x + 1, i.y + 1, i.z), f.x), f.y);
-    float b = mix(mix(fieldHash(i.x, i.y, i.z + 1), fieldHash(i.x + 1, i.y, i.z + 1), f.x),
-                  mix(fieldHash(i.x, i.y + 1, i.z + 1), fieldHash(i.x + 1, i.y + 1, i.z + 1), f.x), f.y);
-    return mix(a, b, f.z);
+static float fieldNoise(float2 p) {
+    float2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = noiseHash(i), b = noiseHash(i + float2(1.0, 0.0));
+    float c = noiseHash(i + float2(0.0, 1.0)), d = noiseHash(i + 1.0);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+static float fieldFbm(float2 p) {
+    float value = 0.0, amplitude = 1.0, weight = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        value += amplitude * fieldNoise(p);
+        weight += amplitude;
+        p *= 3.0;
+        amplitude *= 0.3;
+    }
+    return value / max(weight, 1e-4);
 }
 
 fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)]], constant float4 *cols [[buffer(1)]],
                            texture2d<float> wall [[texture(0)]]) {
     float2 uv = in.px / u.canvas;
     float3 c = cols[0].rgb;
-    if (u.kind == 6) {
-        float cell = max(1.0, u.cell);
-        float2 grid = floor(in.px / cell);
-        float2 p = (grid * cell) / u.canvas;
-        p.x *= u.canvas.x / u.canvas.y;
-        if (u.pointer.z > 0.001) {
-            float2 dm = p - float2(u.pointer.x * u.canvas.x / u.canvas.y, u.pointer.y);
-            p += dm * exp(-dot(dm, dm) * 10.0) * 0.22 * u.pointer.z;
-        }
-        float v = u.density + 0.20 * sin(dot(p, normalize(float2(0.55, 1.0))) * 5.2 - u.time * 0.11)
-                            + 0.12 * sin(dot(p, normalize(float2(1.0, 0.28))) * 8.4 + u.time * 0.07);
-        c = v > bayer8(grid) ? cols[1].rgb : cols[0].rgb;
-    } else if (u.kind == 7) {
-        float pitch = max(3.0, u.cell);
-        float2 grid = floor(in.px / pitch);
-        float step = pitch / u.canvas.y;
-        float nx = grid.x * step * 1.4, ny = grid.y * step * 2.6;
-        // Coherent field: Bayer-ordered density with a slow diagonal wave.
-        // One continuous pattern, no hash gaps or clipped dashes.
-        float wave = 0.5 + 0.5 * sin(dot(float2(nx, ny), normalize(float2(0.55, 1.0))) * 6.0 - u.time * 0.05);
-        float density = clamp(wave * u.density * 1.6, 0.0, 1.0);
-        c = density > bayer8(grid) ? cols[1].rgb : cols[0].rgb;
-    } else if (u.kind == 3) {
-        // Two flat tones ordered-dithered under a slow diagonal wave. Display-rate phase; export always sends 0.
+    if (u.kind == 3) {
         float cell = max(2.0, u.cell);
-        float2 g = floor(in.px / cell);
-        int ix = int(g.x) & 3, iy = int(g.y) & 3;
-        float t = (kBayer[iy * 4 + ix] + 0.5) / 16.0;
-        float2 d = float2(cos(u.angle), sin(u.angle));
-        float s = dot(uv - 0.5, d) / max(abs(d.x) + abs(d.y), 1e-3) + 0.5;
-        float wave = 0.5 + 0.5 * sin((s * 3.0 - u.time * 0.35) * 6.2831853);
-        float field = smoothstep(0.08, 0.92, wave);
-        float ink = field * clamp(u.density * 1.8, 0.0, 1.0);
-        c = ink > t ? cols[1].rgb : cols[0].rgb;
+        float2 grid = floor(in.px / cell);
+        float2 p = ((grid * cell) / u.canvas - 0.5) * float2(u.canvas.x / u.canvas.y, 1.0);
+        float2 moving = p - u.time * 0.05;
+        float field = fieldFbm(p + fieldFbm(moving));
+        float value = clamp(0.5 + (field - 0.45) * 2.4, 0.0, 1.0);
+        float2 pointer = (u.pointer.xy - 0.5) * float2(u.canvas.x / u.canvas.y, 1.0);
+        float touch = u.pointer.z * (1.0 - smoothstep(0.0, 0.34, length(p - pointer)));
+        value = clamp(value - touch * 0.55, 0.0, 1.0);
+        int2 cellIndex = int2(grid) & 7;
+        float threshold = kBayer8[cellIndex.y * 8 + cellIndex.x];
+        c = value > threshold ? cols[1].rgb : cols[0].rgb;
     } else if (u.kind == 5) {
         // Canvas: a flat two-tone pixel weave. Static, so it reads as paper rather than motion.
         float cell = max(4.0, u.cell);
@@ -147,6 +137,10 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
             acc += cols[i % max(u.count, 1)].rgb * w; ws += w;
         }
         c = acc / max(ws, 1e-4);
+    }
+    if (u.kind == 3 || u.kind == 5) {
+        float luminance = dot(c, float3(0.2126, 0.7152, 0.0722));
+        c = mix(float3(luminance), c, clamp(u.saturation, 0.0, 1.0));
     }
     float2 h = u.content.zw * 0.5, ctr = u.content.xy + h;
     float s = u.scale;

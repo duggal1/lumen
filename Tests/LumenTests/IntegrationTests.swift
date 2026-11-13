@@ -197,14 +197,15 @@ import LumenExport
     patterned.style.padding = 0.2
     patterned.style.contentScale = 0.5
     patterned.style.colors = [RGBA(0xFFFFFF), RGBA(0x000000)]
-    patterned.style.background = .wave
-    let wave = try await FrameImage.render(renderer: renderer, session: session, timeline: patterned, t: 0.25, canvas: SIMD2(320, 180))
-    patterned.style.background = .field
-    let field = try await FrameImage.render(renderer: renderer, session: session, timeline: patterned, t: 0.25, canvas: SIMD2(320, 180))
-    #expect(pixels(wave) != pixels(field))
+    patterned.style.background = .dither
+    let dither = try await FrameImage.render(renderer: renderer, session: session, timeline: patterned, t: 0.25, canvas: SIMD2(320, 180))
     patterned.style.colors = [RGBA(0xFFFFFF), RGBA(0xFF6A00)]
     let recolored = try await FrameImage.render(renderer: renderer, session: session, timeline: patterned, t: 0.25, canvas: SIMD2(320, 180))
-    #expect(pixels(field) != pixels(recolored))
+    #expect(pixels(dither) != pixels(recolored))
+    for legacy in ["wave", "field"] {
+        let decoded = try JSONDecoder().decode(BackgroundKind.self, from: Data("\"\(legacy)\"".utf8))
+        #expect(decoded == .dither)
+    }
     let restoredStyle = try JSONDecoder().decode(Style.self, from: JSONEncoder().encode(patterned.style))
     #expect(restoredStyle == patterned.style)
     var larger = patterned.style
