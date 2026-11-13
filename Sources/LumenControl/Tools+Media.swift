@@ -190,6 +190,8 @@ public struct ExportStartInput: ToolInput {
     public var exportStems: Bool = false
     // AGENT: export_start can keep one MCP request open when the client needs inline completion.
     public var wait: Bool = false
+    // AGENT: choosing overwrite is explicit; otherwise an existing export is preserved.
+    public var overwrite: Bool = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -199,6 +201,7 @@ public struct ExportStartInput: ToolInput {
     case includeAudio = "include_audio"
     case exportStems = "export_stems"
     case wait
+    case overwrite
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -208,6 +211,7 @@ public struct ExportStartInput: ToolInput {
     self.includeAudio = try c.decodeIfPresent(Bool.self, forKey: .includeAudio) ?? true
     self.exportStems = try c.decodeIfPresent(Bool.self, forKey: .exportStems) ?? false
     self.wait = try c.decodeIfPresent(Bool.self, forKey: .wait) ?? false
+    self.overwrite = try c.decodeIfPresent(Bool.self, forKey: .overwrite) ?? false
     }
 }
 
@@ -381,11 +385,24 @@ public extension ToolRegistry {
                     : input.output
                 guard !output.isEmpty else { throw ToolError.invalidArguments("Give an output path.") }
                 // AGENT: the file does not exist yet, so confine its parent instead of the path.
-                let resolved = try ctx.paths.writablePath(output, ext: PathGuard.videoExt)
+                var resolved = try ctx.paths.writablePath(output, ext: PathGuard.videoExt)
+                if !input.overwrite {
+                    let folder = resolved.deletingLastPathComponent()
+                    let stem = resolved.deletingPathExtension().lastPathComponent
+                    let ext = resolved.pathExtension
+                    var suffix = 2
+                    while FileManager.default.fileExists(atPath: resolved.path) {
+                        let name = ext.isEmpty ? "\(stem)-\(suffix)" : "\(stem)-\(suffix).\(ext)"
+                        resolved = try ctx.paths.writablePath(folder.appendingPathComponent(name).path,
+                                                              ext: PathGuard.videoExt)
+                        suffix += 1
+                    }
+                }
                 let job = try await ctx.engine.startExport(projectID: input.projectID, presetName: input.preset,
                                                           outputPath: resolved.path,
                                                           includeAudio: input.includeAudio,
-                                                          exportStems: input.exportStems)
+                                                          exportStems: input.exportStems,
+                                                          overwrite: input.overwrite)
                 if input.wait {
                     let completed = try await ctx.waitForJob(job)
                     guard case .object(var result) = completed.jsonValue else { return completed.jsonValue }
