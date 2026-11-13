@@ -19,9 +19,10 @@ import LumenProject
         #expect(peak > 0.5)
         #expect(gain == 0)
     }
-    // Per-key typing is rendered from the pack buffers, not the cue path.
+    // A recorded tap is bundled as the fallback when a typing pack sample is unavailable.
     let (keySamples, _) = bank.render(.key, clickTone: .mouse)
-    #expect(keySamples.isEmpty)
+    #expect(!keySamples.isEmpty)
+    #expect(keySamples.reduce(Float(0)) { max($0, abs($1)) } > 0.5)
 }
 
 @Test func bundledMusicLibraryIsPresent() {

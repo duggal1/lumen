@@ -2,9 +2,9 @@ import Foundation
 import Testing
 import Metal
 import CoreVideo
-import Darwin
 import LumenCore
 import LumenProject
+import LumenControl
 @testable import LumenDirector
 @testable import LumenRender
 @testable import LumenExport
@@ -42,184 +42,117 @@ private func tempDirectory() throws -> URL {
 
 // MARK: - MCP
 
-@Test func mcpPreferencesAreOptInAndClampThePort() throws {
-    let name = "lumen.mcp.\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: name))
-    defer { defaults.removePersistentDomain(forName: name) }
-
-    #expect(defaults.bool(forKey: MCPPreferences.enabledKey) == false, "the server is opt-in")
-    #expect(MCPPreferences.port(defaults: defaults) == MCPPreferences.defaultPort)
-
-    defaults.set(0, forKey: MCPPreferences.portKey)
-    #expect(MCPPreferences.port(defaults: defaults) == MCPPreferences.defaultPort)
-    defaults.set(70_000, forKey: MCPPreferences.portKey)
-    #expect(MCPPreferences.port(defaults: defaults) == MCPPreferences.defaultPort)
-    defaults.set(43_210, forKey: MCPPreferences.portKey)
-    #expect(MCPPreferences.port(defaults: defaults) == 43_210)
+private struct MCPFixture {
+    let directory: URL
+    let server: MCPServer
 }
 
-@MainActor
-@Test func mcpHostStaysOffUntilEnabled() {
-    let host = MCPHost()
-    host.configure(enabled: false, port: 0, actions: FakeMCPActions())
-    #expect(host.runningPort == nil, "disabled means no listener is opened")
+private func makeMCPFixture() throws -> MCPFixture {
+    let directory = try tempDirectory()
+    let jobs = JobManager()
+    let policy = Policy(fileURL: directory.appendingPathComponent("policy.json"))
+    let audit = AuditLog(fileURL: directory.appendingPathComponent("audit.jsonl"))
+    let engine = Engine(runtime: MCPTestRuntime(), jobs: jobs, policy: policy)
+    let registry = ToolRegistry()
+    registry.registerStatusTools()
+    let server = MCPServer(registry: registry, engine: engine, policy: policy, jobs: jobs, audit: audit)
+    return MCPFixture(directory: directory, server: server)
 }
 
-@Test func mcpListenerAnswersOnALoopbackSocket() async throws {
-    let server = MCPTCPServer(port: 0) { line in
-        line.contains("\"method\":\"initialize\"")
-            ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\"}}"
-            : nil
+private final class MCPTestRuntime: LumenRuntime {
+    func runtimeStatus() async -> RuntimeStatus {
+        RuntimeStatus(phase: "idle", paused: false, recording: false, permissions: RuntimePermissions(),
+                      libraryPath: "/tmp/Lumen", projects: 4, activeProjectPath: nil, version: "0.1.0")
     }
-    try server.start()
-    defer { server.stop() }
-    let port = try #require(server.boundPort)
-    #expect(port != 0)
 
-    // Every connection authenticates first: "localhost" is not an
-    // authorisation, so the server demands the shared agent token.
-    let token = AgentCredentials.token()
-    let replies = try exchange(port: port, lines: [
-        "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"lumen/auth\",\"params\":{\"token\":\"\(token)\"}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n",
-    ])
-    #expect(replies.count == 2)
-    #expect(replies.last?.contains("\"protocolVersion\":\"2025-06-18\"") == true)
-
-    // Without the token the server refuses to answer.
-    let denied = try exchange(port: port, line: "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n")
-    #expect(denied.contains("Unauthorized"))
-}
-
-/// Blocking loopback exchange. The server answers on the main actor, so the
-/// test deliberately stays off the main actor while waiting on `recv`.
-private func exchange(port: UInt16, line: String) throws -> String {
-    try exchange(port: port, lines: [line]).first ?? ""
-}
-
-/// One connection, several lines, one reply per line.
-private func exchange(port: UInt16, lines: [String]) throws -> [String] {
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
-    guard fd >= 0 else { throw MCPError.socket("socket() failed") }
-    defer { close(fd) }
-    var timeout = timeval(tv_sec: 3, tv_usec: 0)
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-    var addr = sockaddr_in()
-    addr.sin_family = sa_family_t(AF_INET)
-    addr.sin_port = port.bigEndian
-    addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
-    let connected = withUnsafePointer(to: &addr) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-            connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-        }
+    func startRecording(_ target: RecordingTarget, options: RecordingOptions) async throws {
+        throw RuntimeFailure("Not used by this test.")
     }
-    guard connected == 0 else { throw MCPError.socket("connect() failed") }
 
-    var replies: [String] = []
-    var buffer = [UInt8](repeating: 0, count: 4096)
-    for line in lines {
-        var bytes = Array(line.utf8)
-        _ = bytes.withUnsafeBytes { send(fd, $0.baseAddress, $0.count, 0) }
-        var reply = Data()
-        while !reply.contains(0x0A) {
-            let n = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
-            guard n > 0 else { break }
-            reply.append(buffer, count: n)
-        }
-        replies.append(String(decoding: reply, as: UTF8.self).trimmingCharacters(in: .newlines))
-    }
-    return replies
+    func stopRecording() async throws -> URL { throw RuntimeFailure("Not used by this test.") }
+    func pauseRecording() async throws { throw RuntimeFailure("Not used by this test.") }
+    func resumeRecording() async throws { throw RuntimeFailure("Not used by this test.") }
+    func addMarker(_ marker: CaptureMarker) async throws { throw RuntimeFailure("Not used by this test.") }
+    func activeRecordingBundle() async -> URL? { nil }
+    func recordingLibrary() async -> [URL] { [] }
 }
 
-@MainActor
-private final class FakeMCPActions: MCPActions {
-    var status = MCPStatus(phase: "idle", paused: false, recording: false, projects: 4)
-    var started = 0, stopped = 0, paused = 0
-    var opened: String?
-    var exported: (String, String, String)?
-
-    var mcpStatus: MCPStatus { status }
-    func mcpStart() async throws { started += 1; status.phase = "recording"; status.recording = true }
-    func mcpStop() async throws { stopped += 1; status.phase = "idle"; status.recording = false }
-    func mcpPauseToggle() async throws { paused += 1; status.paused.toggle() }
-    func mcpOpen(path: String) throws { opened = path }
-    func mcpExport(project: String, preset: String, output: String) async throws -> String {
-        exported = (project, preset, output); return output
-    }
+private func rpc(_ object: [String: Any]) throws -> String {
+    let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    return String(decoding: data, as: UTF8.self)
 }
 
-@MainActor
-private func rpc(_ object: [String: Any]) -> String {
-    String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self)
-}
-
-@MainActor
 @Test func mcpInitializeListsToolsAndCallsStatus() async throws {
-    let actions = FakeMCPActions()
-    let router = MCPRouter(actions: actions)
+    let fixture = try makeMCPFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
-    let initLine = rpc(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [:]])
-    let initOut = try #require(await router.handle(initLine))
+    let initLine = try rpc(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [:]])
+    let initOut = try #require(await fixture.server.handle(initLine))
     let initJSON = try #require(try JSONSerialization.jsonObject(with: Data(initOut.utf8)) as? [String: Any])
-    let result = try #require(initJSON["result"] as? [String: Any])
-    #expect(result["protocolVersion"] as? String == MCPRouter.protocolVersion)
-    #expect((result["capabilities"] as? [String: Any])?["tools"] != nil)
+    let initResult = try #require(initJSON["result"] as? [String: Any])
+    #expect(initResult["protocolVersion"] as? String == MCPServer.protocolVersion)
+    #expect((initResult["capabilities"] as? [String: Any])?["tools"] != nil)
 
-    let listLine = rpc(["jsonrpc": "2.0", "id": 2, "method": "tools/list"])
-    let listOut = try #require(await router.handle(listLine))
+    let listLine = try rpc(["jsonrpc": "2.0", "id": 2, "method": "tools/list"])
+    let listOut = try #require(await fixture.server.handle(listLine))
     let listJSON = try #require(try JSONSerialization.jsonObject(with: Data(listOut.utf8)) as? [String: Any])
     let listResult = try #require(listJSON["result"] as? [String: Any])
     let tools = try #require(listResult["tools"] as? [[String: Any]])
     let names = Set(tools.compactMap { $0["name"] as? String })
-    #expect(names.contains("lumen_start_recording"))
-    #expect(names.contains("lumen_stop_recording"))
-    #expect(names.contains("lumen_export"))
-    #expect(names.count == 6)
+    #expect(names.contains("lumen_status"))
+    #expect(names.contains("list_apps"))
+    #expect(names.count == 4)
 
-    let statusLine = rpc(["jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                          "params": ["name": "lumen_status", "arguments": [:]]])
-    let statusOut = try #require(await router.handle(statusLine))
+    let statusLine = try rpc(["jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                              "params": ["name": "lumen_status", "arguments": [:]]])
+    let statusOut = try #require(await fixture.server.handle(statusLine, client: "test-client"))
     let statusJSON = try #require(try JSONSerialization.jsonObject(with: Data(statusOut.utf8)) as? [String: Any])
     let statusResult = try #require(statusJSON["result"] as? [String: Any])
-    let content = try #require(statusResult["content"] as? [[String: Any]])
-    #expect((content.first?["text"] as? String)?.contains("\"projects\":4") == true)
+    #expect(statusResult["isError"] as? Bool == false)
+    let status = try #require(statusResult["structuredContent"] as? [String: Any])
+    #expect(status["projects"] as? Int == 4)
 }
 
-@MainActor
-@Test func mcpRoutesRecordingAndExportActions() async throws {
-    let actions = FakeMCPActions()
-    let router = MCPRouter(actions: actions)
+@Test func mcpServerAnswersOverItsUnixSocket() throws {
+    let fixture = try makeMCPFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
-    let start = rpc(["jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                     "params": ["name": "lumen_start_recording", "arguments": [:]]])
-    _ = await router.handle(start)
-    #expect(actions.started == 1)
+    let socketDirectory = URL(fileURLWithPath: "/tmp/lumen-\(UUID().uuidString.prefix(8))", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: socketDirectory) }
+    let socketPath = socketDirectory.appendingPathComponent("agent.sock")
+    let server = UnixSocketServer(socketPath: socketPath, server: fixture.server)
+    try server.start()
+    defer { server.stop() }
 
-    let pause = rpc(["jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                     "params": ["name": "lumen_toggle_pause", "arguments": [:]]])
-    _ = await router.handle(pause)
-    #expect(actions.paused == 1)
+    let client = UnixSocketClient(socketPath: socketPath)
+    defer { client.disconnect() }
+    try client.connect(timeout: 3)
 
-    let export = rpc(["jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                      "params": ["name": "lumen_export",
-                                 "arguments": ["project": "/tmp/a.lumen", "output": "/tmp/a.mp4", "preset": "1080p60-h264"]]])
-    _ = await router.handle(export)
-    #expect(actions.exported?.0 == "/tmp/a.lumen")
-    #expect(actions.exported?.1 == "1080p60-h264")
-    #expect(actions.exported?.2 == "/tmp/a.mp4")
+    let request = try rpc(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [:]])
+    let response = try client.call(request, timeout: 3)
+    let json = try #require(try JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+    let result = try #require(json["result"] as? [String: Any])
+    #expect(result["protocolVersion"] as? String == MCPServer.protocolVersion)
+
+    let directoryAttributes = try FileManager.default.attributesOfItem(atPath: socketDirectory.path)
+    let socketAttributes = try FileManager.default.attributesOfItem(atPath: socketPath.path)
+    let directoryMode = try #require(directoryAttributes[.posixPermissions] as? NSNumber)
+    let socketMode = try #require(socketAttributes[.posixPermissions] as? NSNumber)
+    #expect(directoryMode.intValue & 0o777 == 0o700)
+    #expect(socketMode.intValue & 0o777 == 0o600)
 }
 
-@MainActor
 @Test func mcpErrorsAreJSONRPCShapedAndNotificationsStaySilent() async throws {
-    let router = MCPRouter(actions: FakeMCPActions())
-    let unknown = rpc(["jsonrpc": "2.0", "id": 7, "method": "does/not/exist"])
-    let out = try #require(await router.handle(unknown))
+    let fixture = try makeMCPFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+    let unknown = try rpc(["jsonrpc": "2.0", "id": 7, "method": "does/not/exist"])
+    let out = try #require(await fixture.server.handle(unknown))
     let json = try #require(try JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any])
     #expect((json["error"] as? [String: Any])?["code"] as? Int == -32601)
 
-    let notification = rpc(["jsonrpc": "2.0", "method": "notifications/initialized"])
-    #expect(await router.handle(notification) == nil)
+    let notification = try rpc(["jsonrpc": "2.0", "method": "notifications/initialized"])
+    #expect(await fixture.server.handle(notification) == nil)
 }
 
 // MARK: - Email
@@ -316,14 +249,14 @@ private final class SpyEmailTransport: EmailTransport, @unchecked Sendable {
     #expect(BackgroundKind.offered.contains(.solid))
     #expect(BackgroundKind.offered.contains(.wallpaper))
     #expect(BackgroundKind.offered.contains(.image))
-    #expect(DitherPalettes.all.count >= 8)
+    #expect(DitherPalettes.all.count == 4)
     #expect(Set(DitherPalettes.all.map(\.0)).count == DitherPalettes.all.count)
     #expect(DitherPalettes.all.allSatisfy { $0.1.count == 2 })
-    #expect(ZoomPreset.cinematic.maxScale == 2.6)
+    #expect(ZoomPreset.cinematic.maxScale == 2.2)
     var camera = CameraParams()
     camera.apply(preset: .cinematic)
     #expect(camera.tilt == .lean)
-    #expect(camera.maxScale == 2.6)
+    #expect(camera.maxScale == 2.2)
 }
 
 // MARK: - Frame budget

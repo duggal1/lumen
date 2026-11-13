@@ -24,8 +24,8 @@ import LumenRender
     let active = derived.evaluate(at: 2.5)
     #expect(active.emphasis.masks.count == 2)
     #expect(active.emphasis.masks.map(\.mode) == [.solid, .pixelate])
-    #expect(active.emphasis.masks[0].rect == SIMD4<Float>(1200, 650, 200, 80))
-    #expect(active.emphasis.masks[1].rect == SIMD4<Float>(500, 260, 180, 70))
+    #expect(active.emphasis.masks[0].rect == SIMD4<Float>(1172, 622, 256, 136))
+    #expect(active.emphasis.masks[1].rect == SIMD4<Float>(475.5, 235.5, 229, 119))
     let canvas = Geometry(canvas: SIMD2(1920, 1080), src: SIMD2<Double>(1920, 1080),
                           style: derived.style)
     let transformed = PrivacyMaskGeometry.canvasRect(
