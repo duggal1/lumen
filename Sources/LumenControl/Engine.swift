@@ -105,32 +105,37 @@ public actor Engine {
                             hint: "There is no project at \(url.path).")
         }
         let file = try bundle.load()
-        let identifier = url.deletingPathExtension().lastPathComponent
+        // AGENT: folder names can collide across approved roots; identify projects by their canonical paths.
+        let identifier = Self.projectID(url)
         let ref = ProjectRef(identifier: identifier, url: url)
-        remember(ref)
         var handle = Handle(bundle: bundle, meta: file.meta, timeline: file.timeline, revision: 1)
         // The session is what the editor uses: it owns the frame source, the
         // mixer and the Director inputs.
-        if let device = MTLCreateSystemDefaultDevice() {
-            if let opened = try? await ProjectSession.open(bundle, device: device) {
-                handle.session = opened.0
-                handle.timeline = opened.1
-                // AGENT: a project that already carries detections counts as scanned.
-                let count = opened.0.input.ocr.count
-                handle.privacy = count > 0 ? .scanned(detections: count) : .notScanned
-            }
-        }
+        // AGENT: do not report an open project when its session could not be created.
+        guard let device = MTLCreateSystemDefaultDevice() else { throw ToolError.failed("No Metal device is available to open the project.") }
+        let opened = try await ProjectSession.open(bundle, device: device)
+        handle.session = opened.0
+        handle.timeline = opened.1
+        // AGENT: cached detections alone cannot prove that a complete privacy scan ran.
+        handle.privacy = .notScanned
         handles[identifier] = handle
+        remember(ref)
         return ref
+    }
+
+    // AGENT: the same canonical project path always yields the same agent identifier.
+    static func projectID(_ url: URL) -> String {
+        "p_" + String(AuditLog.hash(url.standardizedFileURL.resolvingSymlinksInPath().path).prefix(10))
     }
 
     /// Ensures a project is open, opening it from the library when needed.
     private func requireHandle(_ projectID: String) async throws -> Handle {
         if let h = handles[projectID] { return h }
         let library = await runtime.recordingLibrary()
-        if let match = library.first(where: { $0.deletingPathExtension().lastPathComponent == projectID }) {
+        if let match = library.first(where: { Self.projectID($0) == projectID }) {
             let ref = try await openProject(at: match.path)
-            return handles[ref.identifier] ?? handles[projectID]!
+            // AGENT: a failed open must surface rather than force-unwrapping a missing handle.
+            if let handle = handles[ref.identifier] { return handle }
         }
         throw ToolError.failed("Unknown project \(projectID). Call project_open first.")
     }
@@ -155,9 +160,21 @@ public actor Engine {
                      "host_end": .number(m.endHostSeconds),
                      "source_start": .number(max(m.startHostSeconds - origin, 0)),
                      "source_end": .number(max(m.endHostSeconds - origin, 0)),
+                     // AGENT: marker consumers need output times after cuts and speed ramps.
+                     "output_start": .number(h.timeline.timeMap.output(atSource: max(m.startHostSeconds - origin, 0))),
+                     "output_end": .number(h.timeline.timeMap.output(atSource: max(m.endHostSeconds - origin, 0))),
                      "rect": m.rect.map { .array([.number($0.origin.x), .number($0.origin.y), .number($0.size.width), .number($0.size.height)]) } ?? .null])
         }
         return .object(["markers": .array(rows), "origin_host_seconds": .number(origin)])
+    }
+
+    // AGENT: convert marker offsets on the source clock before mapping them onto the edited timeline.
+    public func outputTime(projectID: String, sourceSeconds: Double) async throws -> Double {
+        guard sourceSeconds.isFinite, sourceSeconds >= 0 else {
+            throw ToolError.invalidArguments("Marker time must be finite and non-negative.")
+        }
+        let h = try await requireHandle(projectID)
+        return h.timeline.timeMap.output(atSource: sourceSeconds)
     }
 
     /// The Timeline as JSON: the agent patches the same fields the UI edits.
@@ -300,17 +317,20 @@ public actor Engine {
     // MARK: Verification
 
     /// Renders one frame of the project and returns PNG bytes.
-    public func previewFrame(projectID: String, time: Double, maxWidth: Int = 960) async throws -> (Data, String) {
+    public func previewFrame(projectID: String, time: Double, maxWidth: Int = 960, png: Bool = false) async throws -> (Data, String) {
         let image = try await renderFrame(projectID: projectID, time: time, maxWidth: maxWidth)
         let rep = NSBitmapImageRep(cgImage: image)
-        guard let png = rep.representation(using: .png, properties: [:]) else {
+        // AGENT: JPEG reduces image-block size; PNG remains available for lossless inspection.
+        let format: NSBitmapImageRep.FileType = png ? .png : .jpeg
+        let properties: [NSBitmapImageRep.PropertyKey: Any] = png ? [:] : [.compressionFactor: 0.8]
+        guard let data = rep.representation(using: format, properties: properties) else {
             throw ToolError.failed("The frame could not be encoded.")
         }
-        return (png, "frame-" + String(Int(time * 1000)) + "ms.png")
+        return (data, "frame-" + String(Int(time * 1000)) + (png ? "ms.png" : "ms.jpg"))
     }
 
     /// N frames across the project as one contact sheet.
-    public func previewSheet(projectID: String, frames: Int, duration: Double, maxWidth: Int) async throws -> Data {
+    public func previewSheet(projectID: String, frames: Int, duration: Double, maxWidth: Int, png: Bool = false) async throws -> Data {
         let h = try await requireHandle(projectID)
         let total = duration > 0 ? duration : (h.meta.source.duration > 0 ? h.meta.source.duration : 1)
         let count = max(1, min(frames, 12))
@@ -340,10 +360,13 @@ public actor Engine {
         }
         guard let sheet = context.makeImage() else { throw ToolError.failed("Could not build the contact sheet.") }
         let rep = NSBitmapImageRep(cgImage: sheet)
-        guard let png = rep.representation(using: .png, properties: [:]) else {
+        // AGENT: use the same explicit image format for sheets and individual previews.
+        let format: NSBitmapImageRep.FileType = png ? .png : .jpeg
+        let properties: [NSBitmapImageRep.PropertyKey: Any] = png ? [:] : [.compressionFactor: 0.8]
+        guard let data = rep.representation(using: format, properties: properties) else {
             throw ToolError.failed("The contact sheet could not be encoded.")
         }
-        return png
+        return data
     }
 
     private func renderFrame(projectID: String, time: Double, maxWidth: Int) async throws -> CGImage {
@@ -454,6 +477,10 @@ public actor Engine {
     /// Starts an export as a job. Uses the existing exporter, unchanged.
     public func startExport(projectID: String, presetName: String, outputPath: String,
                             includeAudio: Bool, exportStems: Bool) async throws -> String {
+        // AGENT: capture and export compete for the same GPU and must not run together.
+        guard !RecordingGate.isRecordingActive else {
+            throw ToolError(code: "RECORDING_ACTIVE", hint: "Stop recording before exporting.")
+        }
         let h = try await requireHandle(projectID)
         guard let session = h.session else {
             throw ToolError.failed("This project cannot be opened for export (no Metal device).")
@@ -503,18 +530,29 @@ public actor Engine {
         guard let session = h.session else {
             throw ToolError.failed("This project cannot be opened for scanning (no Metal device).")
         }
-        let timeline = h.timeline
+        // AGENT: prevent competing scans from overwriting each other's completion state.
+        guard h.privacy != .scanning else { throw ToolError(code: "PRIVACY_SCAN_RUNNING", hint: "Wait for the active privacy scan to finish.") }
+        var timeline = h.timeline
+        timeline.overlays.privacy.enabled = true
+        timeline.overlays.privacy.autoDetect = true
+        let scanTimeline = timeline
         // AGENT: record that a scan is in flight so export and QA stop guessing.
         handles[projectID]?.privacy = .scanning
         return jobs.start(kind: "privacy_scan") { [weak self] reporter in
-            let result = await session.analyze(timeline,
+            let result = await session.analyze(scanTimeline,
                                                privacyProgress: { p in reporter.progress(p * 0.9, "Scanning") },
                                                onPrivacy: { error in reporter.progress(0.95, error) })
             let detections = result.ocr.count
             reporter.progress(1, nil)
             // AGENT: the completed scan is the only thing that can make privacy pass.
-            if let error = result.errors["privacy"] {
+            if Task.isCancelled {
+                await self?.setPrivacy(.failed("Scan cancelled."), for: projectID)
+                throw CancellationError()
+            }
+            // AGENT: OCR reports failures under its own key; cancelled or failed scans must never pass.
+            if let error = result.errors["ocr"] ?? result.errors["privacy"] ?? result.errors["cancelled"] {
                 await self?.setPrivacy(.failed(error), for: projectID)
+                throw ToolError(code: "PRIVACY_SCAN_FAILED", hint: error)
             } else {
                 await self?.setPrivacy(.scanned(detections: detections), for: projectID)
             }
@@ -622,14 +660,15 @@ public actor Engine {
             }
             switch result {
             case .success(let transcript):
-                try? bundle.saveTranscript(TranscriptFile(engine: "moonshine-streaming", complete: true,
+                // AGENT: surface persistence and edit failures instead of reporting a successful transcription.
+                try bundle.saveTranscript(TranscriptFile(engine: "moonshine-streaming", complete: true,
                                                            transcript: transcript))
                 let aligned = transcript.shifted(by: offset)
                 // AGENT: the words were saved to disk but never handed to the
                 // session, so caption planning ran on an empty transcript until
                 // the project was reopened.
                 session.updateTranscript(aligned)
-                _ = try? await self.edit(projectID: projectID, expectRevision: nil,
+                _ = try await self.edit(projectID: projectID, expectRevision: nil,
                                          describe: "captions") { timeline in
                     timeline.captions.enabled = true
                     if !locale.isEmpty { timeline.captions.locale = locale }
