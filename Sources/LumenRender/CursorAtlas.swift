@@ -253,6 +253,141 @@ public final class CursorAtlas {
             }
             return [Double(hot.x), Double(hot.y)]
         }
+        // Every mark is drawn twice: a paper silhouette one point larger, then
+        // the ink. That is the whole outline language — no strokes for their own
+        // sake, and a mark stays legible on any wallpaper.
+        func fillMark(_ p: CGPath, rim: CGFloat = 1.0, inkStroke: CGFloat = 0) {
+            shadowed {
+                c.setFillColor(paper); c.setStrokeColor(paper); c.setLineJoin(.round); c.setLineCap(.round)
+                c.addPath(p); c.fillPath()
+                c.setLineWidth(2 * rim + inkStroke); c.addPath(p); c.strokePath()
+                c.setFillColor(ink); c.setStrokeColor(ink)
+                c.addPath(p)
+                if inkStroke <= 0 { c.fillPath() } else { c.setLineWidth(inkStroke); c.strokePath() }
+            }
+        }
+        func strokeMark(_ p: CGPath, _ w: CGFloat, rim: CGFloat = 1.0) {
+            shadowed {
+                c.setLineJoin(.round); c.setLineCap(.round)
+                c.setStrokeColor(paper); c.setLineWidth(w + 2 * rim); c.addPath(p); c.strokePath()
+                c.setStrokeColor(ink); c.setLineWidth(w); c.addPath(p); c.strokePath()
+            }
+        }
+        func box(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat) -> CGPath {
+            CGPath(roundedRect: CGRect(x: x, y: y, width: w, height: h), cornerWidth: r, cornerHeight: r, transform: nil)
+        }
+        func box(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat, rotated t: CGAffineTransform) -> CGPath {
+            var m = t
+            let p = box(x, y, w, h, r)
+            guard let q = p.copy(using: &m) else { return p }
+            return q
+        }
+        func union(_ parts: [CGPath]) -> CGPath {
+            let p = CGMutablePath()
+            for part in parts { p.addPath(part) }
+            return p
+        }
+        guard pack.preservesShape else { return stylized(c, pack, ink: ink, paper: paper) }
+        // Shape-preserving packs: one drawing per recorded shape. A pointing
+        // hand is not an open hand, and text selection is not an arrow.
+        switch s {
+        case .arrow:
+            // 24-unit arrow at 1.4x (about 25 pt tall), tip is the hotspot
+            return glyph(arrowD, tip: CGPoint(x: 3.2, y: 3.2), hot: CGPoint(x: 3.5, y: 3.5), scale: 1.4, stroke: 2.1)
+        case .iBeam:
+            let beam = CGPath(roundedRect: CGRect(x: 14.4, y: 7.4, width: 3.2, height: 17.2), cornerWidth: 0.6, cornerHeight: 0.6, transform: nil)
+            let caps = union([CGPath(roundedRect: CGRect(x: 10.4, y: 5.4, width: 11.2, height: 2.8), cornerWidth: 1.2, cornerHeight: 1.2, transform: nil),
+                              CGPath(roundedRect: CGRect(x: 10.4, y: 23.8, width: 11.2, height: 2.8), cornerWidth: 1.2, cornerHeight: 1.2, transform: nil)])
+            fillMark(union([beam, caps]))
+            // The beam centre is the hotspot, and the beam covers it.
+            return [16, 16]
+        case .pointingHand:
+            // 256-unit hand, ~24 pt tall, fingertip is the hotspot
+            return glyph(handD, tip: CGPoint(x: 112, y: 16), hot: CGPoint(x: 12, y: 3.5), scale: 24.0 / 224.0, stroke: 2.0)
+        case .openHand:
+            let fingers = [CGPath(roundedRect: CGRect(x: 9.6, y: 6.4, width: 3.0, height: 10.6), cornerWidth: 1.5, cornerHeight: 1.5, transform: nil),
+                           CGPath(roundedRect: CGRect(x: 13.0, y: 5.2, width: 3.0, height: 11.8), cornerWidth: 1.5, cornerHeight: 1.5, transform: nil),
+                           CGPath(roundedRect: CGRect(x: 16.4, y: 6.0, width: 3.0, height: 11.0), cornerWidth: 1.5, cornerHeight: 1.5, transform: nil),
+                           CGPath(roundedRect: CGRect(x: 19.8, y: 8.0, width: 3.0, height: 9.0), cornerWidth: 1.5, cornerHeight: 1.5, transform: nil)]
+            let thumb = box(-1.7, -3.5, 3.4, 7.0, 1.7, rotated: CGAffineTransform(translationX: 7.4, y: 17.2).rotated(by: -0.605))
+            fillMark(union([box(9.2, 14.0, 14.0, 12.6, 4.4), thumb] + fingers))
+            return [16, 18]
+        case .closedHand:
+            let knuckles = [CGPath(roundedRect: CGRect(x: 9.9, y: 9.4, width: 2.7, height: 5.2), cornerWidth: 1.35, cornerHeight: 1.35, transform: nil),
+                            CGPath(roundedRect: CGRect(x: 13.1, y: 8.9, width: 2.7, height: 5.7), cornerWidth: 1.35, cornerHeight: 1.35, transform: nil),
+                            CGPath(roundedRect: CGRect(x: 16.3, y: 9.3, width: 2.7, height: 5.3), cornerWidth: 1.35, cornerHeight: 1.35, transform: nil),
+                            CGPath(roundedRect: CGRect(x: 19.5, y: 10.2, width: 2.7, height: 4.4), cornerWidth: 1.35, cornerHeight: 1.35, transform: nil)]
+            let thumb = box(-1.9, -3.8, 3.8, 7.6, 1.9, rotated: CGAffineTransform(translationX: 11.6, y: 20.2).rotated(by: -1.5708))
+            fillMark(union([box(8.8, 12.6, 14.4, 13.9, 5.4), thumb] + knuckles))
+            return [16, 16]
+        case .crosshair:
+            let arm = 12.4, gap = 2.6, thick = 2.2
+            let parts = [CGRect(x: 16 - thick / 2, y: 16 - arm, width: thick, height: arm - gap),
+                         CGRect(x: 16 - thick / 2, y: 16 + gap, width: thick, height: arm - gap),
+                         CGRect(x: 16 - arm, y: 16 - thick / 2, width: arm - gap, height: thick),
+                         CGRect(x: 16 + gap, y: 16 - thick / 2, width: arm - gap, height: thick)]
+            let dot = CGPath(ellipseIn: CGRect(x: 16 - 1.4, y: 16 - 1.4, width: 2.8, height: 2.8), transform: nil)
+            let p = CGMutablePath()
+            for r in parts { p.addRect(r) }
+            p.addPath(dot)
+            fillMark(p)
+            return [16, 16]
+        case .resizeLeftRight:
+            let shaft = CGRect(x: 5.4, y: 14.9, width: 21.2, height: 2.2)
+            let headL = CGMutablePath()
+            headL.move(to: CGPoint(x: 5.0, y: 16)); headL.addLine(to: CGPoint(x: 10.4, y: 11.7)); headL.addLine(to: CGPoint(x: 10.4, y: 20.3)); headL.closeSubpath()
+            let headR = CGMutablePath()
+            headR.move(to: CGPoint(x: 27.0, y: 16)); headR.addLine(to: CGPoint(x: 21.6, y: 11.7)); headR.addLine(to: CGPoint(x: 21.6, y: 20.3)); headR.closeSubpath()
+            let p = CGMutablePath()
+            p.addRect(shaft); p.addPath(headL); p.addPath(headR)
+            fillMark(p)
+            return [16, 16]
+        case .resizeUpDown:
+            let shaft = CGRect(x: 14.9, y: 5.4, width: 2.2, height: 21.2)
+            let headT = CGMutablePath()
+            headT.move(to: CGPoint(x: 16, y: 5.0)); headT.addLine(to: CGPoint(x: 11.7, y: 10.4)); headT.addLine(to: CGPoint(x: 20.3, y: 10.4)); headT.closeSubpath()
+            let headB = CGMutablePath()
+            headB.move(to: CGPoint(x: 16, y: 27.0)); headB.addLine(to: CGPoint(x: 11.7, y: 21.6)); headB.addLine(to: CGPoint(x: 20.3, y: 21.6)); headB.closeSubpath()
+            let p = CGMutablePath()
+            p.addRect(shaft); p.addPath(headT); p.addPath(headB)
+            fillMark(p)
+            return [16, 16]
+        case .notAllowed:
+            let ring = CGPath(ellipseIn: CGRect(x: 6.8, y: 6.8, width: 18.4, height: 18.4), transform: nil)
+            let slash = CGMutablePath()
+            slash.move(to: CGPoint(x: 9.6, y: 9.6)); slash.addLine(to: CGPoint(x: 22.4, y: 22.4))
+            strokeMark(ring, 2.8)
+            strokeMark(slash, 2.8)
+            return [16, 16]
+        case .contextMenu:
+            // The arrow is the pointer; the card says a menu is open here. The
+            // hotspot stays on the arrow tip, not on the card.
+            _ = glyph(arrowD, tip: CGPoint(x: 3.2, y: 3.2), hot: CGPoint(x: 3.5, y: 3.5), scale: 1.05, stroke: 1.8)
+            let card = box(17.4, 17.0, 11.0, 9.4, 2.0)
+            fillMark(card)
+            shadowed {
+                c.setStrokeColor(ink); c.setLineWidth(1.5); c.setLineCap(.round)
+                for i in 0..<3 {
+                    c.move(to: CGPoint(x: 19.6, y: 19.6 + CGFloat(i) * 2.4))
+                    c.addLine(to: CGPoint(x: 26.2, y: 19.6 + CGFloat(i) * 2.4))
+                }
+                c.strokePath()
+            }
+            return [3.5, 3.5]
+        }
+    }
+
+    /// The stylized packs. They are an explicit user override: one glyph for
+    /// every shape, never the recorded pointer's identity.
+    private static func stylized(_ c: CGContext, _ pack: CursorPack, ink: CGColor, paper: CGColor) -> SIMD2<Double> {
+        func shadowed(_ body: () -> Void) {
+            c.saveGState()
+            c.setShadow(offset: CGSize(width: 0, height: -10), blur: 18, color: CGColor(gray: 0, alpha: 0.35))
+            c.beginTransparencyLayer(auxiliaryInfo: nil)
+            body()
+            c.endTransparencyLayer()
+            c.restoreGState()
+        }
         if pack == .holiday {
             // Snowflake: six spokes + center dot, winter pack. Hotspot is
             // the flake center so clicks land where the eye points.
@@ -292,13 +427,13 @@ public final class CursorAtlas {
             }
             return [16, 16]
         }
-        switch s {
-        case .pointingHand, .openHand, .closedHand:
-            // 256-unit hand, ~24 pt tall, fingertip is the hotspot
-            return glyph(handD, tip: CGPoint(x: 112, y: 16), hot: CGPoint(x: 12, y: 3.5), scale: 24.0 / 224.0, stroke: 2.0)
-        default:
-            // 24-unit arrow at 1.4x (about 25 pt tall), tip is the hotspot
-            return glyph(arrowD, tip: CGPoint(x: 3.2, y: 3.2), hot: CGPoint(x: 3.5, y: 3.5), scale: 1.4, stroke: 2.1)
-        }
+        return [16, 16]
     }
+}
+
+extension CursorPack {
+    /// Packs that keep the recorded pointer's identity, so every stock shape gets
+    /// its own artwork. The stylized packs (dot, ring, holiday) are an explicit
+    /// user override and keep one glyph for every shape.
+    var preservesShape: Bool { self == .system || self == .minimal || self == .pro }
 }
