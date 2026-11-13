@@ -1,6 +1,6 @@
 import Foundation
 import AppKit
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 import LumenCore
 import LumenProject
 import LumenCapture
