@@ -118,7 +118,7 @@ public enum ToolSchemas {
             return runScript
         case "project_open":
             props = ["path": J.str("Path to a Lumen project inside an approved folder.")]
-        case "timeline_get", "undo", "zoom_replan", "qa_report", "captions_generate", "captions_set",
+        case "timeline_get", "undo", "zoom_replan", "qa_report", "project_close", "captions_generate", "captions_set",
              "privacy_scan", "privacy_apply":
             if name == "captions_generate" {
                 props = ["project_id": project, "locale": J.str("Speech and caption locale.", def: "en-US")]
@@ -129,6 +129,8 @@ public enum ToolSchemas {
                 props = ["project_id": project,
                          "decisions": .object(["type": .string("object"),
                                                 "additionalProperties": J.bool("Whether each mask is approved.")])]
+            } else if name == "project_close" {
+                props = ["project_id": project]
             } else {
                 props = ["project_id": project]
             }
@@ -203,7 +205,14 @@ public enum ToolSchemas {
                      "include_audio": J.bool("Include the audio mix.", def: true),
                      "export_stems": J.bool("Write separate audio stems.", def: false)]
         case "job_status", "export_cancel":
-            props = ["job_id": J.str("Job id returned by a long-running tool.")]
+            if name == "job_status" {
+                props = ["job_id": J.str("Job id returned by a long-running tool."),
+                         "wait_ms": J.int("Wait for a job update before responding.", min: 0, max: 25_000, def: 0)]
+            } else {
+                props = ["job_id": J.str("Job id returned by a long-running tool.")]
+            }
+        case "export_presets":
+            props = [:]
         default:
             props = [:]
         }

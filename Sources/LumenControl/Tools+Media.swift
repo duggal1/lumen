@@ -209,14 +209,18 @@ public struct ExportStartInput: ToolInput {
 
 public struct JobStatusInput: ToolInput {
     public var jobID: String = ""
+    // AGENT: bounded long polling prevents clients from hammering the daemon for progress.
+    public var waitMs: Int = 0
     public init() {}
 
     enum CodingKeys: String, CodingKey {
     case jobID = "job_id"
+    case waitMs = "wait_ms"
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.jobID = try c.decodeIfPresent(String.self, forKey: .jobID) ?? ""
+    self.waitMs = try c.decodeIfPresent(Int.self, forKey: .waitMs) ?? 0
     }
 }
 
@@ -233,8 +237,20 @@ public struct ExportCancelInput: ToolInput {
     }
 }
 
+/// AGENT: preset discovery avoids making agents infer valid export names from errors.
+public struct ExportPresetsInput: ToolInput {
+    public init() {}
+}
+
 public extension ToolRegistry {
     func registerMediaTools() {
+        register(ToolDefinition<ExportPresetsInput>(name: "export_presets",
+            description: "Lists supported export preset names and the default preset.",
+            capability: .read) { _, _ in
+                return .object(["presets": .array(ExportPresets.all.map { .string($0.name) }),
+                                "default": .string("1080p30-h264")])
+            })
+
         register(ToolDefinition<AudioImportInput>(name: "audio_import",
             description: "Adds an MP3, WAV or M4A to a project: music, voice-over or a sound effect. Anchor it to a marker or to an output time.",
             capability: .edit, required: ["project_id", "path"], mutating: true) { input, ctx in
@@ -372,8 +388,23 @@ public extension ToolRegistry {
         register(ToolDefinition<JobStatusInput>(name: "job_status",
             description: "Reports the progress and result of a job started by export_start, privacy_scan or captions_generate.",
             capability: .read, required: ["job_id"]) { input, ctx in
-                guard let job = ctx.jobs.job(input.jobID) else {
+                guard (0...25_000).contains(input.waitMs) else {
+                    throw ToolError.invalidArguments("wait_ms must be between 0 and 25000.")
+                }
+                guard let initial = ctx.jobs.job(input.jobID) else {
                     throw ToolError.failed("No job with id \(input.jobID).")
+                }
+                var job = initial
+                if input.waitMs > 0 && (job.state == .queued || job.state == .running) {
+                    let clock = ContinuousClock()
+                    let deadline = clock.now.advanced(by: .milliseconds(Int64(input.waitMs)))
+                    while clock.now < deadline {
+                        try Task.checkCancellation()
+                        try await Task.sleep(for: .milliseconds(200))
+                        guard let latest = ctx.jobs.job(input.jobID) else { break }
+                        job = latest
+                        if job.updated > initial.updated || (job.state != .queued && job.state != .running) { break }
+                    }
                 }
                 return .object([
                     "job_id": .string(job.id),
@@ -405,26 +436,19 @@ public extension ToolRegistry {
     private func resolvePlacement(projectID: String, ctx: ToolContext, atMarker: String?, atOutput: Double?,
                                   offsetMs: Double) async throws -> Double {
         guard offsetMs.isFinite else { throw ToolError.invalidArguments("offset_ms must be finite.") }
-        if let atMarker, !atMarker.isEmpty, let atOutput {
+        if let atMarker, !atMarker.isEmpty, atOutput != nil {
             throw ToolError.invalidArguments("Choose either at_marker or at_output, not both.")
         }
         if let atMarker, !atMarker.isEmpty {
-            let markers = try await ctx.engine.markersValue(projectID: projectID)
-            let rows = markers["markers"]?.arrayValue ?? []
-            for row in rows {
-                if row["id"]?.stringValue == atMarker {
-                    let source = row["source_start"]?.doubleValue ?? 0
-                    // AGENT: audio placement is output time, so cuts and speed ramps must be applied.
-                    return try await ctx.engine.outputTime(projectID: projectID, sourceSeconds: source + offsetMs / 1000)
-                }
-            }
-            throw ToolError.failed("No marker named \(atMarker). Call timeline_get markers first.")
+            // AGENT: every anchored audio placement now uses the shared marker-aware clock resolver.
+            return try await ctx.engine.outputSeconds(projectID: projectID,
+                time: .marker(id: atMarker, offsetMs: offsetMs))
         }
         if let atOutput {
             guard atOutput.isFinite, atOutput >= 0 else { throw ToolError.invalidArguments("at_output must be finite and non-negative.") }
             let placement = atOutput + offsetMs / 1000
             guard placement.isFinite, placement >= 0 else { throw ToolError.invalidArguments("The resulting audio placement must be finite and non-negative.") }
-            return placement
+            return try await ctx.engine.outputSeconds(projectID: projectID, time: .output(placement))
         }
         let placement = offsetMs / 1000
         guard placement >= 0 else { throw ToolError.invalidArguments("An unanchored audio placement cannot be negative.") }

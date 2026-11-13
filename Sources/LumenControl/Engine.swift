@@ -71,6 +71,8 @@ public actor Engine {
     public let jobs: JobManager
     public let policy: Policy
     private var handles: [String: Handle] = [:]
+    // AGENT: decoded sessions retain audio and frame readers, so the daemon needs a small LRU bound.
+    private var handleOrder: [String] = []
     private let refs = OSAllocatedUnfairLock<[ProjectRef]>(initialState: [])
 
     public init(runtime: LumenRuntime, jobs: JobManager, policy: Policy) {
@@ -120,8 +122,22 @@ public actor Engine {
         // AGENT: cached detections alone cannot prove that a complete privacy scan ran.
         handle.privacy = .notScanned
         handles[identifier] = handle
+        handleOrder.removeAll { $0 == identifier }
+        handleOrder.append(identifier)
+        while handleOrder.count > 4 {
+            let evicted = handleOrder.removeFirst()
+            handles[evicted] = nil
+        }
         remember(ref)
         return ref
+    }
+
+    /// Closes an open project session and releases its decoded media resources.
+    public func closeProject(projectID: String) -> Bool {
+        let removed = handles.removeValue(forKey: projectID) != nil
+        handleOrder.removeAll { $0 == projectID }
+        refs.withLock { $0.removeAll { $0.identifier == projectID } }
+        return removed
     }
 
     // AGENT: the same canonical project path always yields the same agent identifier.
@@ -131,7 +147,11 @@ public actor Engine {
 
     /// Ensures a project is open, opening it from the library when needed.
     private func requireHandle(_ projectID: String) async throws -> Handle {
-        if let h = handles[projectID] { return h }
+        if let h = handles[projectID] {
+            handleOrder.removeAll { $0 == projectID }
+            handleOrder.append(projectID)
+            return h
+        }
         let library = await runtime.recordingLibrary()
         if let match = library.first(where: { Self.projectID($0) == projectID }) {
             let ref = try await openProject(at: match.path)
@@ -176,6 +196,43 @@ public actor Engine {
         }
         let h = try await requireHandle(projectID)
         return h.timeline.timeMap.output(atSource: sourceSeconds)
+    }
+
+    // AGENT: audio and editing tools must resolve all time references through the same project clock.
+    /// Resolves a source, output, or marker reference onto the source clock.
+    public func sourceSeconds(projectID: String, time: TimeRef) async throws -> Double {
+        let h = try await requireHandle(projectID)
+        return try resolveSourceSeconds(time, handle: h)
+    }
+
+    /// Resolves a source, output, or marker reference onto the edited output clock.
+    public func outputSeconds(projectID: String, time: TimeRef) async throws -> Double {
+        let h = try await requireHandle(projectID)
+        switch time {
+        case .output(let seconds):
+            guard seconds.isFinite, seconds >= 0, seconds <= h.timeline.timeMap.outputDuration + 0.001 else {
+                throw ToolError.invalidArguments("Output time must be within the edited duration.")
+            }
+            return seconds
+        default:
+            return h.timeline.timeMap.output(atSource: try resolveSourceSeconds(time, handle: h))
+        }
+    }
+
+    private func resolveSourceSeconds(_ time: TimeRef, handle h: Handle) throws -> Double {
+        guard case .marker(let id, let offsetMs) = time else { return try h.timeline.sourceSeconds(time) }
+        guard !id.isEmpty, offsetMs.isFinite else {
+            throw ToolError.invalidArguments("Marker id and offset_ms must be valid.")
+        }
+        let markers = h.bundle.loadMarkers().markers
+        guard let marker = markers.first(where: { $0.id == id }) else {
+            throw ToolError.invalidArguments("No marker named \(id). Read the project markers and retry.")
+        }
+        let source = max(marker.startHostSeconds - h.meta.clock.originHostSeconds, 0) + offsetMs / 1000
+        guard source.isFinite, source >= 0, source <= h.timeline.timeMap.sourceDuration + 0.001 else {
+            throw ToolError.invalidArguments("The marker offset falls outside the recorded source.")
+        }
+        return source
     }
 
     /// The Timeline as JSON: the agent patches the same fields the UI edits.
