@@ -1,15 +1,19 @@
 import Foundation
 import os
+import Darwin
 
-/// Every tool call is written to a JSONL audit log: client id, tool, an
-/// argument hash (never the raw arguments, which can contain file paths and
-/// text), the result and the timestamp.
+/// Every tool call is written as a JSONL record with selected non-secret context.
 public final class AuditLog: @unchecked Sendable {
     public struct Entry: Codable, Sendable {
         public var timestamp: Double
         public var client: String
         public var tool: String
-        public var argsHash: String
+        // AGENT: the audit log records actionable context without storing paths or user-entered text.
+        public var projectID: String?
+        public var bundleID: String?
+        public var operationKinds: [String]
+        public var counts: [String: Int]
+        public var typedTextLength: Int
         public var ok: Bool
         public var detail: String?
     }
@@ -25,8 +29,11 @@ public final class AuditLog: @unchecked Sendable {
     }
 
     public func record(client: String, tool: String, arguments: JSONValue, ok: Bool, detail: String? = nil) {
+        let summary = Self.summary(arguments)
         let entry = Entry(timestamp: Date().timeIntervalSince1970, client: client, tool: tool,
-                          argsHash: Self.hash(arguments.jsonText), ok: ok, detail: detail)
+                          projectID: summary.projectID, bundleID: summary.bundleID,
+                          operationKinds: summary.operationKinds, counts: summary.counts,
+                          typedTextLength: summary.typedTextLength, ok: ok, detail: detail)
         guard let data = try? JSONEncoder().encode(entry) else { return }
         let line = data + Data([0x0A])
         // AGENT: serialize rotation and the entire append so concurrent audit entries cannot interleave.
@@ -39,13 +46,53 @@ public final class AuditLog: @unchecked Sendable {
                 try? files.removeItem(at: previous)
                 try? files.moveItem(at: fileURL, to: previous)
             }
-            if let handle = try? FileHandle(forWritingTo: fileURL) {
-                handle.seekToEndOfFile(); handle.write(line); try? handle.close()
-            } else {
-                try? line.write(to: fileURL, options: .atomic)
-                try? files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            // AGENT: audit records are created with private permissions instead of becoming briefly world-readable.
+            let fd = open(fileURL.path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
+            guard fd >= 0 else { return }
+            defer { close(fd) }
+            line.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress else { return }
+                var offset = 0
+                while offset < raw.count {
+                    let written = Darwin.write(fd, base.advanced(by: offset), raw.count - offset)
+                    if written < 0 && errno == EINTR { continue }
+                    guard written > 0 else { break }
+                    offset += written
+                }
             }
         }
+    }
+
+    /// Extracts only identifiers, operation names, counts, and text length.
+    private static func summary(_ arguments: JSONValue) -> (projectID: String?, bundleID: String?, operationKinds: [String], counts: [String: Int], typedTextLength: Int) {
+        guard case .object(let fields) = arguments else { return (nil, nil, [], [:], 0) }
+        let projectID = fields["project_id"]?.stringValue
+        let bundleID = fields["bundle_id"]?.stringValue
+        var operationKinds: [String] = []
+        var counts: [String: Int] = [:]
+        var textLength = 0
+
+        func collect(_ value: JSONValue, parent: String? = nil) {
+            switch value {
+            case .object(let object):
+                if let op = object["op"]?.stringValue, operationKinds.count < 128 {
+                    operationKinds.append(String(op.prefix(64)))
+                }
+                for (key, child) in object {
+                    if key == "text", let text = child.stringValue { textLength += text.count }
+                    collect(child, parent: key)
+                }
+            case .array(let values):
+                if parent == "ops" { counts["ops"] = values.count }
+                if parent == "actions" || parent == "do" { counts["actions"] = (counts["actions"] ?? 0) + values.count }
+                if parent == "steps" { counts["steps"] = values.count }
+                for child in values { collect(child, parent: parent) }
+            default:
+                break
+            }
+        }
+        collect(arguments)
+        return (projectID, bundleID, operationKinds, counts, textLength)
     }
 
     /// Stable, non-reversible hash of the arguments.

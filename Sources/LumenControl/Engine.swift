@@ -2,6 +2,7 @@ import Foundation
 import os
 import AppKit
 import Metal
+import AVFoundation
 import LumenCore
 import LumenProject
 import LumenDirector
@@ -138,6 +139,35 @@ public actor Engine {
         handleOrder.removeAll { $0 == projectID }
         refs.withLock { $0.removeAll { $0.identifier == projectID } }
         return removed
+    }
+
+    /// Probes and inserts a movie clip through the editor's command reducer.
+    // AGENT: clip_import reuses the editor's AVFoundation probe and reducer path instead of mutating composition fields directly.
+    public func importClip(projectID: String, path: URL, at outputTime: Double?) async throws -> [String: JSONValue] {
+        let h = try await requireHandle(projectID)
+        let asset = AVURLAsset(url: path)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+            throw ToolError.invalidArguments("The selected file has no video track.")
+        }
+        let duration = try await asset.load(.duration).seconds
+        guard duration.isFinite, duration > 0.1 else {
+            throw ToolError.invalidArguments("The selected video must be longer than 0.1 seconds.")
+        }
+        let size = try await track.load(.naturalSize)
+        let start = outputTime ?? h.timeline.compositionDuration
+        guard start.isFinite, start >= 0, start <= h.timeline.timeMap.outputDuration + h.meta.source.duration else {
+            throw ToolError.invalidArguments("at must be a finite non-negative output time.")
+        }
+        let clip = TimelineClip(path: path.path,
+                                name: path.deletingPathExtension().lastPathComponent,
+                                duration: duration, start: start,
+                                width: Int(size.width.rounded()), height: Int(size.height.rounded()))
+        var result = try await edit(projectID: projectID, expectRevision: nil, describe: "import clip") { timeline in
+            try applyCommand(.addClip(clip), to: &timeline)
+        }
+        result["clip_id"] = .string(clip.id.uuidString)
+        result["path"] = .string(path.path)
+        return result
     }
 
     // AGENT: the same canonical project path always yields the same agent identifier.

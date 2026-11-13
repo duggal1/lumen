@@ -130,6 +130,9 @@ public enum ToolSchemas {
             return runScript
         case "project_open":
             props = ["path": J.str("Path to a Lumen project inside an approved folder.")]
+        case "clip_import":
+            props = ["project_id": project, "path": J.str("Approved video file path."),
+                     "at": J.num("Output seconds; omit to append at the end.", min: 0)]
         case "timeline_get", "undo", "zoom_replan", "qa_report", "project_close", "captions_generate", "captions_set",
              "privacy_scan", "privacy_apply":
             if name == "captions_generate" {
