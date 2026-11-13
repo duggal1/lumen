@@ -69,20 +69,25 @@ public struct TimelineGetInput: ToolInput {
 
 /// One typed timeline operation. Flat and explicit so an agent cannot send
 /// an expression it does not understand.
+///
+/// AGENT: every field carried a sentinel (start 0, scale 2, flag true), so
+/// "omitted" and "set to the default" were indistinguishable and a missing
+/// value silently wrote nonsense. Fields are optional and each op names the
+/// ones it needs.
 public struct PatchOp: Codable, Sendable {
     public var op: String = ""
-    public var id: String = ""
-    public var start: Double = 0
-    public var end: Double = 0
-    public var scale: Double = 2
-    public var focusMode: String = "follow"
-    public var focusX: Double = 0.5
-    public var focusY: Double = 0.5
-    public var speed: Double = 2
-    public var key: String = ""
-    public var value: Double = 0
-    public var text: String = ""
-    public var flag: Bool = true
+    public var id: String?
+    public var start: Double?
+    public var end: Double?
+    public var scale: Double?
+    public var focusMode: String?
+    public var focusX: Double?
+    public var focusY: Double?
+    public var speed: Double?
+    public var key: String?
+    public var value: Double?
+    public var text: String?
+    public var flag: Bool?
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -103,18 +108,18 @@ public struct PatchOp: Codable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.op = try c.decodeIfPresent(String.self, forKey: .op) ?? ""
-    self.id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
-    self.start = try c.decodeIfPresent(Double.self, forKey: .start) ?? 0
-    self.end = try c.decodeIfPresent(Double.self, forKey: .end) ?? 0
-    self.scale = try c.decodeIfPresent(Double.self, forKey: .scale) ?? 2
-    self.focusMode = try c.decodeIfPresent(String.self, forKey: .focusMode) ?? "follow"
-    self.focusX = try c.decodeIfPresent(Double.self, forKey: .focusX) ?? 0.5
-    self.focusY = try c.decodeIfPresent(Double.self, forKey: .focusY) ?? 0.5
-    self.speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 2
-    self.key = try c.decodeIfPresent(String.self, forKey: .key) ?? ""
-    self.value = try c.decodeIfPresent(Double.self, forKey: .value) ?? 0
-    self.text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
-    self.flag = try c.decodeIfPresent(Bool.self, forKey: .flag) ?? true
+    self.id = try c.decodeIfPresent(String.self, forKey: .id)
+    self.start = try c.decodeIfPresent(Double.self, forKey: .start)
+    self.end = try c.decodeIfPresent(Double.self, forKey: .end)
+    self.scale = try c.decodeIfPresent(Double.self, forKey: .scale)
+    self.focusMode = try c.decodeIfPresent(String.self, forKey: .focusMode)
+    self.focusX = try c.decodeIfPresent(Double.self, forKey: .focusX)
+    self.focusY = try c.decodeIfPresent(Double.self, forKey: .focusY)
+    self.speed = try c.decodeIfPresent(Double.self, forKey: .speed)
+    self.key = try c.decodeIfPresent(String.self, forKey: .key)
+    self.value = try c.decodeIfPresent(Double.self, forKey: .value)
+    self.text = try c.decodeIfPresent(String.self, forKey: .text)
+    self.flag = try c.decodeIfPresent(Bool.self, forKey: .flag)
     }
 }
 
@@ -587,62 +592,112 @@ public extension ToolRegistry {
 
     /// Applies one typed operation to a timeline.
     func apply(_ op: PatchOp, to timeline: inout Timeline, paths: PathGuard) throws {
+        func need<T>(_ value: T?, _ name: String) throws -> T {
+            guard let value else {
+                throw ToolError.invalidArguments("\(op.op) needs \(name). See the timeline_patch schema.")
+            }
+            return value
+        }
         switch op.op {
         case "zoom_add":
-            timeline.zoom.append(ZoomSegment(start: op.start, end: op.end, scale: op.scale,
-                                            focus: focus(from: op.focusMode, x: op.focusX, y: op.focusY),
+            let start = try need(op.start, "start"), end = try need(op.end, "end")
+            timeline.zoom.append(ZoomSegment(start: start, end: end, scale: op.scale ?? 2,
+                                            focus: focus(from: op.focusMode ?? "follow",
+                                                         x: op.focusX ?? 0.5, y: op.focusY ?? 0.5),
                                             origin: .manual))
         case "zoom_set":
-            guard let index = timeline.zoom.firstIndex(where: { $0.id.uuidString == op.id }) else {
-                throw ToolError.failed("No zoom with id \(op.id).")
+            let id = try need(op.id, "id")
+            guard let index = timeline.zoom.firstIndex(where: { $0.id.uuidString == id }) else {
+                throw ToolError.failed("No zoom with id \(id).")
             }
-            if op.end > op.start { timeline.zoom[index].start = op.start; timeline.zoom[index].end = op.end }
-            if op.scale > 0 { timeline.zoom[index].scale = op.scale }
-            timeline.zoom[index].focus = focus(from: op.focusMode, x: op.focusX, y: op.focusY)
+            if let start = op.start, let end = op.end, end > start {
+                timeline.zoom[index].start = start
+                timeline.zoom[index].end = end
+            } else if (op.start == nil) != (op.end == nil) {
+                throw ToolError.invalidArguments("zoom_set needs both start and end, or neither.")
+            }
+            if let scale = op.scale, scale > 0 { timeline.zoom[index].scale = scale }
+            if op.focusMode != nil || op.focusX != nil || op.focusY != nil {
+                timeline.zoom[index].focus = focus(from: op.focusMode ?? "follow",
+                                                   x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
+            }
         case "zoom_remove":
-            for zoom in timeline.zoom where zoom.id.uuidString == op.id && zoom.origin == .auto {
+            let id = try need(op.id, "id")
+            // AGENT: deleting an auto zoom must survive the next replan.
+            for zoom in timeline.zoom where zoom.id.uuidString == id && zoom.origin == .auto {
                 timeline.suppressedAuto.append(zoom.id.uuidString)
             }
-            timeline.zoom.removeAll { $0.id.uuidString == op.id }
+            timeline.zoom.removeAll { $0.id.uuidString == id }
         case "cut_add":
-            timeline.timeMap.cuts.append(CutRange(start: op.start, end: op.end, origin: .manual))
+            let start = try need(op.start, "start"), end = try need(op.end, "end")
+            guard end > start else {
+                throw ToolError.invalidArguments("cut_add needs end after start, in source seconds.")
+            }
+            timeline.timeMap.cuts.append(CutRange(start: start, end: end, origin: .manual))
         case "cut_remove":
-            timeline.timeMap.cuts.removeAll { $0.id.uuidString == op.id }
+            let id = try need(op.id, "id")
+            timeline.timeMap.cuts.removeAll { $0.id.uuidString == id }
         case "ramp_set":
-            timeline.timeMap.ramps.append(SpeedRamp(start: op.start, end: op.end, speed: op.speed, origin: .manual))
+            let start = try need(op.start, "start"), end = try need(op.end, "end")
+            guard end > start else {
+                throw ToolError.invalidArguments("ramp_set needs end after start, in source seconds.")
+            }
+            timeline.timeMap.ramps.append(SpeedRamp(start: start, end: end,
+                                                    speed: op.speed ?? 2, origin: .manual))
         case "ramp_remove":
-            timeline.timeMap.ramps.removeAll { $0.id.uuidString == op.id }
+            let id = try need(op.id, "id")
+            timeline.timeMap.ramps.removeAll { $0.id.uuidString == id }
         case "style_set":
-            if op.key == "padding" { timeline.style.padding = op.value }
-            else if op.key == "corner_radius" { timeline.style.cornerRadius = op.value }
-            else if op.key == "shadow" { timeline.style.shadow = op.value }
-            else if op.key == "aspect" { timeline.style.customAspect = op.value }
-            else if op.key == "wallpaper_blur" { timeline.style.wallpaperBlur = op.value }
-            else if op.key == "background" { timeline.style.background = try backgroundKind(op.text) }
-            else if op.key == "background_image" {
+            let key = try need(op.key, "key")
+            switch key {
+            case "padding": timeline.style.padding = try need(op.value, "value")
+            case "corner_radius": timeline.style.cornerRadius = try need(op.value, "value")
+            case "shadow": timeline.style.shadow = try need(op.value, "value")
+            case "aspect": timeline.style.customAspect = try need(op.value, "value")
+            case "wallpaper_blur": timeline.style.wallpaperBlur = try need(op.value, "value")
+            case "background": timeline.style.background = try backgroundKind(try need(op.text, "text"))
+            case "background_image":
                 // AGENT: unconfined, this read any image on disk and shipped it in the export.
-                timeline.style.setPhotoBackground(try paths.path(op.text, ext: PathGuard.imageExt).path)
+                let path = try need(op.text, "text")
+                timeline.style.setPhotoBackground(try paths.path(path, ext: PathGuard.imageExt).path)
+            default:
+                throw ToolError.invalidArguments(
+                    "Unknown style key \(key). Use padding, corner_radius, shadow, aspect, wallpaper_blur, background or background_image.")
             }
         case "audio_lane_add":
             // AGENT: an unconfined audio path leaked any local file into the project.
-            let lanePath = op.key.isEmpty ? nil : try paths.path(op.key, ext: PathGuard.audioExt).path
-            timeline.audio.lanes.append(AudioLane(role: AudioLane.Role(rawValue: op.text) ?? .voiceover,
+            let lanePath = try op.key.map { try paths.path($0, ext: PathGuard.audioExt).path }
+            timeline.audio.lanes.append(AudioLane(role: AudioLane.Role(rawValue: op.text ?? "") ?? .voiceover,
                                                   path: lanePath,
-                                                  placement: op.start, gainDb: op.value))
+                                                  placement: op.start ?? 0, gainDb: op.value ?? 0))
         case "audio_lane_remove":
-            timeline.audio.lanes.removeAll { $0.id.uuidString == op.id }
+            let id = try need(op.id, "id")
+            timeline.audio.lanes.removeAll { $0.id.uuidString == id }
         case "music_set":
             // AGENT: confine music to the approved folders and audio extensions.
-            timeline.audio.musicPath = op.text.isEmpty ? nil : try paths.path(op.text, ext: PathGuard.audioExt).path
-            if op.value != 0 { timeline.audio.musicGainDb = op.value }
+            let text = try need(op.text, "text")
+            timeline.audio.musicPath = text.isEmpty ? nil : try paths.path(text, ext: PathGuard.audioExt).path
+            if let value = op.value { timeline.audio.musicGainDb = value }
         case "captions_set":
-            timeline.captions.enabled = op.flag
-            if !op.text.isEmpty { timeline.captions.locale = op.text }
+            timeline.captions.enabled = try need(op.flag, "flag")
+            if let locale = op.text, !locale.isEmpty { timeline.captions.locale = locale }
         case "privacy_set":
-            if op.key == "enabled" { timeline.overlays.privacy.enabled = op.flag }
-            else if op.key == "auto_detect" { timeline.overlays.privacy.autoDetect = op.flag }
-            else if op.key == "mode", let mode = MaskMode(rawValue: op.text) { timeline.overlays.privacy.mode = mode }
-            else if op.key == "padding" { timeline.overlays.privacy.padding = op.value }
+            let key = try need(op.key, "key")
+            switch key {
+            case "enabled": timeline.overlays.privacy.enabled = try need(op.flag, "flag")
+            case "auto_detect": timeline.overlays.privacy.autoDetect = try need(op.flag, "flag")
+            case "mode":
+                let text = try need(op.text, "text")
+                guard let mode = MaskMode(rawValue: text) else {
+                    throw ToolError.invalidArguments(
+                        "Unknown privacy mode \(text). Valid values: \(MaskMode.allCases.map(\.rawValue).joined(separator: ", ")).")
+                }
+                timeline.overlays.privacy.mode = mode
+            case "padding": timeline.overlays.privacy.padding = try need(op.value, "value")
+            default:
+                throw ToolError.invalidArguments(
+                    "Unknown privacy key \(key). Use enabled, auto_detect, mode or padding.")
+            }
         default:
             throw ToolError.invalidArguments("Unknown timeline op \(op.op).")
         }
