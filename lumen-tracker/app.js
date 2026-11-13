@@ -208,11 +208,21 @@
       ["Device verified", pad(verified), "Local notes, not release proof", ""]
     ];
     const next = all().slice().sort(cmp).filter(i => !codeStatus(i).merged).slice(0, 3);
+    const activity = seed.activity;
+    const pullRequest = activity.pullRequest;
+    const activityTime = activity.updatedAt.slice(0, 16).replace("T", " ") + " UTC";
+    const activityStates = '<div class="activity-state">' +
+      '<div class="activity-state-row"><div class="activity-state-head"><span>main</span><a class="activity-sha" href="' + GH + '/commit/' + esc(seed.sourceSha) + '" target="_blank" rel="noopener">' + esc(seed.sourceSha.slice(0, 7)) + '</a>' + badge("Build failed", "rose") + '</div><p>SCShareableContent sendability error at Runner.swift:266 <a class="activity-run" href="' + GH + '/actions/runs/' + esc(seed.ci.run) + '" target="_blank" rel="noopener">Workflow</a></p></div>' +
+      '<div class="activity-state-row"><div class="activity-state-head"><a href="' + GH + '/pull/' + pullRequest.number + '" target="_blank" rel="noopener">Draft PR #' + pullRequest.number + '</a><a class="activity-sha" href="' + GH + '/commit/' + esc(pullRequest.headSha) + '" target="_blank" rel="noopener">' + esc(pullRequest.headSha.slice(0, 7)) + '</a>' + badge("Tests failed", "rose") + '</div><p>Agent3Tests expected 4 tools and received 5 <a class="activity-run" href="' + GH + '/actions/runs/' + esc(pullRequest.ci.run) + '" target="_blank" rel="noopener">Workflow</a></p></div>' +
+      '</div>';
+    const activityEntries = activity.groups.map(group => '<li class="activity-entry"><time class="activity-time">' + esc(group.time) + '</time><div class="activity-body"><div class="activity-title-row"><h3>' + esc(group.title) + '</h3><span class="activity-source">' + esc(group.source) + '</span></div><p>' + esc(group.summary) + '</p><div class="activity-links">' + group.commits.map(sha => '<a href="' + GH + '/commit/' + encodeURIComponent(sha) + '" target="_blank" rel="noopener">' + esc(sha) + '</a>').join("") + '</div></div></li>').join("");
     return '<div class="ledger">' + stats.map(s => '<div class="stat"><span class="stat-k">' + esc(s[0]) + '</span><strong class="stat-v' + (s[3] === "bad" ? " bad" : s[3] === "run" ? " shimmer" : "") + '">' + esc(s[1]) + '</strong><span class="stat-n">' + esc(s[2]) + "</span></div>").join("") + "</div>" +
       '<section class="block"><div class="block-h"><h2>Next fixes</h2><span class="muted">Ranked by priority</span></div><div class="card list">' +
       (next.length ? next.map(i => '<button class="row" type="button" data-a="open" data-id="' + esc(i.id) + '">' + prio(i) +
         '<span class="row-m"><span class="row-t">' + esc(i.title) + '</span><span class="row-s">' + esc(i.impact) + '</span></span><span class="muted">' + esc(i.id) + "</span></button>").join("") : '<div class="empty">Every issue has a merged implementation.</div>') +
-      "</div></section>" + liveIssues();
+      "</div></section>" +
+      '<section class="block"><div class="block-h"><h2>Recent code activity</h2><span class="muted">Nov 12 evening through Nov 13</span></div><div class="activity-window"><span>' + activity.mainCommitCount + ' commits on main</span><span>' + pullRequest.commitCount + ' commits in open PR #' + pullRequest.number + '</span><span>Snapshot ' + esc(activityTime) + '</span></div><div class="card activity-card">' +
+      activityStates + '<ol class="activity-list">' + activityEntries + '</ol></div></section>' + liveIssues();
   }
 
   function liveIssues() {
