@@ -135,7 +135,9 @@ public enum Director {
                 planned = SpeedRamps.plan(events: input.events, vad: input.vad, tm: tm, audio: t.audio, backing: src.backingScale)
                 cache.rampKey = rkey; cache.ramps = planned
             }
-            tm.ramps = manualRamps + planned
+            // AGENT: automatic ramps removed by the user must stay removed after every derive.
+            let suppressed = Set(t.suppressedAuto)
+            tm.ramps = manualRamps + planned.filter { !suppressed.contains($0.id.uuidString) }
         }
         if cancelled() { return nil }
         t.timeMap = tm
@@ -152,7 +154,9 @@ public enum Director {
                                            tm: tm, avoid: avoid)
                 cache.planKey = pkey; cache.plan = planned
             }
-            t.zoom = (manual + planned.segments).sorted { $0.start < $1.start }
+            // AGENT: applying suppression here covers normal derives as well as explicit replans.
+            let suppressed = Set(t.suppressedAuto)
+            t.zoom = (manual + planned.segments.filter { !suppressed.contains($0.id.uuidString) }).sorted { $0.start < $1.start }
             // SMOOTHNESS: the caret paths travel with the plan and become the
             // camera's continuous follow targets.
             followPaths = planned.follow.mapValues { path in
