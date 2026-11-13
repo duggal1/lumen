@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 import CoreGraphics
 import ApplicationServices
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 import LumenCore
 
 /// Receives the markers a script run produces.
