@@ -31,6 +31,42 @@ func applyCommand(_ command: Command, to timeline: inout Timeline, fps: Double =
     }
 }
 
+/// Owns one non-thread-safe renderer and reuses its Metal pipelines for previews.
+private actor RenderService {
+    private var renderer: Renderer?
+
+    // AGENT: creating a Renderer per frame rebuilt Metal pipelines for every preview image.
+    func frame(session: ProjectSession, timeline: Timeline, time: Double, maxWidth: Int) async throws -> CGImage {
+        if renderer == nil {
+            await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
+            renderer = try Renderer()
+        }
+        guard let renderer else { throw ToolError.failed("The preview renderer could not be created.") }
+        renderer.setCustomCursors(session.cursors)
+        let width = max(maxWidth, 160)
+        let height = Int((Double(width) / max(timeline.style.aspectRatio, 0.1)).rounded())
+        let buffer = try await FrameImage.render(renderer: renderer, session: session, timeline: timeline,
+                                                t: time, canvas: SIMD2<Int>(width, height),
+                                                fps: session.meta.source.fps)
+        guard let image = FrameImage.cgImage(buffer) else {
+            throw ToolError.failed("The frame could not be rendered.")
+        }
+        return image
+    }
+}
+
+/// Serializes heavy timeline derivation and audio mixing away from Engine's actor.
+private actor ProjectDerivationLane {
+    // AGENT: camera solving and audio mixing must not hold the request actor while they do CPU-heavy work.
+    func derive(_ session: ProjectSession, timeline: Timeline, revision: Int) -> Timeline {
+        session.derive(timeline, revision: revision)
+    }
+
+    func mix(_ session: ProjectSession, timeline: Timeline) -> MixedAudio? {
+        session.mixer.mix(timeline)
+    }
+}
+
 /// The command layer. Every capture, edit, verify and export action the agent
 /// can take goes through here, and every one of them calls the SAME existing
 /// code the UI calls: `Director.derive`, `ProjectSession`, `Exporter`,
@@ -72,6 +108,10 @@ public actor Engine {
     public let jobs: JobManager
     public let policy: Policy
     private var handles: [String: Handle] = [:]
+    // AGENT: a single actor-owned renderer serializes Metal access across all preview frames.
+    private let renderService = RenderService()
+    // AGENT: a dedicated serial lane keeps edits, status and marker reads responsive during derivation.
+    private let derivationLane = ProjectDerivationLane()
     // AGENT: decoded sessions retain audio and frame readers, so the daemon needs a small LRU bound.
     private var handleOrder: [String] = []
     private let refs = OSAllocatedUnfairLock<[ProjectRef]>(initialState: [])
@@ -195,7 +235,9 @@ public actor Engine {
 
     public func timelineValue(projectID: String) async throws -> JSONValue {
         var h = try await requireHandle(projectID)
-        if let session = h.session { h.timeline = session.derive(h.timeline, revision: h.revision) }
+        if let session = h.session {
+            h.timeline = await derivationLane.derive(session, timeline: h.timeline, revision: h.revision)
+        }
         handles[projectID] = h
         return encode(timeline: h.timeline, revision: h.revision)
     }
@@ -371,7 +413,7 @@ public actor Engine {
         h.redoStack.removeAll()
         h.timeline = updated
         h.revision += 1
-        try save(&h)
+        try await save(&h)
         handles[projectID] = h
         return ["project_id": .string(projectID),
                 "revision": .int(h.revision),
@@ -420,16 +462,16 @@ public actor Engine {
         h.redoStack.append(h.timeline)
         h.timeline = previous
         h.revision += 1
-        try save(&h)
+        try await save(&h)
         handles[projectID] = h
         return ["project_id": .string(projectID), "revision": .int(h.revision), "changed": .bool(true)]
     }
 
     /// Saves and re-derives. The derive is the existing pure Director.
-    private func save(_ h: inout Handle) throws {
+    private func save(_ h: inout Handle) async throws {
         var timeline = h.timeline
         if let session = h.session {
-            timeline = session.derive(timeline, revision: h.revision)
+            timeline = await derivationLane.derive(session, timeline: timeline, revision: h.revision)
         }
         h.timeline = timeline
         try h.bundle.save(ProjectFile(meta: h.meta, timeline: timeline))
@@ -495,19 +537,8 @@ public actor Engine {
         guard let session = h.session else {
             throw ToolError.failed("This project cannot be opened for rendering (no Metal device).")
         }
-        let timeline = session.derive(h.timeline, revision: h.revision)
-        let renderer = try Renderer()
-        renderer.setCustomCursors(session.cursors)
-        let aspect = timeline.style.aspectRatio
-        let width = max(maxWidth, 160)
-        let height = Int((Double(width) / max(aspect, 0.1)).rounded())
-        let buffer = try await FrameImage.render(renderer: renderer, session: session, timeline: timeline,
-                                                t: time, canvas: SIMD2<Int>(width, height),
-                                                fps: session.meta.source.fps)
-        guard let image = FrameImage.cgImage(buffer) else {
-            throw ToolError.failed("The frame could not be rendered.")
-        }
-        return image
+        let timeline = await derivationLane.derive(session, timeline: h.timeline, revision: h.revision)
+        return try await renderService.frame(session: session, timeline: timeline, time: time, maxWidth: maxWidth)
     }
 
     /// The QA report an agent loops on.
@@ -516,7 +547,7 @@ public actor Engine {
         guard let session = h.session else {
             throw ToolError.failed("This project cannot be opened for analysis (no Metal device).")
         }
-        let timeline = session.derive(h.timeline, revision: h.revision)
+        let timeline = await derivationLane.derive(session, timeline: h.timeline, revision: h.revision)
         let events = session.input.events
 
         // Zoom accuracy — the existing measurement.
@@ -528,7 +559,7 @@ public actor Engine {
         // Loudness — the existing mixer measurement.
         var loudness: Double = 0
         var truePeak: Double = 0
-        if let mixed = session.mixer.mix(timeline) {
+        if let mixed = await derivationLane.mix(session, timeline: timeline) {
             loudness = mixed.lufs
             truePeak = mixed.truePeakDb
         }
@@ -610,7 +641,7 @@ public actor Engine {
             throw ToolError.invalidArguments("Unknown preset \(presetName). Use one of: "
                 + ExportPresets.all.map(\.name).joined(separator: ", "))
         }
-        let timeline = session.derive(h.timeline, revision: h.revision)
+        let timeline = await derivationLane.derive(session, timeline: h.timeline, revision: h.revision)
         // The export gate: never ship a video whose masks are unresolved.
         if timeline.overlays.privacy.enabled && timeline.overlays.privacy.autoDetect {
             switch h.privacy {
