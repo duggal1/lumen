@@ -10,7 +10,9 @@ public enum OCRAnalyzer {
     public static func analyze(url: URL, offset: Double = 0, projectSalt: UInt64, customPatterns: [String] = [],
                               entropyThreshold: Double = 3.5, fps: Double = 4, duration: Double = 0, firstFrameOnly: Bool = false,
                               progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> [OCRDetection] {
-        guard ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else { return [] }
+        // A scan that did not run is incomplete, not clean: returning [] here
+        // would publish "no secrets found" for a scan that never looked.
+        guard ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else { throw OCRScanIncomplete.disabled }
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw AnalysisError.noVideoTrack }
         let job = OCRJob(asset: asset, track: track, offset: offset, salt: projectSalt, patterns: customPatterns,
@@ -25,6 +27,16 @@ public enum OCRAnalyzer {
 /// detections travel with the error so the caller can publish the masks it
 /// has instead of discarding them.
 public struct PartialScan: Error, Sendable { public let detections: [OCRDetection] }
+/// The scan never ran. Distinct from "ran and found nothing": callers must not
+/// report this as a clean result.
+public enum OCRScanIncomplete: Error, Sendable, LocalizedError {
+    case disabled
+    public var errorDescription: String? {
+        switch self {
+        case .disabled: "Automatic text scanning is disabled by LUMEN_NO_OCR."
+        }
+    }
+}
 private struct OCRTile: @unchecked Sendable { let image: CGImage; let rect: CGRect }
 private struct OCRLine: @unchecked Sendable { let observation: VNRecognizedTextObservation; let box: CGRect; let tile: CGRect }
 
@@ -267,39 +279,18 @@ private final class OCRJob: @unchecked Sendable {
         }
         if let error = failures.withLock({ $0.first }) { throw error }
         let observations = collected.withLock { $0 }
-        var output: [OCRDetection] = []
-        let confidence = Float(min(max((entropyThreshold - 3) * 0.2 + 0.15, 0.1), 0.5))
-        for line in observations {
-            let observation = line.observation
-            guard let candidate = observation.topCandidates(1).first, candidate.confidence >= confidence else { continue }
-            for hit in SensitivePatterns.scan(candidate.string, custom: patterns, entropyThreshold: entropyThreshold) {
-                let value = String(candidate.string[hit.range]).trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !value.isEmpty else { continue }
-                // Vision's exact box for the matched range, in the tile's own
-                // normalised space. When Vision cannot place it, the whole line
-                // is masked instead: a detected secret is never skipped.
-                let tight = try? candidate.boundingBox(for: hit.range)
-                let box = tight.flatMap { $0.boundingBox.isEmpty ? nil : Self.normalized($0.boundingBox, tile: line.tile, width: width, height: height) }
-                let safeBox = box ?? line.box
-                output.append(OCRDetection(t: time, x: safeBox.minX, y: safeBox.minY, w: safeBox.width, h: safeBox.height,
-                    category: hit.category, hash: fnv1a64(value.lowercased(), salt: salt), confidence: candidate.confidence))
-            }
+        let lines: [OCRTextLine] = observations.compactMap { line in
+            guard let candidate = line.observation.topCandidates(1).first else { return nil }
+            return OCRTextLine(text: candidate.string, box: line.box, confidence: candidate.confidence,
+                               rangeBox: { range in
+                                   guard let tight = try? candidate.boundingBox(for: range), !tight.boundingBox.isEmpty else { return nil }
+                                   return Self.normalized(tight.boundingBox, tile: line.tile, width: width, height: height)
+                               })
         }
-        for line in observations {
-            let label = line.observation, box = line.box
-            guard let text = label.topCandidates(1).first?.string,
-                  text.range(of: "password|passcode|cvv|card number|ssn", options: .regularExpression.union(.caseInsensitive)) != nil else { continue }
-            let neighbors = observations.map(\.box).filter { candidate in
-                candidate != box && ((candidate.minX >= box.maxX && abs(candidate.midY - box.midY) < box.height * 2)
-                    || (candidate.minY >= box.maxY && candidate.minY - box.maxY < 0.08 && abs(candidate.midX - box.midX) < 0.25))
-            }
-            let nearest = neighbors.min { hypot($0.midX - box.midX, $0.midY - box.midY) < hypot($1.midX - box.midX, $1.midY - box.midY) }
-            let field = nearest ?? CGRect(x: box.minX, y: box.maxY, width: max(box.width, 0.18), height: max(box.height * 2, 0.025))
-            let region = box.union(field).intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
-            output.append(OCRDetection(t: time, x: region.minX, y: region.minY, w: region.width, h: region.height,
-                category: .envSecret, hash: fnv1a64(text.lowercased(), salt: salt), confidence: 1))
-        }
-        return output
+        // Detection only. Policy — is this surface private? — is decided later,
+        // where the capture context exists. See `PrivacyPolicy`.
+        return OCRClassify.detections(lines: lines, time: time, salt: salt, custom: patterns,
+                                      entropyThreshold: entropyThreshold)
     }
 
     private static func normalized(_ rect: CGRect, tile: CGRect, width: Int, height: Int) -> CGRect {
@@ -307,18 +298,6 @@ private final class OCRJob: @unchecked Sendable {
             y: (tile.minY + (1 - rect.maxY) * tile.height) / Double(height),
             width: rect.width * tile.width / Double(width), height: rect.height * tile.height / Double(height))
     }
-
-    private static func normalizedImage(_ cgImage: CGImage) -> CGImage? {
-        let width = cgImage.width, height = cgImage.height
-        guard width > 0, height > 0 else { return nil }
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
-        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                                     bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo) else { return nil }
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage()
-    }
-
     private func deduplicate(_ detections: [OCRDetection]) -> [OCRDetection] {
         var seen: Set<String> = []
         return detections.sorted { $0.t < $1.t }.filter { detection in
