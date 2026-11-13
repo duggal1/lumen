@@ -109,7 +109,7 @@ Producers (lane A) fill it. Consumers (lanes B, C, E) read it and must treat `ni
 
 ```sh
 ./Tools/agent-lock.sh acquire lane-a 5400
-swift test --no-parallel --filter 'InputRecorder|FocusProvenance|Typing|Audio'
+swift test --no-parallel --filter 'InputRecorderTests|FocusProvenanceTests'
 ./Tools/agent-lock.sh release lane-a
 ```
 
@@ -169,7 +169,7 @@ A third must exercise a failing AX query and assert the key still reaches the co
 
 ```sh
 ./Tools/agent-lock.sh acquire lane-b 5400
-swift test --no-parallel --filter 'Typing|Tracer|Analysis|Privacy'
+swift test --no-parallel --filter 'TypingTraceTests|ZoomTypingVerifyTests'
 ./Tools/agent-lock.sh release lane-b
 ```
 
@@ -244,7 +244,7 @@ swift test --no-parallel --filter 'Typing|Tracer|Analysis|Privacy'
 
 ```sh
 ./Tools/agent-lock.sh acquire lane-c 5400
-swift test --no-parallel --filter 'zoom|Zoom|camera|Camera|motion|Motion|caret|Caret|Easing|Accuracy'
+swift test --no-parallel --filter 'ZoomEasingTests|ZoomPrecisionTests|MotionTraceTests|ZoomTransformTests|AutoZoomRegressionTests|MotionAccuracyTests|ZoomCropTests|ZoomReportTests|CameraMotionTests'
 ./Tools/agent-lock.sh release lane-c
 ```
 
@@ -312,7 +312,7 @@ never asserted; its presence is not coverage.
 
 ```sh
 ./Tools/agent-lock.sh acquire lane-d 5400
-swift test --no-parallel --filter 'PlayInstant|Performance|Audio|Voice|Studio'
+swift test --no-parallel --filter 'PlayInstantTests|PerformanceTests|AudioStudioTests'
 ./Tools/agent-lock.sh release lane-d
 ```
 
@@ -401,7 +401,7 @@ separately, warm and cold. Report numbers; do not assert a gate you did not meas
 
 ```sh
 ./Tools/agent-lock.sh acquire lane-e 5400
-swift test --no-parallel --filter 'Privacy|Mask|Cursor|Click|MoveTap|OCR'
+swift test --no-parallel --filter 'PrivacyMaskGeometryTests|MaskOCRTests|ClickEffectTests|CursorStylePersistenceTests|MoveTapTests'
 ./Tools/agent-lock.sh release lane-e
 ```
 
