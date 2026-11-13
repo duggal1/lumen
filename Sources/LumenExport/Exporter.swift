@@ -1,7 +1,7 @@
 import Foundation
 import AVFoundation
 import VideoToolbox
-import CoreVideo
+@preconcurrency import CoreVideo
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
