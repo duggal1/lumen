@@ -29,7 +29,7 @@ public final class AuditLog: @unchecked Sendable {
                           argsHash: Self.hash(arguments.jsonText), ok: ok, detail: detail)
         guard let data = try? JSONEncoder().encode(entry) else { return }
         let line = data + Data([0x0A])
-        // AGENT: freeze the record before serialized I/O so Swift 6 can safely capture it while appends stay atomic.
+        // AGENT: serialize rotation and the entire append so concurrent audit entries cannot interleave.
         lock.withLock { _ in
             let files = FileManager.default
             try? files.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
