@@ -46,11 +46,14 @@ extension AppModel: LumenRuntime {
         }
         agentTarget = resolved
         agentOptions = options
+        // AGENT: preserve the recording initiator until the stop operation completes.
+        agentRecording = true
         pendingMarkers = []
         await start()
         agentTarget = nil
         agentOptions = nil
         guard phase == .recording else {
+            agentRecording = false
             let message = error ?? "The recording could not start."
             throw RuntimeFailure(message)
         }
@@ -77,6 +80,10 @@ extension AppModel: LumenRuntime {
 
     public func addMarker(_ marker: CaptureMarker) async throws {
         guard phase == .recording else { throw RuntimeFailure("No recording is running.") }
+        // AGENT: duplicate marker IDs make later timeline anchors ambiguous.
+        guard !marker.id.isEmpty, !pendingMarkers.contains(where: { $0.id == marker.id }) else {
+            throw RuntimeFailure("Marker ID is empty or already exists: \(marker.id).")
+        }
         pendingMarkers.append(marker)
     }
 
