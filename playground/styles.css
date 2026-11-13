@@ -1,9 +1,0 @@
-/* Lumen playground fixture styles. Local only, no network. */
-:root { color-scheme: light dark; }
-body { font: 16px/1.5 -apple-system, system-ui, sans-serif; margin: 2rem; }
-.fixture-label { display:inline-block; padding:0.2rem 0.6rem; border:2px dashed #888; border-radius:6px; margin-bottom:1rem; }
-.card { border:1px solid #ccc; border-radius:12px; padding:1rem; margin:1rem 0; max-width:640px; }
-input, button { font:inherit; padding:0.4rem 0.6rem; }
-.sensitive { outline:2px solid rgba(255,0,0,.35); }
-.dark { background:#111; color:#eee; }
-.dark .card { border-color:#444; }
