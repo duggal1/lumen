@@ -163,7 +163,7 @@ public actor AnalysisService {
                                    entropyThreshold: r.privacy.entropyThreshold, fps: 4)
         do {
             let directory = analysisDirectory(r)
-            let key = try await AnalysisCache.key(media: r.screen, analyzer: "sensitive-text", version: 7, parameters: params)
+            let key = try await AnalysisCache.key(media: r.screen, analyzer: "sensitive-text", version: 8, parameters: params)
             if let detections = AnalysisCache.load([OCRDetection].self, key: key, directory: directory) { return (detections, nil) }
             let detections = try await OCRAnalyzer.analyze(url: r.screen, projectSalt: r.projectSalt,
                 customPatterns: r.privacy.customPatterns, entropyThreshold: r.privacy.entropyThreshold,
