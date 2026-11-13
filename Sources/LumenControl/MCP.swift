@@ -81,12 +81,22 @@ public final class MCPServer: @unchecked Sendable {
             }
             audit.record(client: client, tool: name, arguments: argValue, ok: ok,
                          detail: ok ? nil : payload["error"]?["code"]?.stringValue)
-            let text = payload.jsonText
+            // AGENT: preview pixels must be an MCP image block, not duplicated inside text and structured content.
+            var delivered = payload
+            var imageBlock: [String: Any]?
+            if ok, (name == "preview_frame" || name == "preview_sheet"), case .object(var fields) = payload,
+               case .string(let data)? = fields.removeValue(forKey: "image_base64"),
+               let mime = fields["mime_type"]?.stringValue {
+                imageBlock = ["type": "image", "data": data, "mimeType": mime]
+                delivered = .object(fields)
+            }
+            var content: [[String: Any]] = [["type": "text", "text": delivered.jsonText]]
+            if let imageBlock { content.append(imageBlock) }
             var body: [String: Any] = [
-                "content": [["type": "text", "text": text]],
+                "content": content,
                 "isError": !ok,
             ]
-            if ok, case .object(let o) = payload {
+            if ok, case .object(let o) = delivered {
                 body["structuredContent"] = o.mapValues(\.foundationValue)
             }
             return result(id: id, body)
