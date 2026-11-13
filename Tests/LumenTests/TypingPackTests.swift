@@ -9,14 +9,12 @@ private let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 10
 
 /// Per-key Mechvibes: same key = same sample, fast typing quieter, cuts silent.
 @Test func typingSameKeySameSample() throws {
-    let dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        .appendingPathComponent("Resources/TypingPacks/mechvibes-default", isDirectory: true)
-    guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("config.json").path) else { return }
+    guard let dir = TypingPackLoader.dir(for: "mechvibes-default"),
+          let key = TypingPackLoader.macToPack[0],
+          FileManager.default.fileExists(atPath: dir.appendingPathComponent("a.wav").path) else { return }
     let buffers = TypingPackLoader.buffers(in: dir)
     #expect(!buffers.isEmpty)
-    let a0 = TypingPackLoader.macToPack[0] ?? TypingPackLoader.macToPack.values.sorted().first
-    #expect(a0 != nil)
-    #expect(buffers[a0 ?? -1] != nil)
+    #expect(buffers[key] != nil)
 }
 
 @Test func directorCutsStaySilentForTyping() throws {

@@ -11,6 +11,8 @@ cd "$(dirname "$0")/.."
 APP="${1:-$PWD/.build/Lumen.app}"
 CLI="$APP/Contents/MacOS/lumen-cli"
 [ -x "$CLI" ] || { echo "missing $CLI — run 'make app' first"; exit 1; }
+CLI="$(cd "$(dirname "$CLI")" && pwd)/$(basename "$CLI")"
+TARGET_BUNDLE="com.apple.TextEdit"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -18,14 +20,34 @@ export LUMEN_SMOKE_DIR="$WORK"
 
 echo "== lumen agent smoke =="
 
-# The human approves actuation for this run: the actuate capability and the
-# app allow-list are denied until somebody grants them.
-"$CLI" agent grant --client smoke --capability actuate --bundle-id com.apple.calculator --path "$WORK" >/dev/null
+# AGENT: kernel peer identity replaces spoofable initialize names, so grant the CLI's signing id or executable path.
+CLIENT_ID="$(/usr/bin/codesign -dv --verbose=4 "$CLI" 2>&1 | /usr/bin/sed -n 's/^Identifier=//p')"
+[ -n "$CLIENT_ID" ] || CLIENT_ID="$CLI"
+# AGENT: the final reset is scoped to this identity, so refuse to erase grants that existed before the smoke run.
+PRIOR_GRANTS="$("$CLI" agent status --client "$CLIENT_ID")"
+if printf '%s\n' "$PRIOR_GRANTS" | /usr/bin/grep -Eq 'granted (actuate|record|edit|export|network)'; then
+    echo "refusing to replace existing grants for $CLIENT_ID" >&2
+    exit 1
+fi
+if printf '%s\n' "$PRIOR_GRANTS" | /usr/bin/grep -Fq 'bundle ids: ' \
+    && ! printf '%s\n' "$PRIOR_GRANTS" | /usr/bin/grep -Fq 'bundle ids: (none)'; then
+    echo "refusing to replace existing app approvals for $CLIENT_ID" >&2
+    exit 1
+fi
+if printf '%s\n' "$PRIOR_GRANTS" | /usr/bin/grep -Fq 'folders: ' \
+    && ! printf '%s\n' "$PRIOR_GRANTS" | /usr/bin/grep -Fq 'folders: (library only)'; then
+    echo "refusing to replace existing folder approvals for $CLIENT_ID" >&2
+    exit 1
+fi
+for capability in actuate record edit export; do
+    "$CLI" agent grant --client "$CLIENT_ID" --capability "$capability" \
+        --bundle-id "$TARGET_BUNDLE" --path "$WORK" >/dev/null
+done
 
-python3 - "$CLI" "$WORK" <<'PY'
+python3 - "$CLI" "$WORK" "$CLIENT_ID" <<'PY'
 import json, subprocess, sys, time, os, wave, struct, math
 
-cli, work = sys.argv[1], sys.argv[2]
+cli, work, client_id = sys.argv[1], sys.argv[2], sys.argv[3]
 
 args = [cli, "mcp"]
 if os.environ.get("LUMEN_SMOKE_NO_LAUNCH") == "1":
@@ -54,8 +76,11 @@ def call(method, params=None, timeout=300):
             return reply
     raise SystemExit("timeout waiting for " + method)
 
+def tool_reply(name, args=None, timeout=300):
+    return call("tools/call", {"name": name, "arguments": args or {}}, timeout)
+
 def tool(name, args=None, timeout=300):
-    reply = call("tools/call", {"name": name, "arguments": args or {}}, timeout)
+    reply = tool_reply(name, args, timeout)
     result = reply.get("result", {})
     content = result.get("content", [{}])
     text = content[0].get("text", "{}") if content else "{}"
@@ -83,7 +108,7 @@ def check(name, ok, detail=""):
     if not ok:
         failures.append(name)
 
-# 1. initialize (this is how the daemon learns which client it is talking to)
+# 1. initialize with an untrusted display name; policy uses the kernel peer instead.
 call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                     "clientInfo": {"name": "smoke"}})
 status = tool("lumen_status")
@@ -93,28 +118,28 @@ check("screen recording granted", bool(status["permissions"]["screen_recording"]
       "grant it in System Settings > Privacy & Security > Screen Recording")
 
 # 2. launch TextEdit and find its window
-tool("ui_act", {"bundle_id": "com.apple.calculator", "actions": [{"op": "launch"}]})
+tool("ui_act", {"bundle_id": TARGET_BUNDLE, "actions": [{"op": "launch"}]})
 window = None
 for _ in range(20):
     time.sleep(0.5)
-    windows = tool("list_windows", {"bundle_id": "com.apple.calculator"})
+    windows = tool("list_windows", {"bundle_id": TARGET_BUNDLE})
     rows = windows.get("windows") or []
     if rows:
         window = rows[0]
         break
 print("windows:", json.dumps(windows)[:400])
-check("found the Calculator window", window is not None)
+check("found the TextEdit window", window is not None)
 
 # 3. record it
-tool("record_start", {"target": "window", "bundle_id": "com.apple.calculator",
+tool("record_start", {"target": "window", "bundle_id": TARGET_BUNDLE,
                       "fps": 30, "microphone": False, "privacy_auto_mask": True})
 print("recording started")
 
 # 4. drive it: type a line, so the video has something in it
 try:
-    tool("run_script", {"mode": "virtual", "bundle_id": "com.apple.calculator", "script": {
+    tool("run_script", {"mode": "virtual", "bundle_id": TARGET_BUNDLE, "script": {
         "version": 1,
-        "app": {"bundle_id": "com.apple.calculator"},
+        "app": {"bundle_id": TARGET_BUNDLE},
         "steps": [
             {"id": "type", "say": "Lumen records this.",
              "do": [{"op": "type", "text": "Lumen records this.", "cps": 12}],
@@ -131,6 +156,25 @@ stopped = tool("record_stop")
 project_id = stopped["project_id"]
 print("project:", project_id)
 check("stop returned a project", bool(project_id))
+if stopped.get("privacy_scan_job"):
+    scan = wait_job(stopped["privacy_scan_job"])
+    check("privacy scan finished", scan["state"] == "done", json.dumps(scan)[:300])
+
+# AGENT: cover the empty-target, path-confinement, dry-run, and image-block guarantees.
+empty_target = tool_reply("ui_act", {"bundle_id": "", "actions": []})
+check("empty bundle_id is rejected", bool(empty_target.get("result", {}).get("isError")))
+
+outside_path = os.path.join(os.path.expanduser("~"), "Documents", "lumen-smoke-outside.jpg")
+outside_path_reply = tool_reply("style_set", {"project_id": project_id,
+    "background_image_path": outside_path})
+check("style_set rejects paths outside approved folders",
+      bool(outside_path_reply.get("result", {}).get("isError")))
+
+before_dry_run = tool("timeline_get", {"project_id": project_id})
+dry_run = tool("style_set", {"project_id": project_id, "padding": 0.123, "dry_run": True})
+after_dry_run = tool("timeline_get", {"project_id": project_id})
+check("dry_run leaves revision unchanged",
+      dry_run.get("dry_run") is True and before_dry_run.get("revision") == after_dry_run.get("revision"))
 
 # 6. import a short wav
 wav_path = os.path.join(work, "tone.wav")
@@ -157,8 +201,10 @@ except SystemExit as failure:
 
 # 8. render a frame
 try:
-    frame = tool("preview_frame", {"project_id": project_id, "time": 0.5, "max_width": 480})
-    check("preview_frame returned a PNG", bool(frame.get("image_base64")))
+    frame_reply = tool_reply("preview_frame", {"project_id": project_id, "time": 0.5, "max_width": 480})
+    blocks = frame_reply.get("result", {}).get("content", [])
+    check("preview_frame returned an image content block",
+          any(block.get("type") == "image" for block in blocks))
 except SystemExit as failure:
     check("preview_frame returned a PNG", False, str(failure))
 
@@ -188,7 +234,7 @@ except subprocess.TimeoutExpired:
     proc.kill()
 
 import subprocess as _sp
-_sp.run([cli, "agent", "reset", "--client", "smoke"], capture_output=True)
+_sp.run([cli, "agent", "reset", "--client", client_id], capture_output=True)
 
 print()
 if failures:

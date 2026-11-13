@@ -62,6 +62,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     public var agentOptions: RecordingOptions?
     /// Markers recorded during the session, written into the project on stop.
     var pendingMarkers: [CaptureMarker] = []
+    // AGENT: remember the initiator through finalization after agentTarget is cleared.
+    var agentRecording = false
     /// The project the last recording produced.
     public private(set) var lastProjectURL: URL?
     public var micTesting = false
@@ -483,8 +485,12 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         case .display: cfg = RecordingConfig(source: .display(displayID))
         case .window: cfg = RecordingConfig(source: .window(windowID))
         case .region:
-            guard let r = await RegionSelector.pick() else { return }
-            cfg = RecordingConfig(source: .region(r.display, r.rect))
+            // AGENT: an agent's explicit region must not invoke the human region picker.
+            if let target = agentTarget { cfg = RecordingConfig(source: .display(target.displayID ?? CGMainDisplayID())) }
+            else {
+                guard let r = await RegionSelector.pick() else { return }
+                cfg = RecordingConfig(source: .region(r.display, r.rect))
+            }
         }
         // An agent may ask for an exact target; it wins over the UI selection.
         if let target = agentTarget {
@@ -522,7 +528,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         } ?? NSScreen.main
         // The daemon runs without a window: no floating recorder panel, no
         // library. The agent drives the same engine through tools.
-        if !headless {
+        if !headless && agentTarget == nil {
             hud = HUDController(self, screen: recordingScreen)
             hideLibraryForRecording()
             hud?.show()
@@ -533,12 +539,14 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             // HUD/countdown visible within 100 ms of the click; SCShareableContent
             // and writers warm up in parallel instead of blocking the countdown.
             hud?.showCountdown()
-            phase = .countdown(3)
+            let ticks = max(0, min(agentOptions?.countdownSeconds ?? 3, 10))
+            if ticks > 0 { phase = .countdown(ticks) }
             let prepareTask = Task { try await session.prepare(cfg, library: library) }
             // Countdown ticks while prepare runs; if prepare finishes early we
             // hold in countdown(1), if it overruns we wait below (no dead spinner).
             var firstTick = true
-            for n in [3, 2, 1] {
+            // AGENT: agent recordings use their requested countdown without delaying normal captures.
+            for n in stride(from: ticks, through: 1, by: -1) where ticks > 0 {
                 phase = .countdown(n)
                 if firstTick { try? await Task.sleep(for: .milliseconds(800)) } else { try? await Task.sleep(for: .seconds(1)) }
                 firstTick = false
@@ -601,8 +609,9 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             if !pendingMarkers.isEmpty {
                 var file = MarkerFile()
                 file.markers = pendingMarkers
+                // AGENT: retain markers and surface a failed atomic save.
+                try b.saveMarkers(file)
                 pendingMarkers = []
-                try? b.saveMarkers(file)
             }
             lastProjectURL = b.url
             paused = false
@@ -612,7 +621,9 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                 (try? ProjectBundle(url: finished).load().meta.source.duration) ?? 0
             }.value
             Task { await EmailNotificationService.shared.recordingFinished(project: finished, duration: duration) }
-            if let onFinished { onFinished(b.url); hiddenWindows.removeAll() }
+            // AGENT: finishing an agent recording must not open the editor over the user's work.
+            if agentRecording { agentRecording = false }
+            else if let onFinished { onFinished(b.url); hiddenWindows.removeAll() }
             else { restoreLibraryAfterFailure() }
         } catch { fail(error) }
     }
@@ -640,14 +651,27 @@ enum ClockFormat {
 // MARK: Global hotkey (Carbon, no dependency)
 
 final class HotKey: @unchecked Sendable {
-    nonisolated(unsafe) private static var handler: (() -> Void)?
+    // AGENT: each shortcut needs its own identity and callback rather than overwriting a shared handler.
+    nonisolated(unsafe) private static var handlers: [UInt32: () -> Void] = [:]
+    nonisolated(unsafe) private static var installed = false
+    nonisolated(unsafe) private static var nextID: UInt32 = 1
     private var ref: EventHotKeyRef?
+    private let id: UInt32
     init(keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) {
-        Self.handler = handler
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in HotKey.handler?(); return noErr }, 1, &spec, nil, nil)
-        RegisterEventHotKey(keyCode, modifiers, EventHotKeyID(signature: OSType(0x4C554D4E), id: 1), GetApplicationEventTarget(), 0, &ref)
+        id = Self.nextID; Self.nextID += 1; Self.handlers[id] = handler
+        if !Self.installed {
+            Self.installed = true
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+                var hotkey = EventHotKeyID()
+                let result = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hotkey)
+                if result == noErr, hotkey.signature == OSType(0x4C554D4E) { HotKey.handlers[hotkey.id]?() }
+                return noErr
+            }, 1, &spec, nil, nil)
+        }
+        RegisterEventHotKey(keyCode, modifiers, EventHotKeyID(signature: OSType(0x4C554D4E), id: id), GetApplicationEventTarget(), 0, &ref)
     }
+    deinit { if let ref { UnregisterEventHotKey(ref) }; Self.handlers[id] = nil }
 }
 
 // MARK: Region selector (borderless overlay, drag to select, Esc cancels)

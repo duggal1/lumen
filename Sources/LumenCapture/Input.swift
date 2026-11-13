@@ -113,6 +113,8 @@ public enum ClockCalibration {
 /// Listen-only CGEventTap on its own high-QoS thread. Coordinates converted to source pixels once, here.
 public final class InputRecorder: @unchecked Sendable {
     private let ring = EventRing(capacity: 1 << 16)
+    // AGENT: virtual actuator events bypass the global event tap and are buffered until the normal event flush.
+    private let injected = OSAllocatedUnfairLock<[InputEvent]>(initialState: [])
     private let liveFocusHook = OSAllocatedUnfairLock<(@Sendable (InputEvent, AXFrame) -> Void)?>(initialState: nil)
     public func setLiveFocusHook(_ hook: (@Sendable (InputEvent, AXFrame) -> Void)?) { liveFocusHook.withLock { $0 = hook } }
     private let liveEventHook = OSAllocatedUnfairLock<(@Sendable (InputEvent) -> Void)?>(initialState: nil)
@@ -232,8 +234,32 @@ public final class InputRecorder: @unchecked Sendable {
 
     private func flush() {
         var b: [UInt8] = []
+        // AGENT: the project loader sorts by host time, so encode the tap ring directly without allocating a second event array on the capture queue.
         ring.drain { EventCodec.encode($0, into: &b) }
+        let extra = injected.withLock { pending -> [InputEvent] in
+            defer { pending.removeAll(keepingCapacity: true) }
+            return pending
+        }
+        for event in extra { EventCodec.encode(event, into: &b) }
         if !b.isEmpty { try? fh?.write(contentsOf: Data(b)) }
+    }
+
+    /// Converts intended screen points into the active recording's source-pixel space.
+    // AGENT: virtual pointer motion must render and drive click analysis without moving the user's cursor.
+    func injectPointer(kind: InputEvent.Kind, screenPoint: CGPoint, button: UInt8 = 0,
+                       keyCode: UInt16 = 0, flags: UInt16 = 0, scrollDelta: Float = 0) {
+        var event = InputEvent(t: HostClock.now(), kind: kind)
+        let sourceOrigin = origin.withLock { $0 }
+        let scale = sourceScale.withLock { $0 }
+        event.x = Float((screenPoint.x - sourceOrigin.x) * scale.x)
+        event.y = Float((screenPoint.y - sourceOrigin.y) * scale.y)
+        event.button = button
+        event.keyCode = keyCode
+        event.flags = flags
+        event.cursorShape = shape.withLock { $0 }
+        event.scrollDelta = scrollDelta
+        let completedEvent = event
+        injected.withLock { $0.append(completedEvent) }
     }
 
     fileprivate func handle(_ type: CGEventType, _ e: CGEvent) {

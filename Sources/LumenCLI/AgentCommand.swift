@@ -23,6 +23,9 @@ struct Agent: ParsableCommand {
                 let allowed = policy.allowed(capability, for: client)
                 print("  \(allowed ? "granted" : "denied " ) \(capability.rawValue)")
             }
+            // AGENT: the smoke workflow must preserve pre-existing app approvals when it cleans up.
+            let bundleIDs = policy.grantedBundleIDs(for: client)
+            print("  bundle ids: \(bundleIDs.isEmpty ? "(none)" : bundleIDs.joined(separator: ", "))")
             let paths = policy.allowedPaths(for: client)
             print("  folders: \(paths.isEmpty ? "(library only)" : paths.joined(separator: ", "))")
             let tokenPath = AgentCredentials.tokenURL.path

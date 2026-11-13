@@ -6,20 +6,66 @@ public enum Capability: String, Sendable, CaseIterable {
     case read, record, actuate, edit, export, network
 }
 
+/// A protocol result can carry text data and separate binary image content.
+/// AGENT: screenshots were duplicated as base64 text and structured JSON, so MCP clients could not render them as images.
+public struct ToolOutput: Sendable {
+    public struct Image: Sendable {
+        public let data: Data
+        public let mime: String
+
+        public init(data: Data, mime: String) {
+            self.data = data
+            self.mime = mime
+        }
+    }
+
+    public let json: JSONValue
+    public let images: [Image]
+
+    public init(json: JSONValue, images: [Image] = []) {
+        self.json = json
+        self.images = images
+    }
+
+    /// Migrates existing renderer results into MCP image blocks before serialization.
+    static func extractingPreview(from value: JSONValue, tool: String) -> ToolOutput {
+        guard tool == "preview_frame" || tool == "preview_sheet" || tool == "screen_look",
+              case .object(var fields) = value,
+              case .string(let encoded)? = fields.removeValue(forKey: "image_base64"),
+              case .string(let mime)? = fields.removeValue(forKey: "mime_type"),
+              let data = Data(base64Encoded: encoded) else {
+            return ToolOutput(json: value)
+        }
+        // AGENT: expose encoded size as ordinary metadata while keeping pixels in a binary image block.
+        fields["bytes"] = .int(data.count)
+        return ToolOutput(json: .object(fields), images: [Image(data: data, mime: mime)])
+    }
+}
+
 /// Agent-facing description of one tool.
 public struct ToolSpec: Sendable {
     public let name: String                 // verb_noun, snake_case
+    /// AGENT: clients need a human-readable label for every listed tool.
+    public let title: String
     public let description: String          // when to use, when NOT to, what it returns
     public let capability: Capability
+    /// AGENT: composite tools must ask for every capability their stages exercise.
+    public let additionalCapabilities: [Capability]
     public let inputSchema: JSONValue       // derived from the Codable input type
     public let required: [String]
     public let mutating: Bool
     public let longRunning: Bool
+    /// AGENT: MCP annotations must distinguish reversible edits from destructive actions.
+    public let destructive: Bool
+    public let idempotent: Bool
+    /// AGENT: timeline dry runs need validation against a copied draft, not a generic no-op envelope.
+    public let customDryRun: Bool
+    /// AGENT: stable small outputs can be described separately from their input schemas.
+    public let outputSchema: JSONValue?
 }
 
-/// Every tool input gives every property a default, so the schema can be
-/// derived by reflection and the arguments can be decoded from a partial JSON
-/// object.
+/// Every tool input gives every property a default so partial JSON can decode.
+/// AGENT: tool schemas are declared explicitly, because runtime reflection hid the shape clients need.
 public protocol ToolInput: Codable, Sendable {
     init()
 }
@@ -29,37 +75,68 @@ public struct ToolDefinition<Input: ToolInput>: Sendable {
     public let name: String
     public let description: String
     public let capability: Capability
+    /// AGENT: one-shot workflows need grants for their complete operation chain.
+    public let additionalCapabilities: [Capability]
     public let required: [String]
     public let mutating: Bool
     public let longRunning: Bool
     /// AGENT: nested inputs cannot be described by reflection, so a tool with a
     /// script or a batch of ops publishes a hand-written schema instead.
     public let schema: JSONValue?
+    public let title: String?
+    public let destructive: Bool
+    public let idempotent: Bool?
+    public let customDryRun: Bool
+    public let outputSchema: JSONValue?
     let run: @Sendable (Input, ToolContext) async throws -> JSONValue
 
     public init(name: String, description: String, capability: Capability, required: [String] = [],
                 mutating: Bool = false, longRunning: Bool = false, schema: JSONValue? = nil,
+                additionalCapabilities: [Capability] = [],
+                title: String? = nil, destructive: Bool = false, idempotent: Bool? = nil,
+                outputSchema: JSONValue? = nil, customDryRun: Bool = false,
                 run: @escaping @Sendable (Input, ToolContext) async throws -> JSONValue) {
         self.name = name
         self.description = description
         self.capability = capability
+        self.additionalCapabilities = additionalCapabilities
         self.required = required
         self.mutating = mutating
         self.longRunning = longRunning
         self.schema = schema
+        self.title = title
+        self.destructive = destructive
+        self.idempotent = idempotent
+        self.outputSchema = outputSchema
+        self.customDryRun = customDryRun
         self.run = run
     }
 
     /// The erased form the registry stores.
     func erase() -> ErasedTool {
-        let sample = Input()
-        var schema = schema ?? SchemaGenerator.schema(for: sample, required: required)
-        if mutating { schema = SchemaGenerator.injectingDryRun(schema) }
-        return ErasedTool(spec: ToolSpec(name: name, description: description, capability: capability,
-                                          inputSchema: schema, required: required,
-                                          mutating: mutating, longRunning: longRunning),
+        var inputSchema = schema ?? ToolSchemas.schema(for: name, required: required)
+        if mutating { inputSchema = J.injectingDryRun(inputSchema) }
+        return ErasedTool(spec: ToolSpec(name: name, title: title ?? name.replacingOccurrences(of: "_", with: " "),
+                                          description: description, capability: capability,
+                                          additionalCapabilities: additionalCapabilities,
+                                          inputSchema: inputSchema, required: required,
+                                          mutating: mutating, longRunning: longRunning,
+                                          destructive: destructive, idempotent: idempotent ?? !mutating,
+                                          customDryRun: customDryRun,
+                                          outputSchema: outputSchema ?? ToolSchemas.outputSchema(for: name)),
                           invoke: { args, ctx in
-                              let input = try JSONDecoder().decode(Input.self, from: Data(args.jsonText.utf8))
+                              // AGENT: decoding failures must identify the invalid input instead of leaking a Swift debug dump.
+                              let input: Input
+                              do { input = try JSONDecoder().decode(Input.self, from: Data(args.jsonText.utf8)) }
+                              catch let error as DecodingError {
+                                  let context: DecodingError.Context
+                                  switch error {
+                                  case .typeMismatch(_, let c), .valueNotFound(_, let c), .keyNotFound(_, let c), .dataCorrupted(let c): context = c
+                                  @unknown default: throw ToolError.invalidArguments("Invalid tool arguments.")
+                                  }
+                                  let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+                                  throw ToolError.invalidArguments("\(path.isEmpty ? "arguments" : path): \(context.debugDescription)")
+                              }
                               return try await self.run(input, ctx)
                           })
     }
@@ -93,8 +170,13 @@ public final class ToolRegistry: @unchecked Sendable {
     public func call(_ name: String, arguments: JSONValue, context: ToolContext) async throws -> JSONValue {
         let tool = tools.withLock { $0[name] }
         guard let tool else { throw ToolError.unknownTool(name) }
+        // AGENT: required fields must be present before defaults can conceal missing input.
+        guard case .object(let fields) = arguments else { throw ToolError.invalidArguments("Arguments must be an object.") }
+        for key in tool.spec.required where fields[key] == nil || fields[key] == .null {
+            throw ToolError.invalidArguments("Missing required argument: \(key).")
+        }
         // AGENT: dry_run was honoured by two tools out of twenty, so enforce it centrally.
-        if context.dryRun && tool.spec.mutating {
+        if context.dryRun && tool.spec.mutating && !tool.spec.customDryRun {
             return .object([
                 "dry_run": .bool(true),
                 "tool": .string(name),
@@ -121,9 +203,12 @@ public struct ToolContext: Sendable {
     public let dryRun: Bool
     /// AGENT: one guard for every path argument, so no tool can forget confinement.
     public let paths: PathGuard
+    /// AGENT: long-running tools need an MCP progress route while their request stays open.
+    public let progress: (@Sendable (Double, String?) -> Void)?
 
     public init(engine: Engine, policy: Policy, jobs: JobManager, audit: AuditLog,
-                clientID: String, dryRun: Bool) {
+                clientID: String, dryRun: Bool,
+                progress: (@Sendable (Double, String?) -> Void)? = nil) {
         self.engine = engine
         self.policy = policy
         self.jobs = jobs
@@ -131,6 +216,13 @@ public struct ToolContext: Sendable {
         self.clientID = clientID
         self.dryRun = dryRun
         self.paths = PathGuard(policy: policy, client: clientID)
+        self.progress = progress
+    }
+
+    /// Waits for a job and routes progress to the current MCP request.
+    // AGENT: progress callbacks belong to the request that explicitly asked to wait.
+    public func waitForJob(_ id: String) async throws -> JobManager.Job {
+        try await jobs.waitForCompletion(id, progress: progress)
     }
 }
 

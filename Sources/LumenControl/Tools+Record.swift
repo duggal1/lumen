@@ -88,8 +88,12 @@ public struct RecordStopInput: ToolInput {
 public extension ToolRegistry {
     func registerRecordTools() {
         register(ToolDefinition<RecordStartInput>(name: "record_start",
-            description: "Starts a recording. Target a display, a window (by bundle id or window id) or a region (region_x, region_y, region_width, region_height are 0...1 fractions of the display). Automatic privacy masking is on by default: agent recordings show emails and tokens.",
+            description: "Starts a recording of a display, window, or normalized region. Automatic privacy masking is on by default.",
             capability: .record, required: ["target"], mutating: true) { input, ctx in
+                // AGENT: recording cannot proceed safely without the permissions needed for capture and event logging.
+                let permissions = await ctx.engine.runtime.runtimeStatus().permissions
+                guard permissions.screenRecording else { throw ToolError.permission("screen recording", pane: "ScreenCapture") }
+                guard permissions.inputMonitoring else { throw ToolError.permission("input monitoring", pane: "ListenEvent") }
                 var target = RecordingTarget(kind: .display)
                 switch input.target {
                 case "window":
@@ -103,22 +107,23 @@ public extension ToolRegistry {
                     // AGENT: region_x/y/w/h are documented as 0...1 fractions but
                     // were passed straight through as points, so a "half screen"
                     // region was a half-pixel square.
-                    let w = min(max(input.regionWidth, 0), 1)
-                    let h = min(max(input.regionHeight, 0), 1)
-                    guard w > 0.01, h > 0.01 else {
+                    // AGENT: reject invalid fractions rather than silently moving or resizing the region.
+                    let values = [input.regionX, input.regionY, input.regionWidth, input.regionHeight]
+                    guard values.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
+                          input.regionWidth > 0, input.regionHeight > 0,
+                          input.regionX + input.regionWidth <= 1, input.regionY + input.regionHeight <= 1 else {
                         throw ToolError.invalidArguments(
-                            "region_width and region_height are fractions of the display (0...1). 0.5 is half the screen.")
+                            "Region coordinates must describe a nonempty rectangle inside the display using fractions from 0 to 1.")
                     }
                     let bounds = CGDisplayBounds(display)
-                    let originX = min(max(input.regionX, 0), 1 - w)
-                    let originY = min(max(input.regionY, 0), 1 - h)
-                    target.rect = CGRect(x: bounds.minX + bounds.width * originX,
-                                         y: bounds.minY + bounds.height * originY,
-                                         width: bounds.width * w,
-                                         height: bounds.height * h)
-                default:
+                    // AGENT: ScreenCaptureKit sourceRect is relative to the selected display, including on secondary monitors.
+                    target.rect = CGRect(x: bounds.width * input.regionX, y: bounds.height * input.regionY,
+                                         width: bounds.width * input.regionWidth, height: bounds.height * input.regionHeight)
+                case "display":
                     target.kind = .display
                     target.displayID = input.displayID > 0 ? UInt32(input.displayID) : CGMainDisplayID()
+                default:
+                    throw ToolError.invalidArguments("target must be display, window, or region.")
                 }
                 var options = RecordingOptions()
                 options.fps = max(24, min(input.fps, 120))
@@ -170,8 +175,9 @@ public extension ToolRegistry {
                 var payload: [String: JSONValue] = ["project_id": .string(ref.identifier),
                                                     "path": .string(url.path)]
                 // AGENT: agent recordings auto-mask, so the scan starts without being asked.
-                if (try? await ctx.engine.privacyAutoMasked(projectID: ref.identifier)) == true,
-                   let job = try? await ctx.engine.startPrivacyScan(projectID: ref.identifier) {
+                // AGENT: failing to start the privacy scan must not look like a successful protected recording.
+                if try await ctx.engine.privacyAutoMasked(projectID: ref.identifier) {
+                    let job = try await ctx.engine.startPrivacyScan(projectID: ref.identifier)
                     payload["privacy_scan_job"] = .string(job)
                 }
                 return .object(payload)

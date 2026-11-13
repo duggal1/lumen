@@ -40,6 +40,8 @@ public struct RecordingOptions: Codable, Sendable, Equatable {
     public var microphone = true
     public var systemAudio = false
     public var webcam = false
+    // AGENT: agent recordings can start immediately while human recordings retain their countdown.
+    public var countdownSeconds = 0
     /// Automatic privacy masking is ON by default for agent recordings: they
     /// show emails, tokens and the like.
     public var privacyAutoMask = true
@@ -114,8 +116,20 @@ public protocol LumenRuntime: AnyObject, Sendable {
     func resumeRecording() async throws
     /// Records a marker on the current recording. Throws when nothing is recording.
     func addMarker(_ marker: CaptureMarker) async throws
+    /// Adds an actuator event to the current recording without posting it through HID.
+    // AGENT: virtual mode needs an event-log path because process-targeted events bypass Lumen's global event tap.
+    func injectInput(kind: InputEvent.Kind, screenPoint: CGPoint, button: UInt8,
+                     keyCode: UInt16, flags: UInt16, scrollDelta: Float) async throws
     /// The bundle of the recording in progress, if any.
     func activeRecordingBundle() async -> URL?
     /// All projects in the library.
     func recordingLibrary() async -> [URL]
+}
+
+public extension LumenRuntime {
+    // AGENT: runtimes without an event recorder reject virtual input instead of silently losing its analysis events.
+    func injectInput(kind: InputEvent.Kind, screenPoint: CGPoint, button: UInt8,
+                     keyCode: UInt16, flags: UInt16, scrollDelta: Float) async throws {
+        throw RuntimeFailure("This runtime cannot record virtual input events.")
+    }
 }

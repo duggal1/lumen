@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Metal
 @preconcurrency import AVFoundation
 import os
@@ -16,9 +17,17 @@ public final class ProjectSession: @unchecked Sendable {
     public let screen: ReaderFrameSource
     public let webcam: (any FrameSource)?
     private let saveQueue = DispatchQueue(label: "lumen.project.save", qos: .userInitiated)
+    // AGENT: editor saves must compare the last on-disk revision before replacing an agent's update.
+    private let projectRevision: OSAllocatedUnfairLock<Int>
+    private let saveConflictHandler = OSAllocatedUnfairLock<(@Sendable (Int, Int) -> Void)?>(initialState: nil)
+    // AGENT: an open editor watches atomic project-file replacements to receive newer agent timelines.
+    private let projectChangeHandler = OSAllocatedUnfairLock<(@Sendable (ProjectFile) -> Void)?>(initialState: nil)
+    private var projectWatcher: DispatchSourceFileSystemObject?
+    private let projectWatchQueue = DispatchQueue(label: "lumen.project.watch", qos: .utility)
     private let analysisSequence = OSAllocatedUnfairLock<Int>(initialState: 0)
     private let inputState: OSAllocatedUnfairLock<DirectorInput>
     public var input: DirectorInput { inputState.withLock { $0 } }
+    public var currentProjectRevision: Int { projectRevision.withLock { $0 } }
     public let mixer: AudioMixer
     public let transcriptFile: TranscriptFile?
     public let micOffset: Double
@@ -28,11 +37,38 @@ public final class ProjectSession: @unchecked Sendable {
     /// `ReaderFrameSource` lazily and keep it for the life of the session.
     private let device: SendableMetalDevice
     private let clipSources = OSAllocatedUnfairLock<[String: ReaderFrameSource]>(initialState: [:])
-    init(bundle: ProjectBundle, meta: ProjectMeta, screen: ReaderFrameSource, webcam: (any FrameSource)?, input: DirectorInput,
+    init(bundle: ProjectBundle, meta: ProjectMeta, revision: Int, screen: ReaderFrameSource, webcam: (any FrameSource)?, input: DirectorInput,
          mixer: AudioMixer, transcriptFile: TranscriptFile?, micOffset: Double, waveform: [Float], cursors: [CustomCursor], device: SendableMetalDevice) {
         self.bundle = bundle; self.meta = meta; self.screen = screen; self.webcam = webcam
+        projectRevision = OSAllocatedUnfairLock(initialState: revision)
         inputState = OSAllocatedUnfairLock(initialState: input)
         self.mixer = mixer; self.transcriptFile = transcriptFile; self.micOffset = micOffset; self.waveform = waveform; self.cursors = cursors; self.device = device
+        startProjectWatcher()
+    }
+
+    deinit { projectWatcher?.cancel() }
+
+    private func startProjectWatcher() {
+        let fd = Darwin.open(bundle.url.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write,
+                                                                queue: projectWatchQueue)
+        source.setEventHandler { [weak self] in
+            guard let session = self else { return }
+            // AGENT: defer briefly so the atomic writer advances its in-memory revision before the watcher compares.
+            session.projectWatchQueue.asyncAfter(deadline: .now() + .milliseconds(80)) { [weak session] in
+                session?.publishIfNewerProjectFile()
+            }
+        }
+        source.setCancelHandler { Darwin.close(fd) }
+        source.resume()
+        projectWatcher = source
+    }
+
+    private func publishIfNewerProjectFile() {
+        guard let file = try? bundle.load(), let revision = file.revision,
+              revision > currentProjectRevision else { return }
+        projectChangeHandler.withLock { $0 }?(file)
     }
 
     /// One frame for an OUTPUT time. Recording times read the screen track at
@@ -63,8 +99,35 @@ public final class ProjectSession: @unchecked Sendable {
     }
 
     public func derive(_ tl: Timeline, revision: Int) -> Timeline { Director.derive(tl, input: input, revision: revision) }
+    public func setSaveConflictHandler(_ handler: @escaping @Sendable (Int, Int) -> Void) {
+        saveConflictHandler.withLock { $0 = handler }
+    }
+    // AGENT: an accepted disk timeline is applied on the main actor before its revision becomes the editor's save base.
+    public func setProjectChangeHandler(_ handler: @escaping @Sendable (ProjectFile) -> Void) {
+        projectChangeHandler.withLock { $0 = handler }
+    }
+    // AGENT: update the editor's compare-and-swap base after its in-memory timeline is replaced.
+    public func adoptExternalRevision(_ revision: Int) {
+        projectRevision.withLock { $0 = max($0, revision) }
+    }
     public func save(_ tl: Timeline) {
-        saveQueue.async { [self] in try? bundle.save(ProjectFile(meta: meta, timeline: tl)) }
+        saveQueue.async { [self] in
+            let expected = projectRevision.withLock { $0 }
+            do {
+                let revision = try bundle.save(ProjectFile(meta: meta, timeline: tl), expectingRevision: expected)
+                projectRevision.withLock { $0 = revision }
+            } catch ProjectError.conflict(let expected, let actual) {
+                saveConflictHandler.withLock { $0 }?(expected, actual)
+            } catch {
+                // AGENT: failed saves are no longer allowed to overwrite a newer project revision.
+            }
+        }
+    }
+    // AGENT: one-shot CLI edits must perform the same revision compare-and-swap as background editor saves.
+    public func saveImmediately(_ timeline: Timeline) throws {
+        let expected = projectRevision.withLock { $0 }
+        let revision = try bundle.save(ProjectFile(meta: meta, timeline: timeline), expectingRevision: expected)
+        projectRevision.withLock { $0 = revision }
     }
     public func updateTranscript(_ transcript: Transcript) {
         inputState.withLock { $0.transcript = transcript }
@@ -169,7 +232,7 @@ public final class ProjectSession: @unchecked Sendable {
                                   webcamAspect: aspect, transcript: tf?.transcript.shifted(by: micOff))
         // Declick windows are source-time; convert to mic-file time by micOff.
         let keyTimesInMicFile = events.filter { $0.kind == .keyDown }.map { $0.t - micOff }.filter { $0 >= 0 }
-        let s = ProjectSession(bundle: b, meta: meta, screen: screen, webcam: web, input: input,
+        let s = ProjectSession(bundle: b, meta: meta, revision: file.revision ?? 0, screen: screen, webcam: web, input: input,
                                mixer: AudioMixer(mic: mic, micOffset: micOff, system: sys, systemOffset: sysOff,
                                                  systemRight: sysRight,
                                                  additionalMicrophones: extras, cacheDir: b.cacheURL,

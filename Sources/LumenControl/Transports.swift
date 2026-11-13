@@ -1,5 +1,33 @@
 import Foundation
 import Security
+import os
+
+// AGENT: serialize complete writes and close under the same lock to prevent truncated replies and descriptor reuse.
+private final class SocketWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fd: Int32
+    init(_ fd: Int32) { self.fd = fd }
+    func send(_ line: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard fd >= 0 else { return }
+        var bytes = Array(line.utf8); bytes.append(10)
+        bytes.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            var offset = 0
+            while offset < raw.count {
+                let n = Darwin.write(fd, base.advanced(by: offset), raw.count - offset)
+                if n < 0 && errno == EINTR { continue }
+                guard n > 0 else { break }
+                offset += n
+            }
+        }
+    }
+    func close() {
+        _ = shutdown(fd, SHUT_RDWR)
+        lock.lock(); defer { lock.unlock() }
+        if fd >= 0 { Darwin.close(fd); fd = -1 }
+    }
+}
 
 // MARK: - Peer identity
 
@@ -140,14 +168,22 @@ public final class UnixSocketServer: @unchecked Sendable {
             close(client)
             return
         }
+        // AGENT: last-seen identity is recorded from peer credentials, never initialize metadata.
+        server.policy.touch(peer)
         // One queue per connection: an idle client must never block another
         // client, and the replies on one connection stay in order.
         let connection = DispatchQueue(label: "lumen.agent.socket.conn", qos: .userInitiated)
-        connection.async { [weak self] in self?.serve(client, peer: peer, on: connection) }
+        connection.async { [weak self] in
+            guard let self else { close(client); return }
+            self.serve(client, peer: peer)
+        }
     }
 
-    private func serve(_ fd: Int32, peer: PeerIdentity, on connection: DispatchQueue) {
+    private func serve(_ fd: Int32, peer: PeerIdentity) {
         let clientID = peer.key
+        // AGENT: independent requests keep status and cancellation available while a long tool runs.
+        let writer = SocketWriter(fd)
+        let tasks = OSAllocatedUnfairLock<[String: (UUID, Task<Void, Never>)]>(initialState: [:])
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 64 * 1024)
         while running {
@@ -160,23 +196,29 @@ public final class UnixSocketServer: @unchecked Sendable {
                 let lineData = buffer[buffer.startIndex..<index]
                 buffer.removeSubrange(buffer.startIndex...index)
                 guard let line = String(data: lineData, encoding: .utf8), !line.isEmpty else { continue }
-                let requestClient = clientID
-                // Handle it on this connection's own queue, in order. The
-                // read loop waits for the reply so replies never overtake
-                // each other, and no other connection is affected.
-                let done = DispatchSemaphore(value: 0)
-                Task {
-                    if let reply = await self.server.handle(line, client: requestClient) {
-                        var bytes = Array(reply.utf8)
-                        bytes.append(0x0A)
-                        _ = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
-                    }
-                    done.signal()
+                let request = (try? JSONSerialization.jsonObject(with: lineData)) as? [String: Any]
+                if request?["method"] as? String == "notifications/cancelled",
+                   let params = request?["params"] as? [String: Any], let id = params["requestId"] {
+                    let key = JSONValue(any: id).jsonText
+                    tasks.withLock { $0[key]?.1.cancel() }
+                    continue
                 }
-                done.wait()
+                let key: String?
+                if let id = request?["id"] { key = JSONValue(any: id).jsonText } else { key = nil }
+                let token = UUID()
+                tasks.withLock { pending in
+                    let task = Task { [server] in
+                        if let reply = await server.handle(line, client: clientID, notify: { writer.send($0) }), !Task.isCancelled {
+                            writer.send(reply)
+                        }
+                        if let key { tasks.withLock { if $0[key]?.0 == token { $0[key] = nil } } }
+                    }
+                    if let key { pending[key]?.1.cancel(); pending[key] = (token, task) }
+                }
             }
         }
-        close(fd)
+        tasks.withLock { pending in pending.values.forEach { $0.1.cancel() }; pending.removeAll() }
+        writer.close()
     }
 }
 
@@ -210,7 +252,12 @@ public final class UnixSocketClient: @unchecked Sendable {
                     Darwin.connect(client, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
                 }
             }
-            if ok == 0 { fd = client; return }
+            if ok == 0 {
+                // AGENT: a disconnected daemon must not terminate the CLI with SIGPIPE.
+                var one: Int32 = 1
+                setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+                fd = client; return
+            }
             close(client)
             Thread.sleep(forTimeInterval: 0.1)
         }
@@ -225,8 +272,21 @@ public final class UnixSocketClient: @unchecked Sendable {
         guard fd >= 0 else { throw ToolError.failed("Not connected.") }
         var bytes = Array(line.utf8)
         bytes.append(0x0A)
-        _ = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+        // AGENT: socket writes can be partial even for a single JSON line.
+        try bytes.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            var offset = 0
+            while offset < raw.count {
+                let n = Darwin.write(fd, base.advanced(by: offset), raw.count - offset)
+                if n < 0 && errno == EINTR { continue }
+                guard n > 0 else { throw ToolError.failed("The daemon closed the connection while sending.") }
+                offset += n
+            }
+        }
     }
+
+    // AGENT: half-close lets the reply reader drain outstanding requests after stdin ends.
+    public func shutdownWrite() { if fd >= 0 { _ = shutdown(fd, SHUT_WR) } }
 
     /// Waits for the next line the daemon sends.
     public func receive(timeout: TimeInterval = 600) throws -> String {
@@ -275,6 +335,8 @@ public final class UnixSocketClient: @unchecked Sendable {
 /// MCP client's process.
 public final class StdioServer: @unchecked Sendable {
     private let server: MCPServer
+    // AGENT: concurrent requests and progress notifications must not interleave stdout JSON lines.
+    private let outputLock = NSLock()
 
     public init(server: MCPServer) { self.server = server }
 
@@ -285,12 +347,17 @@ public final class StdioServer: @unchecked Sendable {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 if trimmed.isEmpty { continue }
                 Task {
-                    guard let reply = await self.server.handle(trimmed, client: "stdio") else { return }
-                    print(reply)
-                    fflush(stdout)
+                    guard let reply = await self.server.handle(trimmed, client: "stdio", notify: { [weak self] in self?.writeLine($0) }) else { return }
+                    self.writeLine(reply)
                 }
             }
         }
         dispatchMain()
+    }
+
+    private func writeLine(_ line: String) {
+        outputLock.lock(); defer { outputLock.unlock() }
+        print(line)
+        fflush(stdout)
     }
 }

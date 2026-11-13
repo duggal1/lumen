@@ -13,24 +13,79 @@ import LumenSpeech
 /// AGENT: `start` and `end` were bare numbers, so an agent could not tell the
 /// source seconds a zoom or cut lives in from the output seconds the preview
 /// and QA report speak. Callers now name the basis.
-public struct TimeRef: Codable, Sendable, Equatable {
-    public var seconds: Double
-    /// "source" (the recording) or "output" (after cuts and ramps).
-    public var basis: String
-    public init(seconds: Double, basis: String = "source") {
-        self.seconds = seconds
-        self.basis = basis
+public enum TimeRef: Codable, Sendable, Equatable {
+    case source(Double)
+    case output(Double)
+    case marker(id: String, offsetMs: Double)
+
+    // AGENT: a tagged time reference makes source, edited output, and marker clocks unambiguous.
+    public static func legacy(seconds: Double, basis: String) throws -> TimeRef {
+        switch basis {
+        case "source": return .source(seconds)
+        case "output": return .output(seconds)
+        default: throw ToolError.invalidArguments("basis must be \"source\" or \"output\", not \(basis).")
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case source, output, marker, offsetMs = "offset_ms" }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let hasSource = c.contains(.source), hasOutput = c.contains(.output), hasMarker = c.contains(.marker)
+        guard [hasSource, hasOutput, hasMarker].filter({ $0 }).count == 1 else {
+            throw DecodingError.dataCorruptedError(forKey: .source, in: c,
+                debugDescription: "Use exactly one of source, output, or marker.")
+        }
+        if hasSource { self = .source(try c.decode(Double.self, forKey: .source)) }
+        else if hasOutput { self = .output(try c.decode(Double.self, forKey: .output)) }
+        else {
+            self = .marker(id: try c.decode(String.self, forKey: .marker),
+                           offsetMs: try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .source(let value): try c.encode(value, forKey: .source)
+        case .output(let value): try c.encode(value, forKey: .output)
+        case .marker(let id, let offset):
+            try c.encode(id, forKey: .marker)
+            try c.encode(offset, forKey: .offsetMs)
+        }
     }
 }
 
 extension Timeline {
     /// Converts a caller-supplied time to the source seconds the timeline stores.
     func sourceSeconds(_ ref: TimeRef) throws -> Double {
-        switch ref.basis {
-        case "source": return ref.seconds
-        case "output": return timeMap.source(atOutput: ref.seconds)
+        // AGENT: reject invalid times before the time map can clamp them silently.
+        switch ref {
+        case .source(let seconds):
+            guard seconds.isFinite, seconds >= 0, seconds <= timeMap.sourceDuration + 0.001 else {
+                throw ToolError.invalidArguments("Source time must be within the recording duration.")
+            }
+            return seconds
+        case .output(let seconds):
+            guard seconds.isFinite, seconds >= 0, seconds <= timeMap.outputDuration + 0.001 else {
+                throw ToolError.invalidArguments("Output time must be within the edited duration.")
+            }
+            return timeMap.source(atOutput: seconds)
+        case .marker:
+            throw ToolError.invalidArguments("Marker times must be resolved by the project engine.")
+        }
+    }
+
+    // AGENT: edit commands consume output-clock playheads, so source references must map through TimeMap.
+    func outputSeconds(_ ref: TimeRef) throws -> Double {
+        switch ref {
+        case .output(let seconds):
+            guard seconds.isFinite, seconds >= 0, seconds <= timeMap.outputDuration + 0.001 else {
+                throw ToolError.invalidArguments("Output time must be within the edited duration.")
+            }
+            return seconds
         default:
-            throw ToolError.invalidArguments("basis must be \"source\" or \"output\", not \(ref.basis).")
+            return timeMap.output(atSource: try sourceSeconds(ref))
         }
     }
 }
@@ -67,6 +122,32 @@ public struct TimelineGetInput: ToolInput {
     }
 }
 
+/// AGENT: agents need to release cached project sessions when they finish a project.
+public struct ProjectCloseInput: ToolInput {
+    public var projectID: String = ""
+    public init() {}
+    enum CodingKeys: String, CodingKey { case projectID = "project_id" }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    }
+}
+
+/// AGENT: clip imports need an explicit output position and confined source path.
+public struct ClipImportInput: ToolInput {
+    public var projectID: String = ""
+    public var path: String = ""
+    public var at: Double?
+    public init() {}
+    enum CodingKeys: String, CodingKey { case projectID = "project_id", path, at }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+        path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+        at = try c.decodeIfPresent(Double.self, forKey: .at)
+    }
+}
+
 /// One typed timeline operation. Flat and explicit so an agent cannot send
 /// an expression it does not understand.
 ///
@@ -88,6 +169,10 @@ public struct PatchOp: Codable, Sendable {
     public var value: Double?
     public var text: String?
     public var flag: Bool?
+    // AGENT: edit_apply needs typed clip and multi-clip payloads for editor reducer commands.
+    public var ids: [String]?
+    public var clip: TimelineClip?
+    public var basis: String?
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -104,6 +189,9 @@ public struct PatchOp: Codable, Sendable {
     case value
     case text
     case flag
+    case ids
+    case clip
+    case basis
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -120,13 +208,16 @@ public struct PatchOp: Codable, Sendable {
     self.value = try c.decodeIfPresent(Double.self, forKey: .value)
     self.text = try c.decodeIfPresent(String.self, forKey: .text)
     self.flag = try c.decodeIfPresent(Bool.self, forKey: .flag)
+    self.ids = try c.decodeIfPresent([String].self, forKey: .ids)
+    self.clip = try c.decodeIfPresent(TimelineClip.self, forKey: .clip)
+    self.basis = try c.decodeIfPresent(String.self, forKey: .basis)
     }
 }
 
 public struct TimelinePatchInput: ToolInput {
     public var projectID: String = ""
-    /// Expected revision. 0 means "do not check".
-    public var revision: Int = 0
+    // AGENT: omission means no compare-and-swap; revision zero is not a valid project revision.
+    public var revision: Int?
     public var ops: [PatchOp] = []
     public init() {}
 
@@ -138,7 +229,7 @@ public struct TimelinePatchInput: ToolInput {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
-    self.revision = try c.decodeIfPresent(Int.self, forKey: .revision) ?? 0
+    self.revision = try c.decodeIfPresent(Int.self, forKey: .revision)
     self.ops = try c.decodeIfPresent([PatchOp].self, forKey: .ops) ?? []
     }
 }
@@ -271,13 +362,14 @@ public struct SpeedRampInput: ToolInput {
 
 public struct StyleSetInput: ToolInput {
     public var projectID: String = ""
-    public var padding: Double = -1
-    public var cornerRadius: Double = -1
-    public var shadow: Double = -1
-    public var aspect: Double = 0
-    public var wallpaperBlur: Double = -1
-    public var background: String = ""
-    public var backgroundImagePath: String = ""
+    // AGENT: optional fields replace numeric sentinels so valid zero values can be applied.
+    public var padding: Double?
+    public var cornerRadius: Double?
+    public var shadow: Double?
+    public var aspect: Double?
+    public var wallpaperBlur: Double?
+    public var background: String?
+    public var backgroundImagePath: String?
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -293,13 +385,13 @@ public struct StyleSetInput: ToolInput {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
-    self.padding = try c.decodeIfPresent(Double.self, forKey: .padding) ?? -1
-    self.cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? -1
-    self.shadow = try c.decodeIfPresent(Double.self, forKey: .shadow) ?? -1
-    self.aspect = try c.decodeIfPresent(Double.self, forKey: .aspect) ?? 0
-    self.wallpaperBlur = try c.decodeIfPresent(Double.self, forKey: .wallpaperBlur) ?? -1
-    self.background = try c.decodeIfPresent(String.self, forKey: .background) ?? ""
-    self.backgroundImagePath = try c.decodeIfPresent(String.self, forKey: .backgroundImagePath) ?? ""
+    self.padding = try c.decodeIfPresent(Double.self, forKey: .padding)
+    self.cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius)
+    self.shadow = try c.decodeIfPresent(Double.self, forKey: .shadow)
+    self.aspect = try c.decodeIfPresent(Double.self, forKey: .aspect)
+    self.wallpaperBlur = try c.decodeIfPresent(Double.self, forKey: .wallpaperBlur)
+    self.background = try c.decodeIfPresent(String.self, forKey: .background)
+    self.backgroundImagePath = try c.decodeIfPresent(String.self, forKey: .backgroundImagePath)
     }
 }
 
@@ -329,16 +421,20 @@ public struct BackgroundSetInput: ToolInput {
 public struct CaptionsGenerateInput: ToolInput {
     public var projectID: String = ""
     public var locale: String = "en-US"
+    // AGENT: agents may request a complete transcription result in one progress-reporting call.
+    public var wait: Bool = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
     case projectID = "project_id"
     case locale
+    case wait
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
     self.locale = try c.decodeIfPresent(String.self, forKey: .locale) ?? "en-US"
+    self.wait = try c.decodeIfPresent(Bool.self, forKey: .wait) ?? false
     }
 }
 
@@ -363,14 +459,18 @@ public struct CaptionsSetInput: ToolInput {
 
 public struct PrivacyScanInput: ToolInput {
     public var projectID: String = ""
+    // AGENT: a client can await scan completion without polling when that fits its workflow.
+    public var wait: Bool = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
     case projectID = "project_id"
+    case wait
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
+    self.wait = try c.decodeIfPresent(Bool.self, forKey: .wait) ?? false
     }
 }
 
@@ -400,7 +500,8 @@ public extension ToolRegistry {
                 let rows = library.map { url -> JSONValue in
                     let bundle = ProjectBundle(url: url)
                     let complete = FileManager.default.fileExists(atPath: bundle.projectURL.path)
-                    return .object(["project_id": .string(url.deletingPathExtension().lastPathComponent),
+                    // AGENT: list IDs must match the canonical IDs returned by project_open.
+                    return .object(["project_id": .string(Engine.projectID(url)),
                                     "path": .string(url.path),
                                     "complete": .bool(complete),
                                     "unfinished": .bool(!complete && bundle.isUnfinished)])
@@ -422,14 +523,30 @@ public extension ToolRegistry {
                 try await ctx.engine.timelineValue(projectID: input.projectID)
             })
 
+        register(ToolDefinition<ProjectCloseInput>(name: "project_close",
+            description: "Closes an open project session and releases its decoded media resources.",
+            capability: .read, required: ["project_id"], mutating: true) { input, ctx in
+                let closed = await ctx.engine.closeProject(projectID: input.projectID)
+                return .object(["project_id": .string(input.projectID), "closed": .bool(closed)])
+            })
+
+        register(ToolDefinition<ClipImportInput>(name: "clip_import",
+            description: "Imports a video clip into the project at an output time, or appends it to the end.",
+            capability: .edit, required: ["project_id", "path"], mutating: true) { input, ctx in
+                let url = try ctx.paths.path(input.path, ext: PathGuard.videoExt)
+                return .object(try await ctx.engine.importClip(projectID: input.projectID, path: url, at: input.at))
+            })
+
         register(ToolDefinition<TimelinePatchInput>(name: "timeline_patch",
             description: "Applies typed operations to a timeline. Supported ops: zoom_add, zoom_set, zoom_remove, cut_add, cut_remove, ramp_set, ramp_remove, style_set, audio_lane_add, audio_lane_remove, music_set, captions_set, privacy_set. Pass the revision you read to be sure nobody else changed the project.",
             capability: .edit, required: ["project_id", "ops"], mutating: true,
-            schema: ToolSchemas.timelinePatch) { input, ctx in
-                let expect = input.revision > 0 ? input.revision : nil
+            schema: ToolSchemas.timelinePatch, destructive: true, customDryRun: true) { input, ctx in
+                let expect = input.revision
                 if ctx.dryRun {
-                    return .object(["dry_run": .bool(true), "ops": .int(input.ops.count),
-                                    "project_id": .string(input.projectID)])
+                    let result = try await ctx.engine.previewEdit(projectID: input.projectID, expectRevision: expect) { timeline in
+                        for op in input.ops { try self.apply(op, to: &timeline, paths: ctx.paths) }
+                    }
+                    return .object(result)
                 }
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: expect,
                                                       describe: "\(input.ops.count) timeline operations") { timeline in
@@ -438,9 +555,27 @@ public extension ToolRegistry {
                 return .object(result)
             })
 
+        register(ToolDefinition<TimelinePatchInput>(name: "edit_apply",
+            description: "Applies one batch of validated timeline operations and returns its revision and diff.",
+            capability: .edit, required: ["project_id", "ops"], mutating: true,
+            schema: ToolSchemas.timelinePatch, destructive: true, customDryRun: true) { input, ctx in
+                let result: [String: JSONValue]
+                if ctx.dryRun {
+                    result = try await ctx.engine.previewEdit(projectID: input.projectID, expectRevision: input.revision) { timeline in
+                        for op in input.ops { try self.apply(op, to: &timeline, paths: ctx.paths) }
+                    }
+                } else {
+                    result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: input.revision,
+                                                      describe: "\(input.ops.count) timeline operations") { timeline in
+                        for op in input.ops { try self.apply(op, to: &timeline, paths: ctx.paths) }
+                    }
+                }
+                return .object(result)
+            })
+
         register(ToolDefinition<UndoInput>(name: "undo",
             description: "Undoes the last agent edit on a project.",
-            capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
+            capability: .edit, required: ["project_id"], mutating: true, destructive: true) { input, ctx in
                 let result = try await ctx.engine.undo(projectID: input.projectID)
                 return .object(result)
             })
@@ -451,25 +586,31 @@ public extension ToolRegistry {
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "manual zoom") { timeline in
                     // AGENT: zoom times are stored in source seconds; honour the caller's basis.
-                    let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
-                    let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
-                    timeline.zoom.append(ZoomSegment(start: start, end: end, scale: input.scale,
-                                                    focus: self.focus(from: input.focusMode, x: input.focusX, y: input.focusY),
-                                                    origin: .manual))
+                    let start = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.start, basis: input.basis))
+                    let end = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.end, basis: input.basis))
+                    // AGENT: reject invalid ranges and route zoom edits through the editor reducer.
+                    guard end > start, input.scale.isFinite, (1.1...4).contains(input.scale) else { throw ToolError.invalidArguments("Need start < end and zoom scale 1.1…4.") }
+                    try applyCommand(.addZoom(ZoomSegment(start: start, end: end, scale: input.scale,
+                                                          focus: try self.focus(from: input.focusMode, x: input.focusX, y: input.focusY),
+                                                          origin: .manual)), to: &timeline)
                 }
                 return .object(result)
             })
 
         register(ToolDefinition<ZoomRemoveInput>(name: "zoom_remove",
             description: "Removes a zoom by its id.",
-            capability: .edit, required: ["project_id", "id"], mutating: true) { input, ctx in
+            capability: .edit, required: ["project_id", "id"], mutating: true, destructive: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "remove zoom") { timeline in
-                    // AGENT: deleting an auto zoom must survive the next replan.
-                    for zoom in timeline.zoom where zoom.id.uuidString == input.id && zoom.origin == .auto {
-                        timeline.suppressedAuto.append(zoom.id.uuidString)
+                    guard let id = UUID(uuidString: input.id),
+                          let zoom = timeline.zoom.first(where: { $0.id == id }) else {
+                        throw ToolError.invalidArguments("id must be an existing zoom UUID.")
                     }
-                    timeline.zoom.removeAll { $0.id.uuidString == input.id }
+                    // AGENT: suppress planner-owned zooms before deleting through the reducer.
+                    if zoom.origin == .auto, !timeline.suppressedAuto.contains(id.uuidString) {
+                        timeline.suppressedAuto.append(id.uuidString)
+                    }
+                    try applyCommand(.deleteZoom(id), to: &timeline)
                 }
                 return .object(result)
             })
@@ -483,12 +624,15 @@ public extension ToolRegistry {
 
         register(ToolDefinition<CutRangeInput>(name: "cut_range",
             description: "Cuts a span out of the recording. start and end are in source seconds unless basis is \"output\".",
-            capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
+            capability: .edit, required: ["project_id", "start", "end"], mutating: true, destructive: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "cut") { timeline in
-                    let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
-                    let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
-                    timeline.timeMap.cuts.append(CutRange(start: start, end: end, origin: .manual))
+                    let start = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.start, basis: input.basis))
+                    let end = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.end, basis: input.basis))
+                    // AGENT: the editor's output-range cut handles clips and overlaps consistently.
+                    let a = timeline.timeMap.output(atSource: start), b = timeline.timeMap.output(atSource: end)
+                    guard b > a else { throw ToolError.invalidArguments("Cut end must be after start in the edited timeline.") }
+                    try applyCommand(.cutOutputRange(start: a, end: b), to: &timeline)
                 }
                 return .object(result)
             })
@@ -498,10 +642,11 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "speed ramp") { timeline in
-                    let start = try timeline.sourceSeconds(TimeRef(seconds: input.start, basis: input.basis))
-                    let end = try timeline.sourceSeconds(TimeRef(seconds: input.end, basis: input.basis))
-                    timeline.timeMap.ramps.append(SpeedRamp(start: start, end: end,
-                                                            speed: input.speed, origin: .manual))
+                    let start = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.start, basis: input.basis))
+                    let end = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.end, basis: input.basis))
+                    // AGENT: zero or negative ramp speed breaks time-map construction.
+                    guard end > start, input.speed.isFinite, (0.25...16).contains(input.speed) else { throw ToolError.invalidArguments("Need start < end and speed 0.25…16.") }
+                    try applyCommand(.addSpeedRamp(start: start, end: end, speed: input.speed), to: &timeline)
                 }
                 return .object(result)
             })
@@ -511,19 +656,32 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "style") { timeline in
-                    if input.padding >= 0 { timeline.style.padding = input.padding }
-                    if input.cornerRadius >= 0 { timeline.style.cornerRadius = input.cornerRadius }
-                    if input.shadow >= 0 { timeline.style.shadow = input.shadow }
-                    if input.aspect > 0 { timeline.style.customAspect = input.aspect }
-                    if input.wallpaperBlur >= 0 { timeline.style.wallpaperBlur = input.wallpaperBlur }
-                    if !input.background.isEmpty {
-                        timeline.style.background = try self.backgroundKind(input.background)
+                    var style = timeline.style
+                    func checked(_ value: Double, _ name: String, _ bounds: ClosedRange<Double>) throws -> Double {
+                        guard value.isFinite, bounds.contains(value) else {
+                            throw ToolError.invalidArguments("\(name) must be in \(bounds.lowerBound)…\(bounds.upperBound).")
+                        }
+                        return value
                     }
-                    if !input.backgroundImagePath.isEmpty {
+                    if let padding = input.padding { style.padding = try checked(padding, "padding", 0 ... 0.2) }
+                    if let radius = input.cornerRadius { style.cornerRadius = try checked(radius, "corner_radius", 0 ... 80) }
+                    if let shadow = input.shadow { style.shadow = try checked(shadow, "shadow", 0 ... 1) }
+                    if let aspect = input.aspect {
+                        guard aspect.isFinite, aspect > 0.2, aspect < 5 else {
+                            throw ToolError.invalidArguments("aspect must be greater than 0.2 and less than 5.")
+                        }
+                        style.customAspect = aspect
+                    }
+                    if let blur = input.wallpaperBlur { style.wallpaperBlur = try checked(blur, "wallpaper_blur", 0 ... 60) }
+                    if let background = input.background, !background.isEmpty {
+                        style.background = try self.backgroundKind(background)
+                    }
+                    if let imagePath = input.backgroundImagePath, !imagePath.isEmpty {
                         // AGENT: an unconfined image path let an agent read any file the user owns.
-                        let url = try ctx.paths.path(input.backgroundImagePath, ext: PathGuard.imageExt)
-                        timeline.style.setPhotoBackground(url.path)
+                        let url = try ctx.paths.path(imagePath, ext: PathGuard.imageExt)
+                        style.setPhotoBackground(url.path)
                     }
+                    try applyCommand(.setStyle(style), to: &timeline)
                 }
                 return .object(result)
             })
@@ -539,15 +697,21 @@ public extension ToolRegistry {
         register(ToolDefinition<BackgroundSetInput>(name: "background_set",
             description: "Sets the background of a project: a generated kind or a local image.",
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
+                // AGENT: reject an empty background update instead of reporting a successful no-op.
+                guard !input.background.isEmpty || !input.imagePath.isEmpty else {
+                    throw ToolError.invalidArguments("Provide a background kind or image_path.")
+                }
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "background") { timeline in
+                    var style = timeline.style
                     if !input.imagePath.isEmpty {
                         // AGENT: confine the image to the client's approved folders.
                         let url = try ctx.paths.path(input.imagePath, ext: PathGuard.imageExt)
-                        timeline.style.setPhotoBackground(url.path)
+                        style.setPhotoBackground(url.path)
                     } else if !input.background.isEmpty {
-                        timeline.style.background = try self.backgroundKind(input.background)
+                        style.background = try self.backgroundKind(input.background)
                     }
+                    try applyCommand(.setStyle(style), to: &timeline)
                 }
                 return .object(result)
             })
@@ -556,6 +720,7 @@ public extension ToolRegistry {
             description: "Transcribes the recorded microphone and turns captions on. Needs the local speech model; returns a job id.",
             capability: .edit, required: ["project_id"], mutating: true, longRunning: true) { input, ctx in
                 let job = try await ctx.engine.startTranscription(projectID: input.projectID, locale: input.locale)
+                if input.wait { return try await ctx.waitForJob(job).jsonValue }
                 return .object(["job_id": .string(job)])
             })
 
@@ -564,8 +729,10 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "captions") { timeline in
-                    timeline.captions.enabled = input.enabled
-                    if !input.locale.isEmpty { timeline.captions.locale = input.locale }
+                    var captions = timeline.captions
+                    captions.enabled = input.enabled
+                    if !input.locale.isEmpty { captions.locale = input.locale }
+                    try applyCommand(.setCaptions(captions), to: &timeline)
                 }
                 return .object(result)
             })
@@ -574,6 +741,7 @@ public extension ToolRegistry {
             description: "Runs the privacy scan over a recording and applies automatic masks. Returns a job id; poll it with job_status.",
             capability: .edit, required: ["project_id"], mutating: true, longRunning: true) { input, ctx in
                 let job = try await ctx.engine.startPrivacyScan(projectID: input.projectID)
+                if input.wait { return try await ctx.waitForJob(job).jsonValue }
                 return .object(["job_id": .string(job)])
             })
 
@@ -582,15 +750,24 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "privacy decisions") { timeline in
-                    for (id, approved) in input.decisions {
-                        timeline.overlays.privacy.decisions[id] = approved
+                    var approvedIDs: [UUID] = []
+                    var rejectedIDs: [UUID] = []
+                    for (id, isApproved) in input.decisions {
+                        guard let uuid = UUID(uuidString: id), timeline.overlays.masks.contains(where: { $0.id == uuid }) else {
+                            throw ToolError.invalidArguments("Every decision key must be an existing mask UUID.")
+                        }
+                        if isApproved { approvedIDs.append(uuid) } else { rejectedIDs.append(uuid) }
                     }
+                    if !approvedIDs.isEmpty { try applyCommand(.approveMasks(approvedIDs), to: &timeline) }
+                    if !rejectedIDs.isEmpty { try applyCommand(.rejectMasks(rejectedIDs), to: &timeline) }
                 }
                 return .object(result)
             })
     }
 
-    /// Applies one typed operation to a timeline.
+    /// Applies a timeline operation through the editor's command reducer.
+    ///
+    /// AGENT: direct field edits skipped the same validation and magnetic-lane rules the editor applies.
     func apply(_ op: PatchOp, to timeline: inout Timeline, paths: PathGuard) throws {
         func need<T>(_ value: T?, _ name: String) throws -> T {
             guard let value else {
@@ -598,118 +775,212 @@ public extension ToolRegistry {
             }
             return value
         }
+        func range(_ value: Double, _ name: String, _ bounds: ClosedRange<Double>) throws -> Double {
+            guard value.isFinite, bounds.contains(value) else {
+                throw ToolError.invalidArguments("\(name) must be in \(bounds.lowerBound)…\(bounds.upperBound).")
+            }
+            return value
+        }
+        func uuid(_ raw: String, _ name: String) throws -> UUID {
+            guard let value = UUID(uuidString: raw) else {
+                throw ToolError.invalidArguments("\(name) must be a UUID.")
+            }
+            return value
+        }
         switch op.op {
         case "zoom_add":
             let start = try need(op.start, "start"), end = try need(op.end, "end")
-            timeline.zoom.append(ZoomSegment(start: start, end: end, scale: op.scale ?? 2,
-                                            focus: focus(from: op.focusMode ?? "follow",
-                                                         x: op.focusX ?? 0.5, y: op.focusY ?? 0.5),
-                                            origin: .manual))
-        case "zoom_set":
-            let id = try need(op.id, "id")
-            guard let index = timeline.zoom.firstIndex(where: { $0.id.uuidString == id }) else {
-                throw ToolError.failed("No zoom with id \(id).")
+            guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else {
+                throw ToolError.invalidArguments("zoom_add requires a valid source-time span.")
             }
-            if let start = op.start, let end = op.end, end > start {
-                timeline.zoom[index].start = start
-                timeline.zoom[index].end = end
+            let scale = try range(op.scale ?? 2, "scale", 1.1...4)
+            try applyCommand(.addZoom(ZoomSegment(start: start, end: end, scale: scale,
+                                                  focus: try focus(from: op.focusMode ?? "follow",
+                                                                   x: op.focusX ?? 0.5, y: op.focusY ?? 0.5),
+                                                  origin: .manual)), to: &timeline)
+        case "zoom_set":
+            let id = try uuid(try need(op.id, "id"), "id")
+            guard let zoom = timeline.zoom.first(where: { $0.id == id }) else {
+                throw ToolError.failed("No zoom with id \(id.uuidString).")
+            }
+            if let start = op.start, let end = op.end {
+                guard start.isFinite, end.isFinite, start >= 0, end > start,
+                      end <= timeline.timeMap.sourceDuration + 0.001 else {
+                    throw ToolError.invalidArguments("zoom_set requires a valid source-time span.")
+                }
+                try applyCommand(.moveZoom(id, start: start, end: end), to: &timeline)
             } else if (op.start == nil) != (op.end == nil) {
                 throw ToolError.invalidArguments("zoom_set needs both start and end, or neither.")
             }
-            if let scale = op.scale, scale > 0 { timeline.zoom[index].scale = scale }
-            if op.focusMode != nil || op.focusX != nil || op.focusY != nil {
-                timeline.zoom[index].focus = focus(from: op.focusMode ?? "follow",
-                                                   x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
+            if let scale = op.scale {
+                try applyCommand(.setZoomScale(id, try range(scale, "scale", 1.1...4)), to: &timeline)
             }
-            // AGENT: edited automatic zooms must survive the next planner pass.
-            timeline.zoom[index].origin = .manual
+            if let x = op.focusX { _ = try range(x, "focus_x", 0...1) }
+            if let y = op.focusY { _ = try range(y, "focus_y", 0...1) }
+            if let mode = op.focusMode {
+                let updated = try focus(from: mode, x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
+                try applyCommand(.setZoomFocus(id, updated), to: &timeline)
+            } else if op.focusX != nil || op.focusY != nil {
+                let updated: Focus
+                switch zoom.focus {
+                case .fixed(let x, let y): updated = .fixed(x: op.focusX ?? x, y: op.focusY ?? y)
+                case .element(let x, let y, let w, let h):
+                    updated = .element(x: op.focusX ?? x, y: op.focusY ?? y, w: w, h: h)
+                case .follow:
+                    throw ToolError.invalidArguments("Specify focus_mode when changing coordinates on a follow zoom.")
+                }
+                try applyCommand(.setZoomFocus(id, updated), to: &timeline)
+            }
         case "zoom_remove":
-            let id = try need(op.id, "id")
-            // AGENT: deleting an auto zoom must survive the next replan.
-            for zoom in timeline.zoom where zoom.id.uuidString == id && zoom.origin == .auto {
-                timeline.suppressedAuto.append(zoom.id.uuidString)
+            let id = try uuid(try need(op.id, "id"), "id")
+            guard let zoom = timeline.zoom.first(where: { $0.id == id }) else {
+                throw ToolError.failed("No zoom with id \(id.uuidString).")
             }
-            timeline.zoom.removeAll { $0.id.uuidString == id }
+            if zoom.origin == .auto, !timeline.suppressedAuto.contains(id.uuidString) {
+                timeline.suppressedAuto.append(id.uuidString)
+            }
+            try applyCommand(.deleteZoom(id), to: &timeline)
         case "cut_add":
             let start = try need(op.start, "start"), end = try need(op.end, "end")
-            guard end > start else {
+            guard start.isFinite, end.isFinite, start >= 0, end > start,
+                  end <= timeline.timeMap.sourceDuration + 0.001 else {
                 throw ToolError.invalidArguments("cut_add needs end after start, in source seconds.")
             }
-            timeline.timeMap.cuts.append(CutRange(start: start, end: end, origin: .manual))
+            let outputStart = timeline.timeMap.output(atSource: start)
+            let outputEnd = timeline.timeMap.output(atSource: end)
+            guard outputEnd > outputStart else { throw ToolError.invalidArguments("Cut is outside the edited timeline.") }
+            try applyCommand(.cutOutputRange(start: outputStart, end: outputEnd), to: &timeline)
         case "cut_remove":
-            let id = try need(op.id, "id")
-            timeline.timeMap.cuts.removeAll { $0.id.uuidString == id }
+            let id = try uuid(try need(op.id, "id"), "id")
+            guard timeline.timeMap.cuts.contains(where: { $0.id == id }) else {
+                throw ToolError.failed("No cut with id \(id.uuidString).")
+            }
+            try applyCommand(.deleteCut(id), to: &timeline)
         case "ramp_set":
             let start = try need(op.start, "start"), end = try need(op.end, "end")
-            guard end > start else {
-                throw ToolError.invalidArguments("ramp_set needs end after start, in source seconds.")
+            let speed = try range(op.speed ?? 2, "speed", 0.25...16)
+            guard start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else {
+                throw ToolError.invalidArguments("ramp_set needs a valid source-time span.")
             }
-            timeline.timeMap.ramps.append(SpeedRamp(start: start, end: end,
-                                                    speed: op.speed ?? 2, origin: .manual))
+            try applyCommand(.addSpeedRamp(start: start, end: end, speed: speed), to: &timeline)
         case "ramp_remove":
-            let id = try need(op.id, "id")
-            // AGENT: remember deleted automatic ramps before the planner regenerates them.
-            for ramp in timeline.timeMap.ramps where ramp.id.uuidString == id && ramp.origin == .auto {
-                if !timeline.suppressedAuto.contains(id) { timeline.suppressedAuto.append(id) }
+            let id = try uuid(try need(op.id, "id"), "id")
+            guard let ramp = timeline.timeMap.ramps.first(where: { $0.id == id }) else {
+                throw ToolError.failed("No speed ramp with id \(id.uuidString).")
             }
-            timeline.timeMap.ramps.removeAll { $0.id.uuidString == id }
+            if ramp.origin == .auto, !timeline.suppressedAuto.contains(id.uuidString) {
+                timeline.suppressedAuto.append(id.uuidString)
+            }
+            try applyCommand(.deleteSpeedRamp(id), to: &timeline)
         case "style_set":
             let key = try need(op.key, "key")
+            var style = timeline.style
             switch key {
-            case "padding": timeline.style.padding = try need(op.value, "value")
-            case "corner_radius": timeline.style.cornerRadius = try need(op.value, "value")
-            case "shadow": timeline.style.shadow = try need(op.value, "value")
-            case "aspect": timeline.style.customAspect = try need(op.value, "value")
-            case "wallpaper_blur": timeline.style.wallpaperBlur = try need(op.value, "value")
-            case "background": timeline.style.background = try backgroundKind(try need(op.text, "text"))
+            case "padding": style.padding = try range(need(op.value, "value"), "padding", 0...0.2)
+            case "corner_radius": style.cornerRadius = try range(need(op.value, "value"), "corner_radius", 0...80)
+            case "shadow": style.shadow = try range(need(op.value, "value"), "shadow", 0...1)
+            case "aspect":
+                let aspect = try need(op.value, "value")
+                guard aspect.isFinite, aspect > 0.2, aspect < 5 else {
+                    throw ToolError.invalidArguments("aspect must be greater than 0.2 and less than 5.")
+                }
+                style.customAspect = aspect
+            case "wallpaper_blur": style.wallpaperBlur = try range(need(op.value, "value"), "wallpaper_blur", 0...60)
+            case "background": style.background = try backgroundKind(try need(op.text, "text"))
             case "background_image":
-                // AGENT: unconfined, this read any image on disk and shipped it in the export.
                 let path = try need(op.text, "text")
-                timeline.style.setPhotoBackground(try paths.path(path, ext: PathGuard.imageExt).path)
+                style.setPhotoBackground(try paths.path(path, ext: PathGuard.imageExt).path)
             default:
-                throw ToolError.invalidArguments(
-                    "Unknown style key \(key). Use padding, corner_radius, shadow, aspect, wallpaper_blur, background or background_image.")
+                throw ToolError.invalidArguments("Unknown style key \(key). Use padding, corner_radius, shadow, aspect, wallpaper_blur, background or background_image.")
             }
+            try applyCommand(.setStyle(style), to: &timeline)
         case "audio_lane_add":
-            // AGENT: an unconfined audio path leaked any local file into the project.
+            let roleName = op.text ?? "voiceover"
+            guard let role = AudioLane.Role(rawValue: roleName) else {
+                throw ToolError.invalidArguments("role must be one of mic, system, voiceover, music, sfx.")
+            }
             let lanePath = try op.key.map { try paths.path($0, ext: PathGuard.audioExt).path }
-            timeline.audio.lanes.append(AudioLane(role: AudioLane.Role(rawValue: op.text ?? "") ?? .voiceover,
-                                                  path: lanePath,
-                                                  placement: op.start ?? 0, gainDb: op.value ?? 0))
+            let placement = try range(op.start ?? 0, "placement", 0...max(timeline.timeMap.outputDuration, 0))
+            let gain = try range(op.value ?? 0, "gain_db", -60...12)
+            var audio = timeline.audio
+            audio.lanes.append(AudioLane(role: role, path: lanePath, placement: placement, gainDb: gain))
+            try applyCommand(.setAudio(audio), to: &timeline)
         case "audio_lane_remove":
-            let id = try need(op.id, "id")
-            timeline.audio.lanes.removeAll { $0.id.uuidString == id }
+            let id = try uuid(try need(op.id, "id"), "id")
+            var audio = timeline.audio
+            guard audio.lanes.contains(where: { $0.id == id }) else {
+                throw ToolError.failed("No audio lane with id \(id.uuidString).")
+            }
+            audio.lanes.removeAll { $0.id == id }
+            try applyCommand(.setAudio(audio), to: &timeline)
         case "music_set":
-            // AGENT: confine music to the approved folders and audio extensions.
-            let text = try need(op.text, "text")
-            timeline.audio.musicPath = text.isEmpty ? nil : try paths.path(text, ext: PathGuard.audioExt).path
-            if let value = op.value { timeline.audio.musicGainDb = value }
+            let rawPath = try need(op.text, "text")
+            var audio = timeline.audio
+            audio.musicPath = rawPath.isEmpty ? nil : try paths.path(rawPath, ext: PathGuard.audioExt).path
+            if let gain = op.value { audio.musicGainDb = try range(gain, "music_gain_db", -60...12) }
+            try applyCommand(.setAudio(audio), to: &timeline)
         case "captions_set":
-            timeline.captions.enabled = try need(op.flag, "flag")
-            if let locale = op.text, !locale.isEmpty { timeline.captions.locale = locale }
+            var captions = timeline.captions
+            captions.enabled = try need(op.flag, "flag")
+            if let locale = op.text, !locale.isEmpty { captions.locale = locale }
+            try applyCommand(.setCaptions(captions), to: &timeline)
         case "privacy_set":
             let key = try need(op.key, "key")
+            var privacy = timeline.overlays.privacy
             switch key {
-            case "enabled": timeline.overlays.privacy.enabled = try need(op.flag, "flag")
-            case "auto_detect": timeline.overlays.privacy.autoDetect = try need(op.flag, "flag")
+            case "enabled": privacy.enabled = try need(op.flag, "flag")
+            case "auto_detect": privacy.autoDetect = try need(op.flag, "flag")
             case "mode":
-                let text = try need(op.text, "text")
-                guard let mode = MaskMode(rawValue: text) else {
-                    throw ToolError.invalidArguments(
-                        "Unknown privacy mode \(text). Valid values: \(MaskMode.allCases.map(\.rawValue).joined(separator: ", ")).")
+                let rawMode = try need(op.text, "text")
+                guard let mode = MaskMode(rawValue: rawMode) else {
+                    throw ToolError.invalidArguments("Unknown privacy mode \(rawMode). Valid values: \(MaskMode.allCases.map(\.rawValue).joined(separator: ", ")).")
                 }
-                timeline.overlays.privacy.mode = mode
-            case "padding": timeline.overlays.privacy.padding = try need(op.value, "value")
-            default:
-                throw ToolError.invalidArguments(
-                    "Unknown privacy key \(key). Use enabled, auto_detect, mode or padding.")
+                privacy.mode = mode
+            case "padding": privacy.padding = try range(need(op.value, "value"), "privacy padding", 0...80)
+            default: throw ToolError.invalidArguments("Unknown privacy key \(key). Use enabled, auto_detect, mode or padding.")
             }
+            try applyCommand(.setPrivacy(privacy), to: &timeline)
+        case "split_clip":
+            let at = try timeline.outputSeconds(TimeRef.legacy(seconds: try need(op.start, "start"),
+                                                               basis: op.basis ?? "output"))
+            try applyCommand(.splitClip(atOutput: at), to: &timeline)
+        case "split_recording":
+            let at = try timeline.outputSeconds(TimeRef.legacy(seconds: try need(op.start, "start"),
+                                                               basis: op.basis ?? "output"))
+            try applyCommand(.splitRecording(atOutput: at), to: &timeline)
+        case "delete_clip":
+            let id = try uuid(try need(op.id, "id"), "id")
+            try applyCommand(.rippleDeleteClip(id: id), to: &timeline)
+        case "duplicate_clip":
+            let id = try uuid(try need(op.id, "id"), "id")
+            try applyCommand(.duplicateClip(id: id), to: &timeline)
+        case "join_clips":
+            let rawIDs = try need(op.ids, "ids")
+            guard rawIDs.count >= 2 else { throw ToolError.invalidArguments("join_clips needs at least two clip ids.") }
+            let ids = try rawIDs.map { try uuid($0, "ids") }
+            try applyCommand(.joinClips(ids: ids), to: &timeline)
+        case "add_clip":
+            var clip = try need(op.clip, "clip")
+            clip.path = try paths.path(clip.path, ext: PathGuard.videoExt).path
+            try applyCommand(.addClip(clip), to: &timeline)
+        case "paste_clip":
+            var clip = try need(op.clip, "clip")
+            clip.path = try paths.path(clip.path, ext: PathGuard.videoExt).path
+            let at = try timeline.outputSeconds(TimeRef.legacy(seconds: try need(op.start, "start"),
+                                                               basis: op.basis ?? "output"))
+            try applyCommand(.pasteClip(clip: clip, atOutput: at), to: &timeline)
         default:
-            throw ToolError.invalidArguments("Unknown timeline op \(op.op).")
+            throw ToolError.invalidArguments("Unknown timeline op \(op.op). Valid ops: zoom_add, zoom_set, zoom_remove, cut_add, cut_remove, ramp_set, ramp_remove, style_set, audio_lane_add, audio_lane_remove, music_set, captions_set, privacy_set, split_clip, split_recording, delete_clip, duplicate_clip, join_clips, add_clip, paste_clip.")
         }
     }
 
-    private func focus(from mode: String, x: Double, y: Double) -> Focus {
+    private func focus(from mode: String, x: Double, y: Double) throws -> Focus {
+        guard ["follow", "fixed", "element"].contains(mode) else {
+            throw ToolError.invalidArguments("focus_mode must be follow, fixed, or element.")
+        }
+        guard x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) else {
+            throw ToolError.invalidArguments("focus_x and focus_y must be finite fractions from 0 to 1.")
+        }
         switch mode {
         case "fixed": return .fixed(x: x, y: y)
         case "element": return .element(x: x, y: y, w: 0, h: 0)

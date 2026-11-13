@@ -188,6 +188,14 @@ public actor RecordingSession {
         engine?.setLiveFrameHook(frame); input?.setLiveEventHook(event); input?.setLiveFocusHook(focus)
     }
 
+    // AGENT: process-targeted virtual input must reach the active recording's event stream as well as the app.
+    public func injectInput(kind: InputEvent.Kind, screenPoint: CGPoint, button: UInt8,
+                            keyCode: UInt16, flags: UInt16, scrollDelta: Float) {
+        guard stage == .recording else { return }
+        input?.injectPointer(kind: kind, screenPoint: screenPoint, button: button,
+                             keyCode: keyCode, flags: flags, scrollDelta: scrollDelta)
+    }
+
     public func prepare(_ config: RecordingConfig, library: URL) async throws {
         MainThreadWatchdog.shared.start()
         transition(to: .preparing)

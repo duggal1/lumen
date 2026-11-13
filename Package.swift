@@ -37,7 +37,8 @@ let package = Package(
         lib("LumenActuator", ["LumenCore"]),
         lib("LumenControl", ["LumenCore", "LumenProject", "LumenDirector", "LumenRender", "LumenAudio",
                              "LumenAnalysis", "LumenExport", "LumenSpeech", "LumenActuator"]),
-        lib("LumenUI", all),
+        // AGENT: the Agents settings tab reads the same policy and audit store as the daemon.
+        lib("LumenUI", all + ["LumenControl"]),
         .executableTarget(name: "LumenApp", dependencies: ["LumenUI", "LumenControl", "LumenCapture"]),
         .executableTarget(name: "LumenCLI", dependencies: [
             "LumenProject", "LumenDirector", "LumenRender", "LumenAudio", "LumenExport", "LumenSpeech",

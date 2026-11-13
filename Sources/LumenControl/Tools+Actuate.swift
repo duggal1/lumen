@@ -2,6 +2,7 @@ import Foundation
 import LumenCore
 import LumenProject
 import LumenActuator
+import ApplicationServices
 
 // MARK: - Actuation tools
 
@@ -105,7 +106,9 @@ public extension ToolRegistry {
                 try self.requireBundle(input.bundleID, ctx)
                 var script = DemoScript()
                 script.app.bundleID = input.bundleID
-                script.steps = [DemoScript.Step(id: "ui_act", do: input.actions)]
+                // AGENT: Accessibility permission is required and batch markers must be unique.
+                guard AXIsProcessTrusted() else { throw ToolError.permission("accessibility", pane: "Accessibility") }
+                script.steps = [DemoScript.Step(id: "ui_act-\(UUID().uuidString)", do: input.actions)]
                 let runner = ScriptRunner(mode: .physical, sink: ctx.engine.markerSink(),
                                           allowedBundles: [input.bundleID],
                                           writablePath: { try ctx.paths.writablePath($0, ext: PathGuard.imageExt) })
@@ -133,7 +136,8 @@ public extension ToolRegistry {
 
         register(ToolDefinition<RunScriptInput>(name: "run_script",
             description: "Runs a demo script against an app and records a marker per step. The script is the source of truth: launch, wait_for, click, type, paste, key, move, scroll, sleep. Each step may carry narration in `say`.",
-            capability: .actuate, required: ["bundle_id", "script"], mutating: true) { input, ctx in
+            // AGENT: advertise the script and action fields that the decoder actually accepts.
+            capability: .actuate, required: ["bundle_id", "script"], mutating: true, schema: ToolSchemas.runScript) { input, ctx in
                 var script = input.script
                 if !input.bundleID.isEmpty { script.app.bundleID = input.bundleID }
                 let bundleID = script.app.bundleID ?? ""
@@ -149,14 +153,29 @@ public extension ToolRegistry {
                         }
                     }
                 }
-                let mode: InputMode = input.mode == "virtual" ? .virtual : .physical
+                let mode: InputMode
+                switch input.mode {
+                case "physical": mode = .physical
+                case "virtual": mode = .virtual
+                default: throw ToolError.invalidArguments("mode must be physical or virtual.")
+                }
+                // AGENT: both delivery modes use Accessibility to resolve and activate the approved target.
+                guard AXIsProcessTrusted() else { throw ToolError.permission("accessibility", pane: "Accessibility") }
+                let runtime = ctx.engine.runtime
                 let runner = ScriptRunner(mode: mode, sink: ctx.engine.markerSink(),
                                           allowedBundles: allowed,
+                                          inputInjector: { kind, point, button, keyCode, flags, scrollDelta in
+                                              try await runtime.injectInput(kind: kind, screenPoint: point, button: button,
+                                                                            keyCode: keyCode, flags: flags,
+                                                                            scrollDelta: scrollDelta)
+                                          },
                                           writablePath: { try ctx.paths.writablePath($0, ext: PathGuard.imageExt) })
                 do {
                     let markers = try await runner.run(script)
                     return .object(["markers": .array(markers.map { self.markerJSON($0) })])
                 } catch let e as ActuatorError {
+                    throw ToolError.failed(e.message)
+                } catch let e as RuntimeFailure {
                     throw ToolError.failed(e.message)
                 }
             })
@@ -193,6 +212,8 @@ public extension ToolRegistry {
                  "width": node.width.map { .number($0) } ?? .null,
                  "height": node.height.map { .number($0) } ?? .null,
                  "children": .array(node.children.map { nodeJSON($0) })]
+        // AGENT: agents need to act on the same observed element without relying on match order.
+        payload["ref"] = node.ref.map { .string($0) } ?? .null
         // AGENT: icon-only buttons have no title or value; description is their only label.
         payload["description"] = node.descriptionText.map { .string($0) } ?? .null
         // AGENT: the screen rect lets an agent click a target instead of guessing from fractions.

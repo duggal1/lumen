@@ -15,11 +15,13 @@ public struct AudioImportInput: ToolInput {
     /// music | voiceover | sfx
     public var role: String = "voiceover"
     /// Anchor the clip to a marker id.
-    public var atMarker: String = ""
+    // AGENT: optional placement fields replace the -1 sentinel so output time zero remains a valid value.
+    public var atMarker: String?
     /// Or to an absolute output time.
-    public var atOutput: Double = -1
+    public var atOutput: Double?
     public var offsetMs: Double = 0
-    public var gainDb: Double = 0
+    // AGENT: zero is a valid gain, so omission cannot use it as an unset sentinel.
+    public var gainDb: Double?
     public var loop: Bool = false
     public init() {}
 
@@ -38,22 +40,23 @@ public struct AudioImportInput: ToolInput {
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
     self.path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
     self.role = try c.decodeIfPresent(String.self, forKey: .role) ?? "voiceover"
-    self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker) ?? ""
-    self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput) ?? -1
+    self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker)
+    self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput)
     self.offsetMs = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
-    self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb) ?? 0
+    self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb)
     self.loop = try c.decodeIfPresent(Bool.self, forKey: .loop) ?? false
     }
 }
 
 public struct AudioMixSetInput: ToolInput {
     public var projectID: String = ""
-    public var targetLUFS: Double = 0
-    public var musicGainDb: Double = -1000
-    public var micGainDb: Double = -1000
-    public var outputGainDb: Double = -1000
-    public var duckDepthDb: Double = -1000
-    public var normalize: Bool = false
+    // AGENT: omitted mix fields must leave the mix untouched, and normalize must support an explicit false.
+    public var targetLUFS: Double?
+    public var musicGainDb: Double?
+    public var micGainDb: Double?
+    public var outputGainDb: Double?
+    public var duckDepthDb: Double?
+    public var normalize: Bool?
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -68,12 +71,12 @@ public struct AudioMixSetInput: ToolInput {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
-    self.targetLUFS = try c.decodeIfPresent(Double.self, forKey: .targetLUFS) ?? 0
-    self.musicGainDb = try c.decodeIfPresent(Double.self, forKey: .musicGainDb) ?? -1000
-    self.micGainDb = try c.decodeIfPresent(Double.self, forKey: .micGainDb) ?? -1000
-    self.outputGainDb = try c.decodeIfPresent(Double.self, forKey: .outputGainDb) ?? -1000
-    self.duckDepthDb = try c.decodeIfPresent(Double.self, forKey: .duckDepthDb) ?? -1000
-    self.normalize = try c.decodeIfPresent(Bool.self, forKey: .normalize) ?? false
+    self.targetLUFS = try c.decodeIfPresent(Double.self, forKey: .targetLUFS)
+    self.musicGainDb = try c.decodeIfPresent(Double.self, forKey: .musicGainDb)
+    self.micGainDb = try c.decodeIfPresent(Double.self, forKey: .micGainDb)
+    self.outputGainDb = try c.decodeIfPresent(Double.self, forKey: .outputGainDb)
+    self.duckDepthDb = try c.decodeIfPresent(Double.self, forKey: .duckDepthDb)
+    self.normalize = try c.decodeIfPresent(Bool.self, forKey: .normalize)
     }
 }
 
@@ -82,10 +85,12 @@ public struct VoiceoverGenerateInput: ToolInput {
     public var text: String = ""
     public var voice: String = ""
     public var model: String = ""
-    public var atMarker: String = ""
-    public var atOutput: Double = -1
+    // AGENT: optional placement fields replace the -1 sentinel so output time zero remains valid.
+    public var atMarker: String?
+    public var atOutput: Double?
     public var offsetMs: Double = 0
-    public var gainDb: Double = 0
+    // AGENT: zero is a valid gain, so omission cannot use it as an unset sentinel.
+    public var gainDb: Double?
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -104,10 +109,10 @@ public struct VoiceoverGenerateInput: ToolInput {
     self.text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
     self.voice = try c.decodeIfPresent(String.self, forKey: .voice) ?? ""
     self.model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
-    self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker) ?? ""
-    self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput) ?? -1
+    self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker)
+    self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput)
     self.offsetMs = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
-    self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb) ?? 0
+    self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb)
     }
 }
 
@@ -117,18 +122,22 @@ public struct PreviewFrameInput: ToolInput {
     public var projectID: String = ""
     public var time: Double = 0
     public var maxWidth: Int = 960
+    // AGENT: compact JPEG is the default; callers can request lossless PNG.
+    public var png = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
     case projectID = "project_id"
     case time
     case maxWidth = "max_width"
+    case png
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
     self.time = try c.decodeIfPresent(Double.self, forKey: .time) ?? 0
     self.maxWidth = try c.decodeIfPresent(Int.self, forKey: .maxWidth) ?? 960
+    self.png = try c.decodeIfPresent(Bool.self, forKey: .png) ?? false
     }
 }
 
@@ -137,6 +146,8 @@ public struct PreviewSheetInput: ToolInput {
     public var frames: Int = 6
     public var duration: Double = 0
     public var maxWidth: Int = 480
+    // AGENT: let callers request a lossless sheet when necessary.
+    public var png = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -144,6 +155,7 @@ public struct PreviewSheetInput: ToolInput {
     case frames
     case duration
     case maxWidth = "max_width"
+    case png
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -151,6 +163,7 @@ public struct PreviewSheetInput: ToolInput {
     self.frames = try c.decodeIfPresent(Int.self, forKey: .frames) ?? 6
     self.duration = try c.decodeIfPresent(Double.self, forKey: .duration) ?? 0
     self.maxWidth = try c.decodeIfPresent(Int.self, forKey: .maxWidth) ?? 480
+    self.png = try c.decodeIfPresent(Bool.self, forKey: .png) ?? false
     }
 }
 
@@ -175,6 +188,10 @@ public struct ExportStartInput: ToolInput {
     public var output: String = ""
     public var includeAudio: Bool = true
     public var exportStems: Bool = false
+    // AGENT: export_start can keep one MCP request open when the client needs inline completion.
+    public var wait: Bool = false
+    // AGENT: choosing overwrite is explicit; otherwise an existing export is preserved.
+    public var overwrite: Bool = false
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -183,6 +200,8 @@ public struct ExportStartInput: ToolInput {
     case output
     case includeAudio = "include_audio"
     case exportStems = "export_stems"
+    case wait
+    case overwrite
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -191,19 +210,25 @@ public struct ExportStartInput: ToolInput {
     self.output = try c.decodeIfPresent(String.self, forKey: .output) ?? ""
     self.includeAudio = try c.decodeIfPresent(Bool.self, forKey: .includeAudio) ?? true
     self.exportStems = try c.decodeIfPresent(Bool.self, forKey: .exportStems) ?? false
+    self.wait = try c.decodeIfPresent(Bool.self, forKey: .wait) ?? false
+    self.overwrite = try c.decodeIfPresent(Bool.self, forKey: .overwrite) ?? false
     }
 }
 
 public struct JobStatusInput: ToolInput {
     public var jobID: String = ""
+    // AGENT: bounded long polling prevents clients from hammering the daemon for progress.
+    public var waitMs: Int = 0
     public init() {}
 
     enum CodingKeys: String, CodingKey {
     case jobID = "job_id"
+    case waitMs = "wait_ms"
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.jobID = try c.decodeIfPresent(String.self, forKey: .jobID) ?? ""
+    self.waitMs = try c.decodeIfPresent(Int.self, forKey: .waitMs) ?? 0
     }
 }
 
@@ -220,8 +245,20 @@ public struct ExportCancelInput: ToolInput {
     }
 }
 
+/// AGENT: preset discovery avoids making agents infer valid export names from errors.
+public struct ExportPresetsInput: ToolInput {
+    public init() {}
+}
+
 public extension ToolRegistry {
     func registerMediaTools() {
+        register(ToolDefinition<ExportPresetsInput>(name: "export_presets",
+            description: "Lists supported export preset names and the default preset.",
+            capability: .read) { _, _ in
+                return .object(["presets": .array(ExportPresets.all.map { .string($0.name) }),
+                                "default": .string("1080p30-h264")])
+            })
+
         register(ToolDefinition<AudioImportInput>(name: "audio_import",
             description: "Adds an MP3, WAV or M4A to a project: music, voice-over or a sound effect. Anchor it to a marker or to an output time.",
             capability: .edit, required: ["project_id", "path"], mutating: true) { input, ctx in
@@ -231,6 +268,9 @@ public extension ToolRegistry {
                     throw ToolError.failed("No file at \(url.path).")
                 }
                 let role = input.role
+                guard ["music", "voiceover", "sfx"].contains(role) else {
+                    throw ToolError.invalidArguments("role must be music, voiceover, or sfx.")
+                }
                 let placement = try await self.resolvePlacement(projectID: input.projectID, ctx: ctx,
                                                           atMarker: input.atMarker, atOutput: input.atOutput,
                                                           offsetMs: input.offsetMs)
@@ -240,14 +280,16 @@ public extension ToolRegistry {
                 }
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "import \(role)") { timeline in
+                    var audio = timeline.audio
                     if role == "music" {
-                        timeline.audio.musicPath = url.path
-                        if input.gainDb != 0 { timeline.audio.musicGainDb = input.gainDb }
+                        audio.musicPath = url.path
+                        if let gainDb = input.gainDb { audio.musicGainDb = try Self.validated(gainDb, name: "gain_db", range: -60 ... 12) }
                     } else {
-                        timeline.audio.lanes.append(AudioLane(role: role == "sfx" ? .sfx : .voiceover,
-                                                              path: url.path, placement: placement,
-                                                              gainDb: input.gainDb))
+                        let laneRole: AudioLane.Role = role == "sfx" ? .sfx : .voiceover
+                        let gain = try Self.validated(input.gainDb ?? 0, name: "gain_db", range: -60 ... 12)
+                        audio.lanes.append(AudioLane(role: laneRole, path: url.path, placement: placement, gainDb: gain))
                     }
+                    try applyCommand(.setAudio(audio), to: &timeline)
                 }
                 return .object(result)
             })
@@ -257,12 +299,14 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "mix settings") { timeline in
-                    if input.targetLUFS != 0 { timeline.audio.targetLUFSOverride = input.targetLUFS }
-                    if input.musicGainDb > -999 { timeline.audio.musicGainDb = input.musicGainDb }
-                    if input.micGainDb > -999 { timeline.audio.micGainDb = input.micGainDb }
-                    if input.outputGainDb > -999 { timeline.audio.outputGainDb = input.outputGainDb }
-                    if input.duckDepthDb > -999 { timeline.audio.duckDepthDb = input.duckDepthDb }
-                    if input.normalize { timeline.audio.normalize = true }
+                    var audio = timeline.audio
+                    if let value = input.targetLUFS { audio.targetLUFSOverride = try Self.validated(value, name: "target_lufs", range: -24 ... -10) }
+                    if let value = input.musicGainDb { audio.musicGainDb = try Self.validated(value, name: "music_gain_db", range: -60 ... 12) }
+                    if let value = input.micGainDb { audio.micGainDb = try Self.validated(value, name: "mic_gain_db", range: -60 ... 12) }
+                    if let value = input.outputGainDb { audio.outputGainDb = try Self.validated(value, name: "output_gain_db", range: -60 ... 12) }
+                    if let value = input.duckDepthDb { audio.duckDepthDb = try Self.validated(value, name: "duck_depth_db", range: 0 ... 36) }
+                    if let normalize = input.normalize { audio.normalize = normalize }
+                    try applyCommand(.setAudio(audio), to: &timeline)
                 }
                 return .object(result)
             })
@@ -280,8 +324,11 @@ public extension ToolRegistry {
                 try generated.data.write(to: url)
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "voice-over") { timeline in
-                    timeline.audio.lanes.append(AudioLane(role: .voiceover, path: url.path,
-                                                          placement: placement, gainDb: input.gainDb))
+                    var audio = timeline.audio
+                    let gain = try Self.validated(input.gainDb ?? 0, name: "gain_db", range: -60 ... 12)
+                    audio.lanes.append(AudioLane(role: .voiceover, path: url.path,
+                                                 placement: placement, gainDb: gain))
+                    try applyCommand(.setAudio(audio), to: &timeline)
                 }
                 var payload = result
                 payload["network"] = .string(generated.disclosure)
@@ -290,25 +337,37 @@ public extension ToolRegistry {
             })
 
         register(ToolDefinition<PreviewFrameInput>(name: "preview_frame",
-            description: "Renders one frame of the project and returns it as a PNG so you can SEE what you are editing.",
+            description: "Renders one frame as an image. JPEG is the default; set png for lossless output.",
             capability: .read, required: ["project_id"]) { input, ctx in
-                let (png, name) = try await ctx.engine.previewFrame(projectID: input.projectID,
+                let (image, name) = try await ctx.engine.previewFrame(projectID: input.projectID,
                                                                     time: input.time,
-                                                                    maxWidth: input.maxWidth)
-                return .object(["image_base64": .string(png.base64EncodedString()),
-                                "mime_type": .string("image/png"),
-                                "name": .string(name),
-                                "time": .number(input.time)])
+                                                                    maxWidth: input.maxWidth, png: input.png)
+                var output: [String: JSONValue] = ["image_base64": .string(image.base64EncodedString()),
+                                                   "mime_type": .string(input.png ? "image/png" : "image/jpeg"),
+                                                   "name": .string(name),
+                                                   "time": .number(input.time)]
+                // AGENT: frame metadata tells the agent what it received without embedding pixels in JSON.
+                if let size = Self.pixelSize(image) {
+                    output["width"] = .int(size.width)
+                    output["height"] = .int(size.height)
+                }
+                return .object(output)
             })
 
         register(ToolDefinition<PreviewSheetInput>(name: "preview_sheet",
-            description: "Renders N frames across the project as one contact sheet PNG.",
+            description: "Renders frames across the project as a JPEG contact sheet; set png for lossless output.",
             capability: .read, required: ["project_id"]) { input, ctx in
                 let sheet = try await ctx.engine.previewSheet(projectID: input.projectID, frames: input.frames,
-                                                              duration: input.duration, maxWidth: input.maxWidth)
-                return .object(["image_base64": .string(sheet.base64EncodedString()),
-                                "mime_type": .string("image/png"),
-                                "frames": .int(input.frames)])
+                                                              duration: input.duration, maxWidth: input.maxWidth, png: input.png)
+                // AGENT: the protocol layer needs the MIME type to return the sheet as an image block.
+                var output: [String: JSONValue] = ["image_base64": .string(sheet.base64EncodedString()),
+                                                   "mime_type": .string(input.png ? "image/png" : "image/jpeg"),
+                                                   "frames": .int(input.frames)]
+                if let size = Self.pixelSize(sheet) {
+                    output["width"] = .int(size.width)
+                    output["height"] = .int(size.height)
+                }
+                return .object(output)
             })
 
         register(ToolDefinition<QAReportInput>(name: "qa_report",
@@ -326,19 +385,53 @@ public extension ToolRegistry {
                     : input.output
                 guard !output.isEmpty else { throw ToolError.invalidArguments("Give an output path.") }
                 // AGENT: the file does not exist yet, so confine its parent instead of the path.
-                let resolved = try ctx.paths.writablePath(output, ext: PathGuard.videoExt)
+                var resolved = try ctx.paths.writablePath(output, ext: PathGuard.videoExt)
+                if !input.overwrite {
+                    let folder = resolved.deletingLastPathComponent()
+                    let stem = resolved.deletingPathExtension().lastPathComponent
+                    let ext = resolved.pathExtension
+                    var suffix = 2
+                    while FileManager.default.fileExists(atPath: resolved.path) {
+                        let name = ext.isEmpty ? "\(stem)-\(suffix)" : "\(stem)-\(suffix).\(ext)"
+                        resolved = try ctx.paths.writablePath(folder.appendingPathComponent(name).path,
+                                                              ext: PathGuard.videoExt)
+                        suffix += 1
+                    }
+                }
                 let job = try await ctx.engine.startExport(projectID: input.projectID, presetName: input.preset,
                                                           outputPath: resolved.path,
                                                           includeAudio: input.includeAudio,
-                                                          exportStems: input.exportStems)
+                                                          exportStems: input.exportStems,
+                                                          overwrite: input.overwrite)
+                if input.wait {
+                    let completed = try await ctx.waitForJob(job)
+                    guard case .object(var result) = completed.jsonValue else { return completed.jsonValue }
+                    result["output"] = .string(resolved.path)
+                    return .object(result)
+                }
                 return .object(["job_id": .string(job), "output": .string(resolved.path)])
             })
 
         register(ToolDefinition<JobStatusInput>(name: "job_status",
             description: "Reports the progress and result of a job started by export_start, privacy_scan or captions_generate.",
             capability: .read, required: ["job_id"]) { input, ctx in
-                guard let job = ctx.jobs.job(input.jobID) else {
+                guard (0...25_000).contains(input.waitMs) else {
+                    throw ToolError.invalidArguments("wait_ms must be between 0 and 25000.")
+                }
+                guard let initial = ctx.jobs.job(input.jobID) else {
                     throw ToolError.failed("No job with id \(input.jobID).")
+                }
+                var job = initial
+                if input.waitMs > 0 && (job.state == .queued || job.state == .running) {
+                    let clock = ContinuousClock()
+                    let deadline = clock.now.advanced(by: .milliseconds(Int64(input.waitMs)))
+                    while clock.now < deadline {
+                        try Task.checkCancellation()
+                        try await Task.sleep(for: .milliseconds(200))
+                        guard let latest = ctx.jobs.job(input.jobID) else { break }
+                        job = latest
+                        if job.updated > initial.updated || (job.state != .queued && job.state != .running) { break }
+                    }
                 }
                 return .object([
                     "job_id": .string(job.id),
@@ -353,28 +446,46 @@ public extension ToolRegistry {
 
         register(ToolDefinition<ExportCancelInput>(name: "export_cancel",
             description: "Cancels a running job.",
-            capability: .export, required: ["job_id"], mutating: true) { input, ctx in
+            capability: .export, required: ["job_id"], mutating: true, destructive: true) { input, ctx in
                 let cancelled = ctx.jobs.cancel(input.jobID)
                 return .object(["job_id": .string(input.jobID), "cancelled": .bool(cancelled)])
             })
     }
 
+    // AGENT: read actual encoded dimensions instead of assuming the requested render width was honored.
+    private static func pixelSize(_ data: Data) -> (width: Int, height: Int)? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        return (image.width, image.height)
+    }
+
     /// Marker- or time-based placement, in output seconds.
-    private func resolvePlacement(projectID: String, ctx: ToolContext, atMarker: String, atOutput: Double,
+    private func resolvePlacement(projectID: String, ctx: ToolContext, atMarker: String?, atOutput: Double?,
                                   offsetMs: Double) async throws -> Double {
-        if !atMarker.isEmpty {
-            let markers = try await ctx.engine.markersValue(projectID: projectID)
-            let rows = markers["markers"]?.arrayValue ?? []
-            for row in rows {
-                if row["id"]?.stringValue == atMarker {
-                    let source = row["source_start"]?.doubleValue ?? 0
-                    // AGENT: audio placement is output time, so cuts and speed ramps must be applied.
-                    return try await ctx.engine.outputTime(projectID: projectID, sourceSeconds: source + offsetMs / 1000)
-                }
-            }
-            throw ToolError.failed("No marker named \(atMarker). Call timeline_get markers first.")
+        guard offsetMs.isFinite else { throw ToolError.invalidArguments("offset_ms must be finite.") }
+        if let atMarker, !atMarker.isEmpty, atOutput != nil {
+            throw ToolError.invalidArguments("Choose either at_marker or at_output, not both.")
         }
-        if atOutput >= 0 { return atOutput + offsetMs / 1000 }
-        return offsetMs / 1000
+        if let atMarker, !atMarker.isEmpty {
+            // AGENT: every anchored audio placement now uses the shared marker-aware clock resolver.
+            return try await ctx.engine.outputSeconds(projectID: projectID,
+                time: .marker(id: atMarker, offsetMs: offsetMs))
+        }
+        if let atOutput {
+            guard atOutput.isFinite, atOutput >= 0 else { throw ToolError.invalidArguments("at_output must be finite and non-negative.") }
+            let placement = atOutput + offsetMs / 1000
+            guard placement.isFinite, placement >= 0 else { throw ToolError.invalidArguments("The resulting audio placement must be finite and non-negative.") }
+            return try await ctx.engine.outputSeconds(projectID: projectID, time: .output(placement))
+        }
+        let placement = offsetMs / 1000
+        guard placement >= 0 else { throw ToolError.invalidArguments("An unanchored audio placement cannot be negative.") }
+        return placement
+    }
+
+    private static func validated(_ value: Double, name: String, range: ClosedRange<Double>) throws -> Double {
+        guard value.isFinite, range.contains(value) else {
+            throw ToolError.invalidArguments("\(name) must be in \(range.lowerBound)…\(range.upperBound).")
+        }
+        return value
     }
 }

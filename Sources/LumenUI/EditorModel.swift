@@ -154,6 +154,16 @@ enum TimelineSelection: Equatable {
          exportSettings: ExportSettings, transcript: Transcript?) {
         self.session = session; self.renderer = renderer; self.timeline = timeline; box = TimelineBox(timeline)
         self.exportSettings = exportSettings
+        // AGENT: surface a revision race while the file watcher delivers the newer timeline.
+        session.setSaveConflictHandler { [weak self] _, actual in
+            Task { @MainActor [weak self] in
+                self?.notice = "Project updated by an agent. Reloading revision \(actual)."
+            }
+        }
+        // AGENT: edits from the daemon must replace the editor's stale in-memory copy, not merely show a warning.
+        session.setProjectChangeHandler { [weak self] file in
+            Task { @MainActor [weak self] in self?.acceptExternalProjectFile(file) }
+        }
         renderer.setCustomCursors(session.cursors)
         // SMOOTHNESS: a background image that finishes decoding off the
         // render thread must trigger one more frame, otherwise the preview
@@ -179,6 +189,24 @@ enum TimelineSelection: Equatable {
         // click never pays engine startup inside the transport gap.
         let p = player
         Task.detached(priority: .utility) { p.warm() }
+    }
+
+    // AGENT: stale undo snapshots must not put a superseded timeline back over an accepted agent edit.
+    private func acceptExternalProjectFile(_ file: ProjectFile) {
+        let incomingRevision = file.revision ?? session.currentProjectRevision
+        guard incomingRevision > session.currentProjectRevision else { return }
+        replanTask?.cancel()
+        timeline = file.timeline
+        box.set(file.timeline)
+        undoStack.removeAll()
+        redoStack.removeAll()
+        selection = nil
+        timelineSelection = .none
+        pendingCut = nil
+        revision += 1
+        session.adoptExternalRevision(incomingRevision)
+        notice = "Updated by an agent."
+        replan(remixAudio: true)
     }
 
     /// Republish the timeline to the preview. The render version changes, so

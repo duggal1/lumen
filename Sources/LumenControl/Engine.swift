@@ -2,13 +2,15 @@ import Foundation
 import os
 import AppKit
 import Metal
+@preconcurrency import AVFoundation
+@preconcurrency import CoreVideo
 import LumenCore
 import LumenProject
 import LumenDirector
 import LumenRender
 import LumenAudio
 import LumenAnalysis
-import LumenExport
+@preconcurrency import LumenExport
 import LumenActuator
 import LumenSpeech
 
@@ -17,14 +19,79 @@ import LumenSpeech
 /// AGENT: the agent mutated the timeline directly, so it skipped the
 /// validation, the effect tracking and the manual-origin rules that every UI
 /// edit obeys. Both paths now end in `reduce`.
-func applyCommand(_ command: Command, to timeline: inout Timeline) throws {
-    let context = ReduceContext(playhead: 0, duration: timeline.timeMap.sourceDuration)
+func applyCommand(_ command: Command, to timeline: inout Timeline, fps: Double = 60) throws {
+    // AGENT: the reducer's playhead and duration use output time, while it derives source time from the map.
+    let context = ReduceContext(playhead: 0, duration: timeline.timeMap.outputDuration, fps: fps)
     do {
         _ = try reduce(&timeline, command, ctx: context)
     } catch let error as CommandError {
         switch error {
         case .invalid(let message): throw ToolError.invalidArguments(message)
         case .notFound(let id): throw ToolError.failed("No element with id \(id.uuidString).")
+        }
+    }
+}
+
+/// Owns one non-thread-safe renderer and reuses its Metal pipelines for previews.
+private actor RenderService {
+    private var renderer: Renderer?
+
+    // AGENT: creating a Renderer per frame rebuilt Metal pipelines for every preview image.
+    func frame(session: ProjectSession, timeline: Timeline, time: Double, maxWidth: Int) async throws -> CGImage {
+        if renderer == nil {
+            await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
+            renderer = try Renderer()
+        }
+        guard let renderer else { throw ToolError.failed("The preview renderer could not be created.") }
+        renderer.setCustomCursors(session.cursors)
+        let width = max(maxWidth, 160)
+        let height = Int((Double(width) / max(timeline.style.aspectRatio, 0.1)).rounded())
+        return try await FrameImage.renderCGImage(renderer: renderer, session: session, timeline: timeline,
+                                                  t: time, canvas: SIMD2<Int>(width, height),
+                                                  fps: session.meta.source.fps)
+    }
+}
+
+/// Serializes heavy timeline derivation and audio mixing away from Engine's actor.
+private actor ProjectDerivationLane {
+    // AGENT: camera solving and audio mixing must not hold the request actor while they do CPU-heavy work.
+    func derive(_ session: ProjectSession, timeline: Timeline, revision: Int) -> Timeline {
+        session.derive(timeline, revision: revision)
+    }
+
+    func mix(_ session: ProjectSession, timeline: Timeline) -> MixedAudio? {
+        session.mixer.mix(timeline)
+    }
+}
+
+/// Keeps preview renders and exports from competing for Metal resources.
+private actor GPULane {
+    private var occupied = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    // AGENT: Metal rendering and export share one serialized lane instead of racing for GPU resources.
+    func withPermit<Value: Sendable>(_ operation: @Sendable () async throws -> Value) async throws -> Value {
+        if occupied {
+            await withCheckedContinuation { waiters.append($0) }
+        } else {
+            occupied = true
+        }
+        do {
+            try Task.checkCancellation()
+            let value = try await operation()
+            release()
+            return value
+        } catch {
+            release()
+            throw error
+        }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            occupied = false
+        } else {
+            waiters.removeFirst().resume()
         }
     }
 }
@@ -70,6 +137,14 @@ public actor Engine {
     public let jobs: JobManager
     public let policy: Policy
     private var handles: [String: Handle] = [:]
+    // AGENT: a single actor-owned renderer serializes Metal access across all preview frames.
+    private let renderService = RenderService()
+    // AGENT: previews and exports use the same GPU lane to prevent concurrent Metal work.
+    private let gpuLane = GPULane()
+    // AGENT: a dedicated serial lane keeps edits, status and marker reads responsive during derivation.
+    private let derivationLane = ProjectDerivationLane()
+    // AGENT: decoded sessions retain audio and frame readers, so the daemon needs a small LRU bound.
+    private var handleOrder: [String] = []
     private let refs = OSAllocatedUnfairLock<[ProjectRef]>(initialState: [])
 
     public init(runtime: LumenRuntime, jobs: JobManager, policy: Policy) {
@@ -105,32 +180,84 @@ public actor Engine {
                             hint: "There is no project at \(url.path).")
         }
         let file = try bundle.load()
-        let identifier = url.deletingPathExtension().lastPathComponent
+        // AGENT: folder names can collide across approved roots; identify projects by their canonical paths.
+        let identifier = Self.projectID(url)
         let ref = ProjectRef(identifier: identifier, url: url)
-        remember(ref)
-        var handle = Handle(bundle: bundle, meta: file.meta, timeline: file.timeline, revision: 1)
+        var handle = Handle(bundle: bundle, meta: file.meta, timeline: file.timeline, revision: file.revision ?? 0)
         // The session is what the editor uses: it owns the frame source, the
         // mixer and the Director inputs.
-        if let device = MTLCreateSystemDefaultDevice() {
-            if let opened = try? await ProjectSession.open(bundle, device: device) {
-                handle.session = opened.0
-                handle.timeline = opened.1
-                // AGENT: a project that already carries detections counts as scanned.
-                let count = opened.0.input.ocr.count
-                handle.privacy = count > 0 ? .scanned(detections: count) : .notScanned
-            }
-        }
+        // AGENT: do not report an open project when its session could not be created.
+        guard let device = MTLCreateSystemDefaultDevice() else { throw ToolError.failed("No Metal device is available to open the project.") }
+        let opened = try await ProjectSession.open(bundle, device: device)
+        handle.session = opened.0
+        handle.timeline = opened.1
+        // AGENT: cached detections alone cannot prove that a complete privacy scan ran.
+        handle.privacy = .notScanned
         handles[identifier] = handle
+        handleOrder.removeAll { $0 == identifier }
+        handleOrder.append(identifier)
+        while handleOrder.count > 4 {
+            let evicted = handleOrder.removeFirst()
+            handles[evicted] = nil
+        }
+        remember(ref)
         return ref
+    }
+
+    /// Closes an open project session and releases its decoded media resources.
+    public func closeProject(projectID: String) -> Bool {
+        let removed = handles.removeValue(forKey: projectID) != nil
+        handleOrder.removeAll { $0 == projectID }
+        refs.withLock { $0.removeAll { $0.identifier == projectID } }
+        return removed
+    }
+
+    /// Probes and inserts a movie clip through the editor's command reducer.
+    // AGENT: clip_import reuses the editor's AVFoundation probe and reducer path instead of mutating composition fields directly.
+    public func importClip(projectID: String, path: URL, at outputTime: Double?) async throws -> [String: JSONValue] {
+        let h = try await requireHandle(projectID)
+        let asset = AVURLAsset(url: path)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+            throw ToolError.invalidArguments("The selected file has no video track.")
+        }
+        let duration = try await asset.load(.duration).seconds
+        guard duration.isFinite, duration > 0.1 else {
+            throw ToolError.invalidArguments("The selected video must be longer than 0.1 seconds.")
+        }
+        let size = try await track.load(.naturalSize)
+        let start = outputTime ?? h.timeline.compositionDuration
+        guard start.isFinite, start >= 0, start <= h.timeline.timeMap.outputDuration + h.meta.source.duration else {
+            throw ToolError.invalidArguments("at must be a finite non-negative output time.")
+        }
+        let clip = TimelineClip(path: path.path,
+                                name: path.deletingPathExtension().lastPathComponent,
+                                duration: duration, start: start,
+                                width: Int(size.width.rounded()), height: Int(size.height.rounded()))
+        var result = try await edit(projectID: projectID, expectRevision: nil, describe: "import clip") { timeline in
+            try applyCommand(.addClip(clip), to: &timeline)
+        }
+        result["clip_id"] = .string(clip.id.uuidString)
+        result["path"] = .string(path.path)
+        return result
+    }
+
+    // AGENT: the same canonical project path always yields the same agent identifier.
+    static func projectID(_ url: URL) -> String {
+        "p_" + String(AuditLog.hash(url.standardizedFileURL.resolvingSymlinksInPath().path).prefix(10))
     }
 
     /// Ensures a project is open, opening it from the library when needed.
     private func requireHandle(_ projectID: String) async throws -> Handle {
-        if let h = handles[projectID] { return h }
+        if let h = handles[projectID] {
+            handleOrder.removeAll { $0 == projectID }
+            handleOrder.append(projectID)
+            return h
+        }
         let library = await runtime.recordingLibrary()
-        if let match = library.first(where: { $0.deletingPathExtension().lastPathComponent == projectID }) {
+        if let match = library.first(where: { Self.projectID($0) == projectID }) {
             let ref = try await openProject(at: match.path)
-            return handles[ref.identifier] ?? handles[projectID]!
+            // AGENT: a failed open must surface rather than force-unwrapping a missing handle.
+            if let handle = handles[ref.identifier] { return handle }
         }
         throw ToolError.failed("Unknown project \(projectID). Call project_open first.")
     }
@@ -139,7 +266,9 @@ public actor Engine {
 
     public func timelineValue(projectID: String) async throws -> JSONValue {
         var h = try await requireHandle(projectID)
-        if let session = h.session { h.timeline = session.derive(h.timeline, revision: h.revision) }
+        if let session = h.session {
+            h.timeline = await derivationLane.derive(session, timeline: h.timeline, revision: h.revision)
+        }
         handles[projectID] = h
         return encode(timeline: h.timeline, revision: h.revision)
     }
@@ -170,6 +299,43 @@ public actor Engine {
         }
         let h = try await requireHandle(projectID)
         return h.timeline.timeMap.output(atSource: sourceSeconds)
+    }
+
+    // AGENT: audio and editing tools must resolve all time references through the same project clock.
+    /// Resolves a source, output, or marker reference onto the source clock.
+    public func sourceSeconds(projectID: String, time: TimeRef) async throws -> Double {
+        let h = try await requireHandle(projectID)
+        return try resolveSourceSeconds(time, handle: h)
+    }
+
+    /// Resolves a source, output, or marker reference onto the edited output clock.
+    public func outputSeconds(projectID: String, time: TimeRef) async throws -> Double {
+        let h = try await requireHandle(projectID)
+        switch time {
+        case .output(let seconds):
+            guard seconds.isFinite, seconds >= 0, seconds <= h.timeline.timeMap.outputDuration + 0.001 else {
+                throw ToolError.invalidArguments("Output time must be within the edited duration.")
+            }
+            return seconds
+        default:
+            return h.timeline.timeMap.output(atSource: try resolveSourceSeconds(time, handle: h))
+        }
+    }
+
+    private func resolveSourceSeconds(_ time: TimeRef, handle h: Handle) throws -> Double {
+        guard case .marker(let id, let offsetMs) = time else { return try h.timeline.sourceSeconds(time) }
+        guard !id.isEmpty, offsetMs.isFinite else {
+            throw ToolError.invalidArguments("Marker id and offset_ms must be valid.")
+        }
+        let markers = h.bundle.loadMarkers().markers
+        guard let marker = markers.first(where: { $0.id == id }) else {
+            throw ToolError.invalidArguments("No marker named \(id). Read the project markers and retry.")
+        }
+        let source = max(marker.startHostSeconds - h.meta.clock.originHostSeconds, 0) + offsetMs / 1000
+        guard source.isFinite, source >= 0, source <= h.timeline.timeMap.sourceDuration + 0.001 else {
+            throw ToolError.invalidArguments("The marker offset falls outside the recorded source.")
+        }
+        return source
     }
 
     /// The Timeline as JSON: the agent patches the same fields the UI edits.
@@ -269,19 +435,52 @@ public actor Engine {
         var updated = h.timeline
         try body(&updated)
         if updated == old {
-            return ["project_id": .string(projectID), "revision": .int(h.revision), "changed": .bool(false)]
+            return ["project_id": .string(projectID), "revision": .int(h.revision), "changed": .bool(false),
+                    "diff": .array([]), "warnings": .array([])]
         }
+        let changes = timelineDiff(before: old, after: updated, revision: h.revision + 1)
         h.undoStack.append(old)
         if h.undoStack.count > 100 { h.undoStack.removeFirst() }
         h.redoStack.removeAll()
         h.timeline = updated
         h.revision += 1
-        try save(&h)
+        try await save(&h)
         handles[projectID] = h
         return ["project_id": .string(projectID),
                 "revision": .int(h.revision),
                 "changed": .bool(true),
+                "diff": .array(changes),
+                "warnings": .array([]),
                 "summary": .string(describe)]
+    }
+
+    /// Validates edits against a copied timeline and returns changed fields without persistence.
+    // AGENT: timeline dry runs must execute validation on a draft while leaving revision, undo, and disk untouched.
+    public func previewEdit(projectID: String, expectRevision: Int?,
+                            _ body: @escaping @Sendable (inout Timeline) throws -> Void) async throws -> [String: JSONValue] {
+        let h = try await requireHandle(projectID)
+        if let expectRevision, expectRevision != h.revision {
+            throw ToolError.revisionConflict(expected: expectRevision, actual: h.revision)
+        }
+        var draft = h.timeline
+        try body(&draft)
+        let diff = timelineDiff(before: h.timeline, after: draft, revision: h.revision)
+        return ["project_id": .string(projectID), "revision": .int(h.revision),
+                "dry_run": .bool(true), "diff": .array(diff), "warnings": .array([])]
+    }
+
+    // AGENT: edit_apply reports field-level before/after values for real edits and dry runs alike.
+    private func timelineDiff(before: Timeline, after: Timeline, revision: Int) -> [JSONValue] {
+        let oldFields = encode(timeline: before, revision: revision).objectValue ?? [:]
+        let newFields = encode(timeline: after, revision: revision).objectValue ?? [:]
+        return Set(oldFields.keys).union(newFields.keys)
+            .filter { oldFields[$0] != newFields[$0] }
+            .sorted()
+            .map { key in
+                .object(["field": .string(key),
+                         "before": oldFields[key] ?? .null,
+                         "after": newFields[key] ?? .null])
+            }
     }
 
     /// Undoes the last agent edit.
@@ -294,35 +493,44 @@ public actor Engine {
         h.redoStack.append(h.timeline)
         h.timeline = previous
         h.revision += 1
-        try save(&h)
+        try await save(&h)
         handles[projectID] = h
         return ["project_id": .string(projectID), "revision": .int(h.revision), "changed": .bool(true)]
     }
 
     /// Saves and re-derives. The derive is the existing pure Director.
-    private func save(_ h: inout Handle) throws {
+    private func save(_ h: inout Handle) async throws {
         var timeline = h.timeline
         if let session = h.session {
-            timeline = session.derive(timeline, revision: h.revision)
+            timeline = await derivationLane.derive(session, timeline: timeline, revision: h.revision)
         }
         h.timeline = timeline
-        try h.bundle.save(ProjectFile(meta: h.meta, timeline: timeline))
+        let expected = max(h.revision - 1, 0)
+        do {
+            h.revision = try h.bundle.save(ProjectFile(meta: h.meta, timeline: timeline, revision: h.revision),
+                                           expectingRevision: expected)
+        } catch ProjectError.conflict(let expected, let actual) {
+            throw ToolError.revisionConflict(expected: expected, actual: actual)
+        }
     }
 
     // MARK: Verification
 
     /// Renders one frame of the project and returns PNG bytes.
-    public func previewFrame(projectID: String, time: Double, maxWidth: Int = 960) async throws -> (Data, String) {
+    public func previewFrame(projectID: String, time: Double, maxWidth: Int = 960, png: Bool = false) async throws -> (Data, String) {
         let image = try await renderFrame(projectID: projectID, time: time, maxWidth: maxWidth)
         let rep = NSBitmapImageRep(cgImage: image)
-        guard let png = rep.representation(using: .png, properties: [:]) else {
+        // AGENT: JPEG reduces image-block size; PNG remains available for lossless inspection.
+        let format: NSBitmapImageRep.FileType = png ? .png : .jpeg
+        let properties: [NSBitmapImageRep.PropertyKey: Any] = png ? [:] : [.compressionFactor: 0.8]
+        guard let data = rep.representation(using: format, properties: properties) else {
             throw ToolError.failed("The frame could not be encoded.")
         }
-        return (png, "frame-" + String(Int(time * 1000)) + "ms.png")
+        return (data, "frame-" + String(Int(time * 1000)) + (png ? "ms.png" : "ms.jpg"))
     }
 
     /// N frames across the project as one contact sheet.
-    public func previewSheet(projectID: String, frames: Int, duration: Double, maxWidth: Int) async throws -> Data {
+    public func previewSheet(projectID: String, frames: Int, duration: Double, maxWidth: Int, png: Bool = false) async throws -> Data {
         let h = try await requireHandle(projectID)
         let total = duration > 0 ? duration : (h.meta.source.duration > 0 ? h.meta.source.duration : 1)
         let count = max(1, min(frames, 12))
@@ -352,10 +560,13 @@ public actor Engine {
         }
         guard let sheet = context.makeImage() else { throw ToolError.failed("Could not build the contact sheet.") }
         let rep = NSBitmapImageRep(cgImage: sheet)
-        guard let png = rep.representation(using: .png, properties: [:]) else {
+        // AGENT: use the same explicit image format for sheets and individual previews.
+        let format: NSBitmapImageRep.FileType = png ? .png : .jpeg
+        let properties: [NSBitmapImageRep.PropertyKey: Any] = png ? [:] : [.compressionFactor: 0.8]
+        guard let data = rep.representation(using: format, properties: properties) else {
             throw ToolError.failed("The contact sheet could not be encoded.")
         }
-        return png
+        return data
     }
 
     private func renderFrame(projectID: String, time: Double, maxWidth: Int) async throws -> CGImage {
@@ -363,16 +574,11 @@ public actor Engine {
         guard let session = h.session else {
             throw ToolError.failed("This project cannot be opened for rendering (no Metal device).")
         }
-        let timeline = session.derive(h.timeline, revision: h.revision)
-        let renderer = try Renderer()
-        renderer.setCustomCursors(session.cursors)
-        let aspect = timeline.style.aspectRatio
-        let width = max(maxWidth, 160)
-        let height = Int((Double(width) / max(aspect, 0.1)).rounded())
-        let image = try await FrameImage.renderCGImage(renderer: renderer, session: session, timeline: timeline,
-                                                     t: time, canvas: SIMD2<Int>(width, height),
-                                                     fps: session.meta.source.fps)
-        return image
+        let timeline = await derivationLane.derive(session, timeline: h.timeline, revision: h.revision)
+        let renderer = renderService
+        return try await gpuLane.withPermit {
+            try await renderer.frame(session: session, timeline: timeline, time: time, maxWidth: maxWidth)
+        }
     }
 
     /// The QA report an agent loops on.
@@ -381,7 +587,7 @@ public actor Engine {
         guard let session = h.session else {
             throw ToolError.failed("This project cannot be opened for analysis (no Metal device).")
         }
-        let timeline = session.derive(h.timeline, revision: h.revision)
+        let timeline = await derivationLane.derive(session, timeline: h.timeline, revision: h.revision)
         let events = session.input.events
 
         // Zoom accuracy — the existing measurement.
@@ -393,7 +599,7 @@ public actor Engine {
         // Loudness — the existing mixer measurement.
         var loudness: Double = 0
         var truePeak: Double = 0
-        if let mixed = session.mixer.mix(timeline) {
+        if let mixed = await derivationLane.mix(session, timeline: timeline) {
             loudness = mixed.lufs
             truePeak = mixed.truePeakDb
         }
@@ -462,7 +668,11 @@ public actor Engine {
 
     /// Starts an export as a job. Uses the existing exporter, unchanged.
     public func startExport(projectID: String, presetName: String, outputPath: String,
-                            includeAudio: Bool, exportStems: Bool) async throws -> String {
+                            includeAudio: Bool, exportStems: Bool, overwrite: Bool = false) async throws -> String {
+        // AGENT: capture and export compete for the same GPU and must not run together.
+        guard !RecordingGate.isRecordingActive else {
+            throw ToolError(code: "RECORDING_ACTIVE", hint: "Stop recording before exporting.")
+        }
         let h = try await requireHandle(projectID)
         guard let session = h.session else {
             throw ToolError.failed("This project cannot be opened for export (no Metal device).")
@@ -471,7 +681,7 @@ public actor Engine {
             throw ToolError.invalidArguments("Unknown preset \(presetName). Use one of: "
                 + ExportPresets.all.map(\.name).joined(separator: ", "))
         }
-        let timeline = session.derive(h.timeline, revision: h.revision)
+        let timeline = await derivationLane.derive(session, timeline: h.timeline, revision: h.revision)
         // The export gate: never ship a video whose masks are unresolved.
         if timeline.overlays.privacy.enabled && timeline.overlays.privacy.autoDetect {
             switch h.privacy {
@@ -495,14 +705,36 @@ public actor Engine {
             }
         }
         let output = URL(fileURLWithPath: (outputPath as NSString).expandingTildeInPath)
+        if FileManager.default.fileExists(atPath: output.path) && !overwrite {
+            throw ToolError(code: "EXPORT_OUTPUT_EXISTS", hint: "Choose a different output path or set overwrite=true.")
+        }
+        let gpuLane = self.gpuLane
         return jobs.start(kind: "export") { reporter in
-            await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
-            try await Exporter.run(session: session, timeline: timeline, preset: preset, to: output,
-                                   includeAudio: includeAudio, exportStems: exportStems) { progress in
-                reporter.progress(progress.total > 0 ? Double(progress.frame) / Double(progress.total) : 0,
-                                  progress.notice)
+            try await gpuLane.withPermit {
+                var finished = false
+                let staging = output.deletingLastPathComponent()
+                    .appendingPathComponent(".lumen-\(UUID().uuidString)-\(output.lastPathComponent)")
+                defer {
+                    // AGENT: a cancelled or failed export must not leave a partial movie that looks complete.
+                    if !finished || Task.isCancelled { try? FileManager.default.removeItem(at: staging) }
+                }
+                await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
+                try await Exporter.run(session: session, timeline: timeline, preset: preset, to: staging,
+                                       includeAudio: includeAudio, exportStems: exportStems) { progress in
+                    reporter.progress(progress.total > 0 ? Double(progress.frame) / Double(progress.total) : 0,
+                                      progress.notice)
+                }
+                if FileManager.default.fileExists(atPath: output.path) {
+                    guard overwrite else {
+                        throw ToolError(code: "EXPORT_OUTPUT_EXISTS", hint: "The output path appeared during export; choose another path.")
+                    }
+                    _ = try FileManager.default.replaceItemAt(output, withItemAt: staging)
+                } else {
+                    try FileManager.default.moveItem(at: staging, to: output)
+                }
+                finished = true
+                return .object(["output": .string(output.path)])
             }
-            return .object(["output": .string(output.path)])
         }
     }
 
@@ -512,18 +744,29 @@ public actor Engine {
         guard let session = h.session else {
             throw ToolError.failed("This project cannot be opened for scanning (no Metal device).")
         }
-        let timeline = h.timeline
+        // AGENT: prevent competing scans from overwriting each other's completion state.
+        guard h.privacy != .scanning else { throw ToolError(code: "PRIVACY_SCAN_RUNNING", hint: "Wait for the active privacy scan to finish.") }
+        var timeline = h.timeline
+        timeline.overlays.privacy.enabled = true
+        timeline.overlays.privacy.autoDetect = true
+        let scanTimeline = timeline
         // AGENT: record that a scan is in flight so export and QA stop guessing.
         handles[projectID]?.privacy = .scanning
         return jobs.start(kind: "privacy_scan") { [weak self] reporter in
-            let result = await session.analyze(timeline,
+            let result = await session.analyze(scanTimeline,
                                                privacyProgress: { p in reporter.progress(p * 0.9, "Scanning") },
                                                onPrivacy: { error in reporter.progress(0.95, error) })
             let detections = result.ocr.count
             reporter.progress(1, nil)
             // AGENT: the completed scan is the only thing that can make privacy pass.
-            if let error = result.errors["privacy"] {
+            if Task.isCancelled {
+                await self?.setPrivacy(.failed("Scan cancelled."), for: projectID)
+                throw CancellationError()
+            }
+            // AGENT: OCR reports failures under its own key; cancelled or failed scans must never pass.
+            if let error = result.errors["ocr"] ?? result.errors["privacy"] ?? result.errors["cancelled"] {
                 await self?.setPrivacy(.failed(error), for: projectID)
+                throw ToolError(code: "PRIVACY_SCAN_FAILED", hint: error)
             } else {
                 await self?.setPrivacy(.scanned(detections: detections), for: projectID)
             }

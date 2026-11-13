@@ -1,6 +1,7 @@
 import Foundation
 import ApplicationServices
 import AppKit
+import os
 
 // MARK: - AX tree
 
@@ -20,18 +21,20 @@ public struct AXNode: Sendable, Codable, Equatable {
     public var height: Double?
     /// Screen rect in points.
     public var frame: CGRect?
+    /// Stable locator for this observed accessibility element.
+    public var ref: String?
     /// AGENT: a secure text field's contents must never leave the machine.
     public var redacted: Bool = false
     public var children: [AXNode] = []
     public init(role: String = "AXUnknown", title: String? = nil, value: String? = nil,
                 identifier: String? = nil, descriptionText: String? = nil, enabled: Bool = true,
                 focused: Bool = false, x: Double? = nil, y: Double? = nil, width: Double? = nil,
-                height: Double? = nil, frame: CGRect? = nil, redacted: Bool = false,
+                height: Double? = nil, frame: CGRect? = nil, ref: String? = nil, redacted: Bool = false,
                 children: [AXNode] = []) {
         self.role = role; self.title = title; self.value = value; self.identifier = identifier
         self.descriptionText = descriptionText; self.enabled = enabled; self.focused = focused
         self.x = x; self.y = y; self.width = width; self.height = height
-        self.frame = frame; self.redacted = redacted; self.children = children
+        self.frame = frame; self.ref = ref; self.redacted = redacted; self.children = children
     }
 
     public var label: String {
@@ -41,6 +44,12 @@ public struct AXNode: Sendable, Codable, Equatable {
 
 /// Reads the accessibility tree of an application.
 public enum AXSupport {
+    private struct ElementReference: @unchecked Sendable {
+        let element: AXUIElement
+    }
+    // AGENT: UI snapshots need opaque element locators that do not depend on match indexes.
+    private static let references = OSAllocatedUnfairLock<[String: [String: ElementReference]]>(initialState: [:])
+
     /// The application element for a bundle identifier.
     public static func application(bundleID: String) -> AXUIElement? {
         let apps = NSWorkspace.shared.runningApplications
@@ -67,7 +76,17 @@ public enum AXSupport {
         let window = focusedWindow(in: app)
         let root = window ?? app
         var count = 0
-        return axNode(for: root, depth: 0, maxDepth: maxDepth, maxNodes: maxNodes, counter: &count)
+        var located: [String: ElementReference] = [:]
+        let node = axNode(for: root, depth: 0, maxDepth: maxDepth, maxNodes: maxNodes,
+                          counter: &count, path: [], located: &located)
+        if let resolvedBundle = bundleID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+            let snapshotReferences = located
+            references.withLock { cache in
+                cache[resolvedBundle] = snapshotReferences
+                if cache.count > 32, let oldest = cache.keys.first, oldest != resolvedBundle { cache[oldest] = nil }
+            }
+        }
+        return node
     }
 
     private static func focusedWindow(in app: AXUIElement) -> AXUIElement? {
@@ -79,7 +98,8 @@ public enum AXSupport {
     }
 
     private static func axNode(for element: AXUIElement, depth: Int, maxDepth: Int, maxNodes: Int,
-                                counter: inout Int) -> AXNode {
+                               counter: inout Int, path: [Int],
+                               located: inout [String: ElementReference]) -> AXNode {
         var node = AXNode()
         counter += 1
         AXUIElementSetMessagingTimeout(element, 0.1)
@@ -99,6 +119,10 @@ public enum AXSupport {
         }
         node.identifier = attribute(element, kAXIdentifierAttribute) as? String
         node.descriptionText = attribute(element, kAXDescriptionAttribute) as? String
+        // AGENT: refs are derived from the semantic locator and tree path, not index-among-matches.
+        node.ref = referenceID(role: node.role, title: node.title, identifier: node.identifier,
+                               description: node.descriptionText, frame: rect(element), path: path)
+        if let ref = node.ref { located[ref] = ElementReference(element: element) }
         node.enabled = (attribute(element, kAXEnabledAttribute) as? Bool) ?? true
         node.focused = (attribute(element, kAXFocusedAttribute) as? Bool) ?? false
         if let frame = rect(element) {
@@ -114,14 +138,25 @@ public enum AXSupport {
         if depth < maxDepth, counter < maxNodes {
             var children: [AXNode] = []
             if let list = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
-                for child in list.prefix(maxNodes - counter) {
+                for (index, child) in list.prefix(maxNodes - counter).enumerated() {
                     children.append(axNode(for: child, depth: depth + 1, maxDepth: maxDepth,
-                                          maxNodes: maxNodes, counter: &counter))
+                                          maxNodes: maxNodes, counter: &counter,
+                                          path: path + [index], located: &located))
                 }
             }
             node.children = children
         }
         return node
+    }
+
+    private static func referenceID(role: String, title: String?, identifier: String?,
+                                    description: String?, frame: CGRect?, path: [Int]) -> String {
+        let position = frame.map { "\($0.minX.rounded()),\($0.minY.rounded()),\($0.width.rounded()),\($0.height.rounded())" } ?? "no-frame"
+        let value = [role, title ?? "", identifier ?? "", description ?? "", position,
+                     path.map(String.init).joined(separator: ".")].joined(separator: "|")
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }
+        return "e" + String(hash, radix: 36)
     }
 
     private static func enclosingWindow(_ element: AXUIElement) -> (origin: CGPoint, size: CGSize)? {
@@ -147,6 +182,11 @@ public enum AXSupport {
 
     /// Finds elements matching a target reference.
     public static func find(_ target: TargetRef, bundleID: String?) -> [AXUIElement] {
+        if let ref = target.ref, let bundleID {
+            // AGENT: resolve the reference returned by ui_snapshot directly, without an unstable match index.
+            let match = references.withLock { $0[bundleID]?[ref] }
+            return match.map { [$0.element] } ?? []
+        }
         guard let app = bundleID.flatMap({ application(bundleID: $0) }) ?? frontmostApplication() else { return [] }
         var found: [AXUIElement] = []
         var stack: [AXUIElement] = [app]

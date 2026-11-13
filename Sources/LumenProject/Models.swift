@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import LumenCore
 
 extension KeyedDecodingContainer {
@@ -663,7 +664,15 @@ public struct ProjectMeta: Codable, Sendable {
 public struct ProjectFile: Codable, Sendable {
     public var meta: ProjectMeta
     public var timeline: Timeline
-    public init(meta: ProjectMeta, timeline: Timeline) { self.meta = meta; self.timeline = timeline }
+    // AGENT: both the editor and daemon need a revision persisted with the project for compare-and-swap saves.
+    public var revision: Int? = nil
+    public init(meta: ProjectMeta, timeline: Timeline, revision: Int? = nil) {
+        self.meta = meta; self.timeline = timeline; self.revision = revision
+    }
+}
+
+public enum ProjectError: Error, Sendable {
+    case conflict(expected: Int, actual: Int)
 }
 public struct AXFrame: Codable, Sendable {
     public struct Rect: Codable, Sendable {
@@ -723,9 +732,30 @@ public struct ProjectBundle: Sendable, Hashable {
     public var webcamURL: URL { f("webcam.mov") }
     public var cacheURL: URL { f("cache") }
 
-    public func save(_ file: ProjectFile) throws {
+    /// Saves atomically under a per-project lock and optionally checks the prior revision.
+    // AGENT: the editor and MCP engine previously overwrote project.json without coordinating revisions.
+    @discardableResult
+    public func save(_ file: ProjectFile, expectingRevision: Int? = nil) throws -> Int {
+        let lockURL = f("project.lock")
+        let lockFD = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        guard lockFD >= 0 else { throw CocoaError(.fileWriteUnknown) }
+        defer { close(lockFD) }
+        guard flock(lockFD, LOCK_EX) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        defer { flock(lockFD, LOCK_UN) }
+        let actualRevision: Int
+        if FileManager.default.fileExists(atPath: projectURL.path) {
+            actualRevision = try load().revision ?? 0
+        } else {
+            actualRevision = 0
+        }
+        if let expectingRevision, expectingRevision != actualRevision {
+            throw ProjectError.conflict(expected: expectingRevision, actual: actualRevision)
+        }
+        var persisted = file
+        persisted.revision = actualRevision + 1
         let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try e.encode(file).write(to: projectURL, options: .atomic)
+        try e.encode(persisted).write(to: projectURL, options: .atomic)
+        return actualRevision + 1
     }
     public func load() throws -> ProjectFile {
         var file = try JSONDecoder().decode(ProjectFile.self, from: Data(contentsOf: projectURL))
