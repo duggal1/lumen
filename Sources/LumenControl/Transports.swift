@@ -206,7 +206,9 @@ public final class UnixSocketServer: @unchecked Sendable {
                 let token = UUID()
                 tasks.withLock { pending in
                     let task = Task { [server] in
-                        if let reply = await server.handle(line, client: clientID), !Task.isCancelled { writer.send(reply) }
+                        if let reply = await server.handle(line, client: clientID, notify: { writer.send($0) }), !Task.isCancelled {
+                            writer.send(reply)
+                        }
                         if let key { tasks.withLock { if $0[key]?.0 == token { $0[key] = nil } } }
                     }
                     if let key { pending[key]?.1.cancel(); pending[key] = (token, task) }
@@ -331,6 +333,8 @@ public final class UnixSocketClient: @unchecked Sendable {
 /// MCP client's process.
 public final class StdioServer: @unchecked Sendable {
     private let server: MCPServer
+    // AGENT: concurrent requests and progress notifications must not interleave stdout JSON lines.
+    private let outputLock = NSLock()
 
     public init(server: MCPServer) { self.server = server }
 
@@ -341,12 +345,17 @@ public final class StdioServer: @unchecked Sendable {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 if trimmed.isEmpty { continue }
                 Task {
-                    guard let reply = await self.server.handle(trimmed, client: "stdio") else { return }
-                    print(reply)
-                    fflush(stdout)
+                    guard let reply = await self.server.handle(trimmed, client: "stdio", notify: { [weak self] in self?.writeLine($0) }) else { return }
+                    self.writeLine(reply)
                 }
             }
         }
         dispatchMain()
+    }
+
+    private func writeLine(_ line: String) {
+        outputLock.lock(); defer { outputLock.unlock() }
+        print(line)
+        fflush(stdout)
     }
 }

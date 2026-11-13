@@ -49,6 +49,40 @@ public final class JobManager: @unchecked Sendable {
         state.withLock { s in s.order.compactMap { s.jobs[$0] } }
     }
 
+    /// Waits for a terminal job state while forwarding changed progress.
+    // AGENT: wait=true needs one cancellable request that follows the job instead of returning a poll id.
+    public func waitForCompletion(_ id: String,
+                                  progress: (@Sendable (Double, String?) -> Void)? = nil) async throws -> Job {
+        var previousProgress: Double?
+        var previousMessage: String?
+        do {
+            while true {
+                try Task.checkCancellation()
+                guard let current = job(id) else {
+                    throw ToolError.failed("No job with id \(id).")
+                }
+                if current.progress != previousProgress || current.message != previousMessage {
+                    progress?(current.progress, current.message)
+                    previousProgress = current.progress
+                    previousMessage = current.message
+                }
+                switch current.state {
+                case .done:
+                    return current
+                case .failed:
+                    throw ToolError(code: "JOB_FAILED", hint: current.error ?? "The job failed. Read job_status for details.")
+                case .cancelled:
+                    throw ToolError(code: "JOB_CANCELLED", hint: "The job was cancelled.")
+                case .queued, .running:
+                    try await Task.sleep(for: .milliseconds(200))
+                }
+            }
+        } catch is CancellationError {
+            _ = cancel(id)
+            throw CancellationError()
+        }
+    }
+
     public func cancel(_ id: String) -> Bool {
         let task = state.withLock { $0.tasks[id] }
         task?.cancel()
@@ -127,4 +161,13 @@ public struct JobReporter: Sendable {
     public let jobID: String
     let report: @Sendable (Double, String?) -> Void
     public func progress(_ value: Double, _ message: String? = nil) { report(value, message) }
+}
+
+extension JobManager.Job {
+    // AGENT: waited long-running tools return the same stable job envelope as job_status.
+    var jsonValue: JSONValue {
+        .object(["job_id": .string(id), "kind": .string(kind), "state": .string(state.rawValue),
+                 "progress": .number(progress), "message": message.map(JSONValue.string) ?? .null,
+                 "result": result ?? .null, "error": error.map(JSONValue.string) ?? .null])
+    }
 }
