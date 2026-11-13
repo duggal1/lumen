@@ -152,7 +152,7 @@ public actor Engine {
         // AGENT: folder names can collide across approved roots; identify projects by their canonical paths.
         let identifier = Self.projectID(url)
         let ref = ProjectRef(identifier: identifier, url: url)
-        var handle = Handle(bundle: bundle, meta: file.meta, timeline: file.timeline, revision: 1)
+        var handle = Handle(bundle: bundle, meta: file.meta, timeline: file.timeline, revision: file.revision ?? 0)
         // The session is what the editor uses: it owns the frame source, the
         // mixer and the Director inputs.
         // AGENT: do not report an open project when its session could not be created.
@@ -474,7 +474,13 @@ public actor Engine {
             timeline = await derivationLane.derive(session, timeline: timeline, revision: h.revision)
         }
         h.timeline = timeline
-        try h.bundle.save(ProjectFile(meta: h.meta, timeline: timeline))
+        let expected = max(h.revision - 1, 0)
+        do {
+            h.revision = try h.bundle.save(ProjectFile(meta: h.meta, timeline: timeline, revision: h.revision),
+                                           expectingRevision: expected)
+        } catch ProjectError.conflict(let expected, let actual) {
+            throw ToolError.revisionConflict(expected: expected, actual: actual)
+        }
     }
 
     // MARK: Verification
