@@ -284,15 +284,16 @@ struct Inspector: View {
     @State private var wallpaperSelectTask: Task<Void, Never>?
 
     private var wallpaperList: some View {
-        VStack(spacing: 12) {
+        let choices = Self.wallpaperChoices()[wallpaperSource] ?? []
+        return VStack(spacing: 12) {
             LSegmented(sel: Binding(get: { wallpaperSource }, set: selectWallpaperSource),
                        items: WallpaperSource.allCases.map { ($0, $0.rawValue) })
                 .frame(maxWidth: .infinity)
             switch wallpaperSource {
             case .painting, .macOS:
-                WallpaperGrid(model: model, choices: Self.wallpaperChoices()[wallpaperSource] ?? []) { choice in
+                WallpaperGrid(model: model, choices: choices) { choice in
                     wallpaperSelectTask?.cancel()
-                    wallpaperSelectTask = Task { @MainActor in
+                    wallpaperSelectTask = Task {
                         try? await Task.sleep(for: .milliseconds(150))
                         guard !Task.isCancelled else { return }
                         model.edit { $0.style.setPhotoBackground(choice.url.path) }
