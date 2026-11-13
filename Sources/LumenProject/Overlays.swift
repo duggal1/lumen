@@ -1,4 +1,5 @@
 import Foundation
+import LumenCore
 
 public enum CutOrigin: String, Codable, Sendable { case manual, autoTidy, transcript }
 /// Removed span, SOURCE seconds.
@@ -221,6 +222,150 @@ public struct CaptionPlan: Codable, Equatable, Sendable {
         enabled = c.opt(.enabled, enabled); style = c.opt(.style, style); locale = c.opt(.locale, locale)
         vocabulary = c.opt(.vocabulary, vocabulary); deletedWords = c.opt(.deletedWords, deletedWords)
         textEdits = c.opt(.textEdits, textEdits)
+    }
+}
+
+/// Where a detection came from. Context is a *separate* fact from a detection:
+/// it describes the surface, never the pixels. An empty context means "unknown",
+/// which is never the same thing as "public page".
+public struct PrivacyContext: Codable, Sendable, Equatable {
+    /// Verified registrable host of the focused browser surface (`mail.google.com`).
+    public var host: String?
+    public var appName: String?
+    public var windowID: Int?
+    /// Focused-element identity. A change means a different element.
+    public var epoch: UInt32
+    /// True when a real AX query produced this sample.
+    public var resolved: Bool
+
+    public init(host: String? = nil, appName: String? = nil, windowID: Int? = nil,
+                epoch: UInt32 = 0, resolved: Bool = false) {
+        self.host = host; self.appName = appName; self.windowID = windowID
+        self.epoch = epoch; self.resolved = resolved
+    }
+
+    enum CodingKeys: String, CodingKey { case host, appName, windowID, epoch, resolved }
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        host = try c.decodeIfPresent(String.self, forKey: .host)
+        appName = try c.decodeIfPresent(String.self, forKey: .appName)
+        windowID = try c.decodeIfPresent(Int.self, forKey: .windowID)
+        epoch = try c.decodeIfPresent(UInt32.self, forKey: .epoch) ?? 0
+        resolved = try c.decodeIfPresent(Bool.self, forKey: .resolved) ?? false
+    }
+
+    /// Approved private surfaces. Matching is by exact host or a subdomain of
+    /// one, never by substring: `mail.google.com.example.test` is a different
+    /// registrable domain and must not count as private.
+    public static let approvedPrivateHosts = ["mail.google.com", "accounts.google.com"]
+
+    /// Host only, lowercased, without scheme, path, query, userinfo, port or a
+    /// trailing dot. Anything that is not a bare host name is rejected.
+    public static func normalizeHost(_ raw: String?) -> String? {
+        guard var h = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !h.isEmpty else { return nil }
+        if let r = h.range(of: "://") { h = String(h[r.upperBound...]) }
+        if let r = h.firstIndex(of: "/") { h = String(h[..<r]) }
+        if let r = h.firstIndex(of: "?") { h = String(h[..<r]) }
+        if let r = h.firstIndex(of: "#") { h = String(h[..<r]) }
+        if let r = h.firstIndex(of: "@") { h = String(h[h.index(after: r)...]) }
+        if let r = h.lastIndex(of: ":") { h = String(h[..<r]) }
+        while h.hasSuffix(".") { h.removeLast() }
+        guard !h.isEmpty, h.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." }) else { return nil }
+        return h
+    }
+
+    public static func hostIsApproved(_ raw: String?) -> Bool {
+        guard let h = normalizeHost(raw) else { return false }
+        return approvedPrivateHosts.contains { h == $0 || h.hasSuffix("." + $0) }
+    }
+
+    public var normalizedHost: String? { Self.normalizeHost(host) }
+    public var isApprovedPrivateHost: Bool { Self.hostIsApproved(host) }
+    /// No evidence at all: legacy footage or a capture without AX.
+    public var isUnknown: Bool { host == nil && appName == nil && windowID == nil && !resolved }
+
+    /// Two samples describe the same surface. A focus, window, app or host
+    /// change is a different surface, so a mask must not bridge across it.
+    public func isSameSurface(as other: PrivacyContext) -> Bool {
+        guard host == other.host, appName == other.appName, resolved == other.resolved else { return false }
+        if let a = windowID, let b = other.windowID, a != b { return false }
+        if resolved, epoch != other.epoch { return false }
+        return true
+    }
+
+    public init(anchor: FocusAnchor?) {
+        guard let a = anchor else { self = PrivacyContext(); return }
+        self = PrivacyContext(host: a.host, appName: a.appName, windowID: a.windowID,
+                              epoch: a.epoch, resolved: a.resolved)
+    }
+}
+
+/// One source-time context sample.
+public struct PrivacyContextSample: Codable, Sendable, Equatable {
+    public var t: Double
+    public var context: PrivacyContext
+    public init(t: Double, context: PrivacyContext) { self.t = t; self.context = context }
+    enum CodingKeys: String, CodingKey { case t, context }
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        t = try c.decodeIfPresent(Double.self, forKey: .t) ?? 0
+        context = try c.decodeIfPresent(PrivacyContext.self, forKey: .context) ?? PrivacyContext()
+    }
+}
+
+/// Context over source time, run-length encoded so a long recording carries a
+/// handful of samples instead of one per AX poll.
+public struct PrivacyContextTrack: Codable, Sendable, Equatable {
+    public var samples: [PrivacyContextSample]
+    public init(samples: [PrivacyContextSample] = []) { self.samples = samples }
+
+    /// Context in force at `t`, or nil when nothing is known that early.
+    public func context(at t: Double) -> PrivacyContext? {
+        var lo = 0, hi = samples.count
+        while lo < hi {
+            let m = (lo + hi) / 2
+            if samples[m].t <= t { lo = m + 1 } else { hi = m }
+        }
+        return lo > 0 ? samples[lo - 1].context : nil
+    }
+
+    /// Build from AX samples. Frames without an anchor are recorded as unknown
+    /// context, so a known surface followed by a gap still resets a mask.
+    public static func from(ax: [AXFrame]) -> PrivacyContextTrack {
+        let ordered = ax.compactMap { frame -> PrivacyContextSample? in
+            guard let time = frame.sampledAt, time.isFinite else { return nil }
+            return PrivacyContextSample(t: time, context: PrivacyContext(anchor: frame.anchor))
+        }.sorted { $0.t < $1.t }
+        var out: [PrivacyContextSample] = []
+        for sample in ordered {
+            if let last = out.last, last.context == sample.context { continue }
+            out.append(sample)
+        }
+        return PrivacyContextTrack(samples: out)
+    }
+}
+
+/// Automatic-mask policy. Detection, geometry, confidence and context stay
+/// separate: this decides only what the *policy* may apply automatically.
+public enum PrivacyPolicy {
+    public enum Verdict: String, Codable, Sendable, Equatable {
+        /// Apply automatically when the category is in `PrivacyPlan.autoApply`.
+        case apply
+        /// Never apply automatically: keep it as a proposal for review.
+        case propose
+    }
+
+    /// A visible address is only private on a verified private host. Everywhere
+    /// else it is ordinary page content and stays visible. Keys, tokens, private
+    /// keys, card numbers, high-entropy values and the user's own patterns are
+    /// secrets on any surface and keep their existing protection.
+    public static func verdict(for category: SensitiveCategory, context: PrivacyContext?) -> Verdict {
+        switch category {
+        case .email, .phone:
+            return (context?.isApprovedPrivateHost ?? false) ? .apply : .propose
+        case .apiKey, .jwt, .privateKey, .card, .envSecret, .entropy, .custom:
+            return .apply
+        }
     }
 }
 
