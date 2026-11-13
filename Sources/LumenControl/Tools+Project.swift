@@ -131,8 +131,8 @@ public struct PatchOp: Codable, Sendable {
 
 public struct TimelinePatchInput: ToolInput {
     public var projectID: String = ""
-    /// Expected revision. 0 means "do not check".
-    public var revision: Int = 0
+    // AGENT: omission means no compare-and-swap; revision zero is not a valid project revision.
+    public var revision: Int?
     public var ops: [PatchOp] = []
     public init() {}
 
@@ -144,7 +144,7 @@ public struct TimelinePatchInput: ToolInput {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
-    self.revision = try c.decodeIfPresent(Int.self, forKey: .revision) ?? 0
+    self.revision = try c.decodeIfPresent(Int.self, forKey: .revision)
     self.ops = try c.decodeIfPresent([PatchOp].self, forKey: .ops) ?? []
     }
 }
@@ -277,13 +277,14 @@ public struct SpeedRampInput: ToolInput {
 
 public struct StyleSetInput: ToolInput {
     public var projectID: String = ""
-    public var padding: Double = -1
-    public var cornerRadius: Double = -1
-    public var shadow: Double = -1
-    public var aspect: Double = 0
-    public var wallpaperBlur: Double = -1
-    public var background: String = ""
-    public var backgroundImagePath: String = ""
+    // AGENT: optional fields replace numeric sentinels so valid zero values can be applied.
+    public var padding: Double?
+    public var cornerRadius: Double?
+    public var shadow: Double?
+    public var aspect: Double?
+    public var wallpaperBlur: Double?
+    public var background: String?
+    public var backgroundImagePath: String?
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -299,13 +300,13 @@ public struct StyleSetInput: ToolInput {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
-    self.padding = try c.decodeIfPresent(Double.self, forKey: .padding) ?? -1
-    self.cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? -1
-    self.shadow = try c.decodeIfPresent(Double.self, forKey: .shadow) ?? -1
-    self.aspect = try c.decodeIfPresent(Double.self, forKey: .aspect) ?? 0
-    self.wallpaperBlur = try c.decodeIfPresent(Double.self, forKey: .wallpaperBlur) ?? -1
-    self.background = try c.decodeIfPresent(String.self, forKey: .background) ?? ""
-    self.backgroundImagePath = try c.decodeIfPresent(String.self, forKey: .backgroundImagePath) ?? ""
+    self.padding = try c.decodeIfPresent(Double.self, forKey: .padding)
+    self.cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius)
+    self.shadow = try c.decodeIfPresent(Double.self, forKey: .shadow)
+    self.aspect = try c.decodeIfPresent(Double.self, forKey: .aspect)
+    self.wallpaperBlur = try c.decodeIfPresent(Double.self, forKey: .wallpaperBlur)
+    self.background = try c.decodeIfPresent(String.self, forKey: .background)
+    self.backgroundImagePath = try c.decodeIfPresent(String.self, forKey: .backgroundImagePath)
     }
 }
 
@@ -433,7 +434,7 @@ public extension ToolRegistry {
             description: "Applies typed operations to a timeline. Supported ops: zoom_add, zoom_set, zoom_remove, cut_add, cut_remove, ramp_set, ramp_remove, style_set, audio_lane_add, audio_lane_remove, music_set, captions_set, privacy_set. Pass the revision you read to be sure nobody else changed the project.",
             capability: .edit, required: ["project_id", "ops"], mutating: true,
             schema: ToolSchemas.timelinePatch) { input, ctx in
-                let expect = input.revision > 0 ? input.revision : nil
+                let expect = input.revision
                 if ctx.dryRun {
                     return .object(["dry_run": .bool(true), "ops": .int(input.ops.count),
                                     "project_id": .string(input.projectID)])
@@ -463,7 +464,7 @@ public extension ToolRegistry {
                     // AGENT: reject invalid ranges and route zoom edits through the editor reducer.
                     guard end > start, input.scale.isFinite, (1.1...4).contains(input.scale) else { throw ToolError.invalidArguments("Need start < end and zoom scale 1.1…4.") }
                     try applyCommand(.addZoom(ZoomSegment(start: start, end: end, scale: input.scale,
-                                                          focus: self.focus(from: input.focusMode, x: input.focusX, y: input.focusY),
+                                                          focus: try self.focus(from: input.focusMode, x: input.focusX, y: input.focusY),
                                                           origin: .manual)), to: &timeline)
                 }
                 return .object(result)
@@ -524,17 +525,28 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "style") { timeline in
-                    if input.padding >= 0 { timeline.style.padding = input.padding }
-                    if input.cornerRadius >= 0 { timeline.style.cornerRadius = input.cornerRadius }
-                    if input.shadow >= 0 { timeline.style.shadow = input.shadow }
-                    if input.aspect > 0 { timeline.style.customAspect = input.aspect }
-                    if input.wallpaperBlur >= 0 { timeline.style.wallpaperBlur = input.wallpaperBlur }
-                    if !input.background.isEmpty {
-                        timeline.style.background = try self.backgroundKind(input.background)
+                    func checked(_ value: Double, _ name: String, _ bounds: ClosedRange<Double>) throws -> Double {
+                        guard value.isFinite, bounds.contains(value) else {
+                            throw ToolError.invalidArguments("\(name) must be in \(bounds.lowerBound)…\(bounds.upperBound).")
+                        }
+                        return value
                     }
-                    if !input.backgroundImagePath.isEmpty {
+                    if let padding = input.padding { timeline.style.padding = try checked(padding, "padding", 0 ... 0.2) }
+                    if let radius = input.cornerRadius { timeline.style.cornerRadius = try checked(radius, "corner_radius", 0 ... 80) }
+                    if let shadow = input.shadow { timeline.style.shadow = try checked(shadow, "shadow", 0 ... 1) }
+                    if let aspect = input.aspect {
+                        guard aspect.isFinite, aspect > 0.2, aspect < 5 else {
+                            throw ToolError.invalidArguments("aspect must be greater than 0.2 and less than 5.")
+                        }
+                        timeline.style.customAspect = aspect
+                    }
+                    if let blur = input.wallpaperBlur { timeline.style.wallpaperBlur = try checked(blur, "wallpaper_blur", 0 ... 60) }
+                    if let background = input.background, !background.isEmpty {
+                        timeline.style.background = try self.backgroundKind(background)
+                    }
+                    if let imagePath = input.backgroundImagePath, !imagePath.isEmpty {
                         // AGENT: an unconfined image path let an agent read any file the user owns.
-                        let url = try ctx.paths.path(input.backgroundImagePath, ext: PathGuard.imageExt)
+                        let url = try ctx.paths.path(imagePath, ext: PathGuard.imageExt)
                         timeline.style.setPhotoBackground(url.path)
                     }
                 }
@@ -552,6 +564,10 @@ public extension ToolRegistry {
         register(ToolDefinition<BackgroundSetInput>(name: "background_set",
             description: "Sets the background of a project: a generated kind or a local image.",
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
+                // AGENT: reject an empty background update instead of reporting a successful no-op.
+                guard !input.background.isEmpty || !input.imagePath.isEmpty else {
+                    throw ToolError.invalidArguments("Provide a background kind or image_path.")
+                }
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "background") { timeline in
                     if !input.imagePath.isEmpty {
@@ -622,8 +638,8 @@ public extension ToolRegistry {
             guard start.isFinite, end.isFinite, start >= 0, end > start, end <= timeline.timeMap.sourceDuration + 0.001 else { throw ToolError.invalidArguments("zoom_add requires a valid source-time span.") }
             let scale = try range(op.scale ?? 2, "scale", 1.1...4)
             try applyCommand(.addZoom(ZoomSegment(start: start, end: end, scale: scale,
-                                                  focus: focus(from: op.focusMode ?? "follow",
-                                                               x: op.focusX ?? 0.5, y: op.focusY ?? 0.5),
+                                                  focus: try focus(from: op.focusMode ?? "follow",
+                                                                   x: op.focusX ?? 0.5, y: op.focusY ?? 0.5),
                                                   origin: .manual)), to: &timeline)
         case "zoom_set":
             let id = try need(op.id, "id")
@@ -639,9 +655,12 @@ public extension ToolRegistry {
             }
             if let scale = op.scale { timeline.zoom[index].scale = try range(scale, "scale", 1.1...4) }
             // AGENT: changing only focus coordinates must preserve the existing focus mode and other coordinates.
+            // AGENT: normalized focus coordinates outside the frame produce invalid camera geometry.
+            if let x = op.focusX { _ = try range(x, "focus_x", 0...1) }
+            if let y = op.focusY { _ = try range(y, "focus_y", 0...1) }
             if let mode = op.focusMode {
                 guard ["follow", "fixed", "element"].contains(mode) else { throw ToolError.invalidArguments("focus_mode must be follow, fixed, or element.") }
-                timeline.zoom[index].focus = focus(from: mode, x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
+                timeline.zoom[index].focus = try focus(from: mode, x: op.focusX ?? 0.5, y: op.focusY ?? 0.5)
             } else if op.focusX != nil || op.focusY != nil {
                 switch timeline.zoom[index].focus {
                 case .fixed(let x, let y): timeline.zoom[index].focus = .fixed(x: op.focusX ?? x, y: op.focusY ?? y)
@@ -693,7 +712,7 @@ public extension ToolRegistry {
                 let aspect = try need(op.value, "value")
                 guard aspect.isFinite, aspect > 0.2, aspect < 5 else { throw ToolError.invalidArguments("aspect must be greater than 0.2 and less than 5.") }
                 timeline.style.customAspect = aspect
-            case "wallpaper_blur": timeline.style.wallpaperBlur = try need(op.value, "value")
+            case "wallpaper_blur": timeline.style.wallpaperBlur = try range(need(op.value, "value"), "wallpaper_blur", 0...60)
             case "background": timeline.style.background = try backgroundKind(try need(op.text, "text"))
             case "background_image":
                 // AGENT: unconfined, this read any image on disk and shipped it in the export.
@@ -732,7 +751,7 @@ public extension ToolRegistry {
                         "Unknown privacy mode \(text). Valid values: \(MaskMode.allCases.map(\.rawValue).joined(separator: ", ")).")
                 }
                 timeline.overlays.privacy.mode = mode
-            case "padding": timeline.overlays.privacy.padding = try need(op.value, "value")
+            case "padding": timeline.overlays.privacy.padding = try range(need(op.value, "value"), "privacy padding", 0...80)
             default:
                 throw ToolError.invalidArguments(
                     "Unknown privacy key \(key). Use enabled, auto_detect, mode or padding.")
@@ -742,7 +761,13 @@ public extension ToolRegistry {
         }
     }
 
-    private func focus(from mode: String, x: Double, y: Double) -> Focus {
+    private func focus(from mode: String, x: Double, y: Double) throws -> Focus {
+        guard ["follow", "fixed", "element"].contains(mode) else {
+            throw ToolError.invalidArguments("focus_mode must be follow, fixed, or element.")
+        }
+        guard x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) else {
+            throw ToolError.invalidArguments("focus_x and focus_y must be finite fractions from 0 to 1.")
+        }
         switch mode {
         case "fixed": return .fixed(x: x, y: y)
         case "element": return .element(x: x, y: y, w: 0, h: 0)

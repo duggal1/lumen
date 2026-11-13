@@ -15,9 +15,10 @@ public struct AudioImportInput: ToolInput {
     /// music | voiceover | sfx
     public var role: String = "voiceover"
     /// Anchor the clip to a marker id.
-    public var atMarker: String = ""
+    // AGENT: optional placement fields replace the -1 sentinel so output time zero remains a valid value.
+    public var atMarker: String?
     /// Or to an absolute output time.
-    public var atOutput: Double = -1
+    public var atOutput: Double?
     public var offsetMs: Double = 0
     public var gainDb: Double = 0
     public var loop: Bool = false
@@ -38,8 +39,8 @@ public struct AudioImportInput: ToolInput {
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
     self.path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
     self.role = try c.decodeIfPresent(String.self, forKey: .role) ?? "voiceover"
-    self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker) ?? ""
-    self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput) ?? -1
+    self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker)
+    self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput)
     self.offsetMs = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
     self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb) ?? 0
     self.loop = try c.decodeIfPresent(Bool.self, forKey: .loop) ?? false
@@ -48,12 +49,13 @@ public struct AudioImportInput: ToolInput {
 
 public struct AudioMixSetInput: ToolInput {
     public var projectID: String = ""
-    public var targetLUFS: Double = 0
-    public var musicGainDb: Double = -1000
-    public var micGainDb: Double = -1000
-    public var outputGainDb: Double = -1000
-    public var duckDepthDb: Double = -1000
-    public var normalize: Bool = false
+    // AGENT: omitted mix fields must leave the mix untouched, and normalize must support an explicit false.
+    public var targetLUFS: Double?
+    public var musicGainDb: Double?
+    public var micGainDb: Double?
+    public var outputGainDb: Double?
+    public var duckDepthDb: Double?
+    public var normalize: Bool?
     public init() {}
 
     enum CodingKeys: String, CodingKey {
@@ -68,12 +70,12 @@ public struct AudioMixSetInput: ToolInput {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
     self.projectID = try c.decodeIfPresent(String.self, forKey: .projectID) ?? ""
-    self.targetLUFS = try c.decodeIfPresent(Double.self, forKey: .targetLUFS) ?? 0
-    self.musicGainDb = try c.decodeIfPresent(Double.self, forKey: .musicGainDb) ?? -1000
-    self.micGainDb = try c.decodeIfPresent(Double.self, forKey: .micGainDb) ?? -1000
-    self.outputGainDb = try c.decodeIfPresent(Double.self, forKey: .outputGainDb) ?? -1000
-    self.duckDepthDb = try c.decodeIfPresent(Double.self, forKey: .duckDepthDb) ?? -1000
-    self.normalize = try c.decodeIfPresent(Bool.self, forKey: .normalize) ?? false
+    self.targetLUFS = try c.decodeIfPresent(Double.self, forKey: .targetLUFS)
+    self.musicGainDb = try c.decodeIfPresent(Double.self, forKey: .musicGainDb)
+    self.micGainDb = try c.decodeIfPresent(Double.self, forKey: .micGainDb)
+    self.outputGainDb = try c.decodeIfPresent(Double.self, forKey: .outputGainDb)
+    self.duckDepthDb = try c.decodeIfPresent(Double.self, forKey: .duckDepthDb)
+    self.normalize = try c.decodeIfPresent(Bool.self, forKey: .normalize)
     }
 }
 
@@ -82,8 +84,9 @@ public struct VoiceoverGenerateInput: ToolInput {
     public var text: String = ""
     public var voice: String = ""
     public var model: String = ""
-    public var atMarker: String = ""
-    public var atOutput: Double = -1
+    // AGENT: optional placement fields replace the -1 sentinel so output time zero remains valid.
+    public var atMarker: String?
+    public var atOutput: Double?
     public var offsetMs: Double = 0
     public var gainDb: Double = 0
     public init() {}
@@ -104,8 +107,8 @@ public struct VoiceoverGenerateInput: ToolInput {
     self.text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
     self.voice = try c.decodeIfPresent(String.self, forKey: .voice) ?? ""
     self.model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
-    self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker) ?? ""
-    self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput) ?? -1
+    self.atMarker = try c.decodeIfPresent(String.self, forKey: .atMarker)
+    self.atOutput = try c.decodeIfPresent(Double.self, forKey: .atOutput)
     self.offsetMs = try c.decodeIfPresent(Double.self, forKey: .offsetMs) ?? 0
     self.gainDb = try c.decodeIfPresent(Double.self, forKey: .gainDb) ?? 0
     }
@@ -265,12 +268,12 @@ public extension ToolRegistry {
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "mix settings") { timeline in
-                    if input.targetLUFS != 0 { timeline.audio.targetLUFSOverride = input.targetLUFS }
-                    if input.musicGainDb > -999 { timeline.audio.musicGainDb = input.musicGainDb }
-                    if input.micGainDb > -999 { timeline.audio.micGainDb = input.micGainDb }
-                    if input.outputGainDb > -999 { timeline.audio.outputGainDb = input.outputGainDb }
-                    if input.duckDepthDb > -999 { timeline.audio.duckDepthDb = input.duckDepthDb }
-                    if input.normalize { timeline.audio.normalize = true }
+                    if let value = input.targetLUFS { timeline.audio.targetLUFSOverride = try Self.validated(value, name: "target_lufs", range: -24 ... -10) }
+                    if let value = input.musicGainDb { timeline.audio.musicGainDb = try Self.validated(value, name: "music_gain_db", range: -60 ... 12) }
+                    if let value = input.micGainDb { timeline.audio.micGainDb = try Self.validated(value, name: "mic_gain_db", range: -60 ... 12) }
+                    if let value = input.outputGainDb { timeline.audio.outputGainDb = try Self.validated(value, name: "output_gain_db", range: -60 ... 12) }
+                    if let value = input.duckDepthDb { timeline.audio.duckDepthDb = try Self.validated(value, name: "duck_depth_db", range: 0 ... 36) }
+                    if let normalize = input.normalize { timeline.audio.normalize = normalize }
                 }
                 return .object(result)
             })
@@ -369,9 +372,13 @@ public extension ToolRegistry {
     }
 
     /// Marker- or time-based placement, in output seconds.
-    private func resolvePlacement(projectID: String, ctx: ToolContext, atMarker: String, atOutput: Double,
+    private func resolvePlacement(projectID: String, ctx: ToolContext, atMarker: String?, atOutput: Double?,
                                   offsetMs: Double) async throws -> Double {
-        if !atMarker.isEmpty {
+        guard offsetMs.isFinite else { throw ToolError.invalidArguments("offset_ms must be finite.") }
+        if let atMarker, !atMarker.isEmpty, let atOutput {
+            throw ToolError.invalidArguments("Choose either at_marker or at_output, not both.")
+        }
+        if let atMarker, !atMarker.isEmpty {
             let markers = try await ctx.engine.markersValue(projectID: projectID)
             let rows = markers["markers"]?.arrayValue ?? []
             for row in rows {
@@ -383,7 +390,21 @@ public extension ToolRegistry {
             }
             throw ToolError.failed("No marker named \(atMarker). Call timeline_get markers first.")
         }
-        if atOutput >= 0 { return atOutput + offsetMs / 1000 }
-        return offsetMs / 1000
+        if let atOutput {
+            guard atOutput.isFinite, atOutput >= 0 else { throw ToolError.invalidArguments("at_output must be finite and non-negative.") }
+            let placement = atOutput + offsetMs / 1000
+            guard placement.isFinite, placement >= 0 else { throw ToolError.invalidArguments("The resulting audio placement must be finite and non-negative.") }
+            return placement
+        }
+        let placement = offsetMs / 1000
+        guard placement >= 0 else { throw ToolError.invalidArguments("An unanchored audio placement cannot be negative.") }
+        return placement
+    }
+
+    private static func validated(_ value: Double, name: String, range: ClosedRange<Double>) throws -> Double {
+        guard value.isFinite, range.contains(value) else {
+            throw ToolError.invalidArguments("\(name) must be in \(range.lowerBound)…\(range.upperBound).")
+        }
+        return value
     }
 }

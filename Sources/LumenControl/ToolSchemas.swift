@@ -113,7 +113,7 @@ public enum ToolSchemas {
                      "mic_gain_db": J.num("Microphone gain in decibels.", min: -60, max: 12),
                      "output_gain_db": J.num("Output gain in decibels.", min: -60, max: 12),
                      "duck_depth_db": J.num("Music duck depth in decibels.", min: 0, max: 36),
-                     "normalize": J.bool("Normalize output loudness.", def: false)]
+                     "normalize": J.bool("Enable or disable output loudness normalization.")]
         case "voiceover_generate":
             props = ["project_id": project, "text": J.str("Narration text."),
                      "voice": J.str("Configured voice id."), "model": J.str("Speech model id."),
@@ -317,8 +317,7 @@ public enum ToolSchemas {
             "type": .string("object"),
             "properties": .object([
                 "project_id": .object(["type": .string("string")]),
-                "revision": .object(["type": .string("integer"),
-                                     "description": .string("The revision you read; omit or 0 to skip the check.")]),
+                "revision": J.int("The revision you read; omit to skip the compare-and-swap check.", min: 1),
                 "ops": .object(["type": .string("array"), "items": op]),
             ]),
             "required": .array([.string("project_id"), .string("ops")]),
