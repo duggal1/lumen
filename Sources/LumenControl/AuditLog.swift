@@ -63,6 +63,16 @@ public final class AuditLog: @unchecked Sendable {
         }
     }
 
+    /// Reads a bounded tail for the local Agents settings tab.
+    // AGENT: operators need a live local audit view without giving tools a log-reading capability.
+    public func recentLines(limit: Int = 80) -> [String] {
+        lock.withLock { _ in
+            guard let data = try? Data(contentsOf: fileURL),
+                  let text = String(data: data, encoding: .utf8) else { return [] }
+            return Array(text.split(whereSeparator: \.isNewline).suffix(max(1, limit)).map(String.init))
+        }
+    }
+
     /// Extracts only identifiers, operation names, counts, and text length.
     private static func summary(_ arguments: JSONValue) -> (projectID: String?, bundleID: String?, operationKinds: [String], counts: [String: Int], typedTextLength: Int) {
         guard case .object(let fields) = arguments else { return (nil, nil, [], [:], 0) }

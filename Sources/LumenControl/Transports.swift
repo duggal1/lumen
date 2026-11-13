@@ -168,6 +168,8 @@ public final class UnixSocketServer: @unchecked Sendable {
             close(client)
             return
         }
+        // AGENT: last-seen identity is recorded from peer credentials, never initialize metadata.
+        server.policy.touch(peer)
         // One queue per connection: an idle client must never block another
         // client, and the replies on one connection stay in order.
         let connection = DispatchQueue(label: "lumen.agent.socket.conn", qos: .userInitiated)

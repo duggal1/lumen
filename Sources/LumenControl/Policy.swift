@@ -12,7 +12,35 @@ public final class Policy: @unchecked Sendable {
         public var capabilities: [String] = ["read"]
         public var bundleIDs: [String] = []
         public var paths: [String] = []
+        // AGENT: the Agents tab needs durable identity details and last-seen time for each peer.
+        public var path: String?
+        public var signingID: String?
+        public var lastSeen: Double?
         public init() {}
+
+        private enum CodingKeys: String, CodingKey { case capabilities, bundleIDs, paths, path, signingID, lastSeen }
+
+        // AGENT: old policy files have no peer metadata and must retain their existing grants.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            capabilities = try c.decodeIfPresent([String].self, forKey: .capabilities) ?? ["read"]
+            bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+            paths = try c.decodeIfPresent([String].self, forKey: .paths) ?? []
+            path = try c.decodeIfPresent(String.self, forKey: .path)
+            signingID = try c.decodeIfPresent(String.self, forKey: .signingID)
+            lastSeen = try c.decodeIfPresent(Double.self, forKey: .lastSeen)
+        }
+    }
+
+    public struct ManagedClient: Sendable, Equatable, Identifiable {
+        public let key: String
+        public let path: String?
+        public let signingID: String?
+        public let lastSeen: Double?
+        public let capabilities: [String]
+        public let bundleIDs: [String]
+        public let paths: [String]
+        public var id: String { key }
     }
 
     private struct Store: Codable {
@@ -133,9 +161,50 @@ public final class Policy: @unchecked Sendable {
         return store.withLock { $0.clients[client]?.paths ?? [] }
     }
 
+    /// Known peers with their current local grants.
+    // AGENT: the settings surface needs a stable client inventory instead of UI-only guesses.
+    public func knownClients() -> [ManagedClient] {
+        refreshIfChanged()
+        return store.withLock { s in
+            s.clients.map { key, client in
+                ManagedClient(key: key, path: client.path, signingID: client.signingID,
+                              lastSeen: client.lastSeen, capabilities: client.capabilities,
+                              bundleIDs: client.bundleIDs, paths: client.paths)
+            }.sorted { $0.key.localizedStandardCompare($1.key) == .orderedAscending }
+        }
+    }
+
+    /// Records the kernel-verified peer that opened a socket connection.
+    // AGENT: client names sent in initialize are untrusted, so grant inventory records kernel identity only.
+    public func touch(_ peer: PeerIdentity) {
+        store.withLock { s in
+            var client = s.clients[peer.key] ?? Client()
+            client.path = peer.path
+            client.signingID = peer.signingID
+            client.lastSeen = Date().timeIntervalSince1970
+            s.clients[peer.key] = client
+        }
+        persist()
+    }
+
     /// Removes every grant for a client.
     public func reset(client: String) {
         store.withLock { $0.clients.removeValue(forKey: client) }
+        persist()
+    }
+
+    /// Removes every capability, app and folder grant while retaining peer history.
+    // AGENT: a single revocation action must close every previously approved scope.
+    public func revokeAll() {
+        store.withLock { s in
+            for key in Array(s.clients.keys) {
+                guard var client = s.clients[key] else { continue }
+                client.capabilities = ["read"]
+                client.bundleIDs = []
+                client.paths = []
+                s.clients[key] = client
+            }
+        }
         persist()
     }
 
