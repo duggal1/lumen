@@ -131,7 +131,7 @@ public enum Director {
             if cache.rampKey == rkey, let cached = cache.ramps {
                 planned = cached
             } else {
-                planned = SpeedRamps.plan(events: input.events, vad: input.vad, tm: tm, audio: t.audio, backing: src.backingScale)
+                planned = SpeedRamps.plan(events: input.events, vad: input.vad, tm: tm, audio: t.audio, backing: src.backingScale, activity: input.activity)
                 cache.rampKey = rkey; cache.ramps = planned
             }
             // AGENT: automatic ramps removed by the user must stay removed after every derive.
