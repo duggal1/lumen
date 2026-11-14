@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "allcode.md"
 FEATURE_FILES = (
     "Sources/LumenCore/Core.swift",
+    "Sources/LumenCore/Motion.swift",
     "Sources/LumenCapture/Input.swift",
     "Sources/LumenProject/AnalysisTypes.swift",
     "Sources/LumenAnalysis/TypingAnalyzer.swift",
@@ -14,6 +15,7 @@ FEATURE_FILES = (
     "Sources/LumenDirector/ZeroPhase.swift",
     "Sources/LumenDirector/Planner.swift",
     "Sources/LumenDirector/Camera.swift",
+    "Sources/LumenDirector/Accuracy.swift",
     "Sources/LumenDirector/Cursor.swift",
     "Sources/LumenDirector/Director.swift",
     "Sources/LumenDirector/LiveCamera.swift",
