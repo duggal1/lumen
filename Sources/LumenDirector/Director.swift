@@ -183,8 +183,10 @@ public enum Director {
         let layoutSpans = LayoutSolver.spans(t, tm, hasWebcam: t.webcam != nil)
         let layout = LayoutSolver.solve(t, spans: layoutSpans.spans, fallback: layoutSpans.fallback, src: size,
                                         webcamAspect: Double(input.webcamAspect), placement: placement, outDur: tm.outputDuration)
-        let autoMasks = MaskTracks.build(input.ocr, plan: t.overlays.privacy, src: src)
-            + MaskTracks.secureFields(events: input.events, ax: input.ax, plan: t.overlays.privacy, src: src)
+        let autoMasks = MaskTracks.build(input.ocr, plan: t.overlays.privacy, src: src,
+                                        contexts: PrivacyContextTrack.from(ax: input.ax))
+            + MaskTracks.secureFields(events: input.events, ax: input.ax, plan: t.overlays.privacy, src: src,
+                                      ocr: input.ocr)
         let captions = CaptionPlanner.plan(words: input.transcript?.words ?? [], tm: tm, p: t.captions, aspect: t.style.aspectRatio,
                                            kindAt: layout.kind(at:), cornerAt: placement.corner(at:))
         if cancelled() { return nil }
