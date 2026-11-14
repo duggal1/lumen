@@ -751,7 +751,7 @@ public final class Renderer: @unchecked Sendable {
         return true
     }
 
-    /// Adaptive K = ceil(max screen-space px/frame / 2), clamped; static scenes cost nothing. Preview <= 2.
+    /// Adaptive shutter sampling; preview stays sharp below a three-pixel streak.
     /// Internal (not private) so tests can prove sub-frame accumulation.
     func sampleCount(_ r: RenderRequest, _ g: Geometry) -> Int {
         let tl = r.timeline
@@ -761,14 +761,19 @@ public final class Renderer: @unchecked Sendable {
         let cam = Double(simd_length(b.cameraCenter - a.cameraCenter)) * k * sc
         let zoom = abs(log(Double(b.cameraScale) / Double(a.cameraScale))) * g.content.z * 0.5
         let cur = Double(simd_length(b.cursor.position - a.cursor.position)) * k * sc
-        let n = Int(ceil(max(cam, zoom, cur) / 2))
+        let blurPx = max(cam, zoom, cur) * tl.camera.shutter
+        if r.quality == .preview, blurPx < 3 {
+            blurK = 1; blurCooldown = 0
+            return 1
+        }
+        let n = Int(ceil(blurPx))
         var cap = tl.camera.maxSamples
         if r.quality == .preview {
             // Spend at most half of the frame budget on blur samples. Once
             // the GPU cost is measured, this can rise above 2 on fast Macs
-            // and falls back to 2 before the first measurement.
+            // and falls back to a sharp frame before the first measurement.
             let per = perSample.withLock { $0 }
-            let budget = per > 0 ? min(max(Int(0.5 / max(r.fps, 1) / per), 1), 4) : 2
+            let budget = per > 0 ? min(max(Int(0.5 / max(r.fps, 1) / per), 1), tl.camera.maxSamples) : 1
             cap = min(budget, tl.camera.maxSamples)
         }
         let want = min(max(n, 1), cap)
