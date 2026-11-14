@@ -1150,21 +1150,30 @@ Everything audio is scheduled from `Timeline.audio`, so preview and export match
 
 ### 13.1 Voice chain (per mic source)
 
-1. High-pass at 80 Hz.
-2. **RNNoise** denoise (480-sample frames at 48 kHz, vendored C target).
-3. **Keystroke-aware declick:** `events.bin` gives exact `keyDown` times. In a +/-35 ms window around each key (shifted by the source's latency offset), when VAD says no speech overlaps, attenuate the 2 to 8 kHz band by `declick.depth` (default -12 dB). If speech overlaps, apply a milder reduction. Spike 14 validates against recorded keyboards.
-4. Gentle presence EQ; optional de-esser in Podcast mode.
-5. Compressor, then limiter at -1 dBTP.
-6. **Loudness normalization:** two-pass; integrated loudness per BS.1770-4 K-weighting with gating (about 150 lines on Accelerate, validated against reference tones); gain to the mode's target.
+One shared processor feeds preview, export, stems and clean-voice caches:
+
+1. Gentle 70 Hz high-pass.
+2. One DeepFilterNet3 noise-reduction pass, controlled by `micClean` and
+   `noiseReductionStrength`; bounded spectral Wiener suppression on failure.
+3. One WPE room-prediction pass with a dry/wet blend controlled by `dereverb`.
+4. Optional keystroke-aware, speech-protected de-click.
+5. Mild body/mud/presence EQ controlled independently by `voiceClarity`.
+6. One speech-relative soft-knee compressor controlled by `studio` and the
+   existing `studioMode`. No stacked compressors, gain rider or saturation.
+7. Explicit source gains, timeline mix, BS.1770 integrated-loudness matching,
+   linked lookahead limiting, bounded loudness correction and true-peak safety.
+
+See [the audio processing contract](Docs/AUDIO-PIPELINE.md) for exact control
+mapping, cache versions and provisional-preview limitations.
 
 ### 13.2 Mic modes
 
 | Mode | Chain | Target |
 |---|---|---|
-| Standard | full chain | -14 LUFS |
-| Loud | stronger compression, higher gain ceiling | -12 LUFS (limiter still -1 dBTP) |
-| Podcast | stronger HPF (100 Hz), de-ess, tighter gate, light compression | -16 LUFS |
-| Off | raw, untouched | none |
+| Standard | shared voice chain | -16 LUFS |
+| Loud | shared voice chain, higher loudness target | -12 LUFS (limiter still -1 dBTP) |
+| Podcast | shared voice chain | -16 LUFS |
+| Off | microphone muted | none |
 
 Each source (mic 1, mic 2, virtual, system) has its own mode and level.
 
