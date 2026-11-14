@@ -697,25 +697,7 @@ public final class AudioMixer: @unchecked Sendable {
         }
 
         Self.silenceClips(tl, &L, &R, fs: fs)
-        var ch = [L, R]
-        var lufs = Loudness.integrated(ch)
-        let offsetDb: Double
-        if a.normalize, hasProgram, lufs > -69 {
-            offsetDb = a.targetLUFS - lufs + a.outputGainDb
-        } else {
-            offsetDb = a.outputGainDb
-        }
-        let master = Float(pow(10, clamp(offsetDb, -36, 30) / 20))
-        ch = ch.map { vDSP.multiply(master, $0) }
-        Limiter.apply(&ch, ceiling: Float(pow(10, -1.5 / 20)))
-        var tp = Loudness.truePeakDb(ch)
-        if tp > -1.0 {
-            let g = Float(pow(10, (-1.05 - tp) / 20))
-            ch = ch.map { vDSP.multiply(g, $0) }
-            tp = Loudness.truePeakDb(ch)
-        }
-        lufs = Loudness.integrated(ch)
-        return MixedAudio(l: ch[0], r: ch[1], lufs: lufs, truePeakDb: tp)
+        return AudioMaster.process([L, R], plan: a, hasProgram: hasProgram)
     }
 
     // MARK: Mix cache (exact, keyed by media identity + algorithm + settings + time map)
