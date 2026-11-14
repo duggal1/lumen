@@ -35,26 +35,13 @@ enum SpeedRamps {
     }
 }
 
-/// Auto-zoom decision layer v4.
-/// Only a left click or a typing burst starts a zoom. Typing is framed on the CARET
-/// (never the centre of an element), one scene per burst, with a tight follow window.
+/// Chooses framing and source-time scenes; the solver owns camera motion.
 enum ZoomPlanner {
     struct PathPoint { var t: Double; var p: SIMD2<Double> }
-    /// A point of the camera's continuous target path: source seconds and the
-    /// normalized target centre the camera should be heading towards.
     typealias FollowPoint = PathPoint
-    /// The plan and the continuous follow paths that belong to its segments.
-    /// SMOOTHNESS: the caret path is a continuous target for the camera, not a
-    /// series of retargets. The scene still splits (so the segment focus keeps
-    /// tracking the caret) but the camera glides along the path.
     struct ZoomPlan {
         var segments: [ZoomSegment] = []
-        var follow: [UUID: FollowPath] = [:]
-    }
-    /// A camera target path and whether it continues the previous segment's.
-    struct FollowPath {
-        var points: [FollowPoint] = []
-        var continues: Bool = false
+        var follow: [UUID: [FollowPoint]] = [:]
     }
     struct Intent {
         enum Kind { case click, typing }
@@ -67,8 +54,6 @@ enum ZoomPlanner {
     private struct Open {
         var start: Double, scale: Double, c: SIMD2<Double>
         var path: [FollowPoint] = []
-        /// This segment continues the previous one's caret path.
-        var continuesPath = false
     }
     private struct Fix { var t: Double; var p: SIMD2<Double>; var field: CGRect? }
 
@@ -100,12 +85,9 @@ enum ZoomPlanner {
             frame.x < width && frame.y < height
     }
 
-    // MARK: Caret resolution
-
-    /// Where was the caret at each key? Never falls back to the centre of a big element.
-    private static func fixes(t0: Double, t1: Double, keys: [InputEvent], ax: [AXFrame], traces: [TypingTrace],
-                              click: InputEvent?, W: Double, H: Double, b: Double) -> [Fix] {
-        var out: [Fix] = [], fallback: [Fix] = []
+    private static func caretFixes(t0: Double, t1: Double, keys: [InputEvent], ax: [AXFrame], traces: [TypingTrace],
+                                   W: Double, H: Double, b: Double) -> (fixes: [Fix], tracked: Bool, field: CGRect?) {
+        var carets: [Fix] = [], fields: [CGRect] = []
         for e in keys where e.t >= t0 && e.t <= t1 {
             guard e.axFrameIndex > 0, Int(e.axFrameIndex) <= ax.count else { continue }
             let f = ax[Int(e.axFrameIndex) - 1]
@@ -113,33 +95,27 @@ enum ZoomPlanner {
                   f.w >= 4 * b, f.h >= 6 * b, f.w <= 1.05 * W, f.h <= 1.05 * H,
                   f.x + f.w > 0, f.y + f.h > 0, f.x < W, f.y < H else { continue }
             let field = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
+            fields.append(field)
             if let c = f.caret, c.x.isFinite, c.y.isFinite, c.w.isFinite, c.h.isFinite,
                c.h >= 6 * b, c.h <= 120 * b, c.w <= 80 * b {
-                // A zero-width caret is its own centre; a glyph box means "insertion point = right edge".
                 let px = c.w <= 3 * b ? c.x + c.w / 2 : c.x + c.w
                 let py = c.y + c.h / 2
                 if px >= 0, px <= W, py >= 0, py <= H,
                    field.insetBy(dx: -24 * b, dy: -24 * b).contains(CGPoint(x: px, y: py)) {
-                    out.append(Fix(t: e.t, p: SIMD2(px, py), field: field))
-                    continue
+                    carets.append(Fix(t: e.t, p: SIMD2(px, py), field: field))
                 }
             }
-            // No trustworthy caret: only a single-line field may stand in, and only its left part.
-            if f.h <= 0.09 * H {
-                fallback.append(Fix(t: e.t, p: SIMD2(f.x + min(f.w * 0.35, 0.18 * W), field.midY), field: field))
+        }
+        let biggest = fields.max { $0.width * $0.height < $1.width * $1.height }
+        if !carets.isEmpty { return (carets, true, biggest) }
+        if let tr = traces.first(where: { $0.t0 <= t1 + 0.15 && $0.t1 >= t0 - 0.15 }) {
+            let samples = tr.samples.filter { $0.confidence >= 0.4 && $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
+            if samples.count >= 2 {
+                let line = tr.line ?? tr.rect
+                return (samples.map { Fix(t: $0.t, p: SIMD2($0.x, $0.y), field: line) }, true, line ?? biggest)
             }
         }
-        if !out.isEmpty { return out }
-        if let tr = traces.first(where: { $0.t0 <= t1 + 0.15 && $0.t1 >= t0 - 0.15 && !$0.samples.isEmpty }) {
-            return tr.samples.filter { $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
-                .map { Fix(t: $0.t, p: SIMD2($0.x, $0.y), field: tr.rect) }
-        }
-        if !fallback.isEmpty { return fallback }
-        if let c = click, c.x.isFinite, c.y.isFinite {
-            let p = SIMD2(Double(c.x), Double(c.y))
-            return [Fix(t: t0, p: p, field: nil), Fix(t: t1, p: p, field: nil)]
-        }
-        return []                                   // better no zoom than a wrong one
+        return ([], false, biggest)
     }
 
     /// 30 Hz caret path, hold-then-jump across pauses, zero-phase smoothed.
@@ -186,12 +162,9 @@ enum ZoomPlanner {
         }
         let sorted = events.sorted { $0.t < $1.t }
         func ok(_ t: Double) -> Bool { t.isFinite && t >= tm.trimStart + 0.3 && t <= tm.trimEnd - 0.8 && !tm.isCut(t) }
-        // The internal cap exists to bound the edge-centring fit, not to pick a
-        // default: a click on an edge asks for `W / (2·inset)`, which can be
-        // enormous, and the fit clamps it. 3.2 is the documented contract the
-        // zoom precision tests assert (never the old fixed 1.8 / 2.6 pair).
-        let hi = clamp(p.maxScale, 1.3, 3.2), lo = clamp(p.minScale, 1.2, hi)
-        let hold = min(max(p.hold, p.minHold), max(p.zoomOutGap - 0.2, 0.3))
+        let hi = clamp(p.maxScale, 1.3, 2.6), lo = clamp(p.minScale, 1.2, hi)
+        let hold = max(p.hold.isFinite ? p.hold : 0.9, 0.3)
+        let gap = max(p.zoomOutGap.isFinite ? p.zoomOutGap : 2.6, hold + 0.5)
 
         // ---- 1. intents: ONLY clicks and typing bursts ----
         var intents: [Intent] = []
@@ -210,13 +183,16 @@ enum ZoomPlanner {
         }
         let keys = sorted.filter { $0.kind == .keyDown }
         for burst in sorted.typingBursts() where ok(burst.t0) {
-            let click = sorted.last(where: { $0.kind == .down && $0.button == 0 && $0.t <= burst.t0 && burst.t0 - $0.t < 20 })
-            let fx = fixes(t0: burst.t0, t1: burst.t1, keys: keys, ax: ax, traces: typing, click: click, W: W, H: H, b: b)
-            guard !fx.isEmpty else { continue }
-            let path = smoothPath(fx, t0: burst.t0, t1: burst.t1)
-            guard let first = path.first else { continue }
-            let field = fx.compactMap(\.field).max { $0.width * $0.height < $1.width * $1.height }
-            intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: first.p.x, y: first.p.y, rect: field, path: path))
+            let r = caretFixes(t0: burst.t0, t1: burst.t1, keys: keys, ax: ax, traces: typing, W: W, H: H, b: b)
+            if r.tracked {
+                let path = smoothPath(r.fixes, t0: burst.t0, t1: burst.t1)
+                guard let first = path.first else { continue }
+                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: first.p.x, y: first.p.y,
+                                      rect: r.field, path: path))
+            } else if let field = r.field, field.height <= 0.12 * H {
+                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: field.midX, y: field.midY,
+                                      rect: field, path: []))
+            }
         }
         if !sorted.contains(where: \.hasPosition) {            // device/imported clip: no input log
             var lastT = -10.0
@@ -232,91 +208,62 @@ enum ZoomPlanner {
             let h = half(s); return SIMD2(clamp(c.x, h.x, W - h.x), clamp(c.y, h.y, H - h.y))
         }
         var shots: [ZoomSegment] = []
-        var followPaths: [UUID: FollowPath] = [:]
+        var followPaths: [UUID: [FollowPoint]] = [:]
         var cur: Open?
         var last = 0.0                                  // last activity in the open scene
         var prevScale: Double?
         let keep = sorted.filter { ($0.kind == .scroll || $0.kind == .drag) && ok($0.t) }
         var ki = 0
 
-        func close(at end: Double, minimumDuration: Double = 0.2) {
+        func close(at end: Double) {
             guard let o = cur else { return }
             cur = nil
-            guard end - o.start > minimumDuration, o.scale > 1.001 else { return }
+            guard end - o.start > 0.2, o.scale > 1.001 else { return }
             let id = stableID(o.start, end)
             shots.append(ZoomSegment(id: id, start: o.start, end: end, scale: o.scale,
                                      focus: .fixed(x: o.c.x / W, y: o.c.y / H), origin: .auto))
-            if !o.path.isEmpty { followPaths[id] = FollowPath(points: o.path, continues: o.continuesPath) }
+            let inside = o.path.filter { $0.t >= o.start - 1e-6 && $0.t <= end + 1e-6 }
+            if inside.count >= 2 { followPaths[id] = inside }
         }
-        func retarget(_ c: SIMD2<Double>, at t: Double, minMove: Double = 0.12, minimumDuration: Double = 0.2,
-                      continuesPath: Bool = false) {
+        func retarget(_ c: SIMD2<Double>, at t: Double) {
             guard let o = cur else { return }
-            let nc = clampC(c, o.scale)
-            let moved = (nc - o.c) / half(o.scale)
-            if hypot(moved.x, moved.y) < minMove { return }
-            if minimumDuration >= 0.2, t - o.start <= 0.2 {
-                cur = Open(start: o.start, scale: o.scale, c: nc, path: o.path, continuesPath: o.continuesPath)
-                return
-            }
-            close(at: t, minimumDuration: minimumDuration)
-            // The path carries over: the camera keeps following it across the
-            // split instead of restarting on the new segment.
-            cur = Open(start: t, scale: o.scale, c: nc, path: o.path, continuesPath: continuesPath)
+            let nc = clampC(c, o.scale), moved = (nc - o.c) / half(o.scale)
+            guard hypot(moved.x, moved.y) >= 0.12 else { return }
+            if t - o.start <= 0.2 { cur = Open(start: o.start, scale: o.scale, c: nc, path: o.path); return }
+            let rest = o.path.filter { $0.t >= t }
+            close(at: t)
+            cur = Open(start: t, scale: o.scale, c: nc, path: rest)
         }
-        func ensureVisible(_ pt: SIMD2<Double>, at t: Double) {          // clicks only
+        func ensureVisible(_ pt: SIMD2<Double>, at t: Double) {
             guard let o = cur else { return }
             let d = (pt - o.c) / half(o.scale)
-            let zone = clamp(p.safeZone.isFinite ? p.safeZone : 0.62, 0.005, 0.8)
+            let zone = clamp(p.safeZone.isFinite ? p.safeZone : 0.62, 0.2, 0.9)
             guard abs(d.x) > zone || abs(d.y) > zone else { return }
-            retarget(pt, at: t, minMove: 0.03, minimumDuration: 0.02)    // click anchor is the exact pixel
+            retarget(pt, at: t)
         }
         func absorbKeepAlive(upTo t: Double) {
             guard let o = cur else { return }
             while ki < keep.count, keep[ki].t < t {
                 let e = keep[ki]; ki += 1
                 let d = (SIMD2(Double(e.x), Double(e.y)) - o.c) / half(o.scale)
-                if e.t - last <= p.zoomOutGap, abs(d.x) <= 1, abs(d.y) <= 1 { last = max(last, e.t) }
+                if e.t - last <= gap, abs(d.x) <= 1, abs(d.y) <= 1 { last = max(last, e.t) }
             }
         }
-        /// Caret sits ~42 % across the view, vertically centred.
         func typingCenter(_ pt: SIMD2<Double>, _ s: Double) -> SIMD2<Double> {
-            clampC(SIMD2(pt.x + 0.16 * half(s).x, pt.y), s)
-        }
-        /// SMOOTHNESS: the caret path is recorded as one continuous target for
-        /// the camera. The scene does NOT split when the caret leaves the
-        /// reading band; a new target is appended to the same path, so the
-        /// camera moves before the caret runs out of room and holds while it
-        /// has room. There is no multi-second publication gate (that produced
-        /// the stop→lurch), and no per-key scene restart.
-        func follow(_ path: [PathPoint], from t0: Double) {
-            guard var o = cur else { return }
-            if o.path.isEmpty {
-                o.path.append(FollowPoint(t: o.start, p: SIMD2(o.c.x / W, o.c.y / H)))
-                cur = o
-            }
-            for s in path where s.t >= t0 && ok(s.t) {
-                guard var o = cur else { return }
-                let h = half(o.scale), d = (s.p - o.c) / h
-                // The caret only pulls the camera once it leaves the tight
-                // window. Inside it the camera is still.
-                let outside = d.x > 0.06 || d.x < -0.34 || abs(d.y) > 0.22
-                guard outside else { continue }
-                let target = typingCenter(s.p, o.scale)
-                let moved = (target - o.c) / h
-                guard hypot(moved.x, moved.y) >= 0.06 else { continue }  // clamped to the same view: nothing to do
-                if let lastPoint = o.path.last, s.t - lastPoint.t < 1e-6 { continue }
-                o.c = target
-                o.path.append(FollowPoint(t: s.t, p: SIMD2(target.x / W, target.y / H)))
-                cur = o
-            }
+            clampC(SIMD2(pt.x + 0.24 * half(s).x, pt.y), s)
         }
         func chooseScale(_ i: Intent, prev: Double?) -> Double {
             var s: Double
-            if i.kind == .typing {
+            if i.kind == .typing && !i.path.isEmpty {
                 // viewport ≈ field + 30 %, between 42 % and 62 % of the screen
                 let fieldW = min(i.rect?.width ?? W * 0.35, W)
                 s = W / min(max(fieldW * 1.3, W * 0.42), W * 0.62)
                 s = clamp(s, min(1.6, hi), min(2.0, hi))
+            } else if i.kind == .typing {
+                guard let r = i.rect else { return 1 }
+                let fit = W / max(r.width * 1.25, 1)
+                if fit < max(lo, 1.25) { return 1 }
+                s = clamp(fit, lo, min(2.0, hi))
             } else if let r = i.rect {
                 // CONTEXT-sized, not element-sized: a small button must not mean a big zoom
                 let fit = min(W / max(r.width * 2.4, 1), H / max(r.height * 2.4, 1))
@@ -325,19 +272,13 @@ enum ZoomPlanner {
             } else {
                 s = clamp(1.7, lo, hi)
             }
-            if i.kind == .click {
-                let xInset = max(min(i.x, W - i.x), 1)
-                let yInset = max(min(i.y, H - i.y), 1)
-                let centerFit = max(W / (2 * xInset), H / (2 * yInset))
-                s = min(max(s, centerFit), hi)
-            }
             guard let prev, prev > 1.001 else { return s }
             return abs(log(s / prev)) < log(1.12) ? clamp(prev, lo, hi) : s
         }
 
         for it in intents {
             absorbKeepAlive(upTo: it.t)
-            let continuing = cur != nil && it.t - last <= p.zoomOutGap
+            let continuing = cur != nil && it.t - last <= gap
             let want = chooseScale(it, prev: continuing ? cur?.scale : prevScale)
             switch it.kind {
             case .click:
@@ -356,14 +297,21 @@ enum ZoomPlanner {
                     }
                 }
             case .typing:
+                if want <= 1.001 {
+                    if continuing { last = max(last, it.tEnd + 0.1) }
+                    continue
+                }
+                let anchor = SIMD2(it.x, it.y)
+                let path = it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) }
                 if continuing, let o = cur, abs(log(want / o.scale)) <= log(1.35) {
-                    // keep the zoom the user already saw; follow() moves the camera onto the caret
+                    if path.isEmpty { ensureVisible(anchor, at: it.t) }
                 } else {
                     close(at: continuing ? it.t : last + hold)
                     prevScale = want
-                    cur = Open(start: it.t, scale: want, c: typingCenter(SIMD2(it.x, it.y), want))
+                    cur = Open(start: it.t, scale: want,
+                               c: path.isEmpty ? clampC(anchor, want) : typingCenter(anchor, want))
                 }
-                follow(it.path, from: it.t)
+                cur?.path.append(contentsOf: path)
             }
             last = max(last, it.kind == .typing ? it.tEnd + 0.1 : it.tEnd)
         }
