@@ -875,24 +875,28 @@ Works in source time per clip, outputs `[ZoomSegment]` (source time) tagged `.au
 
 ### 10.4 Camera solver (the smoothness engine)
 
-Implemented in `Sources/LumenDirector/Camera.swift` (`CameraSolver.solve`). State: `pan` in view-normalized space, zoom solved in **log space** (equal perceived zoom speed), plus tilt `(pitch, yaw)` (section 10.4.1). Output centre is `0.5 + pan · margin(z)` with `margin(z) = 0.5 - 0.5·exp(-log z)`, so pan is uniform on screen at every zoom.
+The model-5 solver smooths three step targets: log-scale and source-normalized
+centre x/y. One forward/backward exact critically damped filter uses the same
+response on all channels (`omegaZoom = 7.5`), with automatic steps placed
+`leadIn = 0.30` seconds early. Exit steps start 0.15 seconds after scene end;
+entrances within 1.6 seconds bridge the gap without a zoom-out.
 
-**Target signal:**
-- `z*(t)` from zoom segments (1.0 outside), converted to output time through the `TimeMap`.
-- `.fixed` / `.element` focus give a point target. `.element` centres the AX rect.
-- `.follow` (typing scenes) uses the caret path: cursor samples pass through a **two-pass dead-zone** (`centredPlay`, half-zone `deadZone/2`) and then a **zero-phase Gaussian** (`zeroPhaseSmooth`, `omega = 1/followDelay`). Zero phase means it neither lags nor overshoots, so there is no lookahead term and no follow delay to hide wiggles with.
-- `centerOffset` is applied last, in log scale. The target is clamped so the view stays inside the source.
+Typing supplies continuous caret samples. Its target uses reading room at 38%
+viewport x, ±10%/±16% viewport dead zones and `omegaPan = 4`. Without caret
+samples, frame the entire single-line field with 25% extra width or skip zoom.
+Clicks retain exact pixel targets. The planner uses a 0.9-second hold and a
+2.6-second scene gap, without a second minimum-hold rule.
 
-**Filter: one quintic move per segment, per channel** (log zoom, pan x, pan y). `QuinticMove` is a degree-5 Hermite with position, velocity and acceleration at both ends, so C2 holds across a handoff:
+Centre and log-scale plus their numerical first/second derivatives are published
+at 240 Hz. `Timeline.evaluate` retains quintic interpolation between samples;
+there are no quintic scene moves or pan-margin multiplication in the solver.
+Saved easing values set one project-wide geometric-mean frequency multiplier.
 
-- Entrance start = the displayed trajectory at the handoff, not a stale channel value.
-- A follow path hands over with its own velocity and acceleration (`v/margin`, `a/margin`), so the pan never stops between the entrance move and the caret path.
-- Durations: **zoom-in 550 ms, zoom-out 750 ms, same-scale reframe 350 ms**, divided by the segment's easing and multiplied by a modest distance term (`1 + 0.18·panDistance`, capped at 1.5), clamped to 220–950 ms. Auto shots start `leadIn` earlier so the camera arrives *on* the click. Moves never overlap (one grid step apart).
-- One zoom-out per scene, skipped when the next scene already begins at or before this scene ends: staying zoomed across a related action beats a flash to full frame.
-
-**Published derivatives.** The track stores `nx, ny, lz` plus `vx, vy, vz` and `ax, ay, az` at 240 Hz, differentiated through the `centre = 0.5 + pan·margin(z)` product (including the `dv = pan·margin'(z)·ż` cross terms) and zeroed on a clamped axis. `Timeline.evaluate` interpolates with the same quintic Hermite (`qhm`), so acceleration is continuous across sample boundaries — the old zero-acceleration reconstruction stepped the acceleration 240 times a second and read as robotic.
-
-The smoothness suite (`MotionTraceTests`) is the gate: no position step, hi-frequency energy above 8 Hz in log-zoom < 1 %, bounded pan jerk, published acceleration non-zero on an axis that moves, and no tick-boundary acceleration step when sampled at 4× the grid.
+The live camera uses one causal exact spring on the same three coordinates,
+retaining velocity through retargeting and using resolved caret coordinates
+without an offset. Future-aware recorded framing and live response have different
+timing. CameraParams migrates saved projects to model 5 while retaining manual
+zoom segments. Preview/export use the same derived camera track.
 
 #### 10.4.1 3D camera moves (T2, deterministic, no 3D engine)
 
@@ -1527,17 +1531,16 @@ Milestones: **M1** "Better than QuickTime" (phases 0 to 3) · **M2** "Screen Stu
 | `zoom.minScale` | 1.3 | 1.1 to 2.0 |
 | `zoom.maxScale` | 2.2 | 1.2 to 4.0 |
 | `zoom.minTrigger` | 1.25 | 1.1 to 2.0 |
-| `zoom.leadIn` | 0.45 s | 0 to 1.2 |
+| `zoom.leadIn` | 0.30 s | 0 to 1.2 |
 | `zoom.tail` | 0.7 s | 0.2 to 2 |
 | `zoom.mergeGap` | 2.5 s | 1 to 6 |
 | `zoom.panThroughGap` | 1.5 s | 0.5 to 4 |
-| `zoom.minHold` | 1.0 s | 0.5 to 3 |
 | `zoom.clickWeight` | 3 | 1 to 5 |
 | `zoom.sensitivity` | 0.5 | 0 to 1 |
 | `zoom.backgroundBlur` | off | on / off |
 | **Camera** | | |
-| `camera.omegaPan` | 7.0 rad/s | 3 to 14 |
-| `camera.omegaZoom` | 6.0 rad/s | 3 to 12 |
+| `camera.omegaPan` | 4.0 rad/s | 3 to 14 |
+| `camera.omegaZoom` | 7.5 rad/s | 3 to 12 |
 | `camera.lookahead` | 0.20 s | 0 to 0.6 |
 | `camera.followDelay` | 0.12 s | 0 to 1.0 |
 | `camera.deadZone` | 0.28 | 0.1 to 0.45 |
@@ -1547,7 +1550,7 @@ Milestones: **M1** "Better than QuickTime" (phases 0 to 3) · **M2** "Screen Stu
 | `tilt.float` | 1.2 deg | 0 to 2 |
 | `tilt.omega` | 5.0 | 2 to 10 |
 | `motionBlur.shutter` | 0.5 | 0 to 1 |
-| `motionBlur.maxSamples` | 8 | 1 to 16 |
+| `motionBlur.maxSamples` | 12 | 1 to 16 |
 | **Frame and look** | | |
 | `frame.padding` (per side) | 6% | 0 to 20% |
 | `frame.cornerRadius` (per corner) | 14 pt | 0 to 40 |
