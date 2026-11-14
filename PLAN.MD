@@ -875,30 +875,24 @@ Works in source time per clip, outputs `[ZoomSegment]` (source time) tagged `.au
 
 ### 10.4 Camera solver (the smoothness engine)
 
-State: center `(cx, cy)` in view-normalized coordinates, zoom `z` solved in **log space** (equal perceived zoom speed), plus tilt `(pitch, yaw)` (section 10.4.1). Pan is view-normalized (uniform on-screen speed regardless of zoom).
+Implemented in `Sources/LumenDirector/Camera.swift` (`CameraSolver.solve`). State: `pan` in view-normalized space, zoom solved in **log space** (equal perceived zoom speed), plus tilt `(pitch, yaw)` (section 10.4.1). Output centre is `0.5 + pan · margin(z)` with `margin(z) = 0.5 - 0.5·exp(-log z)`, so pan is uniform on screen at every zoom.
 
 **Target signal:**
-- `z*(t)` from zoom segments (1.0 outside).
-- Center target = `cursor(t + lookahead)` (default 0.20 s), passed through the **dead-zone**.
-- **Dead-zone hysteresis:** rectangle around the current center, half-size `0.28 x view`. Cursor inside: target unmoved. Cursor outside: target moves by the minimum vector that puts the cursor on the boundary.
-- **Follow delay:** the target moves only once the cursor has been outside the dead-zone for >= `followDelay` (default 0.12 s) or has exited by > 2x the margin. Offline analysis makes this exact. This rejects wiggles without lag.
-- `.fixed` / `.element` focus override the follow target. `centerOffset` is applied last.
-- Clamp the target so the view stays inside the source bounds.
+- `z*(t)` from zoom segments (1.0 outside), converted to output time through the `TimeMap`.
+- `.fixed` / `.element` focus give a point target. `.element` centres the AX rect.
+- `.follow` (typing scenes) uses the caret path: cursor samples pass through a **two-pass dead-zone** (`centredPlay`, half-zone `deadZone/2`) and then a **zero-phase Gaussian** (`zeroPhaseSmooth`, `omega = 1/followDelay`). Zero phase means it neither lags nor overshoots, so there is no lookahead term and no follow delay to hide wiggles with.
+- `centerOffset` is applied last, in log scale. The target is clamped so the view stays inside the source.
 
-**Filter: cascade of two critically damped springs** (C2: position, velocity, acceleration continuous). Exact analytic step (stable at any `dt`):
+**Filter: one quintic move per segment, per channel** (log zoom, pan x, pan y). `QuinticMove` is a degree-5 Hermite with position, velocity and acceleration at both ends, so C2 holds across a handoff:
 
-```
-d  = x - target
-e  = exp(-omega * dt)
-x' = target + (d + (v + omega * d) * dt) * e
-v' = (v - omega * (v + omega * d) * dt) * e
-```
+- Entrance start = the displayed trajectory at the handoff, not a stale channel value.
+- A follow path hands over with its own velocity and acceleration (`v/margin`, `a/margin`), so the pan never stops between the entrance move and the caret path.
+- Durations: **zoom-in 550 ms, zoom-out 750 ms, same-scale reframe 350 ms**, divided by the segment's easing and multiplied by a modest distance term (`1 + 0.18·panDistance`, capped at 1.5), clamped to 220–950 ms. Auto shots start `leadIn` earlier so the camera arrives *on* the click. Moves never overlap (one grid step apart).
+- One zoom-out per scene, skipped when the next scene already begins at or before this scene ends: staying zoomed across a related action beats a flash to full frame.
 
-Run the second spring on the first spring's output. Simulate offline at fixed `dt = 1/1440 s`, store samples in `DenseTrack`. Evaluate at arbitrary `t` with cubic Hermite on position + velocity. **Reset state at epoch boundaries** (section 10.1).
+**Published derivatives.** The track stores `nx, ny, lz` plus `vx, vy, vz` and `ax, ay, az` at 240 Hz, differentiated through the `centre = 0.5 + pan·margin(z)` product (including the `dv = pan·margin'(z)·ż` cross terms) and zeroed on a clamped axis. `Timeline.evaluate` interpolates with the same quintic Hermite (`qhm`), so acceleration is continuous across sample boundaries — the old zero-acceleration reconstruction stepped the acceleration 240 times a second and read as robotic.
 
-Defaults: `omegaPan = 7.0`, `omegaZoom = 6.0` (a zoom transition feels like 0.8 to 1.0 s). "Smoothness" slider maps to omega.
-
-**Safety net:** final C1-smooth soft clamp (smoothstep over 8 px) so the view never leaves source bounds.
+The smoothness suite (`MotionTraceTests`) is the gate: no position step, hi-frequency energy above 8 Hz in log-zoom < 1 %, bounded pan jerk, published acceleration non-zero on an axis that moves, and no tick-boundary acceleration step when sampled at 4× the grid.
 
 #### 10.4.1 3D camera moves (T2, deterministic, no 3D engine)
 

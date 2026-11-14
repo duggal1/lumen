@@ -183,3 +183,17 @@ Current `make verify` runs tests, packages the app, and performs a short launch 
 Provide the root cause and fix for each reported issue; exact changed files/commits; failing→passing regression evidence; baseline/after startup, synchronization, throughput, and memory results; short before/after zoom/typing/ripple clips; cursor-state frames; positive/negative privacy render results; and any remaining limitations. Mark each issue fixed only after checking the actual capture, playable preview, and exported result where applicable.
 
 Finish typing synchronization and first-play audio before spending time polishing ripple appearance. Deliver the complete requested repair without expanding scope.
+
+## Implementation status
+
+Every code item above landed on `main`; the proof ledger is
+`Docs/validation.md` §"Studio reliability lanes". Root causes and fixes:
+
+| Issue | Root cause | Fix |
+|---|---|---|
+| Typing focus stolen by a stray pointer | Focus evidence was addressed by array position and a mouse hit-test could publish over a key's own reservation | `InputRecorder` reserves an index per key (`axStore`, `axNextIndex`), keeps `FocusState.lastGood` and `lastFocusIndex`, sorts deliveries to the newest focus sample, and de-duplicates key-down in `LiveCamera` |
+| Caret zoom stops and lurches | Each shot restarted the pan from rest and a 2.4 s gate starved follow | `CameraSolver` solves one quintic per channel from the displayed state, hands the follow path over with its own velocity/acceleration, publishes `vx/vy/vz/ax/ay/az`, and `Timeline.evaluate` interpolates with the same Hermite |
+| Playback starts silent or late | The clock started immediately while the mix was still building, and the late join re-anchored video against a stale instant | `TransportTiming` picks one future host instant from the measured output latency; a bounded 4 s first window (`mixFirstWindow`) starts audibly at once and is upgraded in place; `openEditor` returns before heavy preparation |
+| Masks bridge across pages | `context(at:)` returned nil before the first sample and the lead-in was unbounded | `context(at:)` holds the earliest known surface, `surfaceStart(at:)` floors the lead-in at the page it belongs to |
+| Cursor states lost | The stock cursor was sampled at 10 Hz with a bitmap hash per poll | A 60 Hz identity-first sampler (`CursorCatalog.classify`) |
+| Ripple pops and cuts | Linear progress with no envelope, and taps were not pinned | `ClickEnvelope` (zero-slope onset and exit, one hump) plus tap pinning measured against the pre-pin path |

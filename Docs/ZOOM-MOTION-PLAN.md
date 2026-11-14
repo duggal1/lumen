@@ -114,3 +114,26 @@ swift run --skip-build lumen-cli zoom-verify "$PROJECT" --video "$EXPORTED_VIDEO
 Use the existing marker/caret verification fixture for `zoom-verify`; arbitrary footage is not sufficient. Confirm tests actually run. `make verify` does not replace playback inspection or hardware frame-pacing measurements.
 
 Deliver the smallest reliable patch, the removed/simplified motion layers, the final timing values, passing regression results, measured latency/frame delivery, and a short before/after clip showing the full entrance, typing hold, interruption, and exit. Do not declare success from an easing formula alone.
+
+## Implementation status
+
+The solver is `CameraSolver.solve` in `Sources/LumenDirector/Camera.swift`; the
+plan below is the shipped behaviour, and `PLAN.md` §10.4 is the reference.
+
+- One degree-5 Hermite per channel (log zoom, pan x, pan y) with position,
+  velocity and acceleration at both ends, so C2 holds at every handoff.
+- Durations: zoom-in 550 ms, zoom-out 750 ms, same-scale reframe 350 ms,
+  scaled by easing and a capped distance term, clamped to 220–950 ms.
+- Auto shots lead by `leadIn` so the camera arrives *on* the click.
+- The follow target is a two-pass dead-zone plus a zero-phase Gaussian, so it
+  neither trails constant motion nor chases wiggles.
+- `nx, ny, lz` and their first and second derivatives are published at 240 Hz,
+  differentiated through `centre = 0.5 + pan·margin(z)`, and evaluated with the
+  same Hermite.
+- Gates: `motionTracesAreSmooth`, `cameraTrackPublishesAcceleration`,
+  `evaluatedAccelerationHasNoTickBoundaryStep`,
+  `handoffsKeepAccelerationContinuous`, `zoomOutReachesFullFrameAndStays`,
+  `typingKeepsCaretFramedWithoutTrailing`.
+
+Not measured here (needs a real project and hardware): the before/after motion
+clips, p95 input-to-first-visible-motion, and the 60/120/240 fps frame budgets.
