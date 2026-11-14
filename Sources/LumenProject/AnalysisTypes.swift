@@ -31,10 +31,14 @@ public struct FaceSample: Codable, Sendable {
     public var t: Double, cx: Float, cy: Float, h: Float
     public init(t: Double, cx: Float, cy: Float, h: Float) { self.t = t; self.cx = cx; self.cy = cy; self.h = h }
 }
-/// Pixel-activity centroid (device / imported clips with no input events). Source seconds, source px.
+/// Visual-change evidence for recorded footage. Source seconds and source pixels.
 public struct ActivityPoint: Codable, Sendable {
     public var t: Double, x: Double, y: Double
-    public init(t: Double, x: Double, y: Double) { self.t = t; self.x = x; self.y = y }
+    public var region: CGRect?
+    public var coverage: Double?
+    public init(t: Double, x: Double, y: Double, region: CGRect? = nil, coverage: Double? = nil) {
+        self.t = t; self.x = x; self.y = y; self.region = region; self.coverage = coverage
+    }
 }
 /// Typed-text line located by pixel change (see TypingTracer). Rect/caret in
 /// source px; samples are the caret approach found per keystroke frame.
