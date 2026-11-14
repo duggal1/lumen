@@ -303,7 +303,11 @@ public enum Director {
             h.combine(t.t0); h.combine(t.t1); h.combine(t.samples.count)
             h.combine(t.rect?.origin.x); h.combine(t.rect?.origin.y); h.combine(t.rect?.size.width)
         }
-        for a in input.activity { h.combine(a.t); h.combine(a.x); h.combine(a.y) }
+        for a in input.activity {
+            h.combine(a.t); h.combine(a.x); h.combine(a.y); h.combine(a.coverage)
+            h.combine(a.region?.minX); h.combine(a.region?.minY)
+            h.combine(a.region?.width); h.combine(a.region?.height)
+        }
         return UInt64(bitPattern: Int64(h.finalize()))
     }
 }
