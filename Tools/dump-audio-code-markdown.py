@@ -16,6 +16,7 @@ SUPPORT_FILES = (
     "Sources/LumenProject/Derived.swift",
     "Sources/LumenProject/Composition.swift",
     "Sources/LumenProject/Commands.swift",
+    "Sources/LumenProject/Editing.swift",
     "Sources/LumenCapture/Capture.swift",
     "Sources/LumenCapture/Session.swift",
     "Sources/LumenCapture/ExtraMicrophoneRecorder.swift",
