@@ -23,6 +23,26 @@ final class PlaybackClock: @unchecked Sendable {
     // SMOOTHNESS: duration captured at start() goes stale after cuts; update it without re-anchoring t0/h0.
     func setDuration(_ d: Double) { s.withLock { $0.dur = d } }
     var playing: Bool { s.withLock { $0.playing } }
+    /// The host instant the current t0 is anchored to. The transport reads it
+    /// to prove video and audio were started against the same instant.
+    var anchor: Double { s.withLock { $0.h0 } }
+    var startedAt: Double { s.withLock { $0.t0 } }
+}
+
+/// One owner of transport timing. Video, audio and every late join are placed
+/// against the same future host instant, derived from the measured device
+/// latency, so the first frame and every later seek land the same way.
+enum TransportTiming {
+    /// Seconds between "start the clock now" and "the first sample is really
+    /// audible": the output latency plus a small scheduling margin.
+    static func lead(outputLatency: Double) -> Double { max(0.05, outputLatency + 0.03) }
+    /// The host instant audio for output time `t` must be heard at.
+    static func startInstant(outputLatency: Double, now: Double = HostClock.now()) -> Double {
+        now + lead(outputLatency: outputLatency)
+    }
+    /// Content that will be on screen at host instant `h` when the clock is
+    /// anchored at (t0, h0) and running at 1x.
+    static func content(at h: Double, t0: Double, h0: Double) -> Double { t0 + max(h - h0, 0) }
 }
 
 /// Atomic snapshot handoff: UI writes whole Timeline values, the render task reads one per frame.
@@ -146,6 +166,19 @@ enum TimelineSelection: Equatable {
     private var mixGeneration = 0
     private var playbackTask: Task<Void, Never>?
     private var wantsPlayback = false
+    /// True from the moment Play asks for audio until the clock and the audio
+    /// start together. The transport shows it in the readout line; the clock
+    /// stays stopped, so a silent start is never presented as success.
+    private(set) var preparingPlayback = false
+    /// True while the player holds the bounded first window rather than the
+    /// full program. The full mix replaces it at the content being heard.
+    private var playingProvisional = false
+    /// Measured Play→A/V start, for diagnostics. Seconds, or nil when the last
+    /// start has not completed.
+    private(set) var lastStartLatency: Double?
+    /// True when the last start had real audio queued with it. The regression
+    /// this lane fixes is the clock running with nothing to play.
+    private(set) var audioQueuedAtStart = false
     private let player = PreviewAudioPlayer()
     /// Keeps the wallpaper URL in sync with the active desktop space.
     private var spaceObserver: NSObjectProtocol?
@@ -219,7 +252,11 @@ enum TimelineSelection: Equatable {
         // transcript. The main actor only receives the finished values.
         let (r, s, initial, settings, transcript) = try await Task.detached(priority: .userInitiated) {
             let renderer = try Renderer()
-            let (session, timeline) = try await ProjectSession.open(ProjectBundle(url: url), device: renderer.device)
+            // Minimal open: the persisted project and its frame readers, with
+            // the recorded tracks still on disk. The session prepares them in
+            // the background, so the window paints instead of waiting for
+            // audio decode, VAD, the waveform envelope and the neural pass.
+            let (session, timeline) = try await ProjectSession.openEditor(ProjectBundle(url: url), device: renderer.device)
             let settings = ExportSettings.load(defaultName: AppModel.displayName(session.meta.name))
             let transcript = session.transcriptFile?.transcript.shifted(by: session.micOffset)
             return (renderer, session, timeline, settings, transcript)
@@ -362,7 +399,10 @@ enum TimelineSelection: Equatable {
             // its mix, so this only fires when transport is idle.
             if self.needsInitialMix {
                 self.needsInitialMix = false
-                if !self.hasMixed, !self.isMixing, !self.wantsPlayback { self.remix() }
+                if !self.hasMixed, !self.isMixing, !self.wantsPlayback {
+                    self.prepareFirstWindow()
+                    self.remix()
+                }
             }
             // SMOOTHNESS: `playhead` is a 12 Hz echo, up to ~83 ms behind the real clock.
             // Re-anchoring from it while playing rewinds video but not audio (A/V jump).
@@ -394,20 +434,30 @@ enum TimelineSelection: Equatable {
             defer { if let self, self.mixGeneration == gen { self.isMixing = false } }
             await previous?.value
             guard !Task.isCancelled else { return }
-            let audio = await Task.detached(priority: .userInitiated) { mixer.mix(tl) }.value
+            let audio = await Task.detached(priority: .userInitiated) { mixer.mix(tl, cancelled: { Task.isCancelled }) }.value
             guard !Task.isCancelled else { return }
-            await Task.detached(priority: .userInitiated) { player.load(audio) }.value
+            if let audio { await Task.detached(priority: .userInitiated) { player.load(audio) }.value }
             guard !Task.isCancelled else { return }
             guard let self, self.mixGeneration == gen else { return }
             self.isMixing = false
             self.hasMixed = true
             self.mixStats = audio.map { ($0.lufs, $0.truePeakDb) }
-            // Late join: audio starts at the current video position. Video
-            // is not restarted, so there is no second visible jump.
+            // The full program is now exact. If a provisional window is being
+            // heard, replace it at the content position being heard right now
+            // with a short crossfade: no jump in time and no step in level.
             if self.wantsPlayback, self.clock.playing {
                 let now = HostClock.now()
-                let tNow = self.clock.time(at: now)
-                _ = self.player.play(from: tNow, atHostSeconds: now + max(0.05, self.player.outputLatency + 0.03))
+                let content = self.clock.time(at: now)
+                if let audio, self.playingProvisional,
+                   self.player.upgrade(to: audio, atContent: content) {
+                    self.playingProvisional = false
+                } else {
+                    // Late join: schedule against the same future host instant
+                    // the clock will be showing, not a position sampled earlier.
+                    let at = now + TransportTiming.lead(outputLatency: self.player.outputLatency)
+                    let from = TransportTiming.content(at: at, t0: self.clock.startedAt, h0: self.clock.anchor)
+                    _ = self.player.play(from: from, atHostSeconds: at)
+                }
             }
             // An audio edit that landed while this mix ran makes the buffer
             // stale. Visual-only edits must never restart a full mix (same
@@ -423,16 +473,13 @@ enum TimelineSelection: Equatable {
 
     func seek(_ t: Double) {
         playbackTask?.cancel()
+        preparingPlayback = false
         let c = min(max(t, 0), duration); playhead = c; published = c
         if wantsPlayback {
-            if player.isLoaded {
-                let audible = HostClock.now() + max(0.05, player.outputLatency + 0.03)
-                clock.start(from: c, at: audible, dur: duration)
-                _ = player.play(from: c, atHostSeconds: audible)
-            } else {
-                clock.start(from: c, at: HostClock.now() + 0.08, dur: duration)
-            }
-            isPlaying = true
+            // The first seek and every later seek use the same lead: the
+            // measured device latency, not a hardcoded 80 ms.
+            if audioReady(at: c) { startPlayback(c) }
+            else { startWhenAudioReady(c) }
         } else {
             clock.seek(c)
         }
@@ -445,28 +492,107 @@ enum TimelineSelection: Equatable {
         wantsPlayback = true
         playbackTask?.cancel()
         let t = playhead >= duration - 0.02 ? 0 : playhead
-        // Clock starts first (a lock write). Engine start and buffer
-        // scheduling must never delay video motion, so audio is scheduled
-        // against the host instant the clock already uses.
-        if player.isLoaded {
-            let audible = HostClock.now() + max(0.05, player.outputLatency + 0.03)
-            clock.start(from: t, at: audible, dur: duration)
-            _ = player.play(from: t, atHostSeconds: audible)
-        } else {
-            clock.start(from: t, at: HostClock.now() + 0.08, dur: duration)
-            player.warm()
-            if !hasMixed, !isMixing { remix() }
-        }
-        isPlaying = true
+        // A silent project must never wait for audio that does not exist.
+        if audioReady(at: t) { startPlayback(t); return }
+        startWhenAudioReady(t)
     }
     func pause() {
         wantsPlayback = false
         playbackTask?.cancel()
+        preparingPlayback = false
         clock.pause(at: HostClock.now()); player.stop()
         playhead = clock.time(at: HostClock.now()); published = playhead
         isPlaying = false
     }
     func togglePlay() { wantsPlayback ? pause() : play() }
+
+    /// Renders the bounded first window off the main thread and queues it, so
+    /// a Play a few seconds after open starts with audio already in place.
+    /// The full program always wins: a prefix is never installed over it.
+    private func prepareFirstWindow() {
+        let tl = timeline, mixer = session.mixer, player = player
+        guard mixer.hasProgram(tl) else { return }
+        Task { @MainActor [weak self] in
+            let mixed = await Task.detached(priority: .userInitiated) { mixer.mixFirstWindow(tl) }.value
+            guard let self, let mixed, !self.hasMixed, !self.isMixing else { return }
+            player.load(mixed)
+        }
+    }
+
+    /// True when audio for output time `t` is either unnecessary or already
+    /// queued. Silent, audio-disabled and missing-source projects answer true
+    /// immediately; only a real wait answers false.
+    private func audioReady(at t: Double) -> Bool {
+        guard session.mixer.hasProgram(timeline) else { return true }
+        guard player.isLoaded else { return false }
+        return t < player.duration - 0.02
+    }
+
+    /// Clock and audio start together, against one future host instant derived
+    /// from the measured output latency.
+    private func startPlayback(_ t: Double) {
+        let now = HostClock.now()
+        let requested = now
+        let hasAudio = session.mixer.hasProgram(timeline)
+        if hasAudio { player.warm() }
+        let audible = TransportTiming.startInstant(outputLatency: player.outputLatency)
+        clock.start(from: t, at: audible, dur: duration)
+        if hasAudio {
+            _ = player.play(from: t, atHostSeconds: audible)
+            playingProvisional = !hasMixed
+        }
+        audioQueuedAtStart = hasAudio && player.isLoaded
+        isPlaying = true
+        preparingPlayback = false
+        if editIssue == "Preparing audio…" { editIssue = nil }
+        lastStartLatency = max(audible - requested, 0)
+    }
+
+    /// Play, but only once the audio that belongs to the first played frame
+    /// exists. The clock stays stopped and the readout says so, rather than
+    /// starting silent video and joining audio seconds later.
+    private func startWhenAudioReady(_ t: Double) {
+        wantsPlayback = true
+        preparingPlayback = true
+        editIssue = "Preparing audio…"
+        let started = HostClock.now()
+        playbackTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let tl = self.timeline, mixer = self.session.mixer, player = self.player
+            // The bounded window covers the first seconds of the program, and
+            // the click and typing cues inside it.
+            let withinWindow = t < AudioMixer.firstWindowSeconds - 0.1
+            if withinWindow, !self.hasMixed, !self.isMixing {
+                let ready = await Task.detached(priority: .userInitiated) { () -> Bool in
+                    guard let mixed = mixer.mixFirstWindow(tl) else { return false }
+                    player.load(mixed)
+                    return true
+                }.value
+                guard !Task.isCancelled, self.wantsPlayback else { self.preparingPlayback = false; return }
+                if ready, t < player.duration - 0.02 {
+                    self.lastStartLatency = HostClock.now() - started
+                    self.startPlayback(t)
+                    if !self.hasMixed, !self.isMixing { self.remix() }
+                    return
+                }
+            }
+            // Beyond the first window, or the full program is already on its
+            // way: the honest state is to wait for it rather than start video
+            // with nothing to hear.
+            if !self.hasMixed, !self.isMixing { self.remix() }
+            while !Task.isCancelled, self.wantsPlayback, !self.hasMixed {
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+            guard !Task.isCancelled, self.wantsPlayback else { self.preparingPlayback = false; return }
+            guard t < player.duration - 0.02 else {
+                self.preparingPlayback = false
+                self.editIssue = "Audio is unavailable, so playback cannot start."
+                return
+            }
+            self.lastStartLatency = HostClock.now() - started
+            self.startPlayback(t)
+        }
+    }
 
     /// Publishing the playhead at display rate invalidates the whole editor
     /// (including the waveform canvas) 60-120 times a second. The preview reads

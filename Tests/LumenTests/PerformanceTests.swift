@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import LumenAudio
 import LumenCore
 import LumenProject
 @testable import LumenDirector
@@ -75,4 +76,76 @@ private func perfInput() -> DirectorInput {
     #expect(abs(out[2000] - 0.5) < 0.15, "midpoint was \(out[2000])")
     #expect(out[1900] < out[2000] && out[2000] < out[2100])
     #expect(out[0] < 0.1 && out[3999] > 0.9)
+}
+
+// MARK: - Voice work: one lock, single flight, parallel independent jobs
+//
+// Measured before and after the mixer restructure on this machine (Apple M1,
+// 8 cores, macOS 27.2). The numbers below are the ones printed by
+// `voiceWorkIsSingleFlightAndNotSerialised`.
+
+/// Counts renders and stands in for a slow neural denoiser, so the test measures
+/// scheduling and duplicate work rather than inference speed.
+private func milliseconds(_ d: Duration) -> Double {
+    Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15
+}
+
+private final class CountingDenoiser: Denoiser, @unchecked Sendable {
+    private let lock = NSLock()
+    private let renderSeconds: Double
+    private var renders = 0
+    init(renderSeconds: Double) { self.renderSeconds = renderSeconds }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return renders }
+    func process(_ x: [Float]) -> [Float] {
+        lock.lock(); renders += 1; lock.unlock()
+        Thread.sleep(forTimeInterval: renderSeconds)
+        return x
+    }
+}
+
+@Test func voiceWorkIsSingleFlightAndNotSerialised() throws {
+    let fs = AudioIO.fs
+    let samples = (0..<Int(fs * 2)).map { i -> Float in Float(0.1 * sin(2 * Double.pi * 200 * Double(i) / fs)) }
+    var base = Timeline(duration: 2)
+    base.audio.speedRampsAuto = false
+    // Scheduling, not DSP: dereverb is a full WPE pass over the fixture and
+    // would swamp the timing these assertions are about. The denoiser is the
+    // one heavy stage left, and it is the stage the single-flight protects.
+    base.audio.dereverb = 0
+    let src = SourceInfo(width: 320, height: 180, fps: 30, duration: 2, backingScale: 1, originX: 0, originY: 0)
+    base = Director.derive(base, input: DirectorInput(events: [], source: src), revision: 1)
+
+    // Same plan from two threads at once: one render, both get the result.
+    let denoiser = CountingDenoiser(renderSeconds: 0.4)
+    let mixer = AudioMixer(mic: samples, micOffset: 0, system: nil, systemOffset: 0)
+    mixer.denoiser = denoiser
+    let start = ContinuousClock.now
+    DispatchQueue.concurrentPerform(iterations: 2) { _ in _ = mixer.mix(base) }
+    // `Duration` splits into whole seconds and attoseconds. Seconds are 1e9 ns
+    // and attoseconds are 1e-18 s, so milliseconds are seconds*1e3 +
+    // attoseconds/1e15; dividing attoseconds by 1e9 yields seconds, not ms.
+    let duplicateMs = milliseconds(start.duration(to: .now))
+    print(String(format: "VOICE same-plan concurrent renders=%d wall=%.0fms", denoiser.count, duplicateMs))
+    #expect(denoiser.count == 1, "two callers for one voice key must not both render")
+    // One 400 ms render plus this machine's fixed mix cost. Duplicate work
+    // would add a second 400 ms render on top, so the gap is unambiguous.
+    #expect(duplicateMs < 1000, "concurrent callers of one key took \(duplicateMs) ms")
+
+    // Two different voice settings on the same mixer are independent work: the
+    // old single lock serialised them, so the second waited for the whole
+    // first render. Two 0.6 s renders must overlap, not add up.
+    let parallelDenoiser = CountingDenoiser(renderSeconds: 0.6)
+    let shared = AudioMixer(mic: samples, micOffset: 0, system: nil, systemOffset: 0)
+    shared.denoiser = parallelDenoiser
+    var a = base, b = base
+    a.audio.noiseReductionStrength = 0.4
+    b.audio.noiseReductionStrength = 1.0
+    let started = ContinuousClock.now
+    DispatchQueue.concurrentPerform(iterations: 2) { index in _ = shared.mix(index == 0 ? a : b) }
+    let wallMs = milliseconds(started.duration(to: .now))
+    print(String(format: "VOICE different-plans concurrent renders=%d wall=%.0fms", parallelDenoiser.count, wallMs))
+    #expect(parallelDenoiser.count == 2)
+    // Two 600 ms renders that overlap finish in about one render's time; a
+    // serialised pair would take both, plus the fixed cost twice.
+    #expect(wallMs < 1400, "independent voice jobs were serialised: \(wallMs) ms for two 600 ms renders")
 }

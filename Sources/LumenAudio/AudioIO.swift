@@ -22,26 +22,57 @@ public enum AudioIO {
         AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: fs, channels: 2, interleaved: false)!
     }
 
-    // MARK: Decode
+    /// Decodes only the first `seconds` of a file and downmixes it to mono at
+    /// 48 kHz. Studio's first audible window must not pay for the whole
+    /// recording: on a 30-minute take the difference is seconds of decode.
+    /// The result is the head of `readMono` to within the resampler's edge
+    /// (the full render replaces it at a synchronized boundary).
+    public static func readMonoPrefix(_ url: URL, seconds: Double) throws -> [Float] {
+        let (ch, rate) = try decodePrefix(url, seconds: seconds)
+        guard let first = ch.first, !first.isEmpty else { return [] }
+        return downmix(first, second: ch.count > 1 ? ch[1] : nil, rate: rate)
+    }
 
     /// Whole file -> per-channel Float32 at the file's own sample rate.
     static func decode(_ url: URL) throws -> (channels: [[Float]], rate: Double) {
+        try decodePrefix(url, seconds: nil)
+    }
+
+    private static func decodePrefix(_ url: URL, seconds: Double?) throws -> (channels: [[Float]], rate: Double) {
         let f = try AVAudioFile(forReading: url)
         let fmt = f.processingFormat
-        let total = Int(f.length), nch = Int(fmt.channelCount)
+        let total = seconds.map { min(Int(f.length), Int(($0 * fmt.sampleRate).rounded())) } ?? Int(f.length)
+        let nch = Int(fmt.channelCount)
         guard total > 0, nch > 0 else { return ([], fmt.sampleRate) }
         var chans = [[Float]](repeating: [], count: nch)
         for c in 0..<nch { chans[c].reserveCapacity(total) }
         let cap: AVAudioFrameCount = 1 << 16
         guard let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: cap) else { throw AudioIOError.unreadable("buffer") }
-        while f.framePosition < f.length {
-            try f.read(into: buf, frameCount: cap)
+        var read = 0
+        while read < total {
+            let want = min(cap, AVAudioFrameCount(total - read))
+            try f.read(into: buf, frameCount: want)
             let n = Int(buf.frameLength)
             if n == 0 { break }
             guard let d = buf.floatChannelData else { throw AudioIOError.unreadable("not float PCM") }
             for c in 0..<nch { chans[c].append(contentsOf: UnsafeBufferPointer(start: d[c], count: n)) }
+            read += n
         }
         return (chans, fmt.sampleRate)
+    }
+
+    /// L+R downmix with the cancellation guard used by `readMono`.
+    private static func downmix(_ l: [Float], second r: [Float]?, rate: Double) -> [Float] {
+        let left = resample(l, from: rate)
+        guard let r, r.count == l.count else { return left }
+        let right = resample(r, from: rate)
+        guard left.count == right.count, !left.isEmpty else { return left }
+        let mono = vDSP.multiply(0.5, vDSP.add(left, right))
+        // Opposed microphone channels can cancel almost completely in an L+R
+        // downmix. Keep the stronger voice channel when cancellation is severe.
+        let lp = vDSP.sumOfSquares(left), rp = vDSP.sumOfSquares(right)
+        if vDSP.sumOfSquares(mono) < 0.2 * max(lp, rp) { return lp >= rp ? left : right }
+        return mono
     }
 
     // MARK: Resample (mono -> 48 kHz)
@@ -93,15 +124,18 @@ public enum AudioIO {
         return (l, r)
     }
 
+    /// The first `seconds` of a stereo file at 48 kHz, per channel.
+    public static func readStereoPrefix(_ url: URL, seconds: Double) throws -> ([Float], [Float]) {
+        let (ch, rate) = try decodePrefix(url, seconds: seconds)
+        guard let first = ch.first else { return ([], []) }
+        let l = resample(first, from: rate)
+        let r = ch.count > 1 ? resample(ch[1], from: rate) : l
+        return (l, r)
+    }
+
     public static func readMono(_ url: URL) throws -> [Float] {
-        let (l, r) = try readStereo(url)
-        guard l.count == r.count, !l.isEmpty else { return l }
-        let mono = vDSP.multiply(0.5, vDSP.add(l, r))
-        // Opposed microphone channels can cancel almost completely in an L+R
-        // downmix. Keep the stronger voice channel when cancellation is severe.
-        let lp = vDSP.sumOfSquares(l), rp = vDSP.sumOfSquares(r)
-        if vDSP.sumOfSquares(mono) < 0.2 * max(lp, rp) { return lp >= rp ? l : r }
-        return mono
+        let (ch, rate) = try decode(url)
+        return downmix(ch.first ?? [], second: ch.count > 1 ? ch[1] : nil, rate: rate)
     }
 
     public static func loadMusic(_ url: URL) -> MusicTrack? {

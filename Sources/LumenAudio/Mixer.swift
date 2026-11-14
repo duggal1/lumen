@@ -1,6 +1,7 @@
 import Foundation
 import Accelerate
 import AVFoundation
+import CryptoKit
 import LumenCore
 import LumenProject
 import LumenDirector
@@ -35,6 +36,113 @@ public struct RecordedMicrophone: Sendable {
     }
 }
 
+/// A recorded track that is still on disk. Studio opens without decoding any
+/// audio: the mixer resolves each source through a single-flight slot the first
+/// time a sample is actually needed.
+public struct RecordedMicrophoneSource: Sendable {
+    public let deviceName: String
+    public let url: URL
+    public let offset: Double
+    public init(deviceName: String, url: URL, offset: Double) {
+        self.deviceName = deviceName; self.url = url; self.offset = offset
+    }
+}
+
+/// Which part of the program a render covers. Both the preview prefix and the
+/// exported program go through the same DSP and the same time map; only the
+/// number of output samples differs.
+public enum AudioRange: Sendable, Equatable {
+    case whole
+    case prefix(Double)
+
+    public var seconds: Double? {
+        if case .prefix(let s) = self { return s }
+        return nil
+    }
+}
+
+/// Single-flight, thread-safe cache of decoded source samples. The load runs
+/// outside the lock, so a long decode never serialises other work; a second
+/// caller for the same key waits for the first instead of decoding again.
+private final class SampleCache: @unchecked Sendable {
+    private let lock = NSCondition()
+    private var values: [String: [Float]] = [:]
+    private var loading: Set<String> = []
+
+    func value(_ key: String, _ load: () -> [Float]?) -> [Float]? {
+        lock.lock()
+        if let v = values[key] { lock.unlock(); return v }
+        if loading.contains(key) {
+            while loading.contains(key) { lock.wait() }
+            let v = values[key]
+            lock.unlock()
+            return v
+        }
+        loading.insert(key)
+        lock.unlock()
+        let produced = load()
+        lock.lock()
+        loading.remove(key)
+        if let produced { values[key] = produced }
+        lock.broadcast()
+        lock.unlock()
+        return produced
+    }
+
+    func install(_ key: String, _ value: [Float]) {
+        lock.lock(); values[key] = value; loading.remove(key); lock.broadcast(); lock.unlock()
+    }
+
+    func has(_ key: String) -> Bool { lock.lock(); defer { lock.unlock() }; return values[key] != nil }
+
+    /// Drops the whole-program copy once a bounded render has published its own
+    /// prefix, so a long take does not hold two full decodes in memory.
+    func remove(_ key: String) { lock.lock(); values[key] = nil; lock.unlock() }
+}
+
+/// The same single-flight shape for the one genuinely stereo source (the system
+/// audio track), decoded once for both channels.
+private final class StereoSampleCache: @unchecked Sendable {
+    private let lock = NSCondition()
+    private var values: [String: ([Float], [Float])] = [:]
+    private var loading: Set<String> = []
+
+    func value(_ key: String, _ load: () -> ([Float], [Float])?) -> ([Float], [Float])? {
+        lock.lock()
+        if let v = values[key] { lock.unlock(); return v }
+        if loading.contains(key) {
+            while loading.contains(key) { lock.wait() }
+            let v = values[key]
+            lock.unlock()
+            return v
+        }
+        loading.insert(key)
+        lock.unlock()
+        let produced = load()
+        lock.lock()
+        loading.remove(key)
+        if let produced { values[key] = produced }
+        lock.broadcast()
+        lock.unlock()
+        return produced
+    }
+
+    func install(_ key: String, _ value: ([Float], [Float])) {
+        lock.lock(); values[key] = value; loading.remove(key); lock.broadcast(); lock.unlock()
+    }
+}
+
+/// One in-flight voice render. Waiters block on the job condition, never on a
+/// lock that the DSP holds, and a cancelled waiter stops waiting immediately.
+private final class VoiceJob: @unchecked Sendable {
+    let key: String
+    let lock = NSCondition()
+    var result: [Float]?
+    var finished = false
+    var waiters = 0
+    init(key: String) { self.key = key }
+}
+
 /// Offline mix of the whole timeline. Preview plays this buffer; export encodes it. One code path = they always match.
 /// Processed microphone Float32 WAVs are cached by source content and exact settings.
 public final class AudioMixer: @unchecked Sendable {
@@ -45,6 +153,11 @@ public final class AudioMixer: @unchecked Sendable {
     /// `musicGainDb` (-18) lands the bed ~12 dB under the voice at rest (plan 10.3).
     static let voiceRefLUFS = -16.0, musicRefLUFS = -10.0
 
+    /// The first audible window. Long enough to cover a click cue, the typing
+    /// cues that follow it and the first phrase of speech; short enough that
+    /// the neural denoiser renders it in a fraction of a second.
+    public static let firstWindowSeconds = 4.0
+
     private let mic: [Float]?, micOffset: Double, sys: [Float]?, sysRight: [Float]?, sysOffset: Double
     private let extraMicrophones: [RecordedMicrophone]
     private let cacheDir: URL?
@@ -52,15 +165,37 @@ public final class AudioMixer: @unchecked Sendable {
     /// Empty disables declick (tests call this directly).
     private let keyTimes: [Double]
     private let bank = SFXBank()
-    private let lock = NSLock()
+
+    // MARK: Source resolution (lazy: opening a project reads no audio)
+
+    private let samples = SampleCache()
+    private let stereo = StereoSampleCache()
+    private let micURL: URL?
+    private let systemURL: URL?
+    private var extraSources: [RecordedMicrophoneSource] = []
+    private let prefixSeconds: Double
+
+    // MARK: Voice work (single-flight, cancellable; one lock, held only for
+    // cache lookup and publication)
+
+    private let state = NSLock()
     private var voice: [VoiceKey: [Float]] = [:]
+    private var jobs: [String: VoiceJob] = [:]
     private var music: MusicCache?
     private var imported: [String: MusicTrack] = [:]
     private var customDenoiser: (any Denoiser)?
+
     public var denoiser: any Denoiser {
-        get { lock.lock(); defer { lock.unlock() }; return customDenoiser ?? defaultDenoiser }
-        set { lock.lock(); defer { lock.unlock() }; customDenoiser = newValue; voice.removeAll() }
+        get { state.lock(); defer { state.unlock() }; return customDenoiser ?? defaultDenoiser }
+        set {
+            state.lock()
+            customDenoiser = newValue
+            voice.removeAll()
+            state.unlock()
+        }
     }
+
+    private var defaultDenoiser: any Denoiser { TrainedVoiceDenoiser(strength: 1) }
 
     public init(mic: [Float]?, micOffset: Double, system: [Float]?, systemOffset: Double,
                 systemRight: [Float]? = nil,
@@ -70,76 +205,232 @@ public final class AudioMixer: @unchecked Sendable {
         sysRight = systemRight; sysOffset = systemOffset
         extraMicrophones = additionalMicrophones; self.cacheDir = cacheDir
         self.keyTimes = keyTimes
+        micURL = nil; systemURL = nil; prefixSeconds = Self.firstWindowSeconds
+        if let mic { samples.install("mic:whole", mic) }
+        if let system { stereo.install("system:whole", (system, systemRight ?? system)) }
+        for (i, extra) in additionalMicrophones.enumerated() { samples.install("extra:\(i)", extra.samples) }
         if let cacheDir { try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true) }
     }
 
-    /// Each microphone is processed independently; system audio never enters this chain.
-    private func voiceChain(_ plan: AudioPlan, micIndex: Int, samples: [Float]) -> [Float]? {
-        guard plan.micMode != .off else { return nil }
-        lock.lock(); defer { lock.unlock() }
-        let keys = micIndex == 0 && plan.declick ? keyTimes : []
-        let signature = try? ProcessedVoiceCache.key(samples: samples, plan: plan, keyTimes: keys)
-        let key = VoiceKey(mic: micIndex, settings: signature ?? UUID().uuidString)
-        if let cached = voice[key] { return cached }
-        let diskURL: URL? = customDenoiser == nil ? signature.flatMap { signature in
-            cacheDir?.appendingPathComponent("voice-\(signature)-48000.wav")
-        } : nil
-        let processed: [Float]
-        if let diskURL, let cached = ProcessedVoiceCache.read(diskURL, count: samples.count, rate: AudioIO.fs) {
-            processed = cached
-        } else {
-            processed = ProcessedVoiceCache.render(samples, plan: plan, keyTimes: keys, denoiser: customDenoiser)
-            if let diskURL { try? ProcessedVoiceCache.write(processed, rate: AudioIO.fs, to: diskURL) }
+    /// Studio's opening path: the tracks stay on disk until a render needs
+    /// them. Nothing here touches the file system.
+    public init(micURL: URL?, micOffset: Double, systemURL: URL?, systemOffset: Double,
+                additionalMicrophones: [RecordedMicrophoneSource] = [], cacheDir: URL? = nil,
+                keyTimes: [Double] = [], prefixSeconds: Double = AudioMixer.firstWindowSeconds) {
+        self.mic = nil; self.micOffset = micOffset; self.sys = nil; sysRight = nil; sysOffset = systemOffset
+        self.micURL = micURL; self.systemURL = systemURL
+        extraMicrophones = []; extraSources = additionalMicrophones
+        self.cacheDir = cacheDir; self.keyTimes = keyTimes
+        self.prefixSeconds = max(0.25, prefixSeconds)
+        if let cacheDir { try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true) }
+    }
+
+    /// Background preparation publishes decoded tracks here, so the first Play
+    /// never pays for a decode it could have done while the window opened.
+    public func installAudio(mic: [Float]? = nil, system: [Float]? = nil, systemRight: [Float]? = nil,
+                             additionalMicrophones: [RecordedMicrophone] = []) {
+        if let mic { samples.install("mic:whole", mic) }
+        if let system { stereo.install("system:whole", (system, systemRight ?? system)) }
+        for (i, extra) in additionalMicrophones.enumerated() { samples.install("extra:\(i)", extra.samples) }
+    }
+
+    private func micSamples(_ range: AudioRange) -> [Float]? {
+        if let mic { return mic }
+        guard let micURL else { return nil }
+        switch range {
+        case .whole: return samples.value("mic:whole") { try? AudioIO.readMono(micURL) }
+        case .prefix(let s): return samples.value("mic:\(s)s") { try? AudioIO.readMonoPrefix(micURL, seconds: s) }
         }
-        if voice.count >= max(3, extraMicrophones.count + 1) { voice.removeAll() }
-        voice[key] = processed
+    }
+
+    private func systemSamples(_ range: AudioRange) -> ([Float], [Float])? {
+        if let sys { return (sys, sysRight ?? sys) }
+        guard let systemURL else { return nil }
+        switch range {
+        case .whole: return stereo.value("system:whole") { try? AudioIO.readStereo(systemURL) }
+        case .prefix(let s): return stereo.value("system:\(s)s") { try? AudioIO.readStereoPrefix(systemURL, seconds: s) }
+        }
+    }
+
+    private func extraCount() -> Int { extraMicrophones.count + extraSources.count }
+
+    private func extraSource(_ index: Int) -> (name: String, offset: Double, url: URL?, samples: [Float]?) {
+        if index < extraMicrophones.count {
+            let m = extraMicrophones[index]
+            return (m.deviceName, m.offset, nil, m.samples)
+        }
+        let s = extraSources[index - extraMicrophones.count]
+        return (s.deviceName, s.offset, s.url, nil)
+    }
+
+    private func extraSamples(_ index: Int, _ range: AudioRange) -> [Float]? {
+        let source = extraSource(index)
+        if let provided = source.samples { return provided }
+        guard let url = source.url else { return nil }
+        let key = "extra:\(index)"
+        switch range {
+        case .whole: return samples.value(key) { try? AudioIO.readMono(url) }
+        case .prefix(let s): return samples.value("\(key):\(s)s") { try? AudioIO.readMonoPrefix(url, seconds: s) }
+        }
+    }
+
+    // MARK: Voice processing
+
+    /// The processed microphone for one output range. Single-flight per
+    /// (source, settings, sample count): a second caller for the same key waits
+    /// on the job instead of re-running the denoiser, and no lock is held
+    /// across the DSP, the disk cache read or the disk cache write.
+    private func voiceChain(_ plan: AudioPlan, micIndex: Int, range: AudioRange,
+                            cancelled: (@Sendable () -> Bool)? = nil) -> [Float]? {
+        guard plan.micMode != .off else { return nil }
+        guard let samples = extraOrMicSamples(micIndex, range), !samples.isEmpty else { return nil }
+        let keys = micIndex == 0 && plan.declick ? keyTimes : []
+        let signature: String
+        do { signature = try ProcessedVoiceCache.key(samples: samples, plan: plan, keyTimes: keys) }
+        catch { return nil }
+        let key = VoiceKey(mic: micIndex, settings: signature)
+        // Only the full-program render is worth persisting: a prefix is a
+        // provisional window and must never occupy the full render's slot.
+        let diskURL: URL? = {
+            guard !hasCustomDenoiser, range.seconds == nil, let cacheDir else { return nil }
+            return cacheDir.appendingPathComponent("voice-\(signature)-48000.wav")
+        }()
+        return voiceProcessed(key: key, signature: signature, samples: samples, plan: plan,
+                              keyTimes: keys, diskURL: diskURL, cancelled: cancelled)
+    }
+
+    private var hasCustomDenoiser: Bool {
+        state.lock(); defer { state.unlock() }
+        return customDenoiser != nil
+    }
+
+    private func extraOrMicSamples(_ micIndex: Int, _ range: AudioRange) -> [Float]? {
+        micIndex == 0 ? micSamples(range) : extraSamples(micIndex - 1, range)
+    }
+
+    private func voiceProcessed(key: VoiceKey, signature: String, samples: [Float], plan: AudioPlan,
+                                keyTimes: [Double], diskURL: URL?,
+                                cancelled: (@Sendable () -> Bool)?) -> [Float]? {
+        state.lock()
+        if let cached = voice[key] { state.unlock(); return cached }
+        if let existing = jobs[signature] {
+            existing.waiters += 1
+            state.unlock()
+            return waitFor(existing, cancelled: cancelled)
+        }
+        let job = VoiceJob(key: signature)
+        jobs[signature] = job
+        let denoiser = customDenoiser
+        state.unlock()
+
+        if let diskURL, let cached = ProcessedVoiceCache.read(diskURL, count: samples.count, rate: AudioIO.fs) {
+            publish(job, key: key, value: cached)
+            return cached
+        }
+        let processed = ProcessedVoiceCache.render(samples, plan: plan, keyTimes: keyTimes,
+                                                   denoiser: denoiser, cancelled: cancelled)
+        // A cancelled render produces no result at all: silence would be a lie.
+        guard !(processed.isEmpty && cancelled?() == true) else {
+            finish(job, key: key, value: nil)
+            return nil
+        }
+        if let diskURL, cancelled?() != true { try? ProcessedVoiceCache.write(processed, rate: AudioIO.fs, to: diskURL) }
+        publish(job, key: key, value: processed)
         return processed
     }
 
-    private func voiceChain(_ plan: AudioPlan) -> [Float]? {
-        guard let mic else { return nil }
-        return voiceChain(plan, micIndex: 0, samples: mic)
+    private func publish(_ job: VoiceJob, key: VoiceKey, value: [Float]?) {
+        state.lock()
+        if let value { voice[key] = value }
+        if voice.count >= max(3, extraCount() + 1) { voice.removeAll() }
+        jobs.removeValue(forKey: job.key)
+        state.unlock()
+        job.lock.lock()
+        job.result = value
+        job.finished = true
+        job.lock.broadcast()
+        job.lock.unlock()
     }
 
-    private func extraVoiceChain(_ index: Int, plan: AudioPlan) -> [Float]? {
-        guard extraMicrophones.indices.contains(index) else { return nil }
-        return voiceChain(plan, micIndex: index + 1, samples: extraMicrophones[index].samples)
+    /// Same as `publish`, but the job produced nothing: waiters still wake up
+    /// instead of blocking behind work that no longer exists.
+    private func finish(_ job: VoiceJob, key: VoiceKey, value: [Float]?) {
+        state.lock(); jobs.removeValue(forKey: job.key); state.unlock()
+        job.lock.lock(); job.result = value; job.finished = true; job.lock.broadcast(); job.lock.unlock()
     }
 
-    /// Start the expensive neural pass while the editor prepares its first frame.
-    public func prepareVoice(_ plan: AudioPlan) {
-        _ = voiceChain(plan)
-        for index in extraMicrophones.indices { _ = extraVoiceChain(index, plan: plan) }
+    private func waitFor(_ job: VoiceJob, cancelled: (@Sendable () -> Bool)?) -> [Float]? {
+        job.lock.lock()
+        while !job.finished {
+            if cancelled?() == true {
+                job.waiters -= 1
+                job.lock.unlock()
+                return nil
+            }
+            // Recompute the deadline every round. A fixed deadline that has
+            // already passed makes `wait(until:)` return immediately forever:
+            // the waiter then spins on the condition lock at 100 % CPU and can
+            // starve the publisher, so a 400 ms render never lands. Polling in
+            // 50 ms slices keeps cancellation responsive without the spin.
+            job.lock.wait(until: Date().addingTimeInterval(0.05))
+        }
+        let result = job.result
+        job.waiters -= 1
+        job.lock.unlock()
+        return result
+    }
+
+    /// Start the expensive neural pass while the editor prepares its first
+    /// frame. Cancellable by default: a warm-up runs inside a task, and
+    /// cancelling that task stops the DSP between chunks instead of leaving a
+    /// subprocess and a render running for a closed editor.
+    public func prepareVoice(_ plan: AudioPlan, cancelled: (@Sendable () -> Bool)? = { Task.isCancelled }) {
+        for index in -1..<extraCount() where cancelled?() != true {
+            _ = voiceChain(plan, micIndex: index + 1, range: .whole, cancelled: cancelled)
+        }
+    }
+
+    /// Renders the first audible window now. Studio calls this before it lets
+    /// the clock start, so the first played frames have their audio.
+    public func prepareFirstWindow(_ plan: AudioPlan, cancelled: (@Sendable () -> Bool)? = nil) -> Bool {
+        guard cancelled?() != true else { return false }
+        for index in -1..<extraCount() where cancelled?() != true {
+            _ = voiceChain(plan, micIndex: index + 1, range: .prefix(prefixSeconds), cancelled: cancelled)
+        }
+        return cancelled?() != true
     }
 
     private func loadMusic(_ path: String?) -> MusicCache? {
         guard let path else { return nil }
-        lock.lock(); defer { lock.unlock() }
-        if let m = music, m.path == path { return m }
+        state.lock()
+        if let m = music, m.path == path { state.unlock(); return m }
+        state.unlock()
         let t = AudioIO.loadMusic(URL(fileURLWithPath: path))
         let c = MusicCache(path: path, track: t, lufs: t.map { Loudness.integrated([$0.l, $0.r]) } ?? -70)
-        music = c
+        state.lock(); music = c; state.unlock()
         return c
     }
 
     private func importTrack(_ path: String) -> MusicTrack? {
-        lock.lock()
+        state.lock()
         let cached = imported[path]
-        lock.unlock()
+        state.unlock()
         if let cached { return cached }
         guard let (l, r) = try? AudioIO.readStereo(URL(fileURLWithPath: path)),
               !l.isEmpty, l.count == r.count else { return nil }
         let result = MusicTrack(l: l, r: r)
-        lock.lock()
+        state.lock()
         imported[path] = result
-        lock.unlock()
+        state.unlock()
         return result
     }
 
     // MARK: Building blocks (mapped lives in AudioMapped.swift)
 
     /// Loop with 0.5 s crossfade to length n, 0.3 s fade-in, 1.5 s fade-out.
-    static func fit(_ m: MusicTrack, n: Int) -> ([Float], [Float]) {
+    /// A bounded render keeps the fade-in and drops the fade-out, so the prefix
+    /// of the music bed is the same signal the full mix will have.
+    static func fit(_ m: MusicTrack, n: Int, fadeOut: Bool = true) -> ([Float], [Float]) {
         let fs = AudioIO.fs, xf = Int(0.5 * fs), len = m.l.count
         var L = [Float](repeating: 0, count: n), R = L, i = 0
         while i < n {
@@ -154,7 +445,8 @@ public final class AudioMixer: @unchecked Sendable {
             i += max(len - xf, 1)
         }
         for k in 0..<n {
-            let fin = min(1, Float(k) / Float(0.3 * fs)), fout = min(1, Float(n - k) / Float(1.5 * fs))
+            let fin = min(1, Float(k) / Float(0.3 * fs))
+            let fout = fadeOut ? min(1, Float(n - k) / Float(1.5 * fs)) : 1
             let g = fin * fout
             L[k] *= g; R[k] *= g
         }
@@ -172,7 +464,7 @@ public final class AudioMixer: @unchecked Sendable {
         let a = tl.audio, tm = tl.timeMap
         var result: [AudioStem] = []
 
-        if a.micMode != .off, let voice = voiceChain(a) {
+        if a.micMode != .off, let voice = voiceChain(a, micIndex: 0, range: .whole) {
             let mapped = Self.mapped(voice, offset: micOffset, tm: tm,
                                      n: n, muteRamps: a.muteMicInRamps)
             let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
@@ -180,10 +472,9 @@ public final class AudioMixer: @unchecked Sendable {
             result.append(AudioStem(name: "microphone", left: channel, right: channel))
         }
         if a.micMode != .off {
-            for index in extraMicrophones.indices {
-                guard let processed = extraVoiceChain(index, plan: a) else { continue }
-                let input = extraMicrophones[index]
-                let mapped = Self.mapped(processed, offset: input.offset,
+            for index in 0..<extraCount() {
+                guard let processed = voiceChain(a, micIndex: index + 1, range: .whole) else { continue }
+                let mapped = Self.mapped(processed, offset: extraSource(index).offset,
                                          tm: tm, n: n, muteRamps: a.muteMicInRamps)
                 let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
                 let channel = mapped.map { $0 * gain }
@@ -191,12 +482,11 @@ public final class AudioMixer: @unchecked Sendable {
             }
         }
 
-        if let system = sys {
-            let left = Self.mapped(system, offset: sysOffset, tm: tm, n: n, muteRamps: true)
-            let right = sysRight.map { Self.mapped($0, offset: sysOffset, tm: tm, n: n, muteRamps: true) } ?? left
+        if let (left, right) = systemSamples(.whole) {
+            let l = Self.mapped(left, offset: sysOffset, tm: tm, n: n, muteRamps: true)
+            let r = Self.mapped(right, offset: sysOffset, tm: tm, n: n, muteRamps: true)
             let gain = Float(pow(10, clamp(a.systemGainDb, -60, 24) / 20))
-            result.append(AudioStem(name: "system",
-                                    left: left.map { $0 * gain }, right: right.map { $0 * gain }))
+            result.append(AudioStem(name: "system", left: l.map { $0 * gain }, right: r.map { $0 * gain }))
         }
 
         var voiceIndex = 0
@@ -233,33 +523,70 @@ public final class AudioMixer: @unchecked Sendable {
         }
     }
 
-    public func mix(_ tl: Timeline) -> MixedAudio? {
+    /// Full-program mix, exactly what export encodes. An exact valid cache is
+    /// reused: reopening a project must not re-run a multi-minute DSP pass to
+    /// produce a buffer that is already on disk.
+    public func mix(_ tl: Timeline, cancelled: (@Sendable () -> Bool)? = nil) -> MixedAudio? {
         guard let d = tl.derived else { return nil }
-        let fs = AudioIO.fs, n = Int(tl.compositionDuration * fs) + 1, a = tl.audio, tm = tl.timeMap
+        let n = Int(tl.compositionDuration * AudioIO.fs) + 1
+        guard n > 0 else { return nil }
+        if let cached = mixCacheRead(tl, n: n) { return cached }
+        let out = render(tl, derived: d, n: n, range: .whole, cancelled: cancelled)
+        if let out, cancelled?() != true { mixCacheWrite(tl, n: n, mix: out) }
+        return out
+    }
+
+    /// True when this project has anything to play. A silent project (no mic,
+    /// no system track, no lanes, no music and no cues) must not be blocked on
+    /// audio that does not exist.
+    public func hasProgram(_ tl: Timeline) -> Bool {
+        let a = tl.audio
+        if a.micMode != .off, micURL != nil || mic != nil || extraCount() > 0 { return true }
+        if sys != nil || systemURL != nil { return true }
+        if a.musicPath != nil { return true }
+        if a.lanes.contains(where: { !$0.mute && $0.path != nil && ($0.role == .voiceover || $0.role == .music) }) { return true }
+        if a.soundEffectsEnabled, let cues = tl.derived?.cues, !cues.isEmpty { return true }
+        return false
+    }
+
+    /// The bounded first audible window. Same DSP, same time map, same master
+    /// formula; provisional only in the loudness reference, which the full mix
+    /// replaces at a synchronized boundary.
+    public func mixFirstWindow(_ tl: Timeline, cancelled: (@Sendable () -> Bool)? = nil) -> MixedAudio? {
+        guard let d = tl.derived else { return nil }
+        let full = Int(tl.compositionDuration * AudioIO.fs) + 1
+        let n = min(full, max(Int(prefixSeconds * AudioIO.fs) + 1, 1))
+        guard n > 0 else { return nil }
+        return render(tl, derived: d, n: n, range: .prefix(prefixSeconds), cancelled: cancelled)
+    }
+
+    private func render(_ tl: Timeline, derived d: DerivedTracks, n: Int, range: AudioRange,
+                        cancelled: (@Sendable () -> Bool)?) -> MixedAudio? {
+        let fs = AudioIO.fs, a = tl.audio, tm = tl.timeMap
         var L = [Float](repeating: 0, count: n), R = L
         var hasProgram = false                                   // voice / system / music (not just SFX)
 
-        if a.micMode != .off, let v = voiceChain(a) {
+        if a.micMode != .off, let v = voiceChain(a, micIndex: 0, range: range, cancelled: cancelled) {
             let y = Self.mapped(v, offset: micOffset, tm: tm, n: n, muteRamps: a.muteMicInRamps)
             let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
             for i in 0..<n { L[i] += y[i] * gain; R[i] += y[i] * gain }
             hasProgram = true
         }
         if a.micMode != .off {
-            for index in extraMicrophones.indices {
-                guard let processed = extraVoiceChain(index, plan: a) else { continue }
-                let mapped = Self.mapped(processed, offset: extraMicrophones[index].offset,
+            for index in 0..<extraCount() {
+                guard let processed = voiceChain(a, micIndex: index + 1, range: range, cancelled: cancelled) else { continue }
+                let mapped = Self.mapped(processed, offset: extraSource(index).offset,
                                          tm: tm, n: n, muteRamps: a.muteMicInRamps)
                 let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
                 for i in 0..<n { L[i] += mapped[i] * gain; R[i] += mapped[i] * gain }
                 hasProgram = true
             }
         }
-        if let s = sys {
-            let left = Self.mapped(s, offset: sysOffset, tm: tm, n: n, muteRamps: true)
-            let right = sysRight.map { Self.mapped($0, offset: sysOffset, tm: tm, n: n, muteRamps: true) } ?? left
+        if let (left, right) = systemSamples(range) {
+            let l = Self.mapped(left, offset: sysOffset, tm: tm, n: n, muteRamps: true)
+            let r = Self.mapped(right, offset: sysOffset, tm: tm, n: n, muteRamps: true)
             let gain = Float(pow(10, clamp(a.systemGainDb, -60, 24) / 20))
-            for i in 0..<n { L[i] += left[i] * gain; R[i] += right[i] * gain }
+            for i in 0..<n { L[i] += l[i] * gain; R[i] += r[i] * gain }
             hasProgram = true
         }
         for lane in a.lanes where !lane.mute && (lane.role == .voiceover || lane.role == .music) {
@@ -286,7 +613,7 @@ public final class AudioMixer: @unchecked Sendable {
             hasProgram = true
         }
         if let mc = loadMusic(a.musicPath), let mt = mc.track {
-            let (ml, mr) = Self.fit(mt, n: n)
+            let (ml, mr) = Self.fit(mt, n: n, fadeOut: range.seconds == nil)
             let norm = mc.lufs > -60 ? clamp(Self.musicRefLUFS - mc.lufs, -24, 24) : 0
             let g = Float(pow(10, (norm + a.musicGainDb) / 20))
             for i in 0..<n {
@@ -302,22 +629,28 @@ public final class AudioMixer: @unchecked Sendable {
         }
 
         var prevKeyT: Double?
-        let typingBuffers: [Int: [Float]] = {
-            guard a.keySounds, let directory = TypingPackLoader.dir(for: a.typingPackId) else { return [:] }
+        // A pack is only read when this program actually has key cues. Loading
+        // every sample of a 1.4 s-per-pack decode (and resampling it) before
+        // the cue loop made a silent project pay the full cost of a typing
+        // pack it would never use; the first audible window paid it too.
+        var typingBuffersCache: [Int: [Float]]?
+        func typingBuffers() -> [Int: [Float]] {
+            if let cached = typingBuffersCache { return cached }
             var buffers: [Int: [Float]] = [:]
-            for (code, buffer) in TypingPackLoader.buffers(in: directory) {
-                guard let channel = buffer.floatChannelData?[0] else { continue }
-                let raw = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
-                // Mechvibes packs ship at 44.1 kHz; the timeline runs at 48 kHz.
-                let pcm = AudioIO.resample(raw, from: buffer.format.sampleRate)
-                let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
-                guard peak > 1e-4 else { continue }
-                buffers[code] = pcm.map { $0 / peak }
+            if a.keySounds, let directory = TypingPackLoader.dir(for: a.typingPackId) {
+                for (code, buffer) in TypingPackLoader.buffers(in: directory) {
+                    guard let channel = buffer.floatChannelData?[0] else { continue }
+                    let raw = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+                    // Mechvibes packs ship at 44.1 kHz; the timeline runs at 48 kHz.
+                    let pcm = AudioIO.resample(raw, from: buffer.format.sampleRate)
+                    let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
+                    guard peak > 1e-4 else { continue }
+                    buffers[code] = pcm.map { $0 / peak }
+                }
             }
+            typingBuffersCache = buffers
             return buffers
-        }()
-        let packCodes = Set(typingBuffers.keys)
-        let availableCodes = typingBuffers.keys.sorted()
+        }
         for cue in d.cues {
             guard a.soundEffectsEnabled else { continue }
             let buf: [Float]
@@ -326,13 +659,16 @@ public final class AudioMixer: @unchecked Sendable {
                 // Prefer the pack's exact sample for this key. If the pack does not
                 // define one, pick deterministically among available samples so
                 // different keys don't collapse to the same sound.
+                let pack = typingBuffers()
+                let packCodes = Set(pack.keys)
                 let code = TypingPackLoader.packCode(for: Int(cue.keyCode), definedIn: packCodes)
                 let samples: [Float]
-                if let code, let exact = typingBuffers[code] {
+                if let code, let exact = pack[code] {
                     samples = exact
-                } else if !availableCodes.isEmpty {
+                } else if !pack.isEmpty {
+                    let availableCodes = pack.keys.sorted()
                     let pick = availableCodes[Int(bitPattern: UInt(bitPattern: Int(cue.keyCode))) % availableCodes.count]
-                    samples = typingBuffers[pick] ?? []
+                    samples = pack[pick] ?? []
                 } else {
                     samples = bank.render(.key).samples
                 }
@@ -381,6 +717,70 @@ public final class AudioMixer: @unchecked Sendable {
         lufs = Loudness.integrated(ch)
         return MixedAudio(l: ch[0], r: ch[1], lufs: lufs, truePeakDb: tp)
     }
+
+    // MARK: Mix cache (exact, keyed by media identity + algorithm + settings + time map)
+
+    private func mixSignature(_ tl: Timeline, n: Int) -> String? {
+        guard cacheDir != nil else { return nil }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        var hash = SHA256()
+        hash.update(data: Data((ProcessedVoiceCache.mixRevision + "|\(n)|\(customDenoiser == nil ? "df3" : "custom")").utf8))
+        if let d = try? encoder.encode(tl.audio) { hash.update(data: d) }
+        if let d = try? encoder.encode(tl.timeMap) { hash.update(data: d) }
+        for clip in tl.clips {
+            hash.update(data: Data("\(clip.path)|\(clip.start)|\(clip.end)".utf8))
+        }
+        if let derived = tl.derived {
+            for cue in derived.cues {
+                let isKey: Int
+                switch cue.kind { case .key: isKey = 1; default: isKey = 0 }
+                hash.update(data: Data("\(cue.t)|\(cue.gainDb)|\(cue.keyCode)|\(isKey)".utf8))
+            }
+            // The duck envelope is derived audio: a different envelope means a
+            // different music bed, so it belongs in the identity.
+            derived.duck.withUnsafeBytes { hash.update(bufferPointer: $0) }
+        }
+        for file in [micURL, systemURL] {
+            if let file { hash.update(data: Data(fileIdentity(file).utf8)) }
+        }
+        for source in extraSources { hash.update(data: Data(fileIdentity(source.url).utf8)) }
+        for extra in extraMicrophones {
+            hash.update(data: Data("\(extra.offset)".utf8))
+            extra.samples.withUnsafeBytes { hash.update(bufferPointer: $0) }
+        }
+        if let path = tl.audio.musicPath { hash.update(data: Data(path.utf8)) }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Path plus size plus modification date: two different recordings of the
+    /// same length never share a cache, and a re-recorded file invalidates it.
+    private func fileIdentity(_ url: URL) -> String {
+        guard let s = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return url.path }
+        return "\(url.path)|\(s.fileSize ?? 0)|\(s.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+    }
+
+    private func mixCacheRead(_ tl: Timeline, n: Int) -> MixedAudio? {
+        guard let signature = mixSignature(tl, n: n), let cacheDir,
+              n == Int(tl.compositionDuration * AudioIO.fs) + 1 else { return nil }
+        let url = cacheDir.appendingPathComponent("mix-\(signature).caf")
+        guard let (l, r) = try? AudioIO.readStereo(url), l.count == n, r.count == n else { return nil }
+        let ch = [l, r]
+        return MixedAudio(l: l, r: r, lufs: Loudness.integrated(ch), truePeakDb: Loudness.truePeakDb(ch))
+    }
+
+    private func mixCacheWrite(_ tl: Timeline, n: Int, mix: MixedAudio) {
+        guard let signature = mixSignature(tl, n: n), let cacheDir else { return }
+        let url = cacheDir.appendingPathComponent("mix-\(signature).caf")
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+        let temporary = cacheDir.appendingPathComponent("mix-\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        do {
+            try AudioIO.writeCAF(mix.l, mix.r, to: temporary)
+            try FileManager.default.moveItem(at: temporary, to: url)
+        } catch {
+            // A cache that cannot be written must never fail a mix.
+        }
+    }
 }
 
 /// Preview playback of a pre-mixed buffer, started in lock-step with the host clock. `load` is safe from any thread.
@@ -402,8 +802,11 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
 
     /// True once `load` has installed a non-empty mixed buffer. Transport
     /// reads this to decide whether audio can start locked to video now,
-    /// or video must run silent until the background mix joins.
+    /// or video must wait in a truthful preparing state.
     public var isLoaded: Bool { mixed.withLock { $0.audio != nil && !($0.audio!.l.isEmpty) } }
+
+    /// Length of the loaded program in seconds.
+    public var duration: Double { mixed.withLock { $0.buffer.map { Double($0.value.frameLength) / 48000 } ?? 0 } }
 
     /// Starts the engine early so a cold first click does not pay engine
     /// startup latency inside the transport gap. Safe to call repeatedly.
@@ -440,6 +843,15 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
         mixed.withLock { $0 = (m, ready) }
     }
 
+    private func buffer(from m: MixedAudio, start s: Int) -> AVAudioPCMBuffer? {
+        let count = m.l.count - s
+        guard count > 0, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(count)) else { return nil }
+        b.frameLength = AVAudioFrameCount(count)
+        m.l.withUnsafeBufferPointer { b.floatChannelData![0].update(from: $0.baseAddress! + s, count: count) }
+        m.r.withUnsafeBufferPointer { b.floatChannelData![1].update(from: $0.baseAddress! + s, count: count) }
+        return b
+    }
+
     /// Starts playback of output-time `t` at `atHostSeconds` (HostClock seconds).
     @discardableResult public func play(from t: Double, atHostSeconds h: Double) -> Double {
         node.stop()
@@ -450,19 +862,45 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
         let b: AVAudioPCMBuffer
         if s == 0, let prepared = snapshot.buffer {
             b = prepared.value
-        } else {
-            guard let tail = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(cnt)) else { return max(h, HostClock.now() + 0.03) }
-            tail.frameLength = AVAudioFrameCount(cnt)
-            m.l.withUnsafeBufferPointer { tail.floatChannelData![0].update(from: $0.baseAddress! + s, count: cnt) }
-            m.r.withUnsafeBufferPointer { tail.floatChannelData![1].update(from: $0.baseAddress! + s, count: cnt) }
+        } else if let tail = buffer(from: m, start: s) {
             b = tail
-        }
+        } else { return max(h, HostClock.now() + 0.03) }
         if !engine.isRunning { do { try engine.start() } catch { return max(h, HostClock.now() + 0.03) } }
         node.scheduleBuffer(b, at: nil, options: .interrupts, completionHandler: nil)
         let latency = outputLatency
         let start = max(h - latency, HostClock.now() + 0.005)
         node.play(at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: start)))
         return max(h, start + latency)
+    }
+
+    /// Replaces the program with an exact mix at the content position that is
+    /// being heard right now, crossfading the head so the join has no step in
+    /// time or level. The video clock is never touched, so playback stays
+    /// continuous while the provisional window becomes the final program.
+    @discardableResult public func upgrade(to m: MixedAudio, atContent t: Double, crossfade: Double = 0.03) -> Bool {
+        let snapshot = mixed.withLock { $0 }
+        guard let old = snapshot.audio else { load(m); return false }
+        let s = min(max(Int(t * 48000), 0), min(old.l.count, m.l.count) - 1)
+        guard s >= 0, m.l.count > s else { load(m); return false }
+        guard let tail = buffer(from: m, start: s), let previous = buffer(from: old, start: s) else { load(m); return false }
+        let count = min(tail.frameLength, previous.frameLength)
+        let fade = min(Int(crossfade * 48000), Int(count))
+        if fade > 0 {
+            for ch in 0..<2 {
+                guard let a = tail.floatChannelData?[ch], let b = previous.floatChannelData?[ch] else { continue }
+                for i in 0..<fade {
+                    let w = Float(i) / Float(fade)
+                    a[i] = a[i] * w + b[i] * (1 - w)
+                }
+            }
+        }
+        tail.frameLength = count
+        if !engine.isRunning { try? engine.start() }
+        node.stop()
+        node.scheduleBuffer(tail, at: nil, options: .interrupts)
+        node.play(at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: HostClock.now() + 0.005)))
+        mixed.withLock { $0 = (m, nil) }
+        return true
     }
 
     public func stop() { node.stop() }

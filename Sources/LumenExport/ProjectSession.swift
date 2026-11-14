@@ -10,6 +10,15 @@ import LumenRender
 import LumenAudio
 import LumenAnalysis
 
+/// Where the recorded tracks are in their preparation. The editor opens before
+/// this is `ready`; playback asks it before it lets the clock start.
+public enum AudioPreparation: Sendable, Equatable {
+    case idle
+    case preparing
+    case ready
+    case failed(String)
+}
+
 /// An opened project: frame sources, Director inputs, audio mixer. Immutable after `open`; edits live in the Timeline value.
 public final class ProjectSession: @unchecked Sendable {
     public let bundle: ProjectBundle
@@ -31,18 +40,27 @@ public final class ProjectSession: @unchecked Sendable {
     public let mixer: AudioMixer
     public let transcriptFile: TranscriptFile?
     public let micOffset: Double
-    public let waveform: [Float]                 // 100 Hz peaks in SOURCE time, 0...1
+    /// The waveform is derived audio, not part of the project file: it is
+    /// produced by the background preparation and published here when ready.
+    /// `openEditor` returns before it exists, so every reader must accept an
+    /// empty array (a not-yet-computed envelope draws as dust, never as zero).
+    public var waveform: [Float] { audioState.withLock { $0.waveform } }
+    public var audioPreparation: AudioPreparation { audioState.withLock { $0.state } }
     public let cursors: [CustomCursor]
     /// Shared across the project's decoder; imported clips open their own
     /// `ReaderFrameSource` lazily and keep it for the life of the session.
     private let device: SendableMetalDevice
     private let clipSources = OSAllocatedUnfairLock<[String: ReaderFrameSource]>(initialState: [:])
+    private struct AudioState { var waveform: [Float] = []; var state: AudioPreparation = .idle }
+    private let audioState = OSAllocatedUnfairLock(initialState: AudioState())
+    private let audioTaskState = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
     init(bundle: ProjectBundle, meta: ProjectMeta, revision: Int, screen: ReaderFrameSource, webcam: (any FrameSource)?, input: DirectorInput,
          mixer: AudioMixer, transcriptFile: TranscriptFile?, micOffset: Double, waveform: [Float], cursors: [CustomCursor], device: SendableMetalDevice) {
         self.bundle = bundle; self.meta = meta; self.screen = screen; self.webcam = webcam
         projectRevision = OSAllocatedUnfairLock(initialState: revision)
         inputState = OSAllocatedUnfairLock(initialState: input)
-        self.mixer = mixer; self.transcriptFile = transcriptFile; self.micOffset = micOffset; self.waveform = waveform; self.cursors = cursors; self.device = device
+        self.mixer = mixer; self.transcriptFile = transcriptFile; self.micOffset = micOffset; self.cursors = cursors; self.device = device
+        audioState.withLock { $0.waveform = waveform; $0.state = .ready }
         startProjectWatcher()
     }
 
@@ -188,37 +206,29 @@ public final class ProjectSession: @unchecked Sendable {
         return result
     }
 
+    /// Full open: every track is decoded and analysed before returning. Used by
+    /// the CLI, the daemon and export, where a caller is about to render the
+    /// whole program. The editor uses `openEditor`, which does not pay this.
     public static func open(_ b: ProjectBundle, device: MTLDevice) async throws -> (ProjectSession, Timeline) {
+        let (session, timeline) = try await openEditor(b, device: device, prepareAudio: false)
+        await session.prepareAudio()
+        return (session, timeline)
+    }
+
+    /// Minimal open: the persisted project, the event log, the transcript and
+    /// the frame readers. No audio track is decoded, no VAD runs, no envelope
+    /// is computed and no neural pass starts. Everything audio-related is
+    /// prepared incrementally by `prepareAudio`, which this function starts
+    /// unless the caller asks to drive it (tests do).
+    public static func openEditor(_ b: ProjectBundle, device: MTLDevice,
+                                  prepareAudio shouldPrepare: Bool = true) async throws -> (ProjectSession, Timeline) {
         let file = try b.load(), meta = file.meta, origin = meta.clock.originHostSeconds
         let events = (try? b.events(origin: origin)) ?? []
         var ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
         for i in ax.indices { if let time = ax[i].sampledAt { ax[i].sampledAt = time - origin } }
-        var mic: [Float]?, sys: [Float]?, sysRight: [Float]?
-        var micOff = 0.0, sysOff = 0.0
-        if let m = meta.mic { mic = try? AudioIO.readMono(b.micURL); micOff = m.startHostSeconds - origin }
-        if let s = meta.system {
-            if let (left, right) = try? AudioIO.readStereo(b.systemURL) { sys = left; sysRight = right }
-            sysOff = s.startHostSeconds - origin
-        }
-        // Older projects have no extra tracks. An unavailable/missing device
-        // recording is skipped on reopen without losing the rest of the project.
-        let extras: [RecordedMicrophone] = meta.additionalMicrophones.compactMap { item in
-            let url = b.url.appendingPathComponent(item.track.file)
-            guard url.deletingLastPathComponent().standardizedFileURL == b.url.standardizedFileURL,
-                  let samples = try? AudioIO.readMono(url), !samples.isEmpty else { return nil }
-            return RecordedMicrophone(deviceName: item.deviceName, samples: samples,
-                                      offset: item.track.startHostSeconds - origin)
-        }
-        let primaryVAD = (mic.map { VAD.regions($0) } ?? [])
-            .map { ($0.lowerBound + micOff) ... ($0.upperBound + micOff) }
-        let secondaryVAD = extras.flatMap { track in
-            VAD.regions(track.samples).map {
-                ($0.lowerBound + track.offset) ... ($0.upperBound + track.offset)
-            }
-        }
-        let vad = (primaryVAD + secondaryVAD).sorted { $0.lowerBound < $1.lowerBound }
+        let micOff = (meta.mic?.startHostSeconds ?? origin) - origin
+        let sysOff = (meta.system?.startHostSeconds ?? origin) - origin
         let tf = b.loadTranscript()
-        let wave = mic.map { envelope($0, offset: micOff) } ?? []
         let sharedDevice = SendableMetalDevice(device)
         let screen = try await ReaderFrameSource(url: b.screenURL, device: sharedDevice)
         var web: (any FrameSource)?, aspect: Float = 16.0 / 9
@@ -228,17 +238,100 @@ public final class ProjectSession: @unchecked Sendable {
             if let tr = try? await AVURLAsset(url: b.webcamURL).loadTracks(withMediaType: .video).first,
                let sz = try? await tr.load(.naturalSize), sz.height > 0 { aspect = Float(sz.width / sz.height) }
         }
-        let input = DirectorInput(events: events, source: meta.source, vad: vad, ax: ax, face: [],
+        // VAD is empty until the background preparation publishes it. A derive
+        // with no voice regions simply has no speed ramps yet; it is replanned
+        // when the regions arrive.
+        let input = DirectorInput(events: events, source: meta.source, vad: [], ax: ax, face: [],
                                   webcamAspect: aspect, transcript: tf?.transcript.shifted(by: micOff))
         // Declick windows are source-time; convert to mic-file time by micOff.
         let keyTimesInMicFile = events.filter { $0.kind == .keyDown }.map { $0.t - micOff }.filter { $0 >= 0 }
+        let mixer = AudioMixer(micURL: meta.mic == nil ? nil : b.micURL, micOffset: micOff,
+                               systemURL: meta.system == nil ? nil : b.systemURL, systemOffset: sysOff,
+                               additionalMicrophones: meta.additionalMicrophones.compactMap { item in
+                                   let url = b.url.appendingPathComponent(item.track.file)
+                                   guard url.deletingLastPathComponent().standardizedFileURL == b.url.standardizedFileURL else { return nil }
+                                   return RecordedMicrophoneSource(deviceName: item.deviceName, url: url,
+                                                                   offset: item.track.startHostSeconds - origin)
+                               },
+                               cacheDir: b.cacheURL, keyTimes: keyTimesInMicFile)
         let s = ProjectSession(bundle: b, meta: meta, revision: file.revision ?? 0, screen: screen, webcam: web, input: input,
-                               mixer: AudioMixer(mic: mic, micOffset: micOff, system: sys, systemOffset: sysOff,
-                                                 systemRight: sysRight,
-                                                 additionalMicrophones: extras, cacheDir: b.cacheURL,
-                                                 keyTimes: keyTimesInMicFile),
-                               transcriptFile: tf, micOffset: micOff, waveform: wave, cursors: CursorLibrary.load(from: b.cursorsURL), device: sharedDevice)
+                               mixer: mixer, transcriptFile: tf, micOffset: micOff, waveform: [],
+                               cursors: CursorLibrary.load(from: b.cursorsURL), device: sharedDevice)
+        // A full open already paid for the audio, so the preparation has
+        // nothing left to do; the editor path gets it in the background.
+        s.audioState.withLock { $0.state = .idle }
+        if shouldPrepare {
+            s.audioTaskState.withLock { $0 = Task.detached(priority: .userInitiated) { await s.performAudioPreparation() } }
+        }
         return (s, file.timeline)
+    }
+
+    /// Decodes and analyses the recorded tracks, then publishes the waveform,
+    /// the VAD regions and the mixer's source samples. Single-flight and
+    /// idempotent: warm reopening reuses the result instead of rescheduling it.
+    /// Cancellation is cooperative, so a closed editor does not leave a decode
+    /// or a denoiser running.
+    public func prepareAudio(cancelled: (@Sendable () -> Bool)? = nil) async -> Bool {
+        if audioPreparation == .ready { return true }
+        if let running = audioTaskState.withLock({ $0 }) {
+            await running.value
+            return audioPreparation == .ready
+        }
+        let task = Task.detached(priority: .userInitiated) { [self] in
+            await self.performAudioPreparation(cancelled: cancelled)
+        }
+        // A concurrent caller may have installed its own task in the meantime;
+        // the loser's task sees `.preparing` and returns without doing work.
+        let installed = audioTaskState.withLock { state -> Bool in
+            guard state == nil else { return false }
+            state = task
+            return true
+        }
+        await task.value
+        if installed { audioTaskState.withLock { $0 = nil } }
+        return audioPreparation == .ready
+    }
+
+    private func performAudioPreparation(cancelled: (@Sendable () -> Bool)? = nil) async {
+        guard audioPreparation == .idle else { return }
+        audioState.withLock { $0.state = .preparing }
+        let meta = self.meta, b = bundle, origin = meta.clock.originHostSeconds
+        var micOff = micOffset, sysOff = 0.0
+        var mic: [Float]?, sys: [Float]?, sysRight: [Float]?
+        var extras: [RecordedMicrophone] = []
+        if let m = meta.mic, cancelled?() != true {
+            mic = try? AudioIO.readMono(b.micURL)
+            micOff = m.startHostSeconds - origin
+        }
+        if let s = meta.system, cancelled?() != true {
+            if let (left, right) = try? AudioIO.readStereo(b.systemURL) { sys = left; sysRight = right }
+            sysOff = s.startHostSeconds - origin
+        }
+        // Older projects have no extra tracks. An unavailable/missing device
+        // recording is skipped on reopen without losing the rest of the project.
+        for item in meta.additionalMicrophones where cancelled?() != true {
+            let url = b.url.appendingPathComponent(item.track.file)
+            guard url.deletingLastPathComponent().standardizedFileURL == b.url.standardizedFileURL,
+                  let samples = try? AudioIO.readMono(url), !samples.isEmpty else { continue }
+            extras.append(RecordedMicrophone(deviceName: item.deviceName, samples: samples,
+                                             offset: item.track.startHostSeconds - origin))
+        }
+        if cancelled?() == true {
+            audioState.withLock { $0.state = .failed("Cancelled") }
+            return
+        }
+        let primaryVAD = (mic.map { VAD.regions($0) } ?? [])
+            .map { ($0.lowerBound + micOff) ... ($0.upperBound + micOff) }
+        let secondaryVAD = extras.flatMap { track in
+            VAD.regions(track.samples).map {
+                ($0.lowerBound + track.offset) ... ($0.upperBound + track.offset)
+            }
+        }
+        let vad = (primaryVAD + secondaryVAD).sorted { $0.lowerBound < $1.lowerBound }
+        let wave = mic.map { Self.envelope($0, offset: micOff) } ?? []
+        mixer.installAudio(mic: mic, system: sys, systemRight: sysRight, additionalMicrophones: extras)
+        inputState.withLock { $0.vad = vad }
+        audioState.withLock { $0.waveform = wave; $0.state = .ready }
     }
 
     private static func envelope(_ x: [Float], offset: Double) -> [Float] {
