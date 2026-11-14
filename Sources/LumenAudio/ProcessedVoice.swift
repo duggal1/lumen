@@ -21,6 +21,7 @@ struct ProcessedVoiceCache {
         let dereverb: Double
         let clarity: Bool
         let studio: Double
+        let studioMode: StudioMode
 
         init(_ plan: AudioPlan, hasKeys: Bool) {
             noiseStrength = plan.micClean ? (plan.noiseReductionStrength.isFinite ? clamp(plan.noiseReductionStrength, 0, 1) : 1) : 0
@@ -29,6 +30,7 @@ struct ProcessedVoiceCache {
             dereverb = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
             clarity = plan.voiceClarity
             studio = plan.studio.isFinite ? clamp(plan.studio, 0, 1) : 0
+            studioMode = plan.studioMode
         }
     }
 
