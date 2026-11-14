@@ -337,6 +337,11 @@ enum TimelineSelection: Equatable {
                     guard let self, self.analysisGeneration == generation else { return }
                     self.replan()
                 }
+            }, onActivity: { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self, self.analysisGeneration == generation else { return }
+                    self.replan()
+                }
             }, onPrivacy: { [weak self] error in
                 Task { @MainActor [weak self] in
                     guard let self, self.analysisGeneration == generation else { return }
