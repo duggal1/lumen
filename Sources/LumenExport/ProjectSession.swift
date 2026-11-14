@@ -154,6 +154,7 @@ public final class ProjectSession: @unchecked Sendable {
     @discardableResult
     public func analyze(_ timeline: Timeline, privacyProgress: @escaping @Sendable (Double) -> Void = { _ in },
                         onTyping: @escaping @Sendable () -> Void = {},
+                        onActivity: @escaping @Sendable () -> Void = {},
                         onPrivacy: @escaping @Sendable (String?) -> Void = { _ in },
                         onPrivacyStart: @escaping @Sendable () -> Void = {}) async -> AnalysisResult {
         let sequence = analysisSequence.withLock { value in value += 1; return value }
@@ -168,7 +169,7 @@ public final class ProjectSession: @unchecked Sendable {
                                       vocabulary: timeline.captions.vocabulary, // Caption recognition runs once with Moonshine after capture, not
                                        // concurrently with the UI's file transcriber.
                                        includeSpeech: false,
-                                      includeActivity: !snapshot.events.contains(where: \.hasPosition),
+                                      includeActivity: timeline.camera.autoZoom && timeline.camera.preset != .fixed,
                                       includeFace: meta.webcam != nil,
                                       includePersonMask: timeline.layouts.contains { $0.kind == .cameraCutout }
                                           || (timeline.webcam?.backdrop != nil && timeline.webcam?.backdrop != .original),
@@ -192,6 +193,10 @@ public final class ProjectSession: @unchecked Sendable {
         }, onPrivacyStart: {
             guard self.analysisSequence.withLock({ $0 == sequence }) else { return }
             onPrivacyStart()
+        }, onActivity: { [self] result in
+            guard !Task.isCancelled, analysisSequence.withLock({ $0 == sequence }) else { return }
+            inputState.withLock { $0.activity = result.activity }
+            onActivity()
         })
         guard !Task.isCancelled else { return result }
         let appliedRequest = request
