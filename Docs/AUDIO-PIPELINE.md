@@ -22,7 +22,7 @@ The active finisher has three mild tone filters and one compressor. No hidden
 |---|---|
 | `micClean` | Enables trained DeepFilterNet3 noise reduction. Failure/unavailability uses bounded spectral Wiener suppression, rather than raw passthrough. |
 | `noiseReductionStrength` | Zero bypasses denoising; 0–1 sets neural attenuation and the fallback's attenuation limit (up to 18 dB). Frequency/time smoothing avoids hard gates. |
-| `dereverb` | Zero bypasses room prediction. 0–1 blends up to 65% predicted direct signal, preserving dry voice. One WPE pass, four taps, prediction through 4 kHz; no stacked tail suppressor. |
+| `dereverb` | Zero bypasses room prediction. 0–1 blends up to 20% predicted direct signal during speech and up to 65% on quieter tails, with a smooth 30 ms blend envelope. One WPE pass, twelve taps, prediction through 4 kHz; no stacked tail suppressor. |
 | `voiceClarity` | Independently enables +0.8 dB low shelf at 130 Hz, −1.2 dB broad mud cut at 300 Hz, +1.5 dB broad presence at 3 kHz. No air boost or saturation. |
 | `studio` | Continuous compressor strength; zero bypasses. Speech-relative threshold, 8 dB soft knee, 20 ms attack, 200 ms release, up to 2 dB makeup. No automatic input gain riding. |
 | `studioMode` | Same compressor; maximum ratio 2.5:1 standard, 3:1 optimized. No alternate processing chain. |
