@@ -333,7 +333,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var noiseReductionStrength = 1.0
     public var voiceClarity = true
     public var micMode: MicMode = .standard
-    /// Studio-voice strength, 0...1 (tone, de-ess, leveler). Replaces the old
+    /// Gentle compression strength, 0...1; clarity EQ is independent. Replaces the old
     /// `voiceProfile` + `studioAmount` pair. Legacy `studioAmount` values decode
     /// into this field; legacy `voiceProfile == .studio` projects keep the default.
     public var studio = 0.25
