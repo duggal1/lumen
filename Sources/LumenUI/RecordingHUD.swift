@@ -10,9 +10,10 @@ import Observation
     private var panel: NSPanel?
     private var moveObserver: NSObjectProtocol?
     private let presentation = HUDPresentation()
+    private var settings: CaptureSettingsController?
 
     init(_ app: AppModel, screen: NSScreen?) {
-        let width: CGFloat = 360, height: CGFloat = 56
+        let width: CGFloat = 390, height: CGFloat = 56
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.appearance = NSAppearance(named: .aqua)
@@ -36,7 +37,11 @@ import Observation
         material.wantsLayer = true
         material.layer?.cornerRadius = Radius.card
         material.layer?.masksToBounds = true
-        let content = NSHostingView(rootView: RecordingHUD(app: app, presentation: presentation))
+        let content = NSHostingView(rootView: RecordingHUD(app: app, presentation: presentation, openSettings: { [weak self] in
+            guard let self else { return }
+            if self.settings == nil { self.settings = CaptureSettingsController(app) }
+            self.settings?.show()
+        }))
         content.translatesAutoresizingMaskIntoConstraints = false
         material.addSubview(content)
         NSLayoutConstraint.activate([
@@ -101,18 +106,29 @@ private struct RecordingHUD: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let app: AppModel
     @ObservedObject var presentation: HUDPresentation
+    let openSettings: () -> Void
 
     var body: some View {
         HStack(spacing: Space.s2) {
-            if case .countdown(let number) = app.phase {
+            if app.phase == .idle {
+                Button { app.showLibrary() } label: {
+                    Image(nsImage: NSApp.applicationIconImage ?? NSImage())
+                        .resizable().scaledToFit().frame(width: 24, height: 24)
+                }.buttonStyle(.plain).accessibilityLabel("Open Lumen")
+                HUDAction(title: "Settings", icon: "slider.horizontal.3", action: openSettings)
+                Spacer(minLength: 0)
+                HUDAction(title: "Record", icon: "record.circle") { app.toggle() }
+            } else if case .countdown(let number) = app.phase {
                 PixelWait()
                 Text("Starting in \(number)").font(AppType.label).monospacedDigit()
                 Spacer(minLength: 0)
             } else if app.phase == .recording {
-                Image(nsImage: NSApp.applicationIconImage ?? NSImage())
-                    .resizable().interpolation(.high).scaledToFit()
-                    .frame(width: 24, height: 24)
-                    .accessibilityLabel(app.paused ? "Paused" : "Recording")
+                Button { app.showLibrary() } label: {
+                    Image(nsImage: NSApp.applicationIconImage ?? NSImage())
+                        .resizable().interpolation(.high).scaledToFit().frame(width: 24, height: 24)
+                }.buttonStyle(.plain).accessibilityLabel("Open Lumen")
+                Button(action: openSettings) { Image(systemName: "slider.horizontal.3") }
+                    .buttonStyle(.plain).accessibilityLabel("Capture settings")
                 Text(time(app.stats?.elapsed ?? 0))
                     .font(AppType.label).monospacedDigit()
                     .contentTransition(.numericText())
@@ -202,6 +218,7 @@ private struct RecordingLevelTape: View {
     @State private var history: [Int] = []
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
         Canvas { context, size in
             let columns = 24, cell: CGFloat = 2, pitch: CGFloat = 3
             let values = paused ? [] : history
@@ -219,13 +236,15 @@ private struct RecordingLevelTape: View {
             }
         }
         .frame(width: 72, height: 20)
-        .onChange(of: meter.level) { _, value in
+        .onChange(of: timeline.date) { _, date in
+            let value = meter.level
             let db = value > 0 && value.isFinite ? 20 * log10(Double(value)) : -100
-            let magnitude = db <= -54 ? 0 : min(3, max(1, Int(((db + 54) / 48 * 3).rounded(.up))))
+            let magnitude = db <= -54 ? (Int(date.timeIntervalSinceReferenceDate * 10) % 4 == 0 ? 1 : 0) : min(3, max(1, Int(((db + 54) / 48 * 3).rounded(.up))))
             history = Array((history + [magnitude]).suffix(24))
         }
+        }
         .accessibilityElement()
-        .accessibilityLabel("Microphone level")
+        .accessibilityLabel("Audio level")
         .accessibilityValue(paused ? "Paused" : meter.level > 0.002 ? "Sound detected" : "Quiet")
     }
 }
