@@ -62,3 +62,31 @@ for reviewing a real recording. Do not claim measured caret accuracy, dip
 thresholds, minimum full-scale hold duration or visual smoothness from a build.
 AXObserver capture changes are deferred until those recording diagnostics have
 been reviewed. Existing immediate key delivery and asynchronous enrichment stay.
+
+## Autonomous product shots
+
+Visual activity is analyzed for ordinary desktop recordings as well as imported
+and device footage. It no longer requires an empty mouse-event log. Analysis
+version 2 records changed-region bounds and coverage at 10 Hz. A newly static
+result is checked against its pre-change frame for 0.4 seconds, so a single
+persistent result can trigger a shot while a one-frame flash cannot.
+
+The planner groups nearby changes (gap up to 0.6 seconds, spatial drift up to
+16% of the source diagonal) into a stable region. At least three observations
+spanning 0.3 seconds are required. Tiny regions below 0.8% of frame area,
+changes across more than 55% of the frame, and heavy full-screen change are
+ignored. These are visual heuristics, not semantic recognition of AI tasks.
+
+Clicks/typing within a second and scrolling/dragging near the change take
+priority. Eligible regions use at most 1.6× magnification with 35% framing room,
+hold through the change plus reading time, and have a three-second cooldown.
+They feed the existing shared centre/log-scale filter, including its lead-in,
+bridging and derivative publication. No new motion mode or filter is added.
+Manual shots, the fixed preset, auto-zoom off and suppressed automatic shots
+retain their existing behavior. Visual activity also interrupts idle speed-ramp
+planning so generated results are not skipped as if nothing happened.
+
+Activity publishes as soon as its background analyzer completes; Studio replans
+without waiting for the other scans. Enabling automatic zoom starts analysis
+if it was initially off. Completed Studio preview and export share these shots;
+this does not add autonomous camera motion to the live recording monitor.
