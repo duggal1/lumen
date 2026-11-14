@@ -38,7 +38,7 @@ enum VisualZoom {
             if let previous = region {
                 let distance = hypot(rect.midX - previous.midX, rect.midY - previous.midY)
                 let cut = tm.cuts.contains { $0.start < point.t && $0.end > end }
-                if point.t - end > 0.6 || point.t - start > 8 || distance > hypot(width, height) * 0.16 || cut { close() }
+                if point.t - end > 0.6 || distance > hypot(width, height) * 0.16 || cut { close() }
             }
             if region == nil { start = point.t; region = rect }
             else { region = region?.union(rect) }
