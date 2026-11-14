@@ -10,21 +10,25 @@ struct ProcessedVoiceCache {
     /// Bump whenever the processing semantics change: every persisted voice
     /// and mix cache below is keyed by it, so an algorithm change can never
     /// be served a result produced by the old one.
-    static let revision = "voice-v13-cancellable-df3"
+    static let revision = "voice-v14-short-chain"
     /// Full-program mix cache. Keyed by revision + exact settings + time map.
-    static let mixRevision = "mix-v1"
+    static let mixRevision = "mix-v2-short-chain"
 
     private struct Settings: Encodable {
         let noiseStrength: Double
         let engine: String
         let declickDepth: Double
         let dereverb: Double
+        let clarity: Bool
+        let studio: Double
 
         init(_ plan: AudioPlan, hasKeys: Bool) {
             noiseStrength = plan.micClean ? (plan.noiseReductionStrength.isFinite ? clamp(plan.noiseReductionStrength, 0, 1) : 1) : 0
-            engine = noiseStrength > 0 && DeepFilterNet.isAvailable ? "df3" : "off"
+            engine = noiseStrength > 0 && DeepFilterNet.isAvailable ? "df3-spectral-fallback" : (noiseStrength > 0 ? "spectral" : "off")
             declickDepth = plan.declick && hasKeys ? plan.declickDepthDb : 0
             dereverb = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
+            clarity = plan.voiceClarity
+            studio = plan.studio.isFinite ? clamp(plan.studio, 0, 1) : 0
         }
     }
 
@@ -59,6 +63,21 @@ struct ProcessedVoiceCache {
         try Data(contentsOf: temporary).write(to: url, options: .atomic)
     }
 
+    /// Shared microphone chain for preview, stems, export and transcription caches.
+    static func process(_ samples: [Float], plan: AudioPlan, keyTimes: [Double],
+                        denoiser: (any Denoiser)? = nil,
+                        cancelled: (@Sendable () -> Bool)? = nil) -> [Float] {
+        guard cancelled?() != true else { return [] }
+        let finite = samples.map { $0.isFinite ? $0 : 0 }
+        let filtered = Cascade.apply(finite, [.highpass(70, fs: AudioIO.fs)])
+        let clean = render(filtered, plan: plan, keyTimes: keyTimes,
+                           denoiser: denoiser, cancelled: cancelled)
+        guard cancelled?() != true else { return [] }
+        let finished = VoiceStudio.finish(clean, vad: VAD.regions(clean), plan: plan)
+        guard cancelled?() != true else { return [] }
+        return finished
+    }
+
     /// Apply noise reduction, then the separately configured keyboard declick.
     /// `cancelled` is polled between DSP chunks so an obsolete job (a seek, a
     /// newer edit, a closed editor) stops consuming CPU instead of running to
@@ -83,33 +102,14 @@ struct ProcessedVoiceCache {
             voice = processed
         }
 
+        let echo = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
+        if echo > 0 {
+            voice = LateReverb.process(voice, amount: echo)
+            if stopped() { return [] }
+        }
         if plan.declick, !keyTimes.isEmpty {
             voice = Declick.process(voice, keyTimes: keyTimes, vad: VAD.regions(voice), depthDb: plan.declickDepthDb)
             if stopped() { return [] }
-        }
-        let echo = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
-        if echo > 0, voice.count > 16_384 {
-            var wpe = WPE()
-            wpe.taps = 4
-            wpe.iterations = 1
-            wpe.maxHz = 4_000
-            let reduced = wpe.process(voice)
-            if reduced.count == voice.count {
-                let amount = Float(echo * 0.3)
-                // Chunked so a long file can be abandoned between chunks.
-                let chunk = 1 << 16
-                var out = voice
-                var i = 0
-                while i < voice.count {
-                    if stopped() { return [] }
-                    let end = min(i + chunk, voice.count)
-                    for k in i..<end {
-                        out[k] = reduced[k].isFinite ? voice[k] + (reduced[k] - voice[k]) * amount : voice[k]
-                    }
-                    i = end
-                }
-                voice = out
-            }
         }
         return stopped() ? [] : voice
     }
@@ -143,7 +143,7 @@ public func cleanVoiceURL(for project: ProjectBundle, settings: AudioPlan? = nil
         if let cached = ProcessedVoiceCache.read(voiceURL, count: samples.count, rate: AudioIO.fs) {
             voice = cached
         } else {
-            let rendered = ProcessedVoiceCache.render(samples, plan: plan, keyTimes: keyTimes)
+            let rendered = ProcessedVoiceCache.process(samples, plan: plan, keyTimes: keyTimes)
             try Task.checkCancellation()
             guard !rendered.isEmpty else { throw CancellationError() }
             try ProcessedVoiceCache.write(rendered, rate: AudioIO.fs, to: voiceURL)
