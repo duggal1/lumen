@@ -3,7 +3,7 @@ import LumenCore
 import LumenProject
 
 enum SpeedRamps {
-    static func plan(events: [InputEvent], vad: [ClosedRange<Double>], tm: TimeMap, audio: AudioPlan, backing: Double) -> [SpeedRamp] {
+    static func plan(events: [InputEvent], vad: [ClosedRange<Double>], tm: TimeMap, audio: AudioPlan, backing: Double, activity: [ActivityPoint] = []) -> [SpeedRamp] {
         let minIdle = max(audio.speedRampMinIdle, 1.0)
         var act: [Double] = [tm.trimStart]
         var lx = -1e6, ly = -1e6
@@ -14,6 +14,7 @@ enum SpeedRamps {
             default: act.append(e.t)
             }
         }
+        for point in activity where point.t.isFinite { act.append(point.t) }
         for c in tm.cuts { act.append(c.start); act.append(c.end) }       // a ramp never spans a cut
         act.append(tm.trimEnd)
         act = act.filter { $0 >= tm.trimStart && $0 <= tm.trimEnd }.sorted()
