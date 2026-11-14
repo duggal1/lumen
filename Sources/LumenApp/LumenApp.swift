@@ -24,6 +24,12 @@ final class LumenAppDelegate: NSObject, NSApplicationDelegate {
         startDaemon(model)
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model = LumenAppDelegate.model, model.hasRecordingControls else { return .terminateNow }
+        for window in sender.windows where window.title != "Lumen recording controls" { window.orderOut(nil) }
+        return .terminateCancel
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         daemon?.stop()
         daemon = nil
