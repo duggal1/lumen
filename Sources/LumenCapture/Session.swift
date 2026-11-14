@@ -105,7 +105,7 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 }
 
 public struct CaptureStats: Sendable {
-    public var elapsed: Double, micLevel: Float
+    public var elapsed: Double, micLevel: Float, systemLevel: Float
     public var dropped: Int, thermal: Int
 }
 
@@ -379,6 +379,7 @@ public actor RecordingSession {
 
     public func stats() -> CaptureStats {
         CaptureStats(elapsed: engine?.elapsed ?? 0, micLevel: engine?.mic?.level.withLock { $0 } ?? 0,
+                     systemLevel: engine?.system?.level.withLock { $0 } ?? 0,
                      dropped: engine?.droppedFrames ?? 0, thermal: ProcessInfo.processInfo.thermalState.rawValue)
     }
 
