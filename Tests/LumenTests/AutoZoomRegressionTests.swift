@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import LumenCore
 import LumenProject
@@ -86,4 +87,52 @@ import LumenRender
     let fresh = Director.derive(timeline,
                                 input: DirectorInput(events: events, source: source), revision: 1)
     #expect(fresh.zoom == cached)
+}
+
+private func visualDemoInput(tiny: Bool = false, scroll: Bool = false) -> DirectorInput {
+    let src = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 12, backingScale: 1, originX: 0, originY: 0)
+    let rect = tiny ? CGRect(x: 1400, y: 600, width: 16, height: 16)
+                    : CGRect(x: 1100, y: 500, width: 500, height: 280)
+    let points = (0..<6).map { i in
+        ActivityPoint(t: 6 + Double(i) * 0.1, x: rect.midX, y: rect.midY,
+                      region: rect, coverage: tiny ? 0.001 : 0.025)
+    }
+    var events = [InputEvent(t: 1, kind: .move, x: 100, y: 100)]
+    if scroll { events.append(InputEvent(t: 6.2, kind: .scroll, x: 100, y: 100)) }
+    return DirectorInput(events: events, source: src, activity: points)
+}
+
+@Test func autonomousVisualZoomWorksWithMouseEventsButNoClick() {
+    var tl = Timeline(duration: 12)
+    tl.audio.speedRampsAuto = false
+    let out = Director.derive(tl, input: visualDemoInput(), revision: 1)
+    #expect(out.zoom.count == 1)
+    #expect(out.zoom.first?.start == 6)
+    #expect(out.zoom.first?.scale ?? 0 <= 1.6)
+    #expect(out.evaluate(at: 6.7).cameraScale > 1.3)
+    #expect(out.evaluate(at: 6.7).cameraCenter.x > 1100)
+}
+
+@Test func autonomousVisualZoomIgnoresSpinnersAndScrolling() {
+    var tl = Timeline(duration: 12)
+    tl.audio.speedRampsAuto = false
+    #expect(Director.derive(tl, input: visualDemoInput(tiny: true), revision: 1).zoom.isEmpty)
+    #expect(Director.derive(tl, input: visualDemoInput(scroll: true), revision: 2).zoom.isEmpty)
+}
+
+@Test func autonomousVisualZoomPreservesManualShotsAndOffSetting() {
+    var tl = Timeline(duration: 12)
+    tl.audio.speedRampsAuto = false
+    let manual = ZoomSegment(start: 5, end: 9, scale: 1.4, focus: .fixed(x: 0.5, y: 0.5), origin: .manual)
+    tl.zoom = [manual]
+    let out = Director.derive(tl, input: visualDemoInput(), revision: 1)
+    #expect(out.zoom.map(\.id) == [manual.id])
+    tl.zoom = []; tl.camera.autoZoom = false
+    #expect(Director.derive(tl, input: visualDemoInput(), revision: 2).zoom.isEmpty)
+}
+
+@Test func autonomousVisualActivityPreventsIdleSpeedRampAcrossResult() {
+    let input = visualDemoInput()
+    let out = Director.derive(Timeline(duration: 12), input: input, revision: 1)
+    #expect(!out.timeMap.ramps.contains { $0.start < 6.25 && $0.end > 6.25 })
 }
