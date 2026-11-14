@@ -116,7 +116,6 @@ public enum Director {
         var t = tl
         let src = input.source
         var followPaths: [UUID: [(t: Double, c: SIMD2<Double>)]] = [:]
-        var followContinues: [UUID: Bool] = [:]
         if cancelled() { return nil }
         let digest = inputDigest(input)
         var tm = t.timeMap
@@ -160,9 +159,8 @@ public enum Director {
             // SMOOTHNESS: the caret paths travel with the plan and become the
             // camera's continuous follow targets.
             followPaths = planned.follow.mapValues { path in
-                path.points.map { (tm.output(atSource: $0.t), $0.p) }
+                path.map { (tm.output(atSource: $0.t), $0.p) }
             }
-            followContinues = planned.follow.mapValues { $0.continues }
         }
         if cancelled() { return nil }
         let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature)
@@ -178,7 +176,7 @@ public enum Director {
         let size = SIMD2(Double(src.width), Double(src.height))
         guard let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size,
                                            outDur: tm.outputDuration, loop: t.cursor.loop,
-                                           follow: followPaths, followContinues: followContinues,
+                                           follow: followPaths,
                                            cancelled: cancelled) else { return nil }
         let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad,
                                              outDur: tm.outputDuration, clicks: clicks)
@@ -266,6 +264,16 @@ public enum Director {
                                      frame.cameraCenter.x, frame.cameraCenter.y, frame.cameraScale,
                                      targetLz, arrival, vx, vy)
                 FileHandle.standardError.write(Data(message.utf8))
+            }
+            let zs = t.zoom.sorted { $0.start < $1.start }
+            for (a, b) in zip(zs, zs.dropFirst()) {
+                let ta = tm.output(atSource: a.end), tb = tm.output(atSource: b.start)
+                guard tb > ta, tb - ta < 2.2, let track = t.derived?.camera, !track.lz.isEmpty else { continue }
+                let first = min(max(Int(ta * track.rate), 0), track.lz.count - 1)
+                let last = min(max(Int(tb * track.rate), first), track.lz.count - 1)
+                let lo = track.lz[first...last].min() ?? 0
+                FileHandle.standardError.write(Data(String(format: "LUMEN_DIP gap=%.2f minScale=%.3f expected>=%.3f\n",
+                    tb - ta, exp(Double(lo)), min(a.scale, b.scale) * 0.98).utf8))
             }
             for e in input.events where e.kind == .keyDown && e.axFrameIndex > 0 && Int(e.axFrameIndex) <= input.ax.count {
                 guard let c = input.ax[Int(e.axFrameIndex) - 1].caret else { continue }
