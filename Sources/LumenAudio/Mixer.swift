@@ -327,7 +327,7 @@ public final class AudioMixer: @unchecked Sendable {
             publish(job, key: key, value: cached)
             return cached
         }
-        let processed = ProcessedVoiceCache.render(samples, plan: plan, keyTimes: keyTimes,
+        let processed = ProcessedVoiceCache.process(samples, plan: plan, keyTimes: keyTimes,
                                                    denoiser: denoiser, cancelled: cancelled)
         // A cancelled render produces no result at all: silence would be a lie.
         guard !(processed.isEmpty && cancelled?() == true) else {
@@ -467,7 +467,7 @@ public final class AudioMixer: @unchecked Sendable {
         if a.micMode != .off, let voice = voiceChain(a, micIndex: 0, range: .whole) {
             let mapped = Self.mapped(voice, offset: micOffset, tm: tm,
                                      n: n, muteRamps: a.muteMicInRamps)
-            let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
+            let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
             let channel = mapped.map { $0 * gain }
             result.append(AudioStem(name: "microphone", left: channel, right: channel))
         }
@@ -476,7 +476,7 @@ public final class AudioMixer: @unchecked Sendable {
                 guard let processed = voiceChain(a, micIndex: index + 1, range: .whole) else { continue }
                 let mapped = Self.mapped(processed, offset: extraSource(index).offset,
                                          tm: tm, n: n, muteRamps: a.muteMicInRamps)
-                let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
+                let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
                 let channel = mapped.map { $0 * gain }
                 result.append(AudioStem(name: "microphone-\(index + 2)", left: channel, right: channel))
             }
@@ -568,7 +568,7 @@ public final class AudioMixer: @unchecked Sendable {
 
         if a.micMode != .off, let v = voiceChain(a, micIndex: 0, range: range, cancelled: cancelled) {
             let y = Self.mapped(v, offset: micOffset, tm: tm, n: n, muteRamps: a.muteMicInRamps)
-            let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
+            let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
             for i in 0..<n { L[i] += y[i] * gain; R[i] += y[i] * gain }
             hasProgram = true
         }
@@ -577,7 +577,7 @@ public final class AudioMixer: @unchecked Sendable {
                 guard let processed = voiceChain(a, micIndex: index + 1, range: range, cancelled: cancelled) else { continue }
                 let mapped = Self.mapped(processed, offset: extraSource(index).offset,
                                          tm: tm, n: n, muteRamps: a.muteMicInRamps)
-                let gain = Float(pow(10, clamp(a.micGainDb + 2, -60, 24) / 20))
+                let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
                 for i in 0..<n { L[i] += mapped[i] * gain; R[i] += mapped[i] * gain }
                 hasProgram = true
             }
