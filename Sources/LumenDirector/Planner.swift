@@ -281,8 +281,7 @@ enum ZoomPlanner {
             let continuing = cur != nil && it.t - last <= gap
             let want = chooseScale(it, prev: continuing ? cur?.scale : prevScale)
             switch it.kind {
-            case .click, .visual:
-                if it.kind == .visual, want <= 1.001 { continue }
+            case .click:
                 if continuing, let o = cur {
                     if want > 1.001, abs(log(want / o.scale)) > log(1.35) {
                         close(at: it.t)
@@ -297,6 +296,11 @@ enum ZoomPlanner {
                         cur = Open(start: it.t, scale: want, c: clampC(SIMD2(it.x, it.y), want))
                     }
                 }
+            case .visual:
+                guard want > 1.001 else { continue }
+                close(at: continuing ? it.t : last + hold)
+                prevScale = want
+                cur = Open(start: it.t, scale: want, c: clampC(SIMD2(it.x, it.y), want))
             case .typing:
                 if want <= 1.001 {
                     if continuing { last = max(last, it.tEnd + 0.1) }
