@@ -255,7 +255,8 @@ public actor AnalysisService {
 
     public func run(_ request: AnalysisRequest, onTyping: @escaping @Sendable (AnalysisResult) -> Void = { _ in },
                     onPrivacy: @escaping @Sendable (AnalysisResult) -> Void = { _ in },
-                    onPrivacyStart: @escaping @Sendable () -> Void = {}) async -> AnalysisResult {
+                    onPrivacyStart: @escaping @Sendable () -> Void = {},
+                    onActivity: @escaping @Sendable (AnalysisResult) -> Void = { _ in }) async -> AnalysisResult {
         // The privacy gate must always resolve: whatever ends this run — a
         // finished scan, a failure, a cancellation or a disabled plan — the
         // progress reaches 1 so the editor stops waiting for the masks.
@@ -297,6 +298,7 @@ public actor AnalysisService {
             jobs.append(AnalysisJob(name: "activity", priority: 1) {
                 let (points, error) = await self.activity(request)
                 await collector.setActivity(points, error: error)
+                if error == nil { onActivity(AnalysisResult(activity: points)) }
             })
         }
         if request.includeSpeech, request.mic != nil {
@@ -389,7 +391,7 @@ public actor AnalysisService {
 
     private func activity(_ r: AnalysisRequest) async -> ([ActivityPoint], String?) {
         guard r.includeActivity else { return ([], nil) }
-        let (points, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "activity", version: 1,
+        let (points, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "activity", version: 2,
                                            parameters: ActivityParameters(offset: 0, fps: 10)) {
             try await ActivityAnalyzer.analyze(url: r.screen, fps: 10)
         }
