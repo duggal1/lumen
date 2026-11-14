@@ -44,7 +44,7 @@ enum ZoomPlanner {
         var follow: [UUID: [FollowPoint]] = [:]
     }
     struct Intent {
-        enum Kind { case click, typing }
+        enum Kind { case click, typing, visual }
         var kind: Kind
         var t: Double, tEnd: Double            // source seconds
         var x: Double, y: Double               // click pixel, or caret at burst start (source px)
@@ -166,7 +166,7 @@ enum ZoomPlanner {
         let hold = max(p.hold.isFinite ? p.hold : 0.9, 0.3)
         let gap = max(p.zoomOutGap.isFinite ? p.zoomOutGap : 2.6, hold + 0.5)
 
-        // ---- 1. intents: ONLY clicks and typing bursts ----
+        // Input intent takes priority over autonomous visual framing.
         var intents: [Intent] = []
         var lastClick: Intent?
         for e in sorted where e.kind == .down && e.button == 0 && e.flags & 0x14 == 0 && ok(e.t) {
@@ -194,12 +194,7 @@ enum ZoomPlanner {
                                       rect: field, path: []))
             }
         }
-        if !sorted.contains(where: \.hasPosition) {            // device/imported clip: no input log
-            var lastT = -10.0
-            for a in activity where ok(a.t) && a.t - lastT > 1.5 {
-                intents.append(Intent(kind: .click, t: a.t, tEnd: a.t, x: a.x, y: a.y)); lastT = a.t
-            }
-        }
+        intents += VisualZoom.intents(activity, events: sorted, input: intents, src: src, tm: tm)
         intents.sort { $0.t < $1.t }
 
         // ---- 2. scenes ----
@@ -254,7 +249,12 @@ enum ZoomPlanner {
         }
         func chooseScale(_ i: Intent, prev: Double?) -> Double {
             var s: Double
-            if i.kind == .typing && !i.path.isEmpty {
+            if i.kind == .visual {
+                guard let r = i.rect else { return 1 }
+                let fit = min(W / max(r.width * 1.35, 1), H / max(r.height * 1.35, 1))
+                guard fit >= lo else { return 1 }
+                return min(fit, hi, 1.6)
+            } else if i.kind == .typing && !i.path.isEmpty {
                 // viewport ≈ field + 30 %, between 42 % and 62 % of the screen
                 let fieldW = min(i.rect?.width ?? W * 0.35, W)
                 s = W / min(max(fieldW * 1.3, W * 0.42), W * 0.62)
@@ -281,7 +281,8 @@ enum ZoomPlanner {
             let continuing = cur != nil && it.t - last <= gap
             let want = chooseScale(it, prev: continuing ? cur?.scale : prevScale)
             switch it.kind {
-            case .click:
+            case .click, .visual:
+                if it.kind == .visual, want <= 1.001 { continue }
                 if continuing, let o = cur {
                     if want > 1.001, abs(log(want / o.scale)) > log(1.35) {
                         close(at: it.t)
