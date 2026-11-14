@@ -27,11 +27,11 @@ enum CursorPipeline {
             ts.append(e.t); xs.append(Double(e.x)); ys.append(Double(e.y))
         }
         let hasCursor = !ts.isEmpty                             // device recordings have no cursor: draw none
-        // 3-5. PCHIP onto 1440 Hz, de-spike, zero-lag Gaussian
+        // PCHIP resampling, then one zero-lag smoothing pass.
         var X = hasCursor ? pchipResample(t: ts, y: xs, t0: lo, count: n, rate: rate) : [Double](repeating: Double(src.width) / 2, count: n)
         var Y = hasCursor ? pchipResample(t: ts, y: ys, t0: lo, count: n, rate: rate) : [Double](repeating: Double(src.height) / 2, count: n)
-        X = gaussianSmooth(median5(X), sigma: st.smoothingSigma * rate)
-        Y = gaussianSmooth(median5(Y), sigma: st.smoothingSigma * rate)
+        X = gaussianSmooth(X, sigma: st.smoothingSigma * rate)
+        Y = gaussianSmooth(Y, sigma: st.smoothingSigma * rate)
 
         // 2. movements vs dwells (dwell = < 25 pt/s for >= 120 ms)
         var spd = [Double](repeating: 0, count: n)
