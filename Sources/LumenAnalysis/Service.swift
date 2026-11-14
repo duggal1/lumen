@@ -237,6 +237,10 @@ private actor AnalysisCollector {
     private(set) var typingError: String?
 
     func setOCR(_ value: [OCRDetection], error: String?) { ocr = value; ocrError = error }
+    /// The first-frame scan publishes early, but never over a finished scan.
+    func setOCRIfEmpty(_ value: [OCRDetection]) {
+        if ocr.isEmpty { ocr = value }
+    }
     func setFace(_ value: [FaceSample], error: String?) { face = value; faceError = error }
     func setActivity(_ value: [ActivityPoint], error: String?) { activity = value; activityError = error }
     func setTranscript(_ value: Transcript?, error: String?) { transcript = value; transcriptError = error }
@@ -317,11 +321,10 @@ public actor AnalysisService {
         }
 
         let report = await AnalysisScheduler.run(jobs, capacity: request.maxConcurrentAnalyzers ?? AnalysisScheduler.defaultCapacity)
-        if Task.isCancelled {
-            return AnalysisResult(errors: ["cancelled": "analysis cancelled"],
-                                  diagnostics: diagnostics(report: report, before: before))
-        }
         let after = AnalysisMetrics.shared.snapshot()
+        // A cancelled scan still knows what it found: partial results travel
+        // with the error so the privacy gate fails closed instead of silently
+        // dropping masks that were already computed.
         var errors: [String: String] = [:]
         func put(_ key: String, _ value: String?) { if let value { errors[key] = value } }
         put("face", await collector.faceError)
@@ -330,6 +333,7 @@ public actor AnalysisService {
         put("speech", await collector.transcriptError)
         put("personMask", await collector.personMaskError)
         put("typing", await collector.typingError)
+        if Task.isCancelled { errors["cancelled"] = "analysis cancelled" }
         return AnalysisResult(face: await collector.face, activity: await collector.activity,
                               ocr: await collector.ocr, transcript: await collector.transcript,
                               personMask: await collector.personMask, typing: await collector.typing,
@@ -368,8 +372,10 @@ public actor AnalysisService {
                                    onPrivacy: @Sendable (AnalysisResult) -> Void) async {
         guard ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else { return }
         let (detections, error) = await ocr(request, firstFrameOnly: true)
-        await collector.setOCR(detections, error: nil)
-        if error == nil, !detections.isEmpty { onPrivacy(AnalysisResult(ocr: detections)) }
+        if error == nil {
+            await collector.setOCRIfEmpty(detections)
+            if !detections.isEmpty { onPrivacy(AnalysisResult(ocr: detections)) }
+        }
     }
 
     private func face(_ r: AnalysisRequest) async -> ([FaceSample], String?) {

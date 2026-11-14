@@ -3,12 +3,20 @@ import LumenCore
 import LumenProject
 
 /// Builds auto mask tracks from OCR detections. Pure. Masks live in SOURCE space and SOURCE time.
+///
+/// Detection, geometry, confidence and context stay separate facts: a detection
+/// says "these pixels matched a secret shape", `PrivacyPolicy` decides whether
+/// this surface may be masked automatically, and the track decides how far the
+/// same secret extends. Nothing here looks at a label and invents a region.
 enum MaskTracks {
     /// A same-hash detection continues a track only inside this window, and only
     /// when it is close, in the same capture context and in the same field
-    /// geometry. 1.6 s and 0.4 × diagonal let one address slide across unrelated
-    /// content; these numbers do not.
-    static let bridge = 0.35, lead = 0.12, tail = 0.25
+    /// geometry. The time window has to cover an OCR poll interval (a field is
+    /// read a few times a second), so it cannot be shorter than the gap between
+    /// two reads of one field; the work that stops a mask sliding across
+    /// unrelated content is `maxJump`, `maxGrowth` and `isSameSurface`, not the
+    /// time window.
+    static let bridge = 0.9, lead = 0.12, tail = 0.25
     static let maxJump = 0.08          // fraction of the source diagonal
     static let maxGrowth = 0.25        // height change that means a different field
     private struct Track {
@@ -27,7 +35,14 @@ enum MaskTracks {
         var tracks: [Track] = []
         let ordered = det.filter { $0.t.isFinite && $0.x.isFinite && $0.y.isFinite && $0.w > 0 && $0.h > 0 }
             .sorted { ($0.t, $0.hash, $0.x, $0.y) < ($1.t, $1.hash, $1.x, $1.y) }
+        // Two samples of the same secret in the same place at the same moment are
+        // one detection: the AX sample and the focus event describe the same field,
+        // and a duplicate would produce two masks with one id.
+        var seen: Set<String> = []
         for d in ordered {
+            let slot = "\(d.hash):\(Int((d.t * 100).rounded())):\(Int((d.x * 100_000).rounded())):"
+                + "\(Int((d.y * 100_000).rounded())):\(Int((d.w * 100_000).rounded())):\(Int((d.h * 100_000).rounded()))"
+            guard seen.insert(slot).inserted else { continue }
             let ctx = contexts.context(at: d.t) ?? PrivacyContext()
             let proposed = PrivacyPolicy.verdict(for: d.category, context: contexts.context(at: d.t)) == .propose
             let cx = (d.x + d.w / 2) * W, cy = (d.y + d.h / 2) * H
@@ -52,7 +67,11 @@ enum MaskTracks {
         var out: [Mask] = []
         for tr in tracks {
             guard let f = tr.keys.first, let l = tr.keys.last else { continue }
-            let s = max(f.t - lead, 0), e = src.duration > 0 ? min(l.t + tail, src.duration) : l.t + tail
+            // The lead-in may not cross into the surface that came before this
+            // one: the mask belongs to the page its detection was read on.
+            let floor = contexts.surfaceStart(at: f.t) ?? 0
+            let s = max(f.t - lead, floor, 0)
+            let e = src.duration > 0 ? min(l.t + tail, src.duration) : l.t + tail
             let xSeed = UInt64(max(f.x * 10_000, 0).rounded())
             let ySeed = UInt64(max(f.y * 10_000, 0).rounded())
             let id = stableUUID(tr.hash ^ xSeed, UInt64(max(f.t * 100, 0).rounded()) ^ ySeed)
@@ -66,9 +85,8 @@ enum MaskTracks {
     }
 
     /// Field semantics from capture-time AX. A click into a secure field
-    /// (password/CC role) masks the WHOLE field box (not the text box, so
-    /// region size never reveals length) from focus to last keystroke.
-    /// Covers show-password toggles where OCR alone sees plain text.
+    /// (password/CC role) masks the field from focus to the last keystroke, so
+    /// region size never reveals the value's length.
     ///
     /// `ocr` is the pixel evidence. Pass it and the mask shrinks to the exposed
     /// value: a field showing only `••••••` has no detection inside it, so it

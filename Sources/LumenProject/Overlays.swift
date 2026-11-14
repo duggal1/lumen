@@ -319,14 +319,36 @@ public struct PrivacyContextTrack: Codable, Sendable, Equatable {
     public var samples: [PrivacyContextSample]
     public init(samples: [PrivacyContextSample] = []) { self.samples = samples }
 
-    /// Context in force at `t`, or nil when nothing is known that early.
+    /// Context in force at `t`. Before the first sample the earliest known
+    /// surface still holds: an AX poll that started a fraction of a second
+    /// late must not turn a private page into "unknown", and "unknown" is what
+    /// disables automatic masking.
     public func context(at t: Double) -> PrivacyContext? {
+        guard !samples.isEmpty else { return nil }
         var lo = 0, hi = samples.count
         while lo < hi {
             let m = (lo + hi) / 2
             if samples[m].t <= t { lo = m + 1 } else { hi = m }
         }
-        return lo > 0 ? samples[lo - 1].context : nil
+        return samples[max(lo, 1) - 1].context
+    }
+
+    /// First sample time of the run of the same surface that contains `t`.
+    /// A mask may not reach back past the moment its own surface appeared:
+    /// doing so paints the previous page, which is the bridging defect.
+    public func surfaceStart(at t: Double) -> Double? {
+        var lo = 0, hi = samples.count
+        while lo < hi {
+            let m = (lo + hi) / 2
+            if samples[m].t <= t { lo = m + 1 } else { hi = m }
+        }
+        guard lo > 0 else { return nil }
+        let context = samples[lo - 1].context
+        var start = samples[lo - 1].t, j = lo - 1
+        while j > 0, samples[j - 1].context.isSameSurface(as: context) {
+            j -= 1; start = samples[j].t
+        }
+        return start
     }
 
     /// Build from AX samples. Frames without an anchor are recorded as unknown

@@ -298,6 +298,17 @@ private final class OCRJob: @unchecked Sendable {
             y: (tile.minY + (1 - rect.maxY) * tile.height) / Double(height),
             width: rect.width * tile.width / Double(width), height: rect.height * tile.height / Double(height))
     }
+    private static func normalizedImage(_ cgImage: CGImage) -> CGImage? {
+        let width = cgImage.width, height = cgImage.height
+        guard width > 0, height > 0 else { return nil }
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                     bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo) else { return nil }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
+
     private func deduplicate(_ detections: [OCRDetection]) -> [OCRDetection] {
         var seen: Set<String> = []
         return detections.sorted { $0.t < $1.t }.filter { detection in
@@ -305,5 +316,47 @@ private final class OCRJob: @unchecked Sendable {
             let cellT = Int((detection.t * 2).rounded())
             return seen.insert("\(detection.hash):\(cellT):\(cellX):\(cellY)").inserted
         }
+    }
+}
+
+/// One recognized line of text with its normalized source box (top-left origin).
+/// `rangeBox` places a substring of `text`, the way Vision's `boundingBox(for:)`
+/// does. Raw text never leaves this type.
+struct OCRTextLine {
+    var text: String
+    var box: CGRect
+    var confidence: Float
+    var rangeBox: (Range<String.Index>) -> CGRect?
+}
+
+/// Recognized text to detections. Pure and Vision-free, so the rules can be
+/// tested line by line against a synthetic corpus.
+enum OCRClassify {
+    /// Concealment glyphs a password field draws in place of its value. The
+    /// scan flags them; pixelating dots protects nothing, so they never become
+    /// a detection at all.
+    static func isConcealment(_ s: String) -> Bool {
+        guard s.count >= 4 else { return false }
+        return s.allSatisfy { $0 == "•" || $0 == "●" || $0 == "·" }
+    }
+
+    static func detections(lines: [OCRTextLine], time: Double, salt: UInt64, custom: [String],
+                           entropyThreshold: Double) -> [OCRDetection] {
+        let gate = Float(min(max((entropyThreshold - 3) * 0.2 + 0.15, 0.1), 0.5))
+        var out: [OCRDetection] = []
+        for line in lines where line.confidence >= gate {
+            for hit in SensitivePatterns.scan(line.text, custom: custom, entropyThreshold: entropyThreshold) {
+                let value = String(line.text[hit.range]).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !value.isEmpty else { continue }
+                if hit.category == .envSecret, isConcealment(value) { continue }
+                // Vision's exact box for the matched range. When Vision cannot
+                // place it, the whole line is masked instead: a detected secret
+                // is never skipped.
+                let box = line.rangeBox(hit.range) ?? line.box
+                out.append(OCRDetection(t: time, x: box.minX, y: box.minY, w: box.width, h: box.height,
+                    category: hit.category, hash: fnv1a64(value.lowercased(), salt: salt), confidence: line.confidence))
+            }
+        }
+        return out
     }
 }
