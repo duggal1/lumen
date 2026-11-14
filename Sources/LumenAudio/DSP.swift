@@ -195,4 +195,3 @@ public enum VAD {
 }
 
 public protocol Denoiser: Sendable { func process(_ x: [Float]) -> [Float] }
-
