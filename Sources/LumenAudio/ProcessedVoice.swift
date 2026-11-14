@@ -107,7 +107,7 @@ struct ProcessedVoiceCache {
         let echo = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
         if echo > 0 {
             var predictor = WPE()
-            predictor.taps = 4
+            predictor.taps = 12
             predictor.iterations = 1
             predictor.maxHz = 4_000
             let reduced = predictor.process(voice)
