@@ -294,6 +294,8 @@ enum TimelineSelection: Equatable {
             || old.captions.locale != new.captions.locale || old.captions.vocabulary != new.captions.vocabulary
             || old.layouts != new.layouts
             || old.webcam?.backdrop != new.webcam?.backdrop
+            || ((!old.camera.autoZoom || old.camera.preset == .fixed)
+                && new.camera.autoZoom && new.camera.preset != .fixed)
         if analysisChanged { analyzeInBackground(new) }
         if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap
             || old.audio != new.audio || old.webcam != new.webcam || old.overlays.taps != new.overlays.taps
