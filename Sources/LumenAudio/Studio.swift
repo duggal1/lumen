@@ -41,145 +41,6 @@ enum Cascade {
         }
         return out
     }
-    /// 4th-order Butterworth high-pass.
-    static func hp4(_ f: Double, fs: Double) -> [Biquad] { [.highpass(f, q: 0.5412, fs: fs), .highpass(f, q: 1.3066, fs: fs)] }
-}
-
-/// Dynamic de-esser: compresses only the 5.2-9.8 kHz band, only above 45% of the
-/// recording's own p98 sibilance level. `amount` is the studio strength.
-enum DeEsser {
-    static func process(_ x: [Float], fs: Double, amount: Double) -> [Float] {
-        let n = x.count
-        guard amount > 0.01, n > 4800 else { return x }
-        var hp = Biquad.highpass(5200, q: 0.7071, fs: fs), lp = Biquad.lowpass(9800, fs: fs)
-        var s = [Float](repeating: 0, count: n), env = s
-        let ca = Float(exp(-1 / (0.0008 * fs))), cr = Float(exp(-1 / (0.020 * fs)))
-        var e: Float = 0
-        for i in 0..<n {
-            let v = Float(lp.run(hp.run(Double(x[i]))))
-            s[i] = v
-            let a = abs(v)
-            e = a > e ? a + ca * (e - a) : a + cr * (e - a)
-            env[i] = e
-        }
-        var samp: [Float] = []
-        var i = 0
-        while i < n { samp.append(env[i]); i += 480 }
-        samp.sort()
-        guard !samp.isEmpty else { return x }
-        let threshold = max(0.45 * samp[Int(Double(samp.count - 1) * 0.98)], 1e-5)
-        let ratio = Float(0.5 + 0.4 * amount)
-        let maxCut = Float(pow(10, -(5 + 7 * amount) / 20))
-        let ga = Float(exp(-1 / (0.0006 * fs))), gr = Float(exp(-1 / (0.012 * fs)))
-        var out = x, g: Float = 1
-        for j in 0..<n {
-            var target: Float = 1
-            if env[j] > threshold { target = max(pow(threshold / env[j], ratio), maxCut) }
-            g = target < g ? target + ga * (g - target) : target + gr * (g - target)
-            out[j] = x[j] - s[j] * (1 - g)
-        }
-        return out
-    }
-}
-
-/// Slow gain riding on voiced 100 ms frames toward the recording's own median
-/// level. Sigma 0.3 s means no word-level pumping.
-enum Leveler {
-    static func process(_ x: [Float], vad: [ClosedRange<Double>], fs: Double, range: Double) -> [Float] {
-        let hop = Int(0.1 * fs), n = x.count / hop
-        guard n > 10, range > 0 else { return x }
-        var db = [Double](repeating: -120, count: n), voiced = [Bool](repeating: false, count: n)
-        for f in 0..<n {
-            var s = 0.0
-            for i in 0..<hop { let v = Double(x[f * hop + i]); s += v * v }
-            db[f] = 10 * log10(s / Double(hop) + 1e-12)
-            let t = (Double(f) + 0.5) * 0.1
-            voiced[f] = db[f] > -55 && vad.contains { $0.lowerBound <= t && t <= $0.upperBound }
-        }
-        let levels = (0..<n).filter { voiced[$0] }.map { db[$0] }.sorted()
-        guard levels.count > 10 else { return x }
-        let target = levels[levels.count / 2]
-        var gain = [Double](repeating: .nan, count: n)
-        for f in 0..<n where voiced[f] { gain[f] = clamp(target - db[f], -range, range) }
-        var last = -1
-        for f in 0..<n where !gain[f].isNaN {
-            if last < 0 { for j in 0..<f { gain[j] = gain[f] } }
-            else if f - last > 1 {
-                for j in (last + 1)..<f {
-                    gain[j] = lerp(gain[last], gain[f], Double(j - last) / Double(f - last))
-                }
-            }
-            last = f
-        }
-        if last >= 0, last < n - 1 { for j in (last + 1)..<n { gain[j] = gain[last] } }
-        guard gain.contains(where: { !$0.isNaN }) else { return x }
-        gain = gaussianSmooth(gain.map { $0.isNaN ? 0 : $0 }, sigma: 3)
-        var out = x
-        for i in 0..<x.count {
-            let p = Double(i) / Double(hop) - 0.5
-            let a = min(max(Int(p.rounded(.down)), 0), n - 1), b = min(a + 1, n - 1)
-            let u = clamp(p - Double(a), 0, 1)
-            out[i] = x[i] * Float(pow(10, lerp(gain[a], gain[b], u) / 20))
-        }
-        return out
-    }
-}
-
-/// A soft downward expander for non-voiced frames. The VAD keeps speech open;
-/// the signal envelope lets room tails fade naturally instead of being gated.
-enum SoftExpander {
-    static func process(_ x: [Float], vad: [ClosedRange<Double>], fs: Double,
-                        thresholdDb: Double, ratio: Double, maxAttenuationDb: Double) -> [Float] {
-        let frameSize = max(Int(0.01 * fs), 1)
-        let frameCount = (x.count + frameSize - 1) / frameSize
-        guard frameCount > 0 else { return x }
-        let kneeDb = 4.0
-        var target = [Double](repeating: 0, count: frameCount)
-        for frame in 0..<frameCount {
-            let start = frame * frameSize
-            let end = min(start + frameSize, x.count)
-            let centerTime = (Double(start + end) * 0.5) / fs
-            guard !vad.contains(where: { $0.contains(centerTime) }) else { continue }
-            var energy = 0.0
-            for sample in start..<end {
-                let value = Double(x[sample])
-                energy += value * value
-            }
-            let level = 10 * log10(energy / Double(max(end - start, 1)) + 1e-12)
-            let over = level - thresholdDb
-            let reduction: Double
-            if over >= kneeDb / 2 {
-                reduction = 0
-            } else if over <= -kneeDb / 2 {
-                reduction = (ratio - 1) * over
-            } else {
-                let distance = kneeDb / 2 - over
-                reduction = -(ratio - 1) * distance * distance / (2 * kneeDb)
-            }
-            target[frame] = max(-maxAttenuationDb, min(reduction, 0))
-        }
-
-        let duration = Double(frameSize)
-        let attack = exp(-duration / (0.025 * fs))
-        let release = exp(-duration / (0.14 * fs))
-        var gains = [Double](repeating: 0, count: frameCount)
-        var gain = target[0]
-        for frame in 0..<frameCount {
-            let coefficient = target[frame] < gain ? attack : release
-            gain = target[frame] + coefficient * (gain - target[frame])
-            gains[frame] = gain
-        }
-
-        var out = x
-        for sample in x.indices {
-            let frame = sample / frameSize
-            let next = min(frame + 1, frameCount - 1)
-            let fraction = Double(sample % frameSize) / Double(frameSize)
-            let gainDb = lerp(gains[frame], gains[next], fraction)
-            out[sample] *= Float(pow(10, gainDb / 20))
-        }
-        return out
-    }
 }
 
 /// Feed-forward compressor, soft knee, mean-square detector, attack/release in the dB domain.
@@ -213,14 +74,6 @@ struct VoiceCompressor {
     }
 }
 
-/// Gentle odd-harmonic saturation: the "density" a cheap mic lacks. Unity gain for small signals.
-enum Saturator {
-    static func process(_ x: [Float], drive: Float, mix: Float) -> [Float] {
-        guard mix > 0.001, drive > 0.01 else { return x }
-        return x.map { v in v * (1 - mix) + mix * tanhf(v * drive) / drive }
-    }
-}
-
 enum VoiceStudio {
     /// 60th-percentile level (dB, 100 ms RMS) of the voiced frames = the speech body.
     /// Dynamics thresholds are meaningless unless the voice sits at a known level first.
@@ -241,55 +94,24 @@ enum VoiceStudio {
         return levels[levels.count * 6 / 10]
     }
 
-    /// Podcast chain: HPF → gain staging → body/mud/presence/air → de-ess → level ride
-    /// → leveling comp (2:1) → peak comp (4:1) → parallel density comp → light saturation.
-    /// The noise is already gone (neural denoiser), so nothing here lifts it.
+    /// Tone and one soft-knee compressor. Noise and room tails are removed upstream.
     static func finish(_ x: [Float], vad: [ClosedRange<Double>], plan: AudioPlan,
                        denoiser: (any Denoiser)? = nil) -> [Float] {
         let fs = AudioIO.fs
-        var voice = x
-        if plan.micClean, let denoiser { voice = denoiser.process(voice) }
-        voice = Cascade.apply(voice, Cascade.hp4(70, fs: fs))
-        guard plan.voiceClarity, plan.studio > 0 else { return voice }
-        let s = min(max(plan.studio * 4, 0), 1)
-
-        // 1. gain staging: speech body at -21 dBFS so the thresholds below mean something
-        let stagedSpeechLevel = speechLevelDb(voice, vad: vad, fs: fs)
-        if let level = stagedSpeechLevel {
-            let g = Float(pow(10, clamp(-21 - level, -30, 30) / 20))
-            voice = voice.map { $0 * g }
+        var voice = plan.micClean ? (denoiser?.process(x) ?? x) : x
+        if plan.voiceClarity {
+            voice = Cascade.apply(voice, [
+                .lowShelf(130, db: 0.8, fs: fs),
+                .peaking(300, q: 0.8, db: -1.2, fs: fs),
+                .peaking(3000, q: 0.7, db: 1.5, fs: fs)
+            ])
         }
-        if stagedSpeechLevel != nil {
-            let standard = SoftExpander.process(voice, vad: vad, fs: fs,
-                                                thresholdDb: -23, ratio: 4.8, maxAttenuationDb: 30)
-            if plan.studioMode == .optimized {
-                let optimized = SoftExpander.process(voice, vad: vad, fs: fs,
-                                                     thresholdDb: -21, ratio: 5.6, maxAttenuationDb: 44)
-                let optimizedDelta = 44.0 - 30.0
-                voice = optimizedDelta > 12
-                    ? zip(optimized, standard).map { $0 * 0.85 + $1 * 0.15 }
-                    : optimized
-            } else {
-                voice = standard
-            }
-        }
-        // 2. tone: fuller (body), cleaner (mud cut), closer (presence), open (air)
-        voice = Cascade.apply(voice, [
-            .lowShelf(130, db: 2.2 * s, fs: fs),
-            .peaking(300, q: 1.0, db: -2.8 * s, fs: fs),
-            .peaking(3400, q: 0.9, db: 2.8 * s, fs: fs),
-            .highShelf(9500, db: 1.8 * s, fs: fs)
-        ])
-        // 3. sibilance, 4. slow level ride
-        voice = DeEsser.process(voice, fs: fs, amount: 0.3)
-        voice = Leveler.process(voice, vad: vad, fs: fs, range: 4)
-        // 5. dynamics
-        voice = VoiceCompressor(thresholdDb: -25, ratio: 2, kneeDb: 10, attack: 0.020, release: 0.250).process(voice, fs: fs)
-        let body = VoiceCompressor(thresholdDb: -19, ratio: 4, kneeDb: 6, attack: 0.004, release: 0.100).process(voice, fs: fs)
-        let dense = VoiceCompressor(thresholdDb: -32, ratio: 10, kneeDb: 4, attack: 0.002, release: 0.060, makeupDb: 10).process(body, fs: fs)
-        let parallel = Float(0.22 * s)
-        voice = zip(body, dense).map { pair in pair.0 + pair.1 * parallel }
-        // 6. density
-        return Saturator.process(voice, drive: 1.5, mix: Float(0.4 * s))
+        let amount = plan.studio.isFinite ? clamp(plan.studio, 0, 1) : 0
+        guard amount > 0 else { return voice }
+        let level = speechLevelDb(voice, vad: vad, fs: fs) ?? -24
+        return VoiceCompressor(thresholdDb: level - 3 - 3 * amount,
+                               ratio: 1 + 1.5 * amount, kneeDb: 8,
+                               attack: 0.020, release: 0.200,
+                               makeupDb: 2 * amount).process(voice, fs: fs)
     }
 }
