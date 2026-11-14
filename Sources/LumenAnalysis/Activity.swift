@@ -46,6 +46,7 @@ private final class ActivityJob: @unchecked Sendable {
         guard reader.startReading() else { throw reader.error ?? AnalysisError.readerStart }
         var next = 0.0
         var previous: [UInt8]?
+        var settling: (base: [UInt8], until: Double)?
         var results: [ActivityPoint] = []
         while let sample = output.copyNextSampleBuffer() {
             if cancelled.withLock({ $0 }) { reader.cancelReading(); throw CancellationError() }
@@ -53,7 +54,12 @@ private final class ActivityJob: @unchecked Sendable {
             guard time + 0.0001 >= next, let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             next = time + 1 / max(fps, 1)
             let current = try lumaGrid(buffer, columns: 80, rows: 50)
-            if let previous, let change = changedRegion(previous, current, width: 80, height: 50) {
+            var change = previous.flatMap { changedRegion($0, current, width: 80, height: 50) }
+            if change != nil, let previous { settling = (previous, time + 0.4) }
+            else if let settled = settling, time <= settled.until {
+                change = changedRegion(settled.base, current, width: 80, height: 50)
+            } else { settling = nil }
+            if let change {
                 let scale = SIMD2(Double(CVPixelBufferGetWidth(buffer)) / 80,
                                   Double(CVPixelBufferGetHeight(buffer)) / 50)
                 let rect = CGRect(x: change.rect.minX * scale.x, y: change.rect.minY * scale.y,
