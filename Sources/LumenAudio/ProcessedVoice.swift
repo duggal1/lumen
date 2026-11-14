@@ -106,8 +106,18 @@ struct ProcessedVoiceCache {
 
         let echo = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
         if echo > 0 {
-            voice = LateReverb.process(voice, amount: echo)
+            var predictor = WPE()
+            predictor.taps = 4
+            predictor.iterations = 1
+            predictor.maxHz = 4_000
+            let reduced = predictor.process(voice)
             if stopped() { return [] }
+            let wet = Float(0.65 * echo)
+            if reduced.count == voice.count {
+                voice = zip(voice, reduced).map { dry, clean in
+                    clean.isFinite ? dry + (clean - dry) * wet : dry
+                }
+            }
         }
         if plan.declick, !keyTimes.isEmpty {
             voice = Declick.process(voice, keyTimes: keyTimes, vad: VAD.regions(voice), depthDb: plan.declickDepthDb)
