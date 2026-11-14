@@ -17,6 +17,7 @@ public struct LibraryRoot: View {
         .onAppear {
             Appearance.apply()
             app.onFinished = { openWindow(value: $0) }
+            app.onShowLibrary = { openWindow(id: "library") }
         }
     }
 }
@@ -90,7 +91,7 @@ struct LibrarySurface: View {
         switch app.phase {
         case .idle:
             LButton(title: "Record", icon: "record.circle", kind: permissionNotice == nil ? .primary : .secondary) {
-                showRecord = true
+                app.showRecordingControls()
             }
         case .recording:
             HStack(spacing: Space.s3) {
