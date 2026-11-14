@@ -109,8 +109,9 @@ enum VoiceStudio {
         let amount = plan.studio.isFinite ? clamp(plan.studio, 0, 1) : 0
         guard amount > 0 else { return voice }
         let level = speechLevelDb(voice, vad: vad, fs: fs) ?? -24
+        let density = plan.studioMode == .optimized ? 2.0 : 1.5
         return VoiceCompressor(thresholdDb: level - 3 - 3 * amount,
-                               ratio: 1 + 1.5 * amount, kneeDb: 8,
+                               ratio: 1 + density * amount, kneeDb: 8,
                                attack: 0.020, release: 0.200,
                                makeupDb: 2 * amount).process(voice, fs: fs)
     }
