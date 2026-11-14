@@ -93,10 +93,21 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var captureMbps: Double = UserDefaults.standard.object(forKey: "LumenCaptureMbps") as? Double ?? 20 {
         didSet { UserDefaults.standard.set(captureMbps, forKey: "LumenCaptureMbps") }
     }
-    var mic = true
-    var system = false
-    var webcam = false
-    var webcamQuality: WebcamQuality = .auto
+    var mic = UserDefaults.standard.object(forKey: "LumenCaptureMic") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(mic, forKey: "LumenCaptureMic") }
+    }
+    var micDeviceID = UserDefaults.standard.string(forKey: "LumenMicDevice") ?? "" {
+        didSet { UserDefaults.standard.set(micDeviceID, forKey: "LumenMicDevice") }
+    }
+    var system = UserDefaults.standard.bool(forKey: "LumenCaptureSystem") {
+        didSet { UserDefaults.standard.set(system, forKey: "LumenCaptureSystem") }
+    }
+    var webcam = UserDefaults.standard.bool(forKey: "LumenCaptureWebcam") {
+        didSet { UserDefaults.standard.set(webcam, forKey: "LumenCaptureWebcam") }
+    }
+    var webcamQuality = WebcamQuality(rawValue: UserDefaults.standard.string(forKey: "LumenWebcamQuality") ?? "") ?? .auto {
+        didSet { UserDefaults.standard.set(webcamQuality.rawValue, forKey: "LumenWebcamQuality") }
+    }
     var livePreview = false
     private var livePreviewController: LivePreviewController?
     var displays: [(id: CGDirectDisplayID, name: String)] = []
@@ -111,6 +122,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     let recordingMeter = RecordingMeter()
     var projects: [ProjectRow] = []
     public var onFinished: ((URL) -> Void)?
+    var onShowLibrary: (() -> Void)?
     public let library: URL
     /// The capture session. Internal so the agent runtime adapter can drive
     /// the same lifecycle the UI buttons drive.
@@ -188,7 +200,22 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         return 60
     }
 
-    public func showRecordingControls() { hud?.show() }
+    public func showRecordingControls() {
+        if hud == nil { hud = HUDController(self, screen: NSScreen.main) }
+        hud?.show()
+    }
+
+    public var hasRecordingControls: Bool { hud != nil }
+
+    func showLibrary() {
+        onShowLibrary?()
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.title == "Lumen" }) {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            restoreLibraryAfterFailure()
+        }
+    }
 
     // Keep the selected desktop visible, not the Library floating over it.
     // The recording controls are an independent, capture-excluded NSPanel.
@@ -507,6 +534,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             }
         }
         cfg.fps = fps; cfg.mic = mic && Permissions.mic; cfg.systemAudio = system
+        cfg.micDeviceID = micDeviceID.isEmpty ? nil : micDeviceID
+        cfg.webcamQuality = webcamQuality.rawValue
         cfg.resolution = captureResolution; cfg.quality = captureQuality; cfg.customMbps = captureMbps
         cfg.webcamDeviceID = webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
         if let options = agentOptions {
@@ -529,7 +558,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         // The daemon runs without a window: no floating recorder panel, no
         // library. The agent drives the same engine through tools.
         if !headless && agentTarget == nil {
-            hud = HUDController(self, screen: recordingScreen)
+            if hud == nil { hud = HUDController(self, screen: recordingScreen) }
             hideLibraryForRecording()
             hud?.show()
             if livePreview { livePreviewController = LivePreviewController(); livePreviewController?.show() }
@@ -570,9 +599,10 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                     // recorder. Publishing every poll kept the main thread
                     // busy enough that clicking Pause or Stop waited behind
                     // the redraw. Only publish a level that actually moved.
-                    if abs(sample.micLevel - lastLevel) > 0.004 {
-                        lastLevel = sample.micLevel
-                        recordingMeter.level = sample.micLevel
+                    let level = max(sample.micLevel, sample.systemLevel)
+                    if abs(level - lastLevel) > 0.004 {
+                        lastLevel = level
+                        recordingMeter.level = level
                     }
                     let now = ContinuousClock.now
                     if now >= nextStatus {
@@ -593,7 +623,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         phase = .finishing; poll?.cancel()
         // HUD dismisses within 200 ms of the click (spec §3.2): close it now,
         // finalize in the background with "Finishing…" progress in Library.
-        hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
+        livePreviewController?.close(); livePreviewController = nil
         do {
             try await session.stopCapture()
             let b = try await session.finalize { [weak self] value in
@@ -631,7 +661,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     private func fail(_ e: Error) {
         poll?.cancel(); paused = false
         _ = appUsageRecorder?.finish(); appUsageRecorder = nil
-        hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
+        livePreviewController?.close(); livePreviewController = nil
         restoreLibraryAfterFailure()
         phase = .idle; error = "Recording failed. \(e)"
     }
@@ -696,18 +726,69 @@ final class HotKey: @unchecked Sendable {
 private final class KeyWindow: NSWindow { override var canBecomeKey: Bool { true } }
 private final class RegionView: NSView {
     var finish: ((CGRect?) -> Void)?
-    private var a: CGPoint?, b: CGPoint?
-    private var rect: CGRect? { guard let a, let b else { return nil }; return CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y)) }
+    private var selection: CGRect?
+    private var anchor = CGPoint.zero
+    private var original = CGRect.zero
+    private var mode = 0
     override var acceptsFirstResponder: Bool { true }
-    override func mouseDown(with e: NSEvent) { a = convert(e.locationInWindow, from: nil); b = a; needsDisplay = true }
-    override func mouseDragged(with e: NSEvent) { b = convert(e.locationInWindow, from: nil); needsDisplay = true }
-    override func mouseUp(with e: NSEvent) { NSCursor.pop(); finish?(rect.flatMap { $0.width > 40 && $0.height > 40 ? $0 : nil }) }
-    override func keyDown(with e: NSEvent) { if e.keyCode == 53 { NSCursor.pop(); finish?(nil) } }
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        anchor = point
+        if let rect = selection {
+            original = rect
+            let nearX = abs(point.x - rect.minX) < 12 ? -1 : (abs(point.x - rect.maxX) < 12 ? 1 : 0)
+            let nearY = abs(point.y - rect.minY) < 12 ? -1 : (abs(point.y - rect.maxY) < 12 ? 1 : 0)
+            if nearX != 0 || nearY != 0, rect.insetBy(dx: -12, dy: -12).contains(point) {
+                mode = (nearX + 1) + (nearY + 1) * 3 + 2
+                return
+            }
+            if rect.contains(point) { mode = 1; return }
+        }
+        mode = 0
+        selection = CGRect(origin: point, size: .zero)
+        needsDisplay = true
+    }
+    override func mouseDragged(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if mode == 0 {
+            selection = CGRect(x: min(anchor.x, point.x), y: min(anchor.y, point.y),
+                               width: abs(point.x - anchor.x), height: abs(point.y - anchor.y))
+        } else if mode == 1 {
+            let x = min(max(original.minX + point.x - anchor.x, 0), bounds.width - original.width)
+            let y = min(max(original.minY + point.y - anchor.y, 0), bounds.height - original.height)
+            selection = CGRect(x: x, y: y, width: original.width, height: original.height)
+        } else {
+            let edge = mode - 2
+            let xEdge = edge % 3 - 1, yEdge = edge / 3 - 1
+            let x = min(max(point.x, 0), bounds.width), y = min(max(point.y, 0), bounds.height)
+            let left = xEdge == -1 ? min(x, original.maxX - 40) : original.minX
+            let right = xEdge == 1 ? max(x, original.minX + 40) : original.maxX
+            let bottom = yEdge == -1 ? min(y, original.maxY - 40) : original.minY
+            let top = yEdge == 1 ? max(y, original.minY + 40) : original.maxY
+            selection = CGRect(x: left, y: bottom, width: right - left, height: top - bottom)
+        }
+        needsDisplay = true
+    }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { NSCursor.pop(); finish?(nil) }
+        if event.keyCode == 36, let rect = selection, rect.width > 40, rect.height > 40 {
+            NSCursor.pop(); finish?(rect)
+        }
+    }
     override func draw(_ dirty: NSRect) {
         NSColor.black.withAlphaComponent(0.35).setFill(); bounds.fill()
-        guard let r = rect else { return }
-        NSColor.clear.setFill(); r.fill(using: .copy)
-        let s = "\(Int(r.width)) × \(Int(r.height))" as NSString
-        s.draw(at: CGPoint(x: r.minX + 6, y: r.maxY + 6), withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.white])
+        guard let rect = selection else {
+            ("Drag to select an area · Return to confirm · Escape to cancel" as NSString).draw(at: CGPoint(x: 24, y: bounds.height - 40), withAttributes: [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.white])
+            return
+        }
+        NSColor.clear.setFill(); rect.fill(using: .copy)
+        NSColor.white.setFill()
+        for x in [rect.minX, rect.midX, rect.maxX] {
+            for y in [rect.minY, rect.midY, rect.maxY] where x != rect.midX || y != rect.midY {
+                NSRect(x: x - 3, y: y - 3, width: 6, height: 6).fill()
+            }
+        }
+        let text = "\(Int(rect.width)) × \(Int(rect.height)) · Return to confirm" as NSString
+        text.draw(at: CGPoint(x: max(0, rect.minX), y: min(bounds.height - 18, rect.maxY + 8)), withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.white])
     }
 }
