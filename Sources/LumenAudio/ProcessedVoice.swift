@@ -112,10 +112,24 @@ struct ProcessedVoiceCache {
             predictor.maxHz = 4_000
             let reduced = predictor.process(voice)
             if stopped() { return [] }
-            let wet = Float(0.65 * echo)
             if reduced.count == voice.count {
-                voice = zip(voice, reduced).map { dry, clean in
-                    clean.isFinite ? dry + (clean - dry) * wet : dry
+                let hop = 960, frames = (voice.count + 959) / 960
+                var levels = [Double](repeating: -120, count: frames)
+                for frame in 0..<frames {
+                    let start = frame * hop, end = min(start + hop, voice.count)
+                    var energy = 0.0
+                    for i in start..<end { energy += Double(voice[i]) * Double(voice[i]) }
+                    levels[frame] = 10 * log10(energy / Double(end - start) + 1e-12)
+                }
+                let body = levels.filter { $0 > -60 }.sorted()
+                let reference = body.isEmpty ? -60 : body[body.count * 7 / 10]
+                let coefficient = 1 - exp(-1 / (0.030 * AudioIO.fs))
+                var wet = 0.20 * echo
+                for i in voice.indices {
+                    let tail = clamp((reference - levels[i / hop] - 6) / 12, 0, 1)
+                    let target = echo * (0.20 + 0.45 * tail)
+                    wet += (target - wet) * coefficient
+                    if reduced[i].isFinite { voice[i] += (reduced[i] - voice[i]) * Float(wet) }
                 }
             }
         }
