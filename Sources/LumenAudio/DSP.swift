@@ -99,9 +99,12 @@ public enum Limiter {
         }
         var pre = [Double](repeating: 0, count: n + 1)
         for i in 0..<n { pre[i + 1] = pre[i] + Double(mn[i]) }
+        let release = exp(-1 / (0.080 * 48000))
+        var heldGain: Float = 1
         for i in 0..<n {
             let a = max(0, i - half), b = min(n - 1, i + half), g = Float((pre[b + 1] - pre[a]) / Double(b - a + 1))
-            for c in 0..<ch.count { ch[c][i] *= g }
+            heldGain = g < heldGain ? g : g + Float(release) * (heldGain - g)
+            for c in 0..<ch.count { ch[c][i] *= heldGain }
         }
     }
 }
