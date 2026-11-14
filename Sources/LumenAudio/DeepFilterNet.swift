@@ -96,7 +96,7 @@ public enum DeepFilterNet {
     }
 }
 
-/// One DeepFilterNet3 pass. If DF3 cannot run, keep the microphone signal unchanged.
+/// One DeepFilterNet3 pass, with bounded spectral suppression on failure.
 struct TrainedVoiceDenoiser: Denoiser {
     let strength: Double
 
@@ -105,14 +105,14 @@ struct TrainedVoiceDenoiser: Denoiser {
     func process(_ x: [Float]) -> [Float] {
         guard DeepFilterNet.isAvailable else {
             Logger(subsystem: "com.lumen.studio", category: "audio")
-                .error("DeepFilterNet unavailable; passing microphone audio through")
-            return x
+                .error("DeepFilterNet unavailable; using spectral noise reduction")
+            return SpectralGate(strength: strength).process(x)
         }
         do { return try DeepFilterNet.process(x, strength: strength) }
         catch {
             Logger(subsystem: "com.lumen.studio", category: "audio")
-                .error("DeepFilterNet failed; passing microphone audio through: \(String(describing: error), privacy: .public)")
-            return x
+                .error("DeepFilterNet failed; using spectral noise reduction: \(String(describing: error), privacy: .public)")
+            return SpectralGate(strength: strength).process(x)
         }
     }
 }
