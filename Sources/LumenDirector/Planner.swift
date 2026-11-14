@@ -186,7 +186,11 @@ enum ZoomPlanner {
         }
         let sorted = events.sorted { $0.t < $1.t }
         func ok(_ t: Double) -> Bool { t.isFinite && t >= tm.trimStart + 0.3 && t <= tm.trimEnd - 0.8 && !tm.isCut(t) }
-        let hi = clamp(p.maxScale, 1.3, 2.6), lo = clamp(p.minScale, 1.2, hi)
+        // The internal cap exists to bound the edge-centring fit, not to pick a
+        // default: a click on an edge asks for `W / (2·inset)`, which can be
+        // enormous, and the fit clamps it. 3.2 is the documented contract the
+        // zoom precision tests assert (never the old fixed 1.8 / 2.6 pair).
+        let hi = clamp(p.maxScale, 1.3, 3.2), lo = clamp(p.minScale, 1.2, hi)
         let hold = min(max(p.hold, p.minHold), max(p.zoomOutGap - 0.2, 0.3))
 
         // ---- 1. intents: ONLY clicks and typing bursts ----
@@ -278,31 +282,32 @@ enum ZoomPlanner {
         func typingCenter(_ pt: SIMD2<Double>, _ s: Double) -> SIMD2<Double> {
             clampC(SIMD2(pt.x + 0.16 * half(s).x, pt.y), s)
         }
-        /// SMOOTHNESS: the caret path is recorded as a continuous target for
-        /// the camera. The scene still splits (the segment focus keeps
-        /// tracking the caret, which is what the inspector and the accuracy
-        /// rules read), but the camera now glides along the path instead of
-        /// restarting a spring on every retarget.
+        /// SMOOTHNESS: the caret path is recorded as one continuous target for
+        /// the camera. The scene does NOT split when the caret leaves the
+        /// reading band; a new target is appended to the same path, so the
+        /// camera moves before the caret runs out of room and holds while it
+        /// has room. There is no multi-second publication gate (that produced
+        /// the stop→lurch), and no per-key scene restart.
         func follow(_ path: [PathPoint], from t0: Double) {
             guard var o = cur else { return }
             if o.path.isEmpty {
-                // The path starts where the camera already is.
                 o.path.append(FollowPoint(t: o.start, p: SIMD2(o.c.x / W, o.c.y / H)))
                 cur = o
             }
-            var lastMove = t0 - 1
             for s in path where s.t >= t0 && ok(s.t) {
-                guard let o = cur else { return }
+                guard var o = cur else { return }
                 let h = half(o.scale), d = (s.p - o.c) / h
-                // The caret only pulls the camera once it leaves the tight window.
+                // The caret only pulls the camera once it leaves the tight
+                // window. Inside it the camera is still.
                 let outside = d.x > 0.06 || d.x < -0.34 || abs(d.y) > 0.22
-                guard outside, s.t - lastMove >= 2.4 else { continue }
+                guard outside else { continue }
                 let target = typingCenter(s.p, o.scale)
                 let moved = (target - o.c) / h
-                guard hypot(moved.x, moved.y) >= 0.12 else { continue }  // clamped to the same view: nothing to do
-                retarget(target, at: s.t, continuesPath: true)
-                lastMove = s.t
-                cur?.path.append(FollowPoint(t: s.t, p: SIMD2(target.x / W, target.y / H)))
+                guard hypot(moved.x, moved.y) >= 0.06 else { continue }  // clamped to the same view: nothing to do
+                if let lastPoint = o.path.last, s.t - lastPoint.t < 1e-6 { continue }
+                o.c = target
+                o.path.append(FollowPoint(t: s.t, p: SIMD2(target.x / W, target.y / H)))
+                cur = o
             }
         }
         func chooseScale(_ i: Intent, prev: Double?) -> Double {

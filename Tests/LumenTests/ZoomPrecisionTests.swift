@@ -225,20 +225,15 @@ private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
 
 @Test func caretSweepStaysInRangeWithFewRetargets() {
     // Spec §10: synthetic caret trace sweeping 0->0.9 W over 8 s =>
-    // <= 3 retargets, caret within d.x in (-0.85, 0.60) at every sample.
-    // Measured against the planner's segment target centres (the decision
-    // layer); the derived camera spring that trails mid-pan is not part of
-    // this pure-planner assertion.
+    // <= 3 scenes, caret within the viewport at every sample.
+    // The caret is measured against the EVALUATED camera (the real user-visible
+    // guarantee), not the segment focus: one continuous path follows the caret,
+    // so the segment focus is only the last target, not the camera.
     let src = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 16,
                          backingScale: 1, originX: 0, originY: 0)
     var events: [InputEvent] = []
     for i in 0..<24 { events.append(InputEvent(t: 2.0 + Double(i) * 0.3, kind: .keyDown, keyCode: 7)) }
     // One typing burst 2.0..8.9; caret sweeps across the field.
-    // The bullet says 0->0.9 W, but at 1.8x those absolute extremes are
-    // outside the feasibility clamp (centre must lie in [533, 1387] at
-    // 1920 wide), so d.x bounds cannot hold there for ANY planner.
-    // Sweep the widest checkable range instead (0.06W->0.85W); the 0.9W
-    // frame edge is covered by the A7 viewport bound on video.
     let samples = (0..<24).map { TypingTrace.Sample(t: 2.0 + Double($0) * 0.3,
                                                     x: 115 + Double($0) * (1517.0 / 23.0), y: 540) }
     let trace = TypingTrace(t0: 2.0, t1: 8.9,
@@ -251,12 +246,11 @@ private let precisionSource = SourceInfo(width: 1920, height: 1080, fps: 60,
     print("CARET-SWEEP scenes:", inWindow.map { "\(String(format: "%.1f-%.1f", $0.start, $0.end))" }.joined(separator: " | "))
     #expect(inWindow.count - 1 <= 3, "retargets=\(inWindow.count - 1)")
     for s in samples {
-        guard let seg = out.zoom.first(where: { s.t >= $0.start && s.t < $0.end })
-                ?? out.zoom.last(where: { $0.end <= s.t }) else { continue }
-        guard case .fixed(let fx, let fy) = seg.focus else { continue }
-        let halfX = 1920.0 / (2 * seg.scale)
-        let dx = ((s.x - fx * 1920.0) / halfX)
-        let dy = ((s.y - fy * 1080.0) / (1080.0 / (2 * seg.scale)))
+        let frame = out.evaluate(at: s.t)
+        let scale = Double(frame.cameraScale)
+        let halfX = 1920.0 / (2 * scale), halfY = 1080.0 / (2 * scale)
+        let dx = (s.x - Double(frame.cameraCenter.x)) / halfX
+        let dy = (s.y - Double(frame.cameraCenter.y)) / halfY
         // The caret framing follows the element and re-aims when the caret
         // drifts out of the safe band, so the guarantee is that the caret is
         // never cropped: it stays inside the viewport at every sample.

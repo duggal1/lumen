@@ -82,7 +82,7 @@ enum CameraSolver {
 
     /// SMOOTHNESS: `follow` carries the continuous camera target paths (the
     /// caret path of a typing scene). The camera glides along them instead of
-    /// being retargeted — and the scene split — every 0.45 s.
+    /// being retargeted — and the scene split — every few hundred milliseconds.
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams,
                       src: SIMD2<Double>, outDur: Double, loop: Double?,
                       follow: [UUID: [(t: Double, c: SIMD2<Double>)]],
@@ -95,9 +95,6 @@ enum CameraSolver {
         let dt = 1 / rate
         let n = max(Int(outDur * rate) + 1, 2)
         var track = CameraTrack(count: n, rate: rate)
-        let zoomIn = max(p.omegaZoom.isFinite ? p.omegaZoom : 1, 1)
-        let zoomOut = zoomIn * 0.85
-        let panOmega = max(p.omegaPan.isFinite ? p.omegaPan : 1, 1)
         let rest = SIMD2<Double>(repeating: 0.5)
 
         func index(_ time: Double) -> Int {
@@ -172,106 +169,129 @@ enum CameraSolver {
             panPosition(center: center, logScale: logScale)
         }
 
-        func pathState(_ values: [Double], at time: Double) -> (x: Double, v: Double, a: Double) {
-            guard !values.isEmpty else { return (0.5, 0, 0) }
+        // MARK: Continuous path sampling
+
+        /// Position, velocity and acceleration of a cubic Hermite through a
+        /// (time, value) path. C1 at the knots (position and velocity match),
+        /// with bounded acceleration — enough for a camera target that was
+        /// already smoothed by the planner, and it never invents a stop.
+        func scalarState(_ values: [Double], at time: Double) -> (x: Double, v: Double, a: Double) {
+            guard values.count > 1 else { return (values.first ?? 0.5, 0, 0) }
             let lastTime = Double(values.count - 1) * dt
-            func value(at sampleTime: Double) -> Double {
-                let frame = clamp(sampleTime, 0, lastTime) * rate
-                let low = min(Int(frame), values.count - 1)
-                let high = min(low + 1, values.count - 1)
-                return lerp(values[low], values[high], frame - Double(low))
-            }
             let t = clamp(time, 0, lastTime)
-            let before = max(t - dt, 0)
-            let after = min(t + dt, lastTime)
-            let x = value(at: t)
-            guard before < t, after > t else { return (x, 0, 0) }
-            let leftSpan = t - before, rightSpan = after - t
-            let leftVelocity = (x - value(at: before)) / leftSpan
-            let rightVelocity = (value(at: after) - x) / rightSpan
-            return (x, (value(at: after) - value(at: before)) / (leftSpan + rightSpan),
-                    2 * (rightVelocity - leftVelocity) / (leftSpan + rightSpan))
+            let f = t * rate
+            let lo = min(Int(f), values.count - 2)
+            let span = dt
+            let u = clamp((t - Double(lo) * dt) / span, 0, 1)
+            func tangent(_ i: Int) -> Double {
+                if i <= 0 { return (values[1] - values[0]) * rate }
+                if i >= values.count - 1 { return (values[values.count - 1] - values[values.count - 2]) * rate }
+                return (values[i + 1] - values[i - 1]) * rate / 2
+            }
+            let m0 = tangent(lo) * span, m1 = tangent(lo + 1) * span
+            let p0 = values[lo], p1 = values[lo + 1]
+            let u2 = u * u, u3 = u2 * u
+            let h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2
+            let x = p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11
+            let dh00 = (6 * u2 - 6 * u) / span, dh10 = (3 * u2 - 4 * u + 1) / span
+            let dh01 = (-6 * u2 + 6 * u) / span, dh11 = (3 * u2 - 2 * u) / span
+            let v = p0 * dh00 + m0 * dh10 + p1 * dh01 + m1 * dh11
+            let s2 = span * span
+            let ddh00 = (12 * u - 6) / s2, ddh10 = (6 * u - 4) / s2, ddh01 = (-12 * u + 6) / s2, ddh11 = (6 * u - 2) / s2
+            let a = p0 * ddh00 + m0 * ddh10 + p1 * ddh01 + m1 * ddh11
+            return (x, v, a)
         }
 
-        /// SMOOTHNESS: a smooth, dead-zoned follower for the camera target.
-        /// The camera holds while the target is inside the dead zone, then
-        /// closes on it exponentially (first order, no overshoot) — so the
-        /// handover from a scene's centre to the caret path is a glide, not a
-        /// jump, and the caret never leaves the frame.
-        func followStep(point: SIMD2<Double>, halfView: SIMD2<Double>,
-                        dead: SIMD2<Double>, omega: Double, dt: Double,
-                        position: inout SIMD2<Double>) {
-            let k = 1 - exp(-omega * dt)
-            for i in 0..<2 {
-                let d = point[i] - position[i], lim = dead[i] * halfView[i]
-                var goal = point[i]
-                if d > lim { goal = point[i] - lim } else if d < -lim { goal = point[i] + lim }
-                position[i] += (goal - position[i]) * k
+        /// Position, velocity and acceleration of a continuous target path at
+        /// an output time. The path is a polyline of (time, normalized centre);
+        /// a cubic Hermite keeps the camera moving through the knots instead of
+        /// stopping at every target.
+        func pathState(_ path: [(t: Double, c: SIMD2<Double>)], at time: Double) -> (c: SIMD2<Double>, v: SIMD2<Double>, a: SIMD2<Double>) {
+            guard let first = path.first else { return (SIMD2<Double>(repeating: 0.5), .zero, .zero) }
+            guard path.count > 1 else { return (first.c, .zero, .zero) }
+            let last = path[path.count - 1]
+            if time <= first.t { return (first.c, .zero, .zero) }
+            if time >= last.t { return (last.c, .zero, .zero) }
+            var lo = 0, hi = path.count - 1
+            while lo + 1 < hi {
+                let mid = (lo + hi) / 2
+                if path[mid].t <= time { lo = mid } else { hi = mid }
             }
+            let p0 = path[lo], p1 = path[lo + 1]
+            let span = p1.t - p0.t
+            guard span > 1e-9 else { return (p1.c, .zero, .zero) }
+            let u = clamp((time - p0.t) / span, 0, 1)
+            func tangent(_ i: Int) -> SIMD2<Double> {
+                if i <= 0 { return (path[1].c - path[0].c) / max(path[1].t - path[0].t, 1e-9) }
+                if i >= path.count - 1 { return (path[path.count - 1].c - path[path.count - 2].c) / max(path[path.count - 1].t - path[path.count - 2].t, 1e-9) }
+                return (path[i + 1].c - path[i - 1].c) / max(path[i + 1].t - path[i - 1].t, 1e-9)
+            }
+            let m0 = tangent(lo) * span, m1 = tangent(lo + 1) * span
+            let u2 = u * u, u3 = u2 * u
+            let h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2
+            let c = p0.c * h00 + m0 * h10 + p1.c * h01 + m1 * h11
+            let dh00 = (6 * u2 - 6 * u) / span, dh10 = (3 * u2 - 4 * u + 1) / span
+            let dh01 = (-6 * u2 + 6 * u) / span, dh11 = (3 * u2 - 2 * u) / span
+            let v = p0.c * dh00 + m0 * dh10 + p1.c * dh01 + m1 * dh11
+            let s2 = span * span
+            let ddh00 = (12 * u - 6) / s2, ddh10 = (6 * u - 4) / s2, ddh01 = (-12 * u + 6) / s2, ddh11 = (6 * u - 2) / s2
+            let a = p0.c * ddh00 + m0 * ddh10 + p1.c * ddh01 + m1 * ddh11
+            return (c, v, a)
         }
 
-        /// Position and velocity of a continuous target path at an output time.
-        func pathState(_ path: [(t: Double, c: SIMD2<Double>)], at time: Double) -> (c: SIMD2<Double>, v: SIMD2<Double>) {
-            func sample(_ t: Double) -> SIMD2<Double> {
-                guard let first = path.first else { return SIMD2<Double>(repeating: 0.5) }
-                if t <= first.t { return first.c }
-                guard path.count > 1 else { return first.c }
-                let last = path[path.count - 1]
-                if t >= last.t { return last.c }
-                var lo = 0, hi = path.count - 1
-                while lo + 1 < hi {
-                    let mid = (lo + hi) / 2
-                    if path[mid].t <= t { lo = mid } else { hi = mid }
-                }
-                let span = path[hi].t - path[lo].t
-                let u = span > 1e-9 ? (t - path[lo].t) / span : 0
-                return path[lo].c + (path[hi].c - path[lo].c) * u
-            }
-            let c = sample(time)
-            let h = 1 / rate
-            let v = (sample(time + h) - sample(time - h)) / (2 * h)
-            return (c, v)
-        }
+        // MARK: Moves
+
+        // Tuning policy (Docs/ZOOM-MOTION-PLAN.md): a typical 1.5–2x zoom-in
+        // reviews at 550 ms, a zoom-out at 750 ms, and an ordinary nearby
+        // reframe at 350 ms. The segment's own easing scales these, and a
+        // modest distance term stays inside the measured bounds. `omegaZoom`
+        // is a physical spring frequency (the live camera), not a duration.
+        let zoomInBase = 0.55, zoomOutBase = 0.75, reframeBase = 0.35
 
         var moves: [Move] = []
         var previousLogScale = 0.0
         var previousCenter = rest
         var lastStart = -Double.infinity
         var previousIntentTime: Double?
-        let arrivalLead = 1.0 / 60.0
+
         for shot in shots {
-            let estimate = targetCenter(shot, at: index(shot.start))
+            let estimate = shot.path.first?.c ?? targetCenter(shot, at: index(shot.start))
             let scaleChange = abs(shot.logScale - previousLogScale)
             let panDistance = hypot(estimate.x - previousCenter.x, estimate.y - previousCenter.y)
                 * exp(max(shot.logScale, previousLogScale))
-            let panDuration = min(max((0.35 + 0.9 * panDistance) * (7 / panOmega) / shot.ease, 0.30), 1.2)
-            let preferredDuration = scaleChange > 0.03
-                ? max(5.5 / (zoomIn * shot.ease), 0.6 * panDuration)
-                : panDuration
+            let reframe = scaleChange <= 0.03
+            let base = reframe ? reframeBase : zoomInBase
+            let distanceGrow = 1 + clamp(panDistance, 0, 1.5) * 0.18
+            let duration = clamp(base / shot.ease * distanceGrow, 0.22, 0.95)
             let earliestStart = max(lastStart + 1 / rate, (previousIntentTime ?? -Double.infinity) + 1 / rate)
-            let deadline = shot.start - arrivalLead
-            let available = deadline - earliestStart
-            let duration = shot.isAuto && available > 1e-3 ? min(preferredDuration, available) : preferredDuration
             let nominalStart = shot.isAuto
-                ? shot.start - max(p.leadIn.isFinite ? p.leadIn : 0.6, duration + arrivalLead)
+                ? shot.start - max(p.leadIn.isFinite ? p.leadIn : 0.6, duration)
                 : shot.start
-            let start = max(nominalStart, earliestStart)
+            let start = max(nominalStart, earliestStart, 0)
             let end = start + duration
-            let endCenter = targetCenter(shot, at: index(end))
+            // Pan and scale share the one transition interval, so the camera
+            // never zooms first and drags the subject in afterwards.
+            let endCenter: SIMD2<Double>
+            if !shot.path.isEmpty {
+                endCenter = pathState(shot.path, at: end).c
+            } else {
+                endCenter = targetCenter(shot, at: index(end))
+            }
             let endPan = panCoordinate(for: endCenter, logScale: shot.logScale)
             var endVelocity = SIMD2<Double>.zero
             var endAcceleration = SIMD2<Double>.zero
             if isFollow(shot.focus) {
                 let margin = max(panMargin(logScale: shot.logScale), 1e-8)
-                let x = pathState(followX, at: end), y = pathState(followY, at: end)
+                let x = scalarState(followX, at: end), y = scalarState(followY, at: end)
                 endVelocity = SIMD2(x.v / margin, y.v / margin)
                 endAcceleration = SIMD2(x.a / margin, y.a / margin)
             } else if !shot.path.isEmpty {
-                // SMOOTHNESS: a path scene ends where the caret was, so the
-                // pan channel keeps the caret's own velocity at the handover.
+                // Hand the follow over from the caret path with the caret's
+                // own velocity and acceleration, not a fresh rest.
                 let margin = max(panMargin(logScale: shot.logScale), 1e-8)
                 let state = pathState(shot.path, at: end)
                 endVelocity = state.v / margin
+                endAcceleration = state.a / margin
             }
             moves.append(Move(start: start, duration: duration, logScale: shot.logScale, pan: endPan,
                               endVelocity: endVelocity, endAcceleration: endAcceleration,
@@ -283,57 +303,60 @@ enum CameraSolver {
             previousCenter = endCenter
         }
 
-        let entries = moves
+        // Zoom-out: one finite curve back to full frame. Skipped when the next
+        // scene's move already begins at or before this scene ends (a related
+        // action makes staying zoomed more useful than a flash to full frame).
+        let entranceCount = moves.count
         for (index, shot) in shots.enumerated() {
-            if index + 1 < entries.count, entries[index + 1].start <= shot.off + 1e-3 { continue }
-            moves.append(Move(start: shot.off, duration: 6.5 / (zoomOut * shot.ease), logScale: 0, pan: .zero))
+            if index + 1 < entranceCount, moves[index + 1].start <= shot.off + 1e-3 { continue }
+            moves.append(Move(start: shot.off, duration: zoomOutBase / shot.ease, logScale: 0, pan: .zero))
         }
         moves.sort { $0.start < $1.start }
+
+        // MARK: Sample the generated trajectory
 
         var logScale = Channel(0)
         var panX = Channel(0), panY = Channel(0)
         var centersX = [Double](repeating: 0.5, count: n)
         var centersY = centersX
         var scales = [Double](repeating: 0, count: n)
+        var velX = [Double](repeating: 0, count: n), velY = velX, velZ = velX
+        var accX = [Double](repeating: 0, count: n), accY = accX, accZ = accX
         var moveIndex = 0
         var followMove: Move?
-        /// The camera's current follow target (normalized centre).
-        var followTarget = SIMD2<Double>(repeating: 0.5)
-        /// The follower has to be seeded from the pan channel when it takes over.
-        var pathNeedsSeed = false
 
         for sample in 0..<n {
             // SMOOTHNESS: a cancelled derive abandons the solve here instead
-            // of running the whole 1440 Hz grid to completion.
+            // of running the whole grid to completion.
             if sample % 4096 == 0, cancelled() { return nil }
             let time = Double(sample) * dt
+
             while moveIndex < moves.count, moves[moveIndex].start <= time {
                 let move = moves[moveIndex]
                 moveIndex += 1
                 var startX: (x: Double, v: Double, a: Double)?
                 var startY: (x: Double, v: Double, a: Double)?
-                // SMOOTHNESS: the first scene of a path hands the pan over to
-                // the follower once its zoom has arrived (the centre and the
-                // zoom arrive together); a continuation hands over at once.
-                if !move.path.isEmpty && !move.pathContinues { pathNeedsSeed = true }
-                if let current = followMove, let until = current.followUntil,
-                   move.start >= current.start + current.duration, move.start <= until + 1e-9 {
-                    let margin = max(panMargin(logScale: current.logScale), 1e-8)
-                    if !current.path.isEmpty {
-                        // SMOOTHNESS: hand over from the caret path with the
-                        // caret's own position and velocity.
-                        let state = pathState(current.path, at: move.start)
-                        startX = (panCoordinate(for: SIMD2(state.c.x, 0.5), logScale: current.logScale).x,
-                                  state.v.x / margin, 0)
-                        startY = (panCoordinate(for: SIMD2(0.5, state.c.y), logScale: current.logScale).y,
-                                  state.v.y / margin, 0)
-                    } else {
-                        let x = pathState(followX, at: move.start), y = pathState(followY, at: move.start)
-                        startX = (panCoordinate(for: SIMD2(x.x, 0.5), logScale: current.logScale).x,
-                                  x.v / margin, x.a / margin)
-                        startY = (panCoordinate(for: SIMD2(0.5, y.x), logScale: current.logScale).y,
-                                  y.v / margin, y.a / margin)
+                // Seed the next move from the ACTUAL displayed trajectory at
+                // the handoff, not from a stale channel or the raw target path.
+                // Before the follow has taken over the entrance quintic owns
+                // the pan, so the channel state is already the displayed one.
+                if let current = followMove {
+                    if move.start >= current.start + current.duration {
+                        if !current.path.isEmpty {
+                            let state = pathState(current.path, at: move.start)
+                            let m = max(panMargin(logScale: current.logScale), 1e-8)
+                            startX = (x: panCoordinate(for: SIMD2(state.c.x, 0.5), logScale: current.logScale).x,
+                                      v: state.v.x / m, a: state.a.x / m)
+                            startY = (x: panCoordinate(for: SIMD2(0.5, state.c.y), logScale: current.logScale).y,
+                                      v: state.v.y / m, a: state.a.y / m)
+                        } else if current.followUntil != nil {
+                            let x = scalarState(followX, at: move.start), y = scalarState(followY, at: move.start)
+                            let m = max(panMargin(logScale: current.logScale), 1e-8)
+                            startX = (x: panCoordinate(for: SIMD2(x.x, 0.5), logScale: current.logScale).x, v: x.v / m, a: x.a / m)
+                            startY = (x: panCoordinate(for: SIMD2(0.5, y.x), logScale: current.logScale).y, v: y.v / m, a: y.a / m)
+                        }
                     }
+                    followMove = nil
                 }
                 logScale.retarget(at: move.start, to: move.logScale, duration: move.duration)
                 panX.retarget(at: move.start, to: move.pan.x, duration: move.duration, start: startX,
@@ -343,64 +366,73 @@ enum CameraSolver {
                 followMove = move.followUntil == nil ? nil : move
             }
 
-            let zoom = max(logScale.move.sample(time).x, 0)
-            var pan = SIMD2(panX.move.sample(time).x, panY.move.sample(time).x)
-            if let current = followMove, let until = current.followUntil {
-                let margin = max(panMargin(logScale: zoom), 1e-8)
-                if !current.path.isEmpty {
-                    // SMOOTHNESS: the continuous target path drives the pan
-                    // once the scene's zoom has arrived; the caret is followed
-                    // by a follower that never stops, so the camera glides.
-                    let handover = current.pathContinues ? current.start : current.start + current.duration
-                    if time >= handover, time < until {
-                        if pathNeedsSeed {
-                            // The pan channel works in pan coordinates; the
-                            // follower works in the normalized centre.
-                            let x = panX.move.sample(time), y = panY.move.sample(time)
-                            let m = panMargin(logScale: zoom)
-                            followTarget = SIMD2(0.5 + x.x * m, 0.5 + y.x * m)
-                            pathNeedsSeed = false
-                        }
-                        let desired = pathState(current.path, at: time).c
-                        let half = 0.5 / exp(zoom)
-                        let halfView = SIMD2(half, half)
-                        followStep(point: desired, halfView: halfView,
-                                   dead: SIMD2(0.01, 0.01), omega: 8, dt: dt,
-                                   position: &followTarget)
-                        pan = SIMD2((followTarget.x - 0.5) / margin, (followTarget.y - 0.5) / margin)
-                    }
-                } else if time >= current.start + current.duration, time < until {
-                    pan = SIMD2((followX[sample] - 0.5) / margin, (followY[sample] - 0.5) / margin)
-                }
-            }
-            pan = SIMD2(clamp(pan.x, -1, 1), clamp(pan.y, -1, 1))
-            let margin = panMargin(logScale: zoom)
-            centersX[sample] = 0.5 + pan.x * margin
-            centersY[sample] = 0.5 + pan.y * margin
-            scales[sample] = zoom
-        }
+            var lzState = logScale.move.sample(time)
+            var panXState = panX.move.sample(time)
+            var panYState = panY.move.sample(time)
 
-        func tangent(_ values: [Double]) -> [Float] {
-            var result = [Float](repeating: 0, count: values.count)
-            guard values.count > 1 else { return result }
-            result[0] = Float((values[1] - values[0]) * rate)
-            result[values.count - 1] = Float((values[values.count - 1] - values[values.count - 2]) * rate)
-            if values.count > 2 {
-                for i in 1..<(values.count - 1) {
-                    let left = (values[i] - values[i - 1]) * rate
-                    let right = (values[i + 1] - values[i]) * rate
-                    if left * right > 0 { result[i] = Float(2 * left * right / (left + right)) }
+            // The follow path drives the pan directly once the entrance has
+            // arrived. There is no downstream follower easing it a second time.
+            if let current = followMove, let until = current.followUntil,
+               time >= current.start + current.duration, time < until {
+                if !current.path.isEmpty {
+                    let state = pathState(current.path, at: time)
+                    let m = max(panMargin(logScale: max(lzState.x, 0)), 1e-8)
+                    panXState = (x: panCoordinate(for: SIMD2(state.c.x, 0.5), logScale: max(lzState.x, 0)).x,
+                                 v: state.v.x / m, a: state.a.x / m)
+                    panYState = (x: panCoordinate(for: SIMD2(0.5, state.c.y), logScale: max(lzState.x, 0)).y,
+                                 v: state.v.y / m, a: state.a.y / m)
+                } else {
+                    let i = min(max(sample, 1), n - 2)
+                    let m = max(panMargin(logScale: max(lzState.x, 0)), 1e-8)
+                    let x = (followX[i], (followX[i + 1] - followX[i - 1]) * rate / 2,
+                             (followX[i + 1] - 2 * followX[i] + followX[i - 1]) * rate * rate)
+                    let y = (followY[i], (followY[i + 1] - followY[i - 1]) * rate / 2,
+                             (followY[i + 1] - 2 * followY[i] + followY[i - 1]) * rate * rate)
+                    panXState = (x: panCoordinate(for: SIMD2(x.0, 0.5), logScale: max(lzState.x, 0)).x, v: x.1 / m, a: x.2 / m)
+                    panYState = (x: panCoordinate(for: SIMD2(0.5, y.0), logScale: max(lzState.x, 0)).y, v: y.1 / m, a: y.2 / m)
                 }
             }
-            return result
+
+            // Log-scale is clamped at 1x: a clamped axis has no rate.
+            let lz = max(lzState.x, 0)
+            if lzState.x <= 0 { lzState.v = 0; lzState.a = 0 }
+
+            // Pan is clamped to the legal range; a clamped axis has no rate.
+            var px = clamp(panXState.x, -1, 1), py = clamp(panYState.x, -1, 1)
+            var pvx = panXState.v, pvy = panYState.v
+            var pax = panXState.a, pay = panYState.a
+            if px != panXState.x { pvx = 0; pax = 0 }
+            if py != panYState.x { pvy = 0; pay = 0 }
+
+            // Centre = 0.5 + pan · margin(lz). Differentiate the product so
+            // the stored velocity and acceleration belong to the centre the
+            // evaluator actually displays.
+            let e = exp(-lz)
+            let m = 0.5 - 0.5 * e
+            let m1 = 0.5 * e
+            let m2 = -0.5 * e
+            let cx = 0.5 + px * m, cy = 0.5 + py * m
+            let vcx = pvx * m + px * m1 * lzState.v
+            let vcy = pvy * m + py * m1 * lzState.v
+            let acx = pax * m + 2 * pvx * m1 * lzState.v + px * (m2 * lzState.v * lzState.v + m1 * lzState.a)
+            let acy = pay * m + 2 * pvy * m1 * lzState.v + py * (m2 * lzState.v * lzState.v + m1 * lzState.a)
+
+            centersX[sample] = cx
+            centersY[sample] = cy
+            scales[sample] = lz
+            velX[sample] = vcx; velY[sample] = vcy; velZ[sample] = lzState.v
+            accX[sample] = acx; accY[sample] = acy; accZ[sample] = lzState.a
         }
 
         track.nx = centersX.map(Float.init)
         track.ny = centersY.map(Float.init)
         track.lz = scales.map(Float.init)
-        track.vx = tangent(centersX)
-        track.vy = tangent(centersY)
-        track.vz = tangent(scales)
+        track.vx = velX.map(Float.init)
+        track.vy = velY.map(Float.init)
+        track.vz = velZ.map(Float.init)
+        track.ax = accX.map(Float.init)
+        track.ay = accY.map(Float.init)
+        track.az = accZ.map(Float.init)
 
         var yaw = p.tilt == .reveal ? 12.0 : 0.0, yawVelocity = 0.0
         var pitch = 0.0, pitchVelocity = 0.0

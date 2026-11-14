@@ -383,13 +383,17 @@ extension Timeline {
         var rings: [ClickRing] = []
         if cursor.clickRing != nil, cursor.clickEffect != .none, !d.clicks.isEmpty {
             let dur = max(cursor.clickDuration, 0.05)
+            // A click whose time is the frame time must exist on that frame.
+            // Source→output time conversion leaves a few 1e-14 of error, so an
+            // exact comparison hides the first tick of every ripple.
+            let eps = 1e-6
             var lo = 0, hi = d.clicks.count
-            while lo < hi { let m = (lo + hi) / 2; if d.clicks[m].t <= t - dur { lo = m + 1 } else { hi = m } }
+            while lo < hi { let m = (lo + hi) / 2; if d.clicks[m].t <= t - dur + eps { lo = m + 1 } else { hi = m } }
             var i = lo
             // SMOOTHNESS: reserve once. `evaluate` runs for every sub-frame of
             // every frame; the ring list is the one array that grows there.
             rings.reserveCapacity(8)
-            while i < d.clicks.count, d.clicks[i].t <= t {
+            while i < d.clicks.count, d.clicks[i].t <= t + eps {
                 rings.append(ClickRing(position: SIMD2(d.clicks[i].x, d.clicks[i].y), progress: Float((t - d.clicks[i].t) / dur)))
                 i += 1
             }
