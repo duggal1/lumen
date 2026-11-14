@@ -860,18 +860,20 @@ public struct TimeMap: Sendable {
 
 Works in source time per clip, outputs `[ZoomSegment]` (source time) tagged `.auto`.
 
-1. **Activity points:** clicks (weight `clickWeight`, default 3), drags (3), typing bursts (2, located at the last click or AX focused element), scroll (1). Pixel-activity points (weight 1) for clips without events (device/import). Cursor travel counts **only** if it is purposeful: path length > `wiggleRadius` within 400 ms **and** it ends in a dwell >= 200 ms. `zoom.sensitivity` (0..1) maps `wiggleRadius = lerp(120 px, 12 px, sensitivity)`. Idle wiggle creates nothing.
-2. **Cluster:** merge points within `mergeGap` (2.5 s) and within 35% of the viewport diagonal.
-3. **Focus box:** union of point locations (or AX element frames) + 12% padding.
-4. **Viewport-aware scale:** `viewport` is the content rect's aspect inside the **current layout and canvas** (not just the source aspect). `scale = clamp(0.8 * min(viewW/boxW, viewH/boxH), minScale, maxScale)`, quantized to 0.1. If the raw scale < `minTrigger`, skip the cluster.
-5. **Focus mode:** if the whole cluster fits inside the zoomed view with margin, use `.fixed(box center)` (stable, no wander). Otherwise `.follow`.
-6. **Lead-in:** start `leadIn` (0.45 s) before the first event.
-7. **Hold and tail:** hold while the next activity is within 2.0 s; end `tail` (0.7 s) after the last event.
-8. **Pan-through:** if the next cluster starts within `panThroughGap` (1.5 s), do not zoom out; pan directly (rescale if needed).
-9. **Rate limits:** minimum hold 1.0 s; minimum gap between zoom-out and next zoom-in 0.6 s; otherwise merge.
-10. **Presets:** Subtle (max 1.6), Balanced (2.2), Dramatic (3.0), **Cinematic** (max 2.6, leadIn 0.9, tail 1.1, `omegaPan` 4.5, `omegaZoom` 4.0, shutter 0.6, 3D Lean on), Fixed (always N x).
-11. **Re-aim:** changing canvas aspect, padding, or layout replans `.auto` segments automatically with the new viewport. `.manual` segments are preserved.
-12. **Centering offset:** `camera.centerOffset` (view-normalized) biases where the cursor sits in the zoomed view (for example, leave room for a webcam or captions).
+The planner combines explicit clicks and resolved typing with autonomous visual
+shots. Pixel activity runs on desktop, imported and device footage whenever
+auto-zoom is enabled (except the fixed preset), including recordings with mouse
+events. It carries source-pixel bounds and changed-pixel coverage, not text or
+semantic content. Stable localized changes form held shots; tiny animations,
+large navigation changes, scrolling and nearby user input are filtered out.
+Visual shots fit the complete changed region with 35% extra room and at most
+1.6× zoom. Manual edits and explicit input retain priority. Activity also stops
+idle speed ramps from crossing visibly changing product content.
+
+All shots use the same camera solver below. Background activity completion
+publishes camera evidence promptly and causes a Studio replan. There is no
+second animation system. Exact thresholds and verification limits are recorded
+in [the motion contract](Docs/ZOOM-MOTION-PLAN.md).
 
 ### 10.4 Camera solver (the smoothness engine)
 
