@@ -233,18 +233,18 @@ public struct CameraParams: Codable, Equatable, Sendable {
     public var maxScale = 2.0
     public var minScale = 1.25
     public var minTrigger = 1.25
-    public var leadIn = 0.6, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5, minHold = 1.0
-    public var omegaPan = 7.0, omegaZoom = 9.0, lookahead = 0.20, deadZone = 0.28, followDelay = 0.12
+    public var leadIn = 0.30, tail = 0.7, mergeGap = 2.5, panThroughGap = 1.5
+    public var omegaPan = 4.0, omegaZoom = 7.5, lookahead = 0.20, deadZone = 0.28, followDelay = 0.12
     public var baseScale = 1.8
-    public var zoomOutGap = 1.8
-    public var hold = 0.7
+    public var zoomOutGap = 2.6
+    public var hold = 0.9
     public var safeZone = 0.62
-    public var cameraModel = 4
+    public var cameraModel = 5
     public var centerOffsetX = 0.0, centerOffsetY = 0.0         // view-normalized bias of where the cursor sits in the zoomed view
     public var sensitivity = 0.5                                // 0 = only clicks, 1 = purposeful hovers count too
     public var clickWeight = 3.0
     public var shutter = 0.5
-    public var maxSamples = 8
+    public var maxSamples = 12
     /// User setting for the real-time upscaler cap (2...10, ladder
     /// {2,3,4,5,6,8,10}). Magnification picks the smallest factor >= need.
     public var upscaleMaxFactor = 10
@@ -254,7 +254,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
     public var maxYaw = 8.0, maxPitch = 6.0, floatDeg = 1.2, omegaTilt = 5.0
     public var tiltSeed: UInt64 = 0xC11C
     enum CodingKeys: String, CodingKey {
-        case preset, autoZoom, maxScale, minScale, minTrigger, leadIn, tail, mergeGap, panThroughGap, minHold, omegaPan, omegaZoom, lookahead, deadZone
+        case preset, autoZoom, maxScale, minScale, minTrigger, leadIn, tail, mergeGap, panThroughGap, omegaPan, omegaZoom, lookahead, deadZone
         case followDelay, centerOffsetX, centerOffsetY, sensitivity, clickWeight, shutter, maxSamples, upscaleMaxFactor, upscaleEnabled, tilt, maxYaw, maxPitch, floatDeg, omegaTilt, tiltSeed
         case baseScale, zoomOutGap, hold, safeZone, cameraModel
     }
@@ -263,7 +263,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
         let c = try d.container(keyedBy: CodingKeys.self)
         preset = c.opt(.preset, preset); autoZoom = c.opt(.autoZoom, autoZoom); maxScale = c.opt(.maxScale, maxScale); minScale = c.opt(.minScale, minScale)
         minTrigger = c.opt(.minTrigger, minTrigger); leadIn = c.opt(.leadIn, leadIn); tail = c.opt(.tail, tail); mergeGap = c.opt(.mergeGap, mergeGap)
-        panThroughGap = c.opt(.panThroughGap, panThroughGap); minHold = c.opt(.minHold, minHold); omegaPan = c.opt(.omegaPan, omegaPan)
+        panThroughGap = c.opt(.panThroughGap, panThroughGap); omegaPan = c.opt(.omegaPan, omegaPan)
         omegaZoom = c.opt(.omegaZoom, omegaZoom); lookahead = c.opt(.lookahead, lookahead); deadZone = c.opt(.deadZone, deadZone)
         followDelay = c.opt(.followDelay, followDelay); centerOffsetX = c.opt(.centerOffsetX, centerOffsetX); centerOffsetY = c.opt(.centerOffsetY, centerOffsetY)
         sensitivity = c.opt(.sensitivity, sensitivity); clickWeight = c.opt(.clickWeight, clickWeight); shutter = c.opt(.shutter, shutter)
@@ -271,9 +271,9 @@ public struct CameraParams: Codable, Equatable, Sendable {
         baseScale = c.opt(.baseScale, baseScale)
         zoomOutGap = c.opt(.zoomOutGap, zoomOutGap); hold = c.opt(.hold, hold); safeZone = c.opt(.safeZone, safeZone)
         cameraModel = c.opt(.cameraModel, 1)
-        if cameraModel < 4 {
-            maxScale = 2.0; minScale = 1.25; leadIn = 0.6; hold = 0.7; zoomOutGap = 1.8
-            omegaZoom = 9; omegaPan = 7; safeZone = 0.62; baseScale = 1.8; cameraModel = 4
+        if cameraModel < 5 {
+            maxScale = 2.0; minScale = 1.25; leadIn = 0.30; hold = 0.9; zoomOutGap = 2.6
+            omegaZoom = 7.5; omegaPan = 4; safeZone = 0.62; baseScale = 1.8; cameraModel = 5
         }
         let savedUpscale = c.opt(.upscaleMaxFactor, upscaleMaxFactor)
         upscaleMaxFactor = min(max(savedUpscale == 8 ? 10 : savedUpscale, 2), 10)
@@ -284,8 +284,8 @@ public struct CameraParams: Codable, Equatable, Sendable {
     /// Applies a preset's whole feel. Sliders edited afterwards stick (nothing re-applies the preset behind the user's back).
     public mutating func apply(preset p: ZoomPreset) {
         preset = p; maxScale = p.maxScale
-        leadIn = 0.6; tail = 0.7; omegaPan = 7; omegaZoom = 9; shutter = 0.5; tilt = .off
-        if p == .cinematic { leadIn = 0.8; tail = 1.1; omegaPan = 5; omegaZoom = 6.5; shutter = 0.6; tilt = .lean }
+        leadIn = 0.30; tail = 0.7; omegaPan = 4; omegaZoom = 7.5; shutter = 0.5; tilt = .off
+        if p == .cinematic { leadIn = 0.45; tail = 1.1; omegaPan = 3; omegaZoom = 5.5; shutter = 0.6; tilt = .lean }
         // Fixed camera magnification remains independent of automatic fitting.
         switch p {
         case .subtle: baseScale = 1.4
