@@ -3,68 +3,59 @@ import LumenCore
 import LumenProject
 
 public struct LiveCamera: Sendable {
-    public var maxScale = 2.0, hold = 0.7, omegaZoom = 9.0, omegaPan = 7.0, lookahead = 0.15, deadZone = 0.28
+    public var maxScale = 2.0, hold = 2.6, omegaZoom = 7.5
     public var cursor = CursorStyle()
     private let src: SIMD2<Double>
     private var t = 0.0, started = false
-    private var raw: SIMD2<Double>, rawT = 0.0, vel = SIMD2<Double>.zero
+    private var raw: SIMD2<Double>, rawT = 0.0
     private var shape: UInt16 = 0
-    private var down = false, zoomed = false
+    private var down = false
     private var lastActivity = -1e9, lastMove = -1e9, opacity = 1.0, lzShot = 0.0
-    private var cur1: Spring3, cur2: Spring3, zoom1: Spring3, press: Spring3
-    private var typing = false
+    private var pointer: Spring3, camera: Spring3, press: Spring3
     private var tgt = SIMD2<Double>(0.5, 0.5)
-    private var pan = SIMD2<Double>.zero, panVelocity = SIMD2<Double>.zero
     private var rings: [(t: Double, x: Float, y: Float)] = []
-    /// The newest key-down already ingested. A resolved focus sample is an
-    /// update to that event, not a second press, so it must not restart the
-    /// live scene (which would read as a double zoom trigger).
-    private var lastKeyIndex: UInt32 = 0
+    private var focusTime = -Double.infinity
 
     public init(source: SIMD2<Double>) {
         src = source; raw = source / 2
-        cur1 = Spring3(x: SIMD3(source.x / 2, source.y / 2, 0)); cur2 = cur1
-        zoom1 = Spring3(x: .zero)
+        pointer = Spring3(x: SIMD3(source.x / 2, source.y / 2, 0))
+        camera = Spring3(x: SIMD3(0.5, 0.5, 0))
         press = Spring3(x: SIMD3(1, 0, 0))
     }
     private func norm(_ p: SIMD2<Double>) -> SIMD2<Double> { SIMD2(p.x / src.x, p.y / src.y) }
-    /// SMOOTHNESS: shared pan-space helper (LumenCore) — one definition of
-    /// how a centre maps to a pan coordinate.
-    private func panPosition(for center: SIMD2<Double>, logScale: Double) -> SIMD2<Double> {
-        LumenCore.panPosition(center: center, logScale: logScale)
+    private mutating func aim(_ point: SIMD2<Double>, scale: Double) {
+        let half = 0.5 / scale, c = norm(point)
+        tgt = SIMD2(clamp(c.x, half, 1 - half), clamp(c.y, half, 1 - half))
+        lzShot = log(scale)
     }
     public mutating func ingest(_ e: InputEvent, focus: AXFrame? = nil) {
         if e.hasPosition {
             let p = SIMD2(Double(e.x), Double(e.y))
-            if rawT == 0 { cur1.x = SIMD3(p.x, p.y, 0); cur2.x = cur1.x }
-            else if e.t > rawT { vel += ((p - raw) / max(e.t - rawT, 0.004) - vel) * 0.3 }
+            if rawT == 0 { pointer.x = SIMD3(p.x, p.y, 0) }
             raw = p; rawT = e.t; shape = e.cursorShape
             if e.kind != .up && e.kind != .down { lastMove = e.t }
         }
         switch e.kind {
         case .down:
-            typing = false
-            down = true; lastActivity = e.t; rings.append((e.t, e.x, e.y))
-            if !zoomed {
-                let atRest = zoom1.x.x < 0.03
-                zoomed = true; lzShot = log(min(maxScale, 1.7))
-                let c = norm(SIMD2(Double(e.x), Double(e.y))), hw = 0.5 / exp(lzShot)
-                tgt = SIMD2(clamp(c.x, hw, 1 - hw), clamp(c.y, hw, 1 - hw))
-                if atRest { pan = panPosition(for: tgt, logScale: lzShot); panVelocity = .zero }
-            }
+            down = true; lastActivity = e.t; focusTime = e.t
+            rings.append((e.t, e.x, e.y))
+            if e.button == 0 { aim(raw, scale: min(max(maxScale, 1), 1.7)) }
         case .up: down = false; lastActivity = e.t
         case .keyDown:
-            guard e.axFrameIndex > 0, e.axFrameIndex != lastKeyIndex else { return }
-            lastKeyIndex = e.axFrameIndex
-            let scale = focus.map { clamp(min(src.x / max($0.w * 1.3, 1), src.y / max($0.h * 1.3, 1)), 1.6, 2.0) } ?? maxScale
-            typing = true; zoomed = true; lastActivity = e.t; lzShot = log(scale)
-            let point = focus.map { f in
-                SIMD2(f.caret.map { $0.x + $0.w / 2 } ?? f.x + f.w / 2,
-                      f.caret.map { $0.y + $0.h / 2 } ?? f.y + f.h / 2)
-            } ?? SIMD2(Double(e.x), Double(e.y))
-            let center = norm(point) + SIMD2(0.15 / scale, 0), half = 0.5 / scale
-            let next = SIMD2(clamp(center.x, half, 1 - half), clamp(center.y, half, 1 - half))
-            if hypot(next.x - tgt.x, next.y - tgt.y) > 0.06 / scale { tgt = next }
+            lastActivity = max(lastActivity, e.t)
+            guard e.t >= focusTime, let f = focus,
+                  f.x.isFinite, f.y.isFinite, f.w.isFinite, f.h.isFinite,
+                  f.w > 0, f.h > 0 else { return }
+            focusTime = e.t
+            if let c = f.caret, c.x.isFinite, c.y.isFinite, c.w.isFinite, c.h.isFinite, c.h > 0 {
+                let point = SIMD2(c.w <= 3 ? c.x + c.w / 2 : c.x + c.w, c.y + c.h / 2)
+                guard point.x >= 0, point.x <= src.x, point.y >= 0, point.y <= src.y else { return }
+                let fieldWidth = min(max(f.w * 1.3, src.x * 0.42), src.x * 0.62)
+                aim(point, scale: min(clamp(src.x / fieldWidth, 1.6, 2), max(maxScale, 1)))
+            } else if f.h <= src.y * 0.12 {
+                let fit = src.x / max(f.w * 1.25, 1)
+                if fit >= 1.25 { aim(SIMD2(f.x + f.w / 2, f.y + f.h / 2), scale: min(fit, maxScale, 2)) }
+            }
         case .drag, .scroll: lastActivity = e.t
         default: break
         }
@@ -77,46 +68,26 @@ public struct LiveCamera: Sendable {
     }
     private mutating func advance(_ dt: Double) {
         let tt = t
-        vel *= exp(-dt / 0.08)
-        let wc = SIMD3<Double>(repeating: 110)
-        cur1.step(target: SIMD3(raw.x, raw.y, 0), omega: wc, dt: dt)
-        cur2.step(target: cur1.x, omega: wc, dt: dt)
+        pointer.step(target: SIMD3(raw.x, raw.y, 0), omega: SIMD3(repeating: 110), dt: dt)
         press.step(target: SIMD3(down ? cursor.pressScale : 1, 0, 0), omega: SIMD3(repeating: 38), dt: dt)
         var on = 1.0
         if let idle = cursor.idleHide, tt - max(lastMove, lastActivity) >= idle { on = 0 }
         opacity += clamp(on - opacity, -dt / 0.4, dt / 0.15)
         rings.removeAll { tt - $0.t > max(cursor.clickDuration, 0.05) }
-        if zoomed && !down && tt - lastActivity > hold { zoomed = false }
-        let wz = SIMD3<Double>(repeating: omegaZoom)
-        zoom1.step(target: SIMD3(zoomed ? lzShot : 0, 0, 0), omega: wz, dt: dt)
-        let sc = exp(max(lzShot, 0)), hw = 0.5 / sc
-        if zoomed && !typing {
-            let pred = norm(raw + vel * lookahead), half = deadZone / sc
-            for k in 0..<2 {
-                let d = pred[k] - tgt[k]
-                if d > half { tgt[k] = pred[k] - half } else if d < -half { tgt[k] = pred[k] + half }
-                tgt[k] = clamp(tgt[k], hw, 1 - hw)
-            }
-        }
-        let targetLogScale = zoomed ? lzShot : 0
-        let targetPan = zoomed ? panPosition(for: tgt, logScale: targetLogScale) : .zero
-        let zoomSettling = abs(zoom1.x.x - targetLogScale) > 0.02
-        let panOmega = zoomSettling ? omegaZoom : omegaPan
-        for k in 0..<2 {
-            springStep(&pan[k], &panVelocity[k], target: targetPan[k], omega: panOmega, dt: dt)
-        }
+        let active = down || tt - lastActivity <= hold
+        let target = active ? SIMD3(tgt.x, tgt.y, lzShot) : SIMD3(0.5, 0.5, 0)
+        camera.step(target: target, omega: SIMD3(repeating: omegaZoom), dt: dt)
     }
     private func state(at now: Double) -> FrameState {
-        let lz = max(zoom1.x.x, 0), margin = 0.5 - 0.5 / exp(lz)
-        let c = SIMD2(0.5 + clamp(pan.x, -1, 1) * margin,
-                      0.5 + clamp(pan.y, -1, 1) * margin)
+        let lz = max(camera.x.z, 0)
+        let c = SIMD2(camera.x.x, camera.x.y)
         let scale = Float(exp(lz))
         let half = SIMD2(Float(src.x / 2) / scale, Float(src.y / 2) / scale)
         let center = SIMD2(
             min(max(Float(c.x * src.x), half.x), Float(src.x) - half.x),
             min(max(Float(c.y * src.y), half.y), Float(src.y) - half.y)
         )
-        let cs = CursorSample(position: SIMD2(Float(cur2.x.x), Float(cur2.x.y)), velocity: SIMD2(Float(cur2.v.x), Float(cur2.v.y)),
+        let cs = CursorSample(position: SIMD2(Float(pointer.x.x), Float(pointer.x.y)), velocity: SIMD2(Float(pointer.v.x), Float(pointer.v.y)),
                               opacity: Float(smoothstep(opacity)), press: Float(press.x.x), shape: shape)
         var fx: [ClickRing] = []
         // Mirror the offline gate: no rings when the effect is off, and the
