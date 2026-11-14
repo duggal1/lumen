@@ -86,7 +86,7 @@ import LumenDirector
     #expect(SpectralGate(strength: 0).process(noise) == noise)
     let clean = SpectralGate(strength: 0.8).process(noise)
     #expect(clean.count == noise.count)
-    #expect(clean.allSatisfy(\.isFinite))
+    #expect(clean.allSatisfy { $0.isFinite })
     let before = noise.reduce(0.0) { $0 + Double($1 * $1) }
     let after = clean.reduce(0.0) { $0 + Double($1 * $1) }
     #expect(after < before)
@@ -105,7 +105,7 @@ import LumenDirector
     let before = samples[24_000...].reduce(0.0) { $0 + Double($1 * $1) }
     let after = clean[24_000...].reduce(0.0) { $0 + Double($1 * $1) }
     #expect(after < before)
-    #expect(clean.allSatisfy(\.isFinite))
+    #expect(clean.allSatisfy { $0.isFinite })
 }
 
 @Test func voiceNormalizationMeasuresFinalProgram() throws {
