@@ -77,11 +77,30 @@ enum CursorPipeline {
             }
         }
 
-        // 6. click pinning (after glide so pins stay exact)
+        // 6. click pinning (after glide so pins stay exact). Every offset is
+        // measured against the pre-pin path, so a press and its release cannot
+        // compound into an overshoot past the click point.
         let w = 0.065 * rate, r = Int(3 * w)
+        let baseX = X, baseY = Y
+        /// Manual taps carry the only position evidence for that click, so the
+        /// cursor holds on the tap for the press and eases away afterwards
+        /// instead of bumping toward a smoothed path that never went there.
+        for tap in taps where tap.t >= lo && tap.t <= hi {
+            let a = Int(((tap.t - lo) * rate).rounded())
+            let b = Int(((tap.t + 0.12 - lo) * rate).rounded())
+            guard a >= 0, a < n else { continue }
+            let ex = Double(tap.x) - baseX[a], ey = Double(tap.y) - baseY[a]
+            let tail = Int(0.22 * rate)
+            for j in max(0, a - r)...min(n - 1, max(b, a) + tail) {
+                let k: Double = j < a
+                    ? exp(-0.5 * pow(Double(j - a) / w, 2))
+                    : (j <= b ? 1 : exp(-0.5 * pow(Double(j - b) / w, 2)))
+                X[j] += ex * k; Y[j] += ey * k
+            }
+        }
         for e in events where e.kind == .down || e.kind == .up {
             let c = Int(((e.t - lo) * rate).rounded()); guard c >= 0, c < n else { continue }
-            let ex = Double(e.x) - X[c], ey = Double(e.y) - Y[c]
+            let ex = Double(e.x) - baseX[c], ey = Double(e.y) - baseY[c]
             for j in max(0, c - r)...min(n - 1, c + r) {
                 let k = exp(-0.5 * pow(Double(j - c) / w, 2)); X[j] += ex * k; Y[j] += ey * k
             }

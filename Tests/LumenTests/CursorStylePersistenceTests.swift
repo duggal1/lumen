@@ -2,8 +2,10 @@ import Foundation
 import Testing
 import Metal
 import CoreVideo
+import AppKit
 import simd
 @testable import LumenRender
+@testable import LumenDirector
 import LumenProject
 import LumenCore
 
@@ -24,7 +26,7 @@ enum LumenTestRender {
             let row = CVPixelBufferGetBytesPerRow(buffer)
             for y in 0..<height { memset(base.advanced(by: y * row), 0x38, width * 4) }
         }
-        CVPixelBufferUnlockBaseAddress(buffer)
+        CVPixelBufferUnlockBaseAddress(buffer, [])
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(nil, nil, device, nil, &cache) == kCVReturnSuccess, let cache else { return nil }
         var cv: CVMetalTexture?
@@ -36,7 +38,8 @@ enum LumenTestRender {
     /// One frame through the real renderer, returned as RGBA bytes. Uses the
     /// public render entry point so GPU work stays on the renderer's own queue.
     static func pixels(_ renderer: Renderer, timeline: Timeline, t: Double, canvas: SIMD2<Int>,
-                       quality: RenderQuality, frame: SourceFrame, live: FrameState? = nil) -> [UInt8]? {
+                       quality: RenderQuality, frame: SourceFrame, live: FrameState? = nil,
+                       cursorOnly: Bool = false) -> [UInt8]? {
         let attrs = [kCVPixelBufferMetalCompatibilityKey as String: true,
                      kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()] as CFDictionary
         var pb: CVPixelBuffer?
@@ -44,12 +47,15 @@ enum LumenTestRender {
               let buffer = pb else { return nil }
         var req = RenderRequest(timeline: timeline, t: t, screen: frame, canvas: canvas, fps: 60,
                                 backingScale: 2, quality: quality)
+        // A cursor-only pass has no opaque backdrop, so the alpha centroid is
+        // the cursor itself and not the middle of a filled frame.
+        req.cursorOnly = cursorOnly
         req.live = live
         let done = DispatchSemaphore(value: 0)
         guard renderer.render(req, into: buffer, completion: { done.signal() }) else { return nil }
         guard case .success = done.wait(timeout: .now() + 15) else { return nil }
         CVPixelBufferLockBaseAddress(buffer, [])
-        defer { CVPixelBufferUnlockBaseAddress(buffer) }
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
         let row = CVPixelBufferGetBytesPerRow(buffer)
         var out = [UInt8](repeating: 0, count: canvas.x * canvas.y * 4)
         guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
@@ -90,7 +96,8 @@ private func layerPixels(_ atlas: CursorAtlas, layer: Int) -> [UInt8] {
     var buf = [UInt8](repeating: 0, count: n * n * 4)
     buf.withUnsafeMutableBytes { p in
         guard let base = p.baseAddress else { return }
-        atlas.texture.getBytes(base, bytesPerRow: n * 4, from: MTLRegionMake2D(0, 0, n, n), mipmapLevel: 0, slice: layer)
+        atlas.texture.getBytes(base, bytesPerRow: n * 4, bytesPerImage: n * n * 4,
+                                 from: MTLRegionMake2D(0, 0, n, n), mipmapLevel: 0, slice: layer)
     }
     return buf
 }
@@ -192,6 +199,51 @@ private func byteHash(_ px: [UInt8]) -> UInt64 {
     }
 }
 
+// MARK: - Cursor state strip (artifact for visual review)
+
+@Test func cursorStateStripIsWrittenForEveryStockShape() throws {
+    let (atlas, _) = try stockAtlas(.system)
+    let n = CursorAtlas.px
+    let scale = 2
+    let cell = CursorAtlas.pts * CGFloat(scale)                 // 32 pt at 2x
+    let shapes = StockCursor.allCases
+    let stripW = Int(cell) * shapes.count, stripH = Int(cell)
+    guard let ctx = CGContext(data: nil, width: stripW, height: stripH, bitsPerComponent: 8,
+                              bytesPerRow: stripW * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+    // Mid grey so the paper rim and the ink both read.
+    ctx.setFillColor(CGColor(gray: 0.5, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: stripW, height: stripH))
+    for (i, shape) in shapes.enumerated() {
+        guard let entry = atlas.entry(shape.rawValue) else { continue }
+        var px = layerPixels(atlas, layer: entry.layer)
+        guard let img: CGImage = px.withUnsafeMutableBytes({ p -> CGImage? in
+            guard let base = p.baseAddress else { return nil }
+            let c = CGContext(data: base, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n * 4,
+                              space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            return c?.makeImage()
+        }) else { continue }
+        // Mark the hotspot with a 1 pt cross so alignment is visible.
+        ctx.setStrokeColor(CGColor(red: 1, green: 0.2, blue: 0.1, alpha: 1))
+        ctx.setLineWidth(1)
+        let hx = CGFloat(i) * cell + CGFloat(entry.hot.x) * cell
+        let hy = CGFloat(entry.hot.y) * cell
+        ctx.move(to: CGPoint(x: hx - 4, y: hy)); ctx.addLine(to: CGPoint(x: hx + 4, y: hy))
+        ctx.move(to: CGPoint(x: hx, y: hy - 4)); ctx.addLine(to: CGPoint(x: hx, y: hy + 4))
+        ctx.strokePath()
+        ctx.draw(img, in: CGRect(x: CGFloat(i) * cell, y: 0, width: cell, height: cell))
+    }
+    guard let out = ctx.makeImage() else { return }
+    let rep = NSBitmapImageRep(cgImage: out)
+    guard let png = rep.representation(using: .png, properties: [:]) else { return }
+    let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("lumen-cursor-strip.png")
+    try png.write(to: url)
+    let size = try #require(NSImage(contentsOf: url)?.size)
+    print("cursor state strip: \(url.path) (\(Int(size.width))x\(Int(size.height)))")
+    #expect(size.width == CGFloat(stripW) && size.height == CGFloat(stripH))
+}
+
 // MARK: - Hotspot alignment through the real render path
 
 @Test func hotspotStaysOnTheClickPointUnderZoomAndSizeCompensation() throws {
@@ -212,9 +264,9 @@ private func byteHash(_ px: [UInt8]) -> UInt64 {
         let st = FrameState(cameraCenter: SIMD2<Float>(Float(click.x), Float(click.y)), cameraScale: Float(scale),
                             cursor: CursorSample(position: SIMD2<Float>(Float(click.x), Float(click.y)), velocity: .zero,
                                                  opacity: 1, press: 1, shape: StockCursor.arrow.rawValue),
-                            clickFX: [])
+                            clickFX: [], webcamCrop: [0, 0, 1, 1], sourceTime: 1.0)
         guard let px = LumenTestRender.pixels(renderer, timeline: tl, t: 1.0, canvas: canvas, quality: .export,
-                                              frame: frame, live: st),
+                                              frame: frame, live: st, cursorOnly: true),
               let centroid = LumenTestRender.alphaCentroid(px, canvas: canvas) else { return }
         let expected = g.toCanvas(click, cam: SIMD2(Double(click.x), Double(click.y)), scale: Double(scale))
         let error = hypot(centroid.x - expected.x, centroid.y - expected.y)

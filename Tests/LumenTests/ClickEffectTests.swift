@@ -44,7 +44,7 @@ import LumenDirector
         let p = Double(i) / Double(n)
         let a = ClickEnvelope.amplitude(p)
         #expect(a >= 0 && a <= 1, "amplitude out of range at \(p)")
-        maxStep = max(maxStep, abs(a - previous))
+        maxStep = max(maxStep, Double(abs(a - previous)))
         if a > peak { peak = a; peakAt = p }
         previous = a
     }
@@ -74,7 +74,9 @@ import LumenDirector
     #expect(active.count == 2)
     #expect(active[0].position == SIMD2<Float>(100, 200))
     #expect(active[1].position == SIMD2<Float>(700, 300))
-    #expect(active[0].progress < active[1].progress, "each ripple ages on its own clock")
+    // Each ripple ages on its own clock: the first pulse is older, so it is
+    // further through its envelope than the second.
+    #expect(active[0].progress > active[1].progress, "each ripple ages on its own clock")
     #expect(active.allSatisfy { $0.progress > 0 && $0.progress < 1 })
     #expect(active.allSatisfy { $0.amplitude > 0 })
 
