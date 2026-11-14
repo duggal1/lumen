@@ -193,6 +193,10 @@ enum ZoomPlanner {
             } else if let field = r.field, field.height <= 0.12 * H {
                 intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: field.midX, y: field.midY,
                                       rect: field, path: []))
+            } else if let lc = lastClick, burst.t0 - lc.t <= 20 {
+                let synth = CGRect(x: lc.x - W * 0.175, y: lc.y - H * 0.05, width: W * 0.35, height: H * 0.10)
+                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: lc.x, y: lc.y,
+                                      rect: synth, path: []))
             }
         }
         intents += VisualZoom.intents(activity, events: sorted, input: intents, src: src, tm: tm)

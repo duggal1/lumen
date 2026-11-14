@@ -59,7 +59,7 @@ enum CameraSolver {
             let path = (follow[z.id] ?? [])
                 .filter { $0.t.isFinite && $0.c.x.isFinite && $0.c.y.isFinite }
                 .sorted { $0.t < $1.t }
-            return Scene(on: a - (z.origin == .auto ? lead : 0), off: b + 0.15,
+            return Scene(on: a - (z.origin == .auto ? lead : 0) + (z.origin == .manual ? 0.4 : 0), off: b + 0.9,
                          lz: log(min(z.scale, 16)), segment: z, path: path)
         }.sorted { $0.on < $1.on }
 
@@ -134,7 +134,7 @@ enum CameraSolver {
         }
         let eases = zoom.compactMap { $0.easing?.omegaScale }.filter { $0.isFinite && $0 > 0 }
         let feel = eases.isEmpty ? 1 : exp(eases.map { log($0) }.reduce(0, +) / Double(eases.count))
-        let omega = max((p.omegaZoom.isFinite ? p.omegaZoom : 7.5) * feel, 1)
+        let omega = max((p.omegaZoom.isFinite ? max(p.omegaZoom, 12.0) : 12.0) * feel, 1)
         if cancelled() { return nil }
         let lz = zeroPhaseSmooth(lzT, omega: omega, dt: dt)
         if cancelled() { return nil }
