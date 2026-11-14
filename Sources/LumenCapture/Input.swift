@@ -45,12 +45,27 @@ extension StockCursor {
 @MainActor public final class CursorCatalog {
     private var stock: [Int: UInt16] = [:], custom: [Int: UInt16] = [:]
     public private(set) var customs: [(id: UInt16, png: Data, hotX: Double, hotY: Double)] = []
+    private var lastIdentity: ObjectIdentifier?, lastValue: UInt16 = 0
     public init() {
         for s in StockCursor.allCases { if let h = Self.hash(s.ns) { stock[h] = s.rawValue } }
     }
     static func hash(_ c: NSCursor) -> Int? { c.image.tiffRepresentation?.hashValue }
+    /// The system reuses one NSCursor instance per shape, so identity is a
+    /// cheap change detector. The bitmap hash runs only when the shape
+    /// actually changes; a 60 Hz poll of an idle cursor stays O(1).
     public func classify() -> UInt16 {
-        guard let c = NSCursor.currentSystem, let h = Self.hash(c) else { return 0 }
+        guard let c = NSCursor.currentSystem else { return 0 }
+        let identity = ObjectIdentifier(c)
+        if identity == lastIdentity { return lastValue }
+        let value = Self.classifyUncached(c, stock: stock, custom: &custom, customs: &customs)
+        lastIdentity = identity
+        lastValue = value
+        return value
+    }
+    private static func classifyUncached(_ c: NSCursor, stock: [Int: UInt16],
+                                         custom: inout [Int: UInt16],
+                                         customs: inout [(id: UInt16, png: Data, hotX: Double, hotY: Double)]) -> UInt16 {
+        guard let h = hash(c) else { return 0 }
         if let s = stock[h] { return s }
         if let s = custom[h] { return s }
         guard customs.count < 24 else { return 0 }
@@ -110,6 +125,46 @@ public enum ClockCalibration {
     }
 }
 
+/// One accessibility focus observation, with the evidence needed to tell
+/// whether it belongs to the event that asked for it. `context` is a stable
+/// token for the focused element (identifier, or role/subrole/title), not the
+/// text value, so ordinary typing does not look like a focus change.
+struct FocusProbe: Sendable {
+    var frame: AXFrame
+    var context: String
+    var appName: String?
+    var windowID: Int?
+    var host: String?
+}
+
+private enum LiveFocusDelivery: Sendable { case none, event, focus }
+
+/// A key-down's own AX reservation. `index` is never shared with another
+/// event: a pending query for field A cannot be published as field B's caret.
+private struct FocusFlight: Sendable {
+    let index: UInt32
+    let event: InputEvent
+    let live: LiveFocusDelivery
+}
+
+private struct FocusState: Sendable {
+    var inFlight: FocusFlight?
+    var queued: FocusFlight?
+    var epoch: UInt32 = 0
+    var lastContext: String?
+    var lastGood: (frame: AXFrame, at: Double, epoch: UInt32, context: String)?
+    var lastDelivered: UInt32 = 0
+    /// Newest event that has already carried a *focus sample* to the consumer.
+    /// An older late sample cannot move the camera back, but each event still
+    /// keeps its own resolved evidence instead of being thrown away.
+    var lastFocusIndex: UInt32 = 0
+}
+
+private struct MouseAXState: Sendable {
+    var inFlight = false
+    var last = -Double.infinity
+}
+
 /// Listen-only CGEventTap on its own high-QoS thread. Coordinates converted to source pixels once, here.
 public final class InputRecorder: @unchecked Sendable {
     private let ring = EventRing(capacity: 1 << 16)
@@ -125,10 +180,20 @@ public final class InputRecorder: @unchecked Sendable {
     private let windowID: CGWindowID?
     private let shape = OSAllocatedUnfairLock<UInt16>(initialState: 0)
     private let loop = OSAllocatedUnfairLock<CFRunLoop?>(uncheckedState: nil)
-    private let axFrames = OSAllocatedUnfairLock<[AXFrame]>(initialState: [])
-    private let focusQuery = OSAllocatedUnfairLock(initialState: (last: -Double.infinity, index: UInt32(0), pending: false))
+    /// AX frames are addressed by a stable 1-based reservation, never by an
+    /// array position: focus, click and secure-field samples share the space,
+    /// so a late writer can never shift another event's frame.
+    private let axStore = OSAllocatedUnfairLock<[UInt32: AXFrame]>(initialState: [:])
+    private let axNextIndex = OSAllocatedUnfairLock(initialState: UInt32(1))
+    private let focusState = OSAllocatedUnfairLock(initialState: FocusState())
+    private let mouseAX = OSAllocatedUnfairLock(initialState: MouseAXState())
     private let axTrusted = OSAllocatedUnfairLock(initialState: false)
     private let axQ = DispatchQueue(label: "lumen.ax", qos: .utility)
+    /// Focus queries get their own queue so the secure-field walk and click
+    /// hit-tests cannot stretch focus latency.
+    private let focusQ = DispatchQueue(label: "lumen.ax.focus", qos: .userInteractive)
+    /// Live delivery is off the event-tap thread.
+    private let liveQ = DispatchQueue(label: "lumen.input.live", qos: .userInteractive)
     private let windowOriginQ = DispatchQueue(label: "lumen.window.origin", qos: .utility)
     private var axTimer: DispatchSourceTimer?
     private var windowOriginTimer: DispatchSourceTimer?
@@ -144,6 +209,12 @@ public final class InputRecorder: @unchecked Sendable {
     private let writeQ = DispatchQueue(label: "lumen.events.write")
     private let running = OSAllocatedUnfairLock(initialState: false)
     private let catalog: CursorCatalog
+    // In-process verification seams. They replace the real event tap / AX
+    // server only when a test sets them; production never does.
+    private let debugAXTrusted = OSAllocatedUnfairLock<Bool?>(initialState: nil)
+    private let debugFocusProbe = OSAllocatedUnfairLock<(@Sendable (UInt32, InputEvent) -> FocusProbe?)?>(initialState: nil)
+    private let debugFocusDelay = OSAllocatedUnfairLock(initialState: 0.025)
+    private let debugRunning = OSAllocatedUnfairLock(initialState: false)
 
     @MainActor public init(url: URL, axURL: URL, origin: CGPoint, scale: Double, clock: RecordingClock,
                            windowID: CGWindowID? = nil) {
@@ -159,6 +230,33 @@ public final class InputRecorder: @unchecked Sendable {
     func setSourceScale(_ scale: SIMD2<Double>) {
         guard scale.x.isFinite, scale.y.isFinite, scale.x > 0, scale.y > 0 else { return }
         sourceScale.withLock { $0 = scale }
+    }
+
+    private var axTrustedNow: Bool { debugAXTrusted.withLock { $0 } ?? axTrusted.withLock { $0 } }
+    private var isRunning: Bool { debugRunning.withLock { $0 } || running.withLock { $0 } }
+
+    private func reserveSlot() -> UInt32 {
+        axNextIndex.withLock { i -> UInt32 in let v = i; i += 1; return v }
+    }
+
+    private func publish(_ frame: AXFrame, at index: UInt32) {
+        guard index > 0 else { return }
+        axStore.withLock { $0[index] = frame }
+    }
+
+    /// Materializes the reservation space in index order. A reservation that
+    /// never resolved is an explicit unresolved placeholder (`resolved == false`),
+    /// never a zeroed sample a consumer could mistake for a real field.
+    var axFramesSnapshot: [AXFrame] {
+        axStore.withLock { store -> [AXFrame] in
+            guard let max = store.keys.max(), max >= 1 else { return [] }
+            var out = [AXFrame](); out.reserveCapacity(Int(max))
+            for i in UInt32(1)...max {
+                out.append(store[i] ?? AXFrame(x: 0, y: 0, w: 0, h: 0,
+                                               anchor: FocusAnchor(resolved: false)))
+            }
+            return out
+        }
     }
 
     @MainActor public func start() throws {
@@ -190,14 +288,28 @@ public final class InputRecorder: @unchecked Sendable {
         th.qualityOfService = .userInteractive; th.start()
         startFlushTimer()
         startAXTimer()
+        startCursorShapeSampler()
         Task { @MainActor [weak self] in
             var ticks = 0
             while let self, self.running.withLock({ $0 }) {
                 if ticks % 20 == 0 { self.refreshLauncherPIDs() }
                 ticks += 1
-                let cursorShape = self.catalog.classify()
-                self.shape.withLock { $0 = cursorShape }
                 try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
+    /// Samples the stock cursor at ~display rate, not once per 100 ms. A shape
+    /// that changes and changes back between two 100 ms ticks used to vanish;
+    /// at 60 Hz a stationary hover/selection change is caught. The catalog
+    /// compares object identity first, so an unchanged cursor costs one
+    /// pointer compare per tick and no bitmap work.
+    private func startCursorShapeSampler() {
+        Task { @MainActor [weak self] in
+            while let self, self.running.withLock({ $0 }) {
+                let sampled = self.catalog.classify()
+                self.shape.withLock { $0 = sampled }
+                try? await Task.sleep(for: .milliseconds(16))
             }
         }
     }
@@ -225,10 +337,17 @@ public final class InputRecorder: @unchecked Sendable {
         await withCheckedContinuation { continuation in
             axQ.async { continuation.resume() }
         }
+        await withCheckedContinuation { continuation in
+            focusQ.async { continuation.resume() }
+        }
+        await withCheckedContinuation { continuation in
+            liveQ.async { continuation.resume() }
+        }
         let cursors = catalog.encodedSnapshot()
+        let frames = axFramesSnapshot
         await Task.detached(priority: .userInitiated) { [self] in
             try? cursors?.write(to: url.deletingLastPathComponent().appendingPathComponent("cursors.json"), options: .atomic)
-            if let d = try? JSONEncoder().encode(axFrames.withLock({ $0 })) { try? d.write(to: axURL, options: .atomic) }
+            if let d = try? JSONEncoder().encode(frames) { try? d.write(to: axURL, options: .atomic) }
         }.value
     }
 
@@ -260,6 +379,26 @@ public final class InputRecorder: @unchecked Sendable {
         event.scrollDelta = scrollDelta
         let completedEvent = event
         injected.withLock { $0.append(completedEvent) }
+    }
+
+    // In-process verification only. These exercise the same reservation and
+    // delivery path as the tap callback without a real event tap or AX server.
+    func debugRecord(_ ev: InputEvent) {
+        var e = ev
+        if e.kind == .keyDown { e.axFrameIndex = reserveFocus(event: e) }
+        else { liveEventHook.withLock { $0 }?(e) }
+        ring.push(e)
+    }
+    func debugSetAXTrusted(_ value: Bool) { debugAXTrusted.withLock { $0 = value } }
+    func debugSetFocusProbe(_ probe: (@Sendable (UInt32, InputEvent) -> FocusProbe?)?) {
+        debugFocusProbe.withLock { $0 = probe }
+    }
+    func debugSetFocusDelay(_ value: Double) { debugFocusDelay.withLock { $0 = value } }
+    func debugSetRunning(_ value: Bool) { debugRunning.withLock { $0 = value } }
+    func debugDrainEvents() -> [InputEvent] {
+        var out: [InputEvent] = []
+        ring.drain { out.append($0) }
+        return out
     }
 
     fileprivate func handle(_ type: CGEventType, _ e: CGEvent) {
@@ -302,39 +441,178 @@ public final class InputRecorder: @unchecked Sendable {
     }
 
     private func reserveAX(_ p: CGPoint) -> UInt32 {
-        guard axTrusted.withLock({ $0 }) else { return 0 }
-        let idx = axFrames.withLock { $0.append(AXFrame(x: 0, y: 0, w: 0, h: 0)); return $0.count }
-        axQ.async { [self] in
-            if let f = queryAX(p) { axFrames.withLock { if idx >= 1, idx <= $0.count { $0[idx - 1] = f } } }
+        guard axTrustedNow else { return 0 }
+        let index = reserveSlot()
+        // Click hit-tests are useful but not latency-critical: at most one in
+        // flight and no more than one every 120 ms, so a click burst cannot
+        // crowd out the focus query on the AX server.
+        let now = HostClock.now()
+        let shouldQuery = mouseAX.withLock { state -> Bool in
+            guard !state.inFlight, now - state.last >= 0.12 else { return false }
+            state.inFlight = true
+            state.last = now
+            return true
         }
-        return UInt32(idx)
+        guard shouldQuery else { return index }
+        axQ.async { [self] in
+            defer { mouseAX.withLock { $0.inFlight = false } }
+            guard isRunning, let f = queryAX(p) else { return }
+            var frame = f
+            let ctx = focusedAppContext()
+            frame.sampledAt = HostClock.now()
+            frame.anchor = FocusAnchor(epoch: focusState.withLock { $0.epoch },
+                                       sampledAt: frame.sampledAt ?? HostClock.now(),
+                                       host: ctx.host, windowID: ctx.windowID,
+                                       appName: ctx.appName, resolved: true)
+            publish(frame, at: index)
+        }
+        return index
     }
 
-    private func reserveFocus(event: InputEvent) -> UInt32 {
-        guard axTrusted.withLock({ $0 }) else { return 0 }
-        let reservation = focusQuery.withLock { state -> (UInt32, Bool) in
-            if state.pending || event.t - state.last < 1.0 / 20 { return (state.index, false) }
-            state.last = event.t; state.pending = true
-            state.index = axFrames.withLock { $0.append(AXFrame(x: 0, y: 0, w: 0, h: 0)); return UInt32($0.count) }
-            return (state.index, true)
+    /// Reserves this key-down's own AX slot. A reservation is never reused for
+    /// another event: if a query is already in flight, this event gets its own
+    /// (queued) reservation or none, never the in-flight one. The key itself is
+    /// always delivered to the live consumer exactly once, even when AX is
+    /// untrusted or the query later fails.
+    private func reserveFocus(event ev: InputEvent) -> UInt32 {
+        guard axTrustedNow else {
+            // No AX at all: the key still reaches the live consumer, once,
+            // with no invented focus frame.
+            let bare = ev
+            liveQ.async { [self] in liveEventHook.withLock { $0 }?(bare) }
+            return 0
         }
-        if reservation.1 {
-            axQ.asyncAfter(deadline: .now() + 0.04) { [self] in
-                defer { focusQuery.withLock { $0.pending = false } }
-                let system = AXUIElementCreateSystemWide()
-                AXUIElementSetMessagingTimeout(system, 0.05)
-                guard let frame = focusedFrame(system) else { return }
-                axFrames.withLock { $0[Int(reservation.0) - 1] = frame }
-                var focused = event
-                let caret = frame.caret
-                focused.x = Float(caret.map { $0.x + $0.w / 2 } ?? (frame.x + frame.w / 2))
-                focused.y = Float(caret.map { $0.y + $0.h / 2 } ?? (frame.y + frame.h / 2))
-                focused.axFrameIndex = reservation.0
-                if let hook = liveFocusHook.withLock({ $0 }) { hook(focused, frame) }
-                else { liveEventHook.withLock { $0 }?(focused) }
+        // The immediate delivery is the bare event: it says "a key was
+        // pressed" and nothing else. A cached caret belongs to the *previous*
+        // sample, so presenting it as this key's focus would aim the camera at
+        // a stale caret until the query returns. The resolved sample follows
+        // as an update to this same event identity.
+        let cached = cachedFocusFrame()
+        let kind: LiveFocusDelivery
+        if liveEventHook.withLock({ $0 }) != nil { kind = .event }
+        else if cached != nil, liveFocusHook.withLock({ $0 }) != nil { kind = .focus }
+        else { kind = .none }
+
+        let index = reserveSlot()
+        var flightEvent = ev
+        flightEvent.axFrameIndex = index
+        let flight = FocusFlight(index: index, event: flightEvent, live: kind)
+        let startNow = focusState.withLock { state -> Bool in
+            if state.inFlight == nil { state.inFlight = flight; return true }
+            // Latest wins for the follow-up. The superseded event keeps its
+            // own unresolved slot and is never given this flight's frame.
+            state.queued = flight
+            return false
+        }
+        let delay = debugFocusDelay.withLock { $0 }
+        liveQ.async { [self] in
+            deliverLive(flight, cached: cached)
+            if startNow {
+                focusQ.asyncAfter(deadline: .now() + delay) { [self] in runFocusQuery(flight) }
             }
         }
-        return reservation.0
+        return index
+    }
+
+    private func cachedFocusFrame() -> AXFrame? {
+        focusState.withLock { state -> AXFrame? in
+            guard let g = state.lastGood, g.frame.w > 0, g.frame.h > 0 else { return nil }
+            return HostClock.now() - g.at <= 0.75 ? g.frame : nil
+        }
+    }
+
+    /// Exactly one live delivery per key-down. A cached, same-context sample is
+    /// the best evidence available before the query returns; otherwise the
+    /// bare event says "typing happened" without claiming a target.
+    private func deliverLive(_ flight: FocusFlight, cached: AXFrame?) {
+        focusState.withLock { state in
+            if flight.index > state.lastDelivered { state.lastDelivered = flight.index }
+        }
+        switch flight.live {
+        case .focus:
+            if let cached, let hook = liveFocusHook.withLock({ $0 }) {
+                focusState.withLock { $0.lastFocusIndex = max($0.lastFocusIndex, flight.index) }
+                hook(flight.event, cached)
+            }
+        case .event:
+            liveEventHook.withLock { $0 }?(flight.event)
+        case .none:
+            break
+        }
+    }
+
+    private func runFocusQuery(_ flight: FocusFlight) {
+        guard isRunning else { finishFocusQuery(flight, probe: nil); return }
+        finishFocusQuery(flight, probe: probeFocus(flight))
+    }
+
+    private func probeFocus(_ flight: FocusFlight) -> FocusProbe? {
+        if let override = debugFocusProbe.withLock({ $0 }) { return override(flight.index, flight.event) }
+        return liveFocusProbe()
+    }
+
+    private func finishFocusQuery(_ flight: FocusFlight, probe: FocusProbe?) {
+        var next: FocusFlight?
+        if let probe {
+            let now = HostClock.now()
+            let settled = focusState.withLock { state -> (frame: AXFrame, queued: FocusFlight?) in
+                if state.inFlight?.index == flight.index { state.inFlight = nil }
+                let value: UInt32
+                if let context = state.lastContext, context == probe.context { value = state.epoch }
+                else { value = state.epoch + 1; state.lastContext = probe.context }
+                state.epoch = value
+                // The cached sample carries the same provenance as the stored
+                // one: a consumer must be able to tell a fresh AX caret from a
+                // held guess and to see which focus epoch it belongs to.
+                var frame = probe.frame
+                frame.sampledAt = now
+                frame.anchor = FocusAnchor(epoch: value, sampledAt: now, host: probe.host,
+                                           windowID: probe.windowID, appName: probe.appName,
+                                           resolved: true)
+                state.lastGood = (frame, now, value, probe.context)
+                let queued = state.queued
+                state.queued = nil
+                return (frame, queued)
+            }
+            let frame = settled.frame
+            next = settled.queued
+            publish(frame, at: flight.index)
+            // Enrichment is an update to the same event identity, never a
+            // second key-down. If a newer key was already delivered, this
+            // older sample must not pull the camera backwards.
+            if flight.live == .event {
+                var focused = flight.event
+                let point = caretCenter(frame)
+                focused.x = Float(point.x)
+                focused.y = Float(point.y)
+                liveQ.async { [self] in
+                    let stale = focusState.withLock { state -> Bool in
+                        guard flight.index > state.lastFocusIndex else { return true }
+                        state.lastFocusIndex = flight.index
+                        return false
+                    }
+                    guard !stale, let hook = liveFocusHook.withLock({ $0 }) else { return }
+                    hook(focused, frame)
+                }
+            }
+        } else {
+            next = focusState.withLock { state -> FocusFlight? in
+                if state.inFlight?.index == flight.index { state.inFlight = nil }
+                let queued = state.queued
+                state.queued = nil
+                return queued
+            }
+        }
+        if let next {
+            focusState.withLock { $0.inFlight = next }
+            let delay = debugFocusDelay.withLock { $0 }
+            focusQ.asyncAfter(deadline: .now() + delay) { [self] in runFocusQuery(next) }
+        }
+    }
+
+    private func caretCenter(_ frame: AXFrame) -> SIMD2<Double> {
+        if let c = frame.caret { return SIMD2(c.x + c.w / 2, c.y + c.h / 2) }
+        return SIMD2(frame.x + frame.w / 2, frame.y + frame.h / 2)
     }
 
     @MainActor private func refreshLauncherPIDs() {
@@ -372,7 +650,22 @@ public final class InputRecorder: @unchecked Sendable {
         }
     }
 
-    private func launcherFocus() -> AXFrame? {
+    private struct FocusedInfo {
+        var frame: AXFrame
+        var token: String
+        var appName: String?
+        var windowID: Int?
+        var host: String?
+        var contextKey: String { "\(appName ?? "")|\(windowID.map(String.init) ?? "")|\(token)" }
+    }
+
+    private struct AppContext {
+        var appName: String?
+        var windowID: Int?
+        var host: String?
+    }
+
+    private func launcherFocusInfo() -> FocusedInfo? {
         for pid in launcherPIDs.withLock({ $0 }) {
             let app = AXUIElementCreateApplication(pid)
             AXUIElementSetMessagingTimeout(app, 0.04)
@@ -383,6 +676,7 @@ public final class InputRecorder: @unchecked Sendable {
             let element = value as! AXUIElement
             AXUIElementSetMessagingTimeout(element, 0.04)
             guard (attribute(element, kAXHiddenAttribute) as? Bool) != true else { continue }
+            var windowID: Int?
             if let value = attribute(element, kAXWindowAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() {
                 let window = value as! AXUIElement
                 AXUIElementSetMessagingTimeout(window, 0.04)
@@ -392,28 +686,123 @@ public final class InputRecorder: @unchecked Sendable {
                 if let number = attribute(window, "AXWindowNumber") as? NSNumber,
                    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [NSDictionary],
                    !windows.contains(where: { ($0[kCGWindowNumber] as? NSNumber) == number }) { continue }
+                if let number = attribute(window, "AXWindowNumber") as? NSNumber { windowID = number.intValue }
             }
             let role = (attribute(element, kAXRoleAttribute) as? String) ?? ""
             guard role.contains("Text") || role.contains("Search") || role.contains("ComboBox"),
                   let focused = frame(element) else { continue }
-            return focused
+            return FocusedInfo(frame: focused, token: elementToken(element),
+                               appName: NSRunningApplication(processIdentifier: pid)?.localizedName,
+                               windowID: windowID, host: nil)
         }
         return nil
     }
 
-    private func focusedFrame(_ system: AXUIElement) -> AXFrame? {
-        if let focused = launcherFocus() { return focused }
-        if let value = attribute(system, kAXFocusedUIElementAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() {
-            let element = value as! AXUIElement
-            AXUIElementSetMessagingTimeout(element, 0.05)
-            if let result = frame(element) { return result }
+    /// Reads the focused element without making a second app/window pass when
+    /// the caller already has the app element.
+    private func focusedInfo(_ system: AXUIElement) -> FocusedInfo? {
+        if let info = launcherFocusInfo() { return info }
+        guard let value = attribute(system, kAXFocusedUIElementAttribute),
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        let element = value as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, 0.05)
+        guard let frame = frame(element) else { return nil }
+        let app = focusedApplication(system)
+        let ctx = app.map { appContext(for: $0, system: system) } ?? AppContext()
+        return FocusedInfo(frame: frame, token: elementToken(element),
+                           appName: ctx.appName, windowID: ctx.windowID, host: ctx.host)
+    }
+
+    private func liveFocusProbe() -> FocusProbe? {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.05)
+        guard let info = focusedInfo(system) else { return nil }
+        // If focus moved while the frame was being read, the sample belongs to
+        // neither the old nor the new field. Drop it rather than publish it.
+        guard focusedContextKey(system) == info.contextKey else { return nil }
+        var frame = info.frame
+        frame.sampledAt = HostClock.now()
+        return FocusProbe(frame: frame, context: info.contextKey, appName: info.appName,
+                          windowID: info.windowID, host: info.host)
+    }
+
+    private func focusedContextKey(_ system: AXUIElement) -> String? {
+        guard let info = focusedInfo(system) else { return nil }
+        return info.contextKey
+    }
+
+    private func focusedApplication(_ system: AXUIElement) -> AXUIElement? {
+        if let value = attribute(system, kAXFocusedApplicationAttribute),
+           CFGetTypeID(value) == AXUIElementGetTypeID() {
+            let app = value as! AXUIElement
+            AXUIElementSetMessagingTimeout(app, 0.05)
+            enableAccessibility(app)
+            return app
         }
-        guard let value = attribute(system, kAXFocusedApplicationAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        let app = value as! AXUIElement
-        AXUIElementSetMessagingTimeout(app, 0.05)
-        enableAccessibility(app)
-        guard let focused = attribute(app, kAXFocusedUIElementAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
-        return frame(focused as! AXUIElement)
+        return nil
+    }
+
+    private func focusedAppContext() -> AppContext {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.05)
+        guard let app = focusedApplication(system) else { return AppContext() }
+        return appContext(for: app, system: system)
+    }
+
+    /// App/window/host evidence for a sample. The host is derived only from a
+    /// real browser AXURL, never from a title or a search, and the full URL is
+    /// discarded immediately.
+    private func appContext(for app: AXUIElement, system: AXUIElement) -> AppContext {
+        var pid: pid_t = 0
+        AXUIElementGetPid(app, &pid)
+        let running = NSRunningApplication(processIdentifier: pid)
+        let rawWindow = attribute(app, kAXFocusedWindowAttribute) ?? attribute(app, kAXWindowAttribute)
+        let window: AXUIElement? = rawWindow.flatMap { raw -> AXUIElement? in
+            CFGetTypeID(raw) == AXUIElementGetTypeID() ? (raw as! AXUIElement) : nil
+        }
+        var windowID: Int?
+        var url: String?
+        if let window {
+            AXUIElementSetMessagingTimeout(window, 0.05)
+            if let number = attribute(window, "AXWindowNumber") as? NSNumber { windowID = number.intValue }
+            url = attribute(window, "AXURL") as? String ?? attribute(window, kAXURLAttribute) as? String
+        }
+        if url == nil { url = attribute(app, kAXURLAttribute) as? String }
+        return AppContext(appName: running?.localizedName, windowID: windowID,
+                          host: Self.verifiedHost(url: url, bundleID: running?.bundleIdentifier))
+    }
+
+    private func elementToken(_ element: AXUIElement) -> String {
+        if let id = attribute(element, kAXIdentifierAttribute) as? String, !id.isEmpty { return "id:" + id }
+        let role = attribute(element, kAXRoleAttribute) as? String ?? ""
+        let subrole = attribute(element, kAXSubroleAttribute) as? String ?? ""
+        let title = attribute(element, kAXTitleAttribute) as? String ?? ""
+        return "\(role)|\(subrole)|\(title)"
+    }
+
+    /// Known browser app identifiers. Capture does not integrate with a
+    /// browser; it only recognises the app that already exposes AXURL.
+    static let browserBundleIDs: Set<String> = [
+        "com.apple.Safari", "com.google.Chrome", "com.google.Chrome.canary",
+        "com.microsoft.edgemac", "org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition",
+        "company.thebrowser.Browser", "com.brave.Browser", "com.operasoftware.Opera",
+        "com.vivaldi.Vivaldi"
+    ]
+
+    /// Returns a verified registrable host, or nil. A full URL never leaves
+    /// this function: only the host component is returned.
+    static func verifiedHost(url: String?, bundleID: String?) -> String? {
+        guard let bundleID = bundleID, browserBundleIDs.contains(bundleID),
+              var raw = url?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        if !raw.contains("://") { raw = "https://" + raw }
+        guard let components = URLComponents(string: raw),
+              let host = components.host?.lowercased(), !host.isEmpty else { return nil }
+        let normalized = host.hasSuffix(".") ? String(host.dropLast()) : host
+        guard normalized.count <= 253, normalized.contains("."), !normalized.contains(".."),
+              normalized.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == ".") }),
+              normalized.split(separator: ".").allSatisfy({ !$0.isEmpty && $0.count <= 63 }),
+              normalized.range(of: #"^\d+(\.\d+){3}$"#, options: .regularExpression) == nil else { return nil }
+        return normalized
     }
 
     private func startAXTimer() {
@@ -426,13 +815,18 @@ public final class InputRecorder: @unchecked Sendable {
     private func sampleSecureFields() {
         let trusted = AXIsProcessTrusted()
         axTrusted.withLock { $0 = trusted }
-        guard trusted, running.withLock({ $0 }) else { return }
+        guard trusted, isRunning else { return }
+        // The 1500-node walk is the heaviest AX job in capture. Never let it
+        // compete with a focus query for the same serial AX server.
+        guard focusState.withLock({ $0.inFlight == nil }) else { return }
         let system = AXUIElementCreateSystemWide(), now = HostClock.now()
         AXUIElementSetMessagingTimeout(system, 0.03)
         guard let value = attribute(system, kAXFocusedApplicationAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return }
         let app = value as! AXUIElement
         AXUIElementSetMessagingTimeout(app, 0.03)
         enableAccessibility(app)
+        let ctx = appContext(for: app, system: system)
+        let epoch = focusState.withLock { $0.epoch }
         guard let window = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(window) == AXUIElementGetTypeID() else { return }
         var pending = [window as! AXUIElement], visited = 0
         while visited < pending.count, visited < 1500, HostClock.now() - now < 0.25 {
@@ -444,8 +838,10 @@ public final class InputRecorder: @unchecked Sendable {
             if labels.range(of: "secure|email|password|passcode|card|cvv|cvc|ssn", options: .regularExpression.union(.caseInsensitive)) != nil,
                var field = frame(element), field.secure {
                 field.sampledAt = now
-                let snapshot = field
-                axFrames.withLock { $0.append(snapshot) }
+                field.anchor = FocusAnchor(epoch: epoch, sampledAt: now, host: ctx.host,
+                                           windowID: ctx.windowID, appName: ctx.appName,
+                                           resolved: true)
+                publish(field, at: reserveSlot())
             }
             if let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
                 pending.append(contentsOf: children.prefix(max(1500 - pending.count, 0)))

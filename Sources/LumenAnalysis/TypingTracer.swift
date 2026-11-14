@@ -225,7 +225,9 @@ public enum TypingTracer {
             let d = delta(k)
             previousLefts = leftHistory
             // Every line-like change is remembered by its left edge so the next
-            // choice can prefer an edge that is not moving.
+            // choice can prefer an edge that is not moving. Only the previous
+            // sample counts: an edge that moved away is not stable.
+            leftHistory = [:]
             for region in components(mask(d) { appeared(d, $0) }) where lineLike(region) {
                 leftHistory[region.c0] = k
             }

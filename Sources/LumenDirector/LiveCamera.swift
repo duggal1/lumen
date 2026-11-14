@@ -16,6 +16,10 @@ public struct LiveCamera: Sendable {
     private var tgt = SIMD2<Double>(0.5, 0.5)
     private var pan = SIMD2<Double>.zero, panVelocity = SIMD2<Double>.zero
     private var rings: [(t: Double, x: Float, y: Float)] = []
+    /// The newest key-down already ingested. A resolved focus sample is an
+    /// update to that event, not a second press, so it must not restart the
+    /// live scene (which would read as a double zoom trigger).
+    private var lastKeyIndex: UInt32 = 0
 
     public init(source: SIMD2<Double>) {
         src = source; raw = source / 2
@@ -50,7 +54,8 @@ public struct LiveCamera: Sendable {
             }
         case .up: down = false; lastActivity = e.t
         case .keyDown:
-            guard e.axFrameIndex > 0 else { return }
+            guard e.axFrameIndex > 0, e.axFrameIndex != lastKeyIndex else { return }
+            lastKeyIndex = e.axFrameIndex
             let scale = focus.map { clamp(min(src.x / max($0.w * 1.3, 1), src.y / max($0.h * 1.3, 1)), 1.6, 2.0) } ?? maxScale
             typing = true; zoomed = true; lastActivity = e.t; lzShot = log(scale)
             let point = focus.map { f in

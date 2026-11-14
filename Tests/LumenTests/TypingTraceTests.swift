@@ -4,7 +4,7 @@ import AVFoundation
 import CoreVideo
 import LumenCore
 import LumenProject
-import LumenAnalysis
+@testable import LumenAnalysis
 import LumenExport
 
 // Lane B regression oracle: typing visual analysis and analysis scheduling.
@@ -23,12 +23,12 @@ private enum TypingGrid {
     static func page(_ lit: [(Int, Int)], cols: Int = TypingGrid.cols, rows: Int = TypingGrid.rows,
                      background: UInt8 = 235, ink: UInt8 = 40) -> LumaTiles {
         var mean = [UInt8](repeating: background, count: cols * rows)
-        for (c, r) in lit where c >= 0, c < cols, r >= 0, r < rows { mean[r * cols + c] = ink }
+        for (c, r) in lit where c >= 0 && c < cols && r >= 0 && r < rows { mean[r * cols + c] = ink }
         return LumaTiles(cols: cols, rows: rows, tile: TypingGrid.tile, mean: mean)
     }
 
     /// `n` typed glyphs on row `row`, starting at column `first`.
-    static func line(_ row: Int, first: Int, _ n: Int, cols: Int = TypingGrid.cols,
+    static func line(_ row: Int, _ first: Int, _ n: Int, cols: Int = TypingGrid.cols,
                      rows: Int = TypingGrid.rows) -> [(Int, Int)] {
         (0..<max(n, 0)).map { (first + $0, row) }
     }
@@ -159,13 +159,13 @@ private enum TypingGrid {
     let frames = TypingGrid.growing(row: 7, first: 5, from: 1, to: 10)
     let tr = try #require(TypingGrid.trace(frames))
     // Every sample knows when it was taken and how much the pixels support it.
-    for a in zip(tr.samples, tr.samples.dropFirst()) { #expect(b.t > a.t) }
+    for (a, b) in zip(tr.samples, tr.samples.dropFirst()) { #expect(b.t > a.t) }
     #expect(tr.samples.allSatisfy { $0.confidence > 0 && $0.confidence <= 1 })
     #expect(tr.samples.contains { $0.evidence == .caret })
     #expect(tr.meanConfidence > 0.5)
     // Freshness is decidable from the value alone: a sample after the burst is
     // not a sample of the burst.
-    #expect(tr.sample(at: tr.t1 + 5) === tr.samples.last)
+    #expect(tr.sample(at: tr.t1 + 5) == tr.samples.last)
     // The line rect survives a JSON round trip with its provenance.
     let data = try JSONEncoder().encode(tr)
     let back = try JSONDecoder().decode(TypingTrace.self, from: data)
@@ -203,10 +203,10 @@ private enum TypingGrid {
 @Test func typingSamplesAreDenserThanTenHertz() {
     let times = TypingAnalyzer.sampleTimes(burst: (t0: 5.0, t1: 5.4), hz: 30)
     let gaps = zip(times, times.dropFirst()).map { $1 - $0 }
-    print("typing samples: \(times.count), max gap \(max(gaps))")
+    print("typing samples: \(times.count), max gap \(gaps.max() ?? 0)")
     // The whole point of the change: a caret step is smaller than a glyph.
     #expect(times.count >= 15)
-    #expect(max(gaps) <= 1.0 / 20 + 0.001)
+    #expect((gaps.max() ?? 0) <= 1.0 / 20 + 0.001)
     // The baseline sits before the first key and the tail covers the last one.
     #expect(times.first == 5.0 - 0.12)
     #expect(times.last! >= 5.4)
@@ -240,8 +240,13 @@ private enum TypingGrid {
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let url = root.appendingPathComponent("edges.mov")
+    // The line has to still be growing at the end of the clip. With the old
+    // `min(..., 20)` cap the page froze at frame 54, so the tail burst covered
+    // a stretch with no on-screen change at all: a delta tracer has nothing to
+    // follow there, and "a trace at the last frame" was unprovable by
+    // construction rather than by the tracer's behaviour.
     try await TypingVideo.write(to: url, seconds: 2.5, fps: 30) { frame in
-        TypingGrid.page(TypingGrid.line(12, 6, min(2 + frame / 3, 20)))
+        TypingGrid.page(TypingGrid.line(12, 6, 2 + frame / 3))
     }
     AnalysisMetrics.shared.reset()
     // First key of the recording, and a burst that runs to the last frame.
@@ -267,13 +272,13 @@ private enum TypingGrid {
         }
         return await AnalysisScheduler.run(built, capacity: capacity)
     }
-    let one = await report(jobs: 4, capacity: 1)
+    let one = await report(4, capacity: 1)
     #expect(one.peakConcurrency == 1, "capacity 1 ran \(one.peakConcurrency) at once")
     #expect(one.order == ["j0", "j1", "j2", "j3"], "priority order changed: \(one.order)")
-    let two = await report(jobs: 5, capacity: 2)
+    let two = await report(5, capacity: 2)
     #expect(two.peakConcurrency == 2)
     #expect(two.peakConcurrency <= two.capacity)
-    let five = await report(jobs: 5, capacity: 3)
+    let five = await report(5, capacity: 3)
     #expect(five.peakConcurrency <= 3)
     #expect(Set(five.order).count == 5, "a job never ran: \(five.order)")
 }
