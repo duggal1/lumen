@@ -99,8 +99,11 @@ import LumenDirector
         let envelope = t < 0.3 ? 1 : exp(-(t - 0.3) / 0.12)
         return Float(0.2 * envelope * sin(2 * .pi * 220 * t))
     }
-    #expect(LateReverb.process(samples, amount: 0) == samples)
-    let clean = LateReverb.process(samples, amount: 0.7)
+    var plan = AudioPlan()
+    plan.micClean = false; plan.declick = false; plan.dereverb = 0
+    #expect(ProcessedVoiceCache.render(samples, plan: plan, keyTimes: []) == samples)
+    plan.dereverb = 0.7
+    let clean = ProcessedVoiceCache.render(samples, plan: plan, keyTimes: [])
     #expect(clean.count == samples.count)
     let before = samples[24_000...].reduce(0.0) { $0 + Double($1 * $1) }
     let after = clean[24_000...].reduce(0.0) { $0 + Double($1 * $1) }
