@@ -193,24 +193,3 @@ public enum VAD {
 
 public protocol Denoiser: Sendable { func process(_ x: [Float]) -> [Float] }
 
-/// Standalone downward expander for diagnostics; the microphone chain uses pretrained engines.
-public struct SpectralGate: Denoiser {
-    public init() {}
-    public func process(_ x: [Float]) -> [Float] {
-        let hop = 480, n = x.count / hop
-        guard n > 4 else { return x }
-        var db = [Double](repeating: -120, count: n)
-        for f in 0..<n { var s = 0.0; for i in 0..<hop { let v = Double(x[f * hop + i]); s += v * v }; db[f] = 10 * log10(s / Double(hop) + 1e-12) }
-        let thr = min(db.sorted()[n / 10] + 8, -40)
-        var g = [Double](repeating: 1, count: n), cur = 1.0
-        for f in 0..<n {
-            let target = db[f] > thr ? 1.0 : pow(10, -18.0 / 20)
-            cur += (target - cur) * (target > cur ? 0.5 : 0.08)
-            g[f] = cur
-        }
-        var out = x
-        for f in 0..<n { let a = g[f], b = f + 1 < n ? g[f + 1] : g[f]
-            for i in 0..<hop { out[f * hop + i] *= Float(a + (b - a) * Double(i) / Double(hop)) } }
-        return out
-    }
-}
