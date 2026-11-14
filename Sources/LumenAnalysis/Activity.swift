@@ -53,9 +53,13 @@ private final class ActivityJob: @unchecked Sendable {
             guard time + 0.0001 >= next, let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             next = time + 1 / max(fps, 1)
             let current = try lumaGrid(buffer, columns: 80, rows: 50)
-            if let previous, let centroid = changedCentroid(previous, current, width: 80, height: 50) {
-                results.append(ActivityPoint(t: time + offset, x: centroid.x * Double(CVPixelBufferGetWidth(buffer)) / 80,
-                                             y: centroid.y * Double(CVPixelBufferGetHeight(buffer)) / 50))
+            if let previous, let change = changedRegion(previous, current, width: 80, height: 50) {
+                let scale = SIMD2(Double(CVPixelBufferGetWidth(buffer)) / 80,
+                                  Double(CVPixelBufferGetHeight(buffer)) / 50)
+                let rect = CGRect(x: change.rect.minX * scale.x, y: change.rect.minY * scale.y,
+                                  width: change.rect.width * scale.x, height: change.rect.height * scale.y)
+                results.append(ActivityPoint(t: time + offset, x: change.center.x * scale.x,
+                                             y: change.center.y * scale.y, region: rect, coverage: change.coverage))
             }
             previous = current
         }
@@ -81,15 +85,20 @@ private final class ActivityJob: @unchecked Sendable {
         return grid
     }
 
-    private func changedCentroid(_ old: [UInt8], _ new: [UInt8], width: Int, height: Int) -> SIMD2<Double>? {
+    private func changedRegion(_ old: [UInt8], _ new: [UInt8], width: Int, height: Int) -> (center: SIMD2<Double>, rect: CGRect, coverage: Double)? {
         var weight = 0.0, sumX = 0.0, sumY = 0.0, count = 0
+        var minX = width, minY = height, maxX = 0, maxY = 0
         for i in old.indices {
             let delta = abs(Int(new[i]) - Int(old[i]))
             guard delta >= 24 else { continue }
             let w = Double(delta - 23), x = Double(i % width), y = Double(i / width)
+            minX = min(minX, i % width); maxX = max(maxX, i % width)
+            minY = min(minY, i / width); maxY = max(maxY, i / width)
             weight += w; sumX += x * w; sumY += y * w; count += 1
         }
         guard count >= max(width * height / 1000, 3), weight > 0 else { return nil }
-        return SIMD2(sumX / weight, sumY / weight)
+        return (SIMD2(sumX / weight + 0.5, sumY / weight + 0.5),
+                CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1),
+                Double(count) / Double(width * height))
     }
 }
