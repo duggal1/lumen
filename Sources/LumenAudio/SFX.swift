@@ -7,6 +7,17 @@ import LumenProject
 public struct SFXBank: Sendable {
     private let mouse: [Float], subtle: [Float], zoomIn: [Float], zoomOut: [Float], key: [Float]
 
+    private static let touches: [ClickSound: [Float]] = {
+        var sounds: [ClickSound: [Float]] = [:]
+        for tone in ClickSound.allCases where tone != .mouse && tone != .subtle && tone != .fresh {
+            guard let url = BundledAudioAssets.effect(named: "touches/\(tone.rawValue).wav"),
+                  let pcm = try? AudioIO.readMono(url), !pcm.isEmpty else { continue }
+            let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
+            if peak > 0.0001 { sounds[tone] = pcm.map { $0 / peak } }
+        }
+        return sounds
+    }()
+
     public init() {
         func load(_ name: String) -> [Float] {
             guard let url = BundledAudioAssets.effect(named: name),
@@ -28,6 +39,7 @@ public struct SFXBank: Sendable {
             case .fresh: (BundledAudioAssets.freshClick, 0)
             case .subtle: (subtle, 0)
             case .mouse: (mouse, 0)
+            default: (Self.touches[clickTone] ?? [], 0)
             }
         case .key: (key, 0)
         case .whooshIn: (zoomIn, 0)
