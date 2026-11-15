@@ -1,0 +1,4 @@
+Interface Sounds by Kenney (https://kenney.nl/assets/interface-sounds).
+CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/
+Downloaded from https://github.com/Daarko/sparkstream-sounds/tree/master/sounds/ui-clicks
+The WAV files were converted by that distributor from Kenney's Interface Sounds pack.
