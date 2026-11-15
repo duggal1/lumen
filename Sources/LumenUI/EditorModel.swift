@@ -1053,7 +1053,11 @@ enum TimelineSelection: Equatable {
 
     /// Auditions the selected click at the current click level without
     /// touching timeline playback.
-    func previewClick() { player.previewClick(timeline.audio) }
+    func previewClick() {
+        var plan = timeline.audio
+        plan.soundEffectsEnabled = true; plan.clickSounds = true
+        player.previewClick(plan)
+    }
 
     func importMusic() {
         let p = NSOpenPanel(); p.allowedContentTypes = [.audio]; p.allowsMultipleSelection = false
