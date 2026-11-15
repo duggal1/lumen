@@ -74,9 +74,133 @@ struct VoiceCompressor {
     }
 }
 
+/// Frame-level RMS analysis shared by the expander and the de-esser.
+enum VoiceLevels {
+    static func frames(_ x: [Float], hop: Int) -> [Double] {
+        guard hop > 0, !x.isEmpty else { return [] }
+        var out: [Double] = []
+        out.reserveCapacity(x.count / hop + 1)
+        var i = 0
+        while i < x.count {
+            let end = min(i + hop, x.count)
+            var s = 0.0
+            for k in i..<end { let v = Double(x[k]); s += v * v }
+            out.append(10 * log10(s / Double(end - i) + 1e-12))
+            i = end
+        }
+        return out
+    }
+
+    static func percentile(_ values: [Double], _ p: Double) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        return sorted[Int(clamp(p, 0, 1) * Double(sorted.count - 1))]
+    }
+
+    static func noiseFloor(_ x: [Float], vad: [ClosedRange<Double>], fs: Double) -> Double {
+        let levels = frames(x, hop: max(Int(0.01 * fs), 1))
+        guard !levels.isEmpty else { return -70 }
+        var outside: [Double] = []
+        for (f, db) in levels.enumerated() {
+            let t = (Double(f) + 0.5) * 0.01
+            guard db > -85 else { continue }
+            if vad.contains(where: { $0.lowerBound <= t && t <= $0.upperBound }) { continue }
+            outside.append(db)
+        }
+        let pool = outside.count >= 8 ? outside : levels.filter { $0 > -85 }
+        return percentile(pool, 0.1) ?? -70
+    }
+}
+
+/// Soft-knee downward expander driven by the voice activity timeline.
+struct VoiceExpander {
+    var floorDb: Double
+    var depthDb: Double
+    var kneeDb: Double = 20
+    var hold: Double = 0.28
+    var preOpen: Double = 0.02
+    var open: Double = 0.020
+    var close: Double = 0.150
+    var speechRefDb: Double = -24
+
+    func process(_ x: [Float], vad: [ClosedRange<Double>], fs: Double) -> [Float] {
+        // No detected speech means we cannot tell noise from voice; leave the
+        // signal untouched instead of gating the whole clip into silence.
+        guard !vad.isEmpty, depthDb > 0.5, !x.isEmpty else { return x }
+        let hop = max(Int(0.01 * fs), 1)
+        let levels = VoiceLevels.frames(x, hop: hop)
+        guard levels.count > 2 else { return x }
+        var target = [Double](repeating: 1, count: levels.count)
+        for (f, db) in levels.enumerated() {
+            let t = (Double(f) + 0.5) * 0.01
+            let voiced = vad.contains { $0.lowerBound - preOpen <= t && t <= $0.upperBound + hold }
+            guard !voiced, db < speechRefDb + 14 else { continue }
+            let above = max(0, db - floorDb)
+            guard above < kneeDb else { continue }
+            target[f] = pow(10, -depthDb * (1 - above / kneeDb) / 20)
+        }
+        var gain = target[0]
+        let cOpen = exp(-1 / (open * fs)), cClose = exp(-1 / (close * fs))
+        var out = x
+        for i in 0..<x.count {
+            let t = target[min(i / hop, target.count - 1)]
+            gain = t + (t < gain ? cClose : cOpen) * (gain - t)
+            out[i] = Float(Double(x[i]) * gain)
+        }
+        return out
+    }
+}
+
+/// Split-band de-esser.
+struct VoiceDeEsser {
+    var thresholdDb: Double
+    var ratio: Double = 3.5
+    var maxReductionDb: Double = 6
+
+    static func band(_ x: [Float], fs: Double) -> [Float] {
+        var hp = Biquad.highpass(4_800, fs: fs)
+        var lp = Biquad.lowpass(9_500, fs: fs)
+        var out = [Float](repeating: 0, count: x.count)
+        for i in x.indices {
+            let v = lp.run(hp.run(Double(x[i])))
+            out[i] = abs(v) < 1e-30 ? 0 : Float(v)
+        }
+        return out
+    }
+
+    static func threshold(band: [Float], vad: [ClosedRange<Double>], fs: Double) -> Double? {
+        let hop = max(Int(0.02 * fs), 1)
+        let levels = VoiceLevels.frames(band, hop: hop)
+        guard levels.count > 3 else { return nil }
+        var voiced: [Double] = []
+        for (f, db) in levels.enumerated() {
+            let t = (Double(f) + 0.5) * 0.02
+            guard vad.contains(where: { $0.lowerBound <= t && t <= $0.upperBound }) else { continue }
+            voiced.append(db)
+        }
+        guard voiced.count >= 3, let peak = VoiceLevels.percentile(voiced, 0.95), peak > -50 else { return nil }
+        return peak - 4
+    }
+
+    func process(_ x: [Float], band: [Float], fs: Double) -> [Float] {
+        guard x.count == band.count, !x.isEmpty else { return x }
+        let attack = exp(-1 / (0.0008 * fs)), release = exp(-1 / (0.060 * fs))
+        let slope = 1 - 1 / ratio
+        var env = 0.0
+        var out = x
+        for i in x.indices {
+            let v = abs(Double(band[i]))
+            env = v > env ? v + attack * (env - v) : v + release * (env - v)
+            let db = 20 * log10(env + 1e-9)
+            guard db > thresholdDb else { continue }
+            let reduction = max(-maxReductionDb, -slope * (db - thresholdDb))
+            out[i] = Float(Double(x[i]) - Double(band[i]) * (1 - pow(10, reduction / 20)))
+        }
+        return out
+    }
+}
+
 enum VoiceStudio {
-    /// 60th-percentile level (dB, 100 ms RMS) of the voiced frames = the speech body.
-    /// Dynamics thresholds are meaningless unless the voice sits at a known level first.
     static func speechLevelDb(_ x: [Float], vad: [ClosedRange<Double>], fs: Double) -> Double? {
         let hop = Int(0.1 * fs), n = x.count / hop
         guard n > 5 else { return nil }
@@ -94,25 +218,53 @@ enum VoiceStudio {
         return levels[levels.count * 6 / 10]
     }
 
-    /// Tone and one soft-knee compressor. Noise and room tails are removed upstream.
     static func finish(_ x: [Float], vad: [ClosedRange<Double>], plan: AudioPlan,
                        denoiser: (any Denoiser)? = nil) -> [Float] {
         let fs = AudioIO.fs
         var voice = plan.micClean ? (denoiser?.process(x) ?? x) : x
-        if plan.voiceClarity {
-            voice = Cascade.apply(voice, [
-                .lowShelf(130, db: 0.8, fs: fs),
-                .peaking(300, q: 0.8, db: -1.2, fs: fs),
-                .peaking(3000, q: 0.7, db: 1.5, fs: fs)
-            ])
-        }
         let amount = plan.studio.isFinite ? clamp(plan.studio, 0, 1) : 0
-        guard amount > 0 else { return voice }
-        let level = speechLevelDb(voice, vad: vad, fs: fs) ?? -24
-        let density = plan.studioMode == .optimized ? 2.0 : 1.5
-        return VoiceCompressor(thresholdDb: level - 3 - 3 * amount,
+        guard amount > 0 else { return tone(voice, plan: plan, optimized: false) }
+
+        let optimized = plan.studioMode == .optimized
+        let strength = 0.8 + 0.4 * amount
+
+        // 1. Room tone, fan, hum.
+        let floor = VoiceLevels.noiseFloor(voice, vad: vad, fs: fs)
+        let speech = speechLevelDb(voice, vad: vad, fs: fs) ?? -24
+        voice = VoiceExpander(floorDb: floor,
+                              depthDb: (optimized ? 48 : 30) * strength,
+                              speechRefDb: speech)
+            .process(voice, vad: vad, fs: fs)
+
+        // 2. Tone: chest, no boxiness, presence, air.
+        voice = tone(voice, plan: plan, optimized: optimized)
+
+        // 3. Sibilance, only where there is any.
+        let band = VoiceDeEsser.band(voice, fs: fs)
+        if let threshold = VoiceDeEsser.threshold(band: band, vad: vad, fs: fs) {
+            voice = VoiceDeEsser(thresholdDb: threshold,
+                                 maxReductionDb: (optimized ? 7 : 6) * strength)
+                .process(voice, band: band, fs: fs)
+        }
+
+        // 4. Density. makeup 0 so the compressor's gain reduction (not amplification)
+        //    keeps the speech-boundary discontinuity below the click threshold.
+        let level = speechLevelDb(voice, vad: vad, fs: fs) ?? speech
+        let density = optimized ? 2.6 : 1.6
+        return VoiceCompressor(thresholdDb: level - 2 - 2 * amount,
                                ratio: 1 + density * amount, kneeDb: 8,
-                               attack: 0.020, release: 0.200,
-                               makeupDb: 2 * amount).process(voice, fs: fs)
+                               attack: 0.012, release: 0.180,
+                               makeupDb: 0).process(voice, fs: fs)
+    }
+
+    private static func tone(_ voice: [Float], plan: AudioPlan, optimized: Bool) -> [Float] {
+        guard plan.voiceClarity else { return voice }
+        let fs = AudioIO.fs
+        return Cascade.apply(voice, [
+            .lowShelf(110, db: 0.3, fs: fs),
+            .peaking(320, q: 1.05, db: optimized ? -2.0 : -1.5, fs: fs),
+            .peaking(2_900, q: 0.9, db: optimized ? 2.6 : 2.0, fs: fs),
+            .highShelf(9_500, db: optimized ? 1.6 : 1.2, fs: fs)
+        ])
     }
 }
