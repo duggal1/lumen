@@ -299,7 +299,9 @@ public struct CameraParams: Codable, Equatable, Sendable {
 
 public enum MicMode: String, Codable, CaseIterable, Sendable {
     case standard, loud, podcast, off
-    public var targetLUFS: Double { switch self { case .standard: -16; case .loud: -12; case .podcast: -16; case .off: -14 } }
+    /// Streaming/web target (-14 LUFS) by default; `.podcast` keeps the Apple
+    /// Podcasts -16 LUFS spec and `.loud` is the -12 LUFS option.
+    public var targetLUFS: Double { switch self { case .standard: -14; case .loud: -12; case .podcast: -16; case .off: -14 } }
 }
 public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
     public enum Role: String, Codable, Sendable { case mic, system, voiceover, music, sfx }

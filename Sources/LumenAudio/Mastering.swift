@@ -9,12 +9,14 @@ enum AudioMaster {
         var channels = input
         let initial = Loudness.integrated(channels)
         let output = plan.outputGainDb.isFinite ? clamp(plan.outputGainDb, -60, 24) : 0
-        let target = plan.targetLUFS.isFinite ? plan.targetLUFS + output : -16 + output
+        let target = plan.targetLUFS.isFinite ? plan.targetLUFS + output : -14 + output
         let normalize = plan.normalize && hasProgram && initial > -69
         let gainDb = normalize ? clamp(target - initial, -36, 30) : output
         let gain = Float(pow(10, gainDb / 20))
         channels = channels.map { vDSP.multiply(gain, $0) }
-        let ceiling = Float(pow(10, -1.5 / 20))
+        // -1.0 dBTP: the ceiling every streaming and podcast target accepts,
+        // and 0.5 dB more headroom used than the old -1.5 default wasted.
+        let ceiling = Float(pow(10, -1.0 / 20))
         Limiter.apply(&channels, ceiling: ceiling)
         if normalize {
             let measured = Loudness.integrated(channels)
