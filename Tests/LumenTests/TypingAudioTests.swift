@@ -17,8 +17,8 @@ import LumenAudio
 @Test func missingAudioSettingsDecodeWithDefaults() throws {
     let audio = try JSONDecoder().decode(AudioPlan.self, from: Data("{}".utf8))
     #expect(audio.micClean)
-    // The standard chain normalizes to -16 LUFS (the podcast target).
-    #expect(audio.targetLUFS == -16)
+    // The standard chain normalizes to -14 LUFS (streaming/podcast target).
+    #expect(audio.targetLUFS == -14)
 }
 
 @Test func outputGainSurvivesLoudnessNormalization() throws {

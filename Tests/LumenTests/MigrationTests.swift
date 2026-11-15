@@ -34,6 +34,6 @@ import LumenAudio
     tl = Director.derive(tl, input: DirectorInput(events: [], source: src), revision: 1)
     let voice = (0..<48000).map { Float(0.2 * sin(2 * Double.pi * 440 * Double($0) / 48000)) }
     let mix = try #require(AudioMixer(mic: voice, micOffset: 0, system: nil, systemOffset: 0).mix(tl))
-    // The standard chain normalizes to -16 LUFS (the podcast target).
-    #expect(abs(mix.lufs + 16) <= 0.5, "default loudness \(mix.lufs) != -16")
+    // The standard chain normalizes to -14 LUFS (streaming/podcast target).
+    #expect(abs(mix.lufs + 14) <= 0.5, "default loudness \(mix.lufs) != -14")
 }
