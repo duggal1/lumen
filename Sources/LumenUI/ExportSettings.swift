@@ -37,7 +37,7 @@ struct ExportSettings: Codable, Equatable, Sendable {
     var customWidth = 1920, customHeight = 1080
     var frameRate: ExportRate = .source
     var includeAudio = true
-    var audioBitrate = 256_000
+    var audioBitrate = 320_000
     /// Premultiplied alpha channel. Forces ProRes 4444 in a .mov.
     var alpha = false
     /// A second, cursor-only movie with an alpha channel beside the main file.

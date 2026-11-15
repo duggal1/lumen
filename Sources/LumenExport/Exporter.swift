@@ -87,7 +87,7 @@ private final class AudioFeeder: @unchecked Sendable {
 public enum Exporter {
     /// Offline export: GPU renders frame i+1 while the encoder consumes frame i (depth-2 pipeline).
     public static func run(session: ProjectSession, timeline tl: Timeline, preset p: ExportPreset, to url: URL,
-                           includeAudio: Bool = true, audioBitrate: Int = 256_000, exportStems: Bool = false,
+                           includeAudio: Bool = true, audioBitrate: Int = 320_000, exportStems: Bool = false,
                            exportCursorLayer: Bool = false,
                            progress: @escaping @Sendable (ExportProgress) -> Void) async throws {
         guard let d = tl.derived else { throw ExportError.noTimeline }
