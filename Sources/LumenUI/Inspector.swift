@@ -551,6 +551,16 @@ struct Inspector: View {
             }.card(padding: 16)
             VStack(spacing: 0) {
                 ToggleRow(label: "Hide when idle", on: Binding(get: { m.timeline.cursor.idleHide != nil }, set: { v in m.edit { $0.cursor.idleHide = v ? 2.0 : nil } }))
+                Row(label: "Click sound") {
+                    HStack(spacing: 4) {
+                        LDropdown(sel: Binding(get: { m.timeline.audio.clickTone }, set: { sound in
+                            m.edit { $0.audio.clickTone = sound; $0.audio.clickSounds = true; $0.audio.soundEffectsEnabled = true }
+                            m.previewClick()
+                        }), options: ClickSound.allCases.map { ($0, $0.rawValue.capitalized, "speaker.wave.2") })
+                        .frame(width: 110)
+                        LIconButton(icon: "play.fill", label: "Preview click sound") { m.previewClick() }
+                    }
+                }
                 ToggleRow(label: "Click ring", on: Binding(get: { m.timeline.cursor.clickRing != nil }, set: { v in m.edit { $0.cursor.clickRing = v ? 0.45 : nil } }))
                 Row(label: "Click effect") {
                     LDropdown(sel: m.bind(\.cursor.clickEffect),
@@ -870,16 +880,6 @@ struct Inspector: View {
                 SliderRow(label: "Zoom out", v: m.bind(\.audio.zoomOutGainDb), range: -24...6,
                           fmt: { "\(Int($0)) dB" })
                     .disabled(!soundEffectsEnabled)
-                Row(label: "Click sound") {
-                    HStack(spacing: 4) {
-                        LDropdown(sel: Binding(get: { m.timeline.audio.clickTone }, set: { sound in
-                            m.edit { $0.audio.clickTone = sound; $0.audio.clickSounds = true; $0.audio.soundEffectsEnabled = true }
-                            m.previewClick()
-                        }), options: ClickSound.allCases.map { ($0, $0.rawValue.capitalized, "speaker.wave.2") })
-                        .frame(width: 110)
-                        LIconButton(icon: "play.fill", label: "Preview click sound") { m.previewClick() }
-                    }
-                }
                 SliderRow(label: "Cursor click", v: m.bind(\.audio.clickGainDb), range: -24...6,
                           fmt: { "\(Int($0)) dB" })
                     .disabled(!soundEffectsEnabled)
