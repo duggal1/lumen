@@ -169,7 +169,7 @@ public struct Style: Codable, Equatable, Sendable {
     }
 }
 
-public enum CursorPack: String, Codable, CaseIterable, Sendable { case system, minimal, dot, ring, pro, holiday }
+public enum CursorPack: String, Codable, CaseIterable, Sendable { case system, minimal, dot, ring, pro, holiday, lavender, coral, sky, mint, lemon, pink, wood, chrome, grass }
 public struct CursorStyle: Codable, Equatable, Sendable {
     public var pack: CursorPack = .system
     public var size: Double = 1.0
@@ -318,7 +318,12 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-public enum ClickSound: String, Codable, CaseIterable, Sendable { case mouse, subtle, fresh }
+public enum ClickSound: String, Codable, CaseIterable, Sendable {
+    case mouse, subtle, fresh
+    case click1, click2, click3, click4, click5
+    case select1, select2, select3, select4, select5, select6, select7, select8
+    case switch1, switch2, switch3, switch4, switch5, switch6, switch7
+}
 
 public enum StudioMode: String, Codable, CaseIterable, Sendable {
     case standard = "Studio Standard"
