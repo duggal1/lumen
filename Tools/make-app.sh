@@ -51,6 +51,7 @@ for sound in App/public/assets/*.mp3; do
 done
 ditto App/public/assets/music "$app/Contents/Resources/Audio/music"
 ditto App/public/assets/typing "$app/Contents/Resources/Audio/typing"
+ditto App/public/assets/touches "$app/Contents/Resources/Audio/touches"
 mkdir -p "$app/Contents/Resources/Wallpapers"
 if [ -d App/public/assets/wallpapers ]; then
     ditto App/public/assets/wallpapers "$app/Contents/Resources/Wallpapers"
