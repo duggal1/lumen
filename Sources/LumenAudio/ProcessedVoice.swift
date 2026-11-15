@@ -10,9 +10,9 @@ struct ProcessedVoiceCache {
     /// Bump whenever the processing semantics change: every persisted voice
     /// and mix cache below is keyed by it, so an algorithm change can never
     /// be served a result produced by the old one.
-    static let revision = "voice-v14-short-chain"
+    static let revision = "voice-v15-broadcast-chain"
     /// Full-program mix cache. Keyed by revision + exact settings + time map.
-    static let mixRevision = "mix-v2-short-chain"
+    static let mixRevision = "mix-v3-broadcast-chain"
 
     private struct Settings: Encodable {
         let noiseStrength: Double
