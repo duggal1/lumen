@@ -39,12 +39,14 @@ public enum DeepFilterNet {
         try process(samples, strength: 1)
     }
 
-    /// `strength` 0…1 maps to an attenuation limit of 14…40 dB.
+    /// `strength` 0…1 maps to an attenuation limit of 12…32 dB. Deep enough to
+    /// bury fan and room tone, shallow enough that the voice keeps its natural
+    /// texture instead of sounding gated or underwater.
     public static func process(_ samples: [Float], strength: Double) throws -> [Float] {
         guard !samples.isEmpty else { return [] }
         guard isAvailable, let executable else { throw DeepFilterNetError.unavailable }
         let s = min(max(strength.isFinite ? strength : 1, 0), 1)
-        let atten = 14 + 26 * s
+        let atten = 12 + 20 * s
 
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("lumen-voice-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
