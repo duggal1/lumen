@@ -34,3 +34,16 @@ import LumenProject
     }
     #expect(Set(music.map(\.category)) == ["calm", "epic", "futuristic", "tension", "upbeat"])
 }
+
+@Test func touchSoundsAreBundledPlayableAndPersisted() throws {
+    let bank = SFXBank()
+    let choices = ClickSound.allCases.filter { ![.mouse, .subtle, .fresh].contains($0) }
+    #expect(choices.count == 20)
+    for sound in choices {
+        let (samples, _) = bank.render(.click, clickTone: sound)
+        #expect(!samples.isEmpty)
+        var plan = AudioPlan(); plan.clickTone = sound
+        let saved = try JSONEncoder().encode(plan)
+        #expect(try JSONDecoder().decode(AudioPlan.self, from: saved).clickTone == sound)
+    }
+}
