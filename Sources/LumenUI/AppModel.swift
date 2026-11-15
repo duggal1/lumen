@@ -129,6 +129,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     let session = RecordingSession()
     private var appUsageRecorder: RecordingAppUsage?
     private var hud: HUDController?
+    /// Set while the app is quitting so a saved recording does not reopen UI.
+    private var terminating = false
     private var hotKey: HotKey?
     private var pauseHotKey: HotKey?
     private var poll: Task<Void, Never>?
@@ -476,6 +478,14 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         micTestDB = -60
     }
 
+    /// Quit path: a recording in flight is finalized before the process goes
+    /// down, without reopening the editor or the library the user is closing.
+    public func finishBeforeTermination() async {
+        guard phase == .recording else { return }
+        terminating = true
+        await stop()
+    }
+
     /// Discards the in-progress recording entirely: stops capture, deletes
     /// the bundle, and returns to the library without opening the project.
     public func discard() {
@@ -652,7 +662,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             }.value
             Task { await EmailNotificationService.shared.recordingFinished(project: finished, duration: duration) }
             // AGENT: finishing an agent recording must not open the editor over the user's work.
-            if agentRecording { agentRecording = false }
+            if terminating { hiddenWindows.removeAll() }
+            else if agentRecording { agentRecording = false }
             else if let onFinished { onFinished(b.url); hiddenWindows.removeAll() }
             else { restoreLibraryAfterFailure() }
         } catch { fail(error) }

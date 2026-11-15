@@ -25,9 +25,16 @@ final class LumenAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model = LumenAppDelegate.model, model.hasRecordingControls else { return .terminateNow }
-        for window in sender.windows where window.title != "Lumen recording controls" { window.orderOut(nil) }
-        return .terminateCancel
+        guard let model = LumenAppDelegate.model else { return .terminateNow }
+        // Quit always quits. Cancelling here hid the windows and left the app
+        // alive with nothing on screen, so only Force Quit could close it.
+        // A live recording is saved first, then the process goes down.
+        guard model.phase == .recording else { return .terminateNow }
+        Task { @MainActor in
+            await model.finishBeforeTermination()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
