@@ -186,6 +186,17 @@ public final class CursorAtlas {
         }
     }
 
+    /// Uses the same rasterizer and arrow artwork as the exported cursor.
+    public static func previewImage(pack: CursorPack) -> NSImage? {
+        let bytes = raster { context in _ = art(context, pack, .arrow) }
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+              let cg = CGImage(width: px, height: px, bitsPerComponent: 8, bitsPerPixel: 32,
+                               bytesPerRow: px * 4, space: CGColorSpace(name: CGColorSpace.displayP3)!,
+                               bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                               provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: pts, height: pts))
+    }
+
     /// Rasterizes one captured cursor PNG into the same 32 pt box as the stock
     /// art. The hotspot is remapped through the fit rect so the click point
     /// stays exact even when the bitmap is scaled.
@@ -232,7 +243,20 @@ public final class CursorAtlas {
 
     /// Returns the hotspot in points.
     private static func art(_ c: CGContext, _ pack: CursorPack, _ s: StockCursor) -> SIMD2<Double> {
-        let ink = CGColor(srgbRed: 0.11, green: 0.098, blue: 0.09, alpha: 1)      // #1c1917
+        let rgb: (Double, Double, Double)
+        switch pack {
+        case .lavender: rgb = (0.53, 0.33, 0.95)
+        case .coral: rgb = (1, 0.16, 0.12)
+        case .sky: rgb = (0.184, 0.525, 0.941)
+        case .mint: rgb = (0.086, 0.659, 0.478)
+        case .lemon: rgb = (0.949, 0.718, 0.020)
+        case .pink: rgb = (0.933, 0.310, 0.596)
+        case .wood: rgb = (0.604, 0.369, 0.173)
+        case .chrome: rgb = (0.420, 0.451, 0.502)
+        case .grass: rgb = (0.243, 0.620, 0.180)
+        default: rgb = (0.11, 0.098, 0.09)
+        }
+        let ink = CGColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
         let paper = CGColor(gray: 1, alpha: 1)
         func shadowed(_ body: () -> Void) {
             c.saveGState()
@@ -435,5 +459,5 @@ extension CursorPack {
     /// Packs that keep the recorded pointer's identity, so every stock shape gets
     /// its own artwork. The stylized packs (dot, ring, holiday) are an explicit
     /// user override and keep one glyph for every shape.
-    var preservesShape: Bool { self == .system || self == .minimal || self == .pro }
+    var preservesShape: Bool { self != .dot && self != .ring && self != .holiday }
 }
