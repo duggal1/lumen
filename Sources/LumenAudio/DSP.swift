@@ -130,49 +130,64 @@ public struct Compressor: Sendable {
     }
 }
 
-/// Keystroke-aware declick (PLAN 13.1). Attenuates the 2–8 kHz band by
-/// `depthDb` in ±35 ms windows around each key time when VAD is silent,
-/// milder (-6 dB) when speech overlaps. Gain is ramped (≥5 ms) so no step
-/// is ever audible. Pure, offline, deterministic.
+/// Keystroke-aware declick (PLAN 13.1). Attenuates the key band (60–250 Hz
+/// thump and 2–8 kHz tick) by `depthDb` in a short window around each key time
+/// when VAD is silent, and by a milder amount when speech overlaps so the
+/// consonant is not swallowed. Gain is ramped (≥5 ms) so no step is ever
+/// audible. Pure, offline, deterministic.
 public enum Declick {
     public static func process(_ x: [Float], keyTimes: [Double], vad: [ClosedRange<Double>],
                                fs: Double = 48000, depthDb: Double = -12) -> [Float] {
         guard depthDb < -0.5, !keyTimes.isEmpty, !x.isEmpty else { return x }
         let n = x.count
-        // Isolate 2–8 kHz with two biquads in series.
-        var hp = Biquad.highpass(2000, fs: fs)
-        var lp = Biquad.lowpass(8000, fs: fs)
-        var band = [Float](repeating: 0, count: n)
+        let high = band(x, 2_000, 8_000, fs: fs)
+        let low = band(x, 60, 250, fs: fs)
+        let highGain = window(n, keyTimes: keyTimes, vad: vad, fs: fs,
+                              half: 0.035, fullDb: depthDb, mildDb: -6)
+        // Keystroke body thump is much shorter than its click; the low band gets
+        // a tighter window so the vowel underneath keeps its weight.
+        let lowGain = window(n, keyTimes: keyTimes, vad: vad, fs: fs,
+                             half: 0.024, fullDb: depthDb * 0.75, mildDb: -3)
+        var out = x
         for i in 0..<n {
-            let v = Double(x[i])
-            let y = lp.run(hp.run(v))
-            band[i] = abs(y) < 1e-30 ? 0 : Float(y)
+            out[i] = x[i] - high[i] * (1 - highGain[i]) - low[i] * (1 - lowGain[i])
         }
-        // Per-sample suppression gain (1 = keep band, g = suppress band).
+        return out
+    }
+
+    /// One band of the signal, isolated by a high-pass and a low-pass biquad.
+    private static func band(_ x: [Float], _ low: Double, _ high: Double, fs: Double) -> [Float] {
+        var hp = Biquad.highpass(low, fs: fs), lp = Biquad.lowpass(high, fs: fs)
+        var out = [Float](repeating: 0, count: x.count)
+        for i in x.indices {
+            let v = lp.run(hp.run(Double(x[i])))
+            out[i] = abs(v) < 1e-30 ? 0 : Float(v)
+        }
+        return out
+    }
+
+    /// Per-sample suppression gain around every key (1 = keep the band,
+    /// `g` = suppress it), ramped over 5 ms at both window edges.
+    private static func window(_ n: Int, keyTimes: [Double], vad: [ClosedRange<Double>],
+                               fs: Double, half: Double, fullDb: Double, mildDb: Double) -> [Float] {
         var g = [Float](repeating: 1, count: n)
-        let halfWin = Int(0.035 * fs)
+        let halfWin = Int(half * fs)
         let ramp = max(Int(0.005 * fs), 1)
-        let fullGain = Float(pow(10.0, depthDb / 20.0))
-        let mildGain = Float(pow(10.0, -6.0 / 20.0))
+        let fullGain = Float(pow(10.0, fullDb / 20.0))
+        let mildGain = Float(pow(10.0, mildDb / 20.0))
         for key in keyTimes {
             let center = Int((key * fs).rounded())
             guard center > -halfWin, center < n + halfWin else { continue }
             let speech = vad.contains { $0.lowerBound <= key && key <= $0.upperBound }
             let target = speech ? mildGain : fullGain
-            // Ramped window: linear attack/release over `ramp` samples.
             let lo = max(center - halfWin, 0), hi = min(center + halfWin, n - 1)
             for i in lo...hi {
                 let edge = min(i - lo, hi - i)
                 let rampT = ramp > 0 ? min(1, Float(edge) / Float(ramp)) : 1
-                let desired = 1 - (1 - target) * rampT
-                g[i] = min(g[i], desired)
+                g[i] = min(g[i], 1 - (1 - target) * rampT)
             }
         }
-        var out = x
-        for i in 0..<n {
-            out[i] = x[i] - band[i] * (1 - g[i])
-        }
-        return out
+        return g
     }
 }
 
