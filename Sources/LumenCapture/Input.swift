@@ -702,12 +702,16 @@ public final class InputRecorder: @unchecked Sendable {
     /// the caller already has the app element.
     private func focusedInfo(_ system: AXUIElement) -> FocusedInfo? {
         if let info = launcherFocusInfo() { return info }
-        guard let value = attribute(system, kAXFocusedUIElementAttribute),
+        // Resolve the focused app before reading any element: a system-wide
+        // focused-element query aimed at Lumen itself materialises our SwiftUI
+        // accessibility on this queue, so this process is skipped up front.
+        let app = focusedApplication(system)
+        if let app, isSelf(app) { return nil }
+        guard let value = attribute(app ?? system, kAXFocusedUIElementAttribute),
               CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         let element = value as! AXUIElement
         AXUIElementSetMessagingTimeout(element, 0.05)
-        guard let frame = frame(element) else { return nil }
-        let app = focusedApplication(system)
+        guard !isSelf(element), let frame = frame(element) else { return nil }
         let ctx = app.map { appContext(for: $0, system: system) } ?? AppContext()
         return FocusedInfo(frame: frame, token: elementToken(element),
                            appName: ctx.appName, windowID: ctx.windowID, host: ctx.host)
@@ -753,6 +757,7 @@ public final class InputRecorder: @unchecked Sendable {
     /// real browser AXURL, never from a title or a search, and the full URL is
     /// discarded immediately.
     private func appContext(for app: AXUIElement, system: AXUIElement) -> AppContext {
+        guard !isSelf(app) else { return AppContext() }
         var pid: pid_t = 0
         AXUIElementGetPid(app, &pid)
         let running = NSRunningApplication(processIdentifier: pid)
@@ -823,6 +828,9 @@ public final class InputRecorder: @unchecked Sendable {
         AXUIElementSetMessagingTimeout(system, 0.03)
         guard let value = attribute(system, kAXFocusedApplicationAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return }
         let app = value as! AXUIElement
+        // Lumen's own tree is never walked: this timer is the heaviest AX job
+        // and must not drag our SwiftUI graph onto the AX queue.
+        guard !isSelf(app) else { return }
         AXUIElementSetMessagingTimeout(app, 0.03)
         enableAccessibility(app)
         let ctx = appContext(for: app, system: system)
@@ -855,12 +863,23 @@ public final class InputRecorder: @unchecked Sendable {
         return value
     }
 
+    /// AX is only ever read for other processes. Reading our own element tree
+    /// makes AppKit materialise SwiftUI accessibility nodes on the calling
+    /// queue, which evaluates main-actor isolated view bodies off the main
+    /// thread and traps in dispatch_assert_queue (seen when the Settings
+    /// window was frontmost during a recording).
+    private func isSelf(_ element: AXUIElement) -> Bool {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else { return false }
+        return pid == ProcessInfo.processInfo.processIdentifier
+    }
+
     private func queryAX(_ p: CGPoint) -> AXFrame? {
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 0.05)
         var element: AXUIElement?
         guard AXUIElementCopyElementAtPosition(system, Float(p.x), Float(p.y), &element) == .success,
-              let element else { return nil }
+              let element, !isSelf(element) else { return nil }
         AXUIElementSetMessagingTimeout(element, 0.05)
         return frame(element)
     }
