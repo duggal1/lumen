@@ -543,8 +543,8 @@ struct Inspector: View {
                 .background(RoundedRectangle(cornerRadius: Radius.nested).fill(Tok.control))
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            CursorAppearance(model: m)
             VStack(spacing: 0) {
-                Row(label: "Pack") { LDropdown(sel: m.bind(\.cursor.pack), options: CursorPack.allCases.map { ($0, $0.rawValue.capitalized, "cursorarrow") }).frame(width: 130) }
                 SliderRow(label: "Size", v: m.bind(\.cursor.size), range: 0.5...2.5)
                 SliderRow(label: "Smoothing", v: m.bind(\.cursor.smoothingSigma), range: 0...0.12, fmt: { "\(Int($0 * 1000)) ms" })
                 SliderRow(label: "Glide", v: m.bind(\.cursor.glide), range: 0...1)
@@ -870,6 +870,16 @@ struct Inspector: View {
                 SliderRow(label: "Zoom out", v: m.bind(\.audio.zoomOutGainDb), range: -24...6,
                           fmt: { "\(Int($0)) dB" })
                     .disabled(!soundEffectsEnabled)
+                Row(label: "Click sound") {
+                    HStack(spacing: 4) {
+                        LDropdown(sel: Binding(get: { m.timeline.audio.clickTone }, set: { sound in
+                            m.edit { $0.audio.clickTone = sound; $0.audio.clickSounds = true; $0.audio.soundEffectsEnabled = true }
+                            m.previewClick()
+                        }), options: ClickSound.allCases.map { ($0, $0.rawValue.capitalized, "speaker.wave.2") })
+                        .frame(width: 110)
+                        LIconButton(icon: "play.fill", label: "Preview click sound") { m.previewClick() }
+                    }
+                }
                 SliderRow(label: "Cursor click", v: m.bind(\.audio.clickGainDb), range: -24...6,
                           fmt: { "\(Int($0)) dB" })
                     .disabled(!soundEffectsEnabled)
