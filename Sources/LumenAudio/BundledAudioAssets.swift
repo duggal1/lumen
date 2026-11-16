@@ -80,11 +80,14 @@ public enum BundledAudioAssets {
         }
     }()
 
-    /// A last-resort clean title for an unknown track: drop a trailing
-    /// `[video-id]`, then any ` - Artist [isrc]` tail, then trim whitespace.
-    static func cleanStem(_ raw: String) -> String {
-        var s = raw.replacingOccurrences(of: " \\[[^\\]]+\\]$", with: "", options: .regularExpression)
-        s = s.replacingOccurrences(of: " - [A-Za-z].*\\[[A-Z0-9]+\\]$", with: "", options: .regularExpression)
+    /// A last-resort clean title for an unknown track: drop any
+    /// ` - Artist [isrc]` tail, then a remaining trailing `[video-id]`, then trim whitespace.
+    public static func cleanStem(_ raw: String) -> String {
+        // Strip the ` - Artist [isrc]` tail while its bracket is still present,
+        // then any remaining trailing `[id]`. Reversing these loses the anchor
+        // the artist pattern needs and leaves `"Song - Artist"` behind.
+        var s = raw.replacingOccurrences(of: " - [A-Za-z].*\\[[A-Z0-9]+\\]$", with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: " \\[[^\\]]+\\]$", with: "", options: .regularExpression)
         s = s.trimmingCharacters(in: .whitespaces)
         return s.isEmpty ? "Untitled" : s
     }
