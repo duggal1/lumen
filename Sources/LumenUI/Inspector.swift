@@ -603,8 +603,6 @@ struct Inspector: View {
                               fmt: { String(format: "%.1f s", $0) })
                     SliderRow(label: "Hold", v: m.bind(\.camera.hold), range: 0.5...2.5,
                               fmt: { String(format: "%.1f s", $0) })
-                    SliderRow(label: "Safe zone", v: m.bind(\.camera.safeZone), range: 0.4...0.8,
-                              fmt: { String(format: "%.2f", $0) })
                     SliderRow(label: "Motion blur", v: m.bind(\.camera.shutter), range: 0...1)
                     SliderRow(label: "Follow delay", v: m.bind(\.camera.followDelay), range: 0...0.5,
                               fmt: { "\(Int($0 * 1000)) ms" })
