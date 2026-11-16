@@ -58,7 +58,7 @@ public final class Upscaler {
     /// a slow camera move, so the upscale is not rebuilt (and its buffers not
     /// reallocated) on every frame of a zoom. The grid only grows the crop, so
     /// the sampled content stays correct.
-    public static func quantize(_ region: SIMD4<Int32>, source: SIMD2<Double>, grid: Int32 = 64) -> SIMD4<Int32> {
+    public static func quantize(_ region: SIMD4<Int32>, source: SIMD2<Double>, grid: Int32 = 32) -> SIMD4<Int32> {
         let g = max(grid, 1)
         let x0 = (region.x / g) * g, y0 = (region.y / g) * g
         let x1 = min(Int32((Double(region.x + region.z) / Double(g)).rounded(.up)) * g, Int32(source.x))

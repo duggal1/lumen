@@ -1,147 +1,378 @@
-# solution.md — reconciled fix plan for issue.md (execute against current tree)
+# Lumen — Core Motion & Zoom: Solution Plan
 
-## Non-negotiable rules
-1. **READ FIRST, WRITE SECOND.** Read and trace every file named in issue.md/solution.md, especially unseen modules: `Sources/LumenCore/*` (`InputEvent`, `typingBursts()`, `SensitivePatterns`, `HostClock`, `EventCodec`, AX/types), `Sources/LumenUI/*` (lanes, privacy/zoom/caption/audio panels, export gate, editor/app state, progress), `App/`, `Sources/LumenExport/*`, `Sources/LumenSpeech/*`, `Package.swift`, `Tools/make-app.sh`. Map actual read/write/call sites before editing.
-2. **NO TESTING / NO NEW TEST FILES.** Do not run tests/harnesses/benchmarks/captures. Do not create test files. Run **`make build` only** to prove it compiles.
-3. **Delete replaced code outright** (no flags/shims/legacy branches), except required Codable migrations/compat needed to load existing projects safely.
-4. **Persistence/cache correctness is mandatory:** changing saved fields requires migration/reset logic for old projects (A1). Changing OCR/typing/voice behavior requires bumping cache/version keys from **current** values (A2). Skip either and fixes won’t appear.
-5. **Reconcile, don’t paste.** Adapt to current types/APIs/signatures and existing fixes. End with a checklist: done / not done / n/a (with reason) and files changed.
+Companion to `issue.md`. Every item maps to a file and a test.
+Principle: delete the zero-phase camera and the magic scale clamps; replace
+them with finite, C2, rest-to-rest moves and an attention planner that emits
+follow paths. Keep the public Director API (`ZoomPlanner.plan`,
+`CameraSolver.solve`, `Director.derive`) byte-compatible.
 
-## Current baseline to preserve/reconcile
-- `CameraParams.cameraModel == 4`, `AudioPlan.typingModel == 2` migrations already exist in `Sources/LumenProject/Models.swift`.
-- Cache versions currently: `sensitive-text` v7, `typing` v5 (`Sources/LumenAnalysis/Service.swift`); voice revision `trained-voice-v8-wpe-residual-df-complete` (`Sources/LumenAudio/ProcessedVoice.swift`).
-- `CameraSolver` already uses `p.omegaZoom`/`p.omegaPan` (not leadIn-derived). `ProcessedVoice` already prefers WPE+residual for short clips.
-- Typing assets exist in `App/public/assets/typing/mechvibes-default` (config defines codes 14,15,28,30,36,42,57) and `Tools/make-app.sh` copies them to `Contents/Resources/Audio/typing`; loaders/mixer are bundle/checkout-aware.
-- `Input` already includes launcher-focus and improved caret/AX sampling logic; `Service`/`TypingTracer` already include anchors and previous-frame diffing in current form. Verify completeness rather than reintroducing old behavior.
+---
 
-## A. Make fixes actually land
+## 1. Finite, C2 camera — `Sources/LumenDirector/Camera.swift`
 
-### A1. Models/migrations/state reset (reconcile, don’t blindly replace)
-- **CameraParams (`Sources/LumenProject/Models.swift`):** ensure decoded legacy projects land on the intended behavior (scale bounds, leadIn/tail/hold/zoomOutGap/minHold/mergeGap/panThroughGap, omegaPan/omegaZoom, lookahead/deadZone/followDelay/safeZone/baseScale, `cameraModel` bumped as needed). Keep/add migration so existing saved values cannot pin old “whip/linger/huge zoom” behavior.
-- **ZoomPreset/apply:** reconcile preset max scales and `apply(preset:)` parameters to the intended feel (smooth, bounded). Do not leave conflicting defaults vs presets.
-- **AudioPlan:** keep `typingModel` migration effective for old projects (`keySounds`, `typingLevelDb`, default pack id as appropriate) and ensure defaults are sane for new projects.
-- **PrivacyPlan/captions-related persisted fields:** if behavior/defaults change (e.g. padding/pixelSize/mode semantics, captions default-off), add decode migrations/default normalization so old projects don’t get stuck/broken.
-- **Auto-zoom rederive on open:** trace project open/load paths (`LumenExport.ProjectSession.open`, `LumenUI` editor/app load, CLI/MCP as relevant). If zoom is `.auto`/derived-from-events and stored segments may be stale, re-run `Director.derive` (or equivalent) with current planner/camera logic on open so A1/B fixes apply. (`EditorModel.open` already triggers replan/derive; verify initial state/UX.)
+### 1.1 Data model (internal)
 
-### A2. Cache/output invalidation (bump from current)
-- Bump `sensitive-text` version in `Service` from **v7** only if OCR/scan output/semantics change in this work (otherwise leave). Bump `typing` from **v5** if typing trace/analysis behavior changes further. Bump `ProcessedVoiceCache.revision` from current **v8** if processed-voice output changes.
-- Rule: any edit affecting OCR/typing/voice results must bump the corresponding cache key/revision in the same change.
+```swift
+private struct Scene {
+    var event: Double          // source seconds the move should land on
+    var start: Double          // output seconds, first frame of the scene
+    var end: Double            // output seconds, last frame of the hold
+    var lz: Double             // log target scale
+    var segment: ZoomSegment
+    var path: [(t: Double, c: SIMD2<Double>)]   // output seconds, normalised
+    var center: SIMD2<Double>  // normalised fixed centre
+    var kind: Kind             // .click, .typing, .visual, .hover
+}
+```
 
-### A3. Stop-time vs editor-time zoom
-- Keep stop-time `planRecordingZoom` cheap/safe (no heavy analysis). Ensure editor derives/refines zoom when typing/activity analysis becomes available. Do not regress startup/stop responsiveness.
+### 1.2 Build a target track analytically, then sample it
 
-### A4. No cwd asset paths in runtime
-- Verify all runtime asset resolution (typing packs, wallpapers/backgrounds, audio/SFX, models) uses bundle/app resources or explicit known roots (never `currentDirectoryPath` inside shipped behavior). Reconcile `TypingPacks`, `AppAssets`, render/UI loaders, and bundling.
+No `zeroPhaseSmooth` on `lz`. For every 240 Hz (soon 480 Hz) tick `t`:
 
-## B. Zoom: dynamic, small, short, smooth (reconcile current Planner/Camera/LiveCamera)
+1. Find the active scene.
+2. `lz(t)`:
+   - before `start`: `0`
+   - `start .. event`: quintic `0 → lz` with zero v/a at both ends
+     (`QuinticMove`), duration `event - start`
+   - `event .. end`: `lz`
+   - `end .. end + tail`: quintic `lz → 0`, duration `p.tail`
+   - after: `0`
+3. If the next scene starts before `end + tail`, **bridge**: do not fall to 0.
+   Replace the tail with a quintic from `lz` to the next scene's `lz` over
+   `[end, next.start]` (or `[end, next.event]` if `next.start < end`).
+   This is the end of "double move" at scene handoffs.
+4. `center(t)`:
+   - if the scene has a follow path: sample the path at `t + p.lookahead`
+     (clamped), then `centredPlay` with the scene's half-view dead zone,
+     then add the `lean` bias (`0.12 / scale`) so the pointer sits left of
+     centre.
+   - else: the scene's fixed normalised centre.
+   - during a bridge: quintic from the outgoing centre to the incoming centre
+     with matched end velocities estimated from each side's path (finite
+     difference over 30 ms). If no path, rest-to-rest.
+5. Clamp the centre to the feasible range at `lz` (`clampCenter`).
 
-### B1/B4/B5 Planner (`Sources/LumenDirector/Planner.swift`)
-- Audit and implement intent/rules (adapt names/structures to current code):
-  - **Scale:** context-sized, bounded (no hard 3.2). Clicks: scale to comfortable context (not element-fit explosion), cap ~1.7 and return 1 when target already fills view. Typing: frame active line/field context, bounded ~1.6–2.0. Unknown/no-rect click: modest default within bounds. Apply hysteresis to avoid jitter.
-  - **Typing bursts:** one stable scene/intent per burst (no per-keystroke pumping). Preserve/use caret samples/path for follow within the scene; do not let growing field text thrash scale.
-  - **Focus:** clicks anchor to exact target pixel/context; typing focuses on caret biased to leave room for rightward text growth (not field/page midpoint).
-  - **Hold/tail/continuation:** scene continues only within intended gap, ends shortly after last activity; cap trace-tail extension so zoom doesn’t linger excessively.
-  - **Close/filter:** drop degenerate/near-1x/too-short shots; keep stable IDs where required.
-- Remove/replace any logic that makes small UI elements produce maximal zoom or creates mid-sentence zoom splits.
+Because every transition is a finite quintic, `lz` and `center` reach their
+targets exactly and reach 0 exactly at `end + tail`. That fixes
+`zoomOutReachesFullFrameAndStays` and removes the pre-end zoom-out.
 
-### B2 Camera (`Sources/LumenDirector/Camera.swift`)
-- Keep springs parameter-driven (`omegaZoom`/`omegaPan`), smooth arrival/exit (no leadIn-derived whip). Tune in/out response to match “arrives by event, not after it” within current timing model.
+### 1.3 Derivatives and rate
 
-### B3 Live camera (`Sources/LumenDirector/LiveCamera.swift`)
-- Reconcile constants/behavior (max scale, hold, omegas, keyDown/typing scaling/focus) with planner intent and bounded, smooth feel.
+- Bake `nx, ny, lz, vx..az, yaw, pitch` at **`cameraRate = 480`**.
+- Compute derivatives analytically from the quintic segments where possible;
+  otherwise central differences at 480 Hz. `evaluate`'s `qhm` then has 2×
+  headroom at 240 fps output.
+- Keep the existing `CameraTrack` layout and `gridRate` indexing for the cursor
+  (`qhm(c.nx, ...)` uses `c.rate`, so this is transparent).
 
-## C. Typing sync / AX / analysis ordering
+### 1.4 Lead-in
 
-### C1-C4 Input/AX (`Sources/LumenCapture/Input.swift`, related Core types)
-- **Launchers:** ensure Spotlight/Launchpad(Dock)/Raycast/Alfred focused text/search elements are detected reliably (refresh PIDs, correct roles/attributes, ignore hidden/minimized/offscreen windows as appropriate). Keep checked before generic focus fallback.
-- **Caret:** handle zero-length selections/insertion points by probing appropriate range; convert bounds to source coordinates correctly.
-- **Chromium/Electron AX:** enable/manual accessibility where needed in focus and secure-field sampling paths.
-- **Secure-field sampling (Layer A):** ensure traversal reaches relevant controls (adequate but bounded node/time budget, periodic refresh); no silent misses due to depth-first/caps/disabled AX.
-- Verify `AXFrame`, event timing/throttling, and recorded indices remain consistent with analysis/planner expectations.
+`lead = max(p.leadIn, 0.22 + 0.16 * log2(scale))` clamped to `[0.22, 1.2]`.
+- 1.8× → `0.22 + 0.16*0.85 = 0.36 s` (close to the old 0.30).
+- 3.0× → `0.22 + 0.16*1.58 = 0.47 s`.
+- 6.0× → `0.22 + 0.16*2.58 = 0.63 s`.
+This is the "start early so the frame is already settled" requirement, derived
+from magnitude instead of a constant.
 
-### C5 Typing traces (`Sources/LumenAnalysis/Service.swift`, `TypingTracer`/`TypingAnalyzer`, request types)
-- Ensure `AnalysisRequest` carries needed AX/event context; build anchors per burst (caret/focused element center, fallback to recent click) instead of nil where possible.
-- Diff against previous frame/state to avoid treating pre-burst UI (e.g. launcher panel) as typed content; filter/size constraints must remain correct.
-- Confirm `typingBursts()`/`InputEvent` semantics in `LumenCore`.
+### 1.5 Retarget without splitting
 
-### C6 Analysis order & publish (`Sources/LumenAnalysis/Service.swift`, UI/editor integration)
-- Make typing analysis run/publish early (cheap path first) so zoom/derived state can update without waiting for slow OCR. Run OCR/privacy without blocking typing-derived UX; publish partial/progressive results safely.
-- Expose/call internal `runTyping`/`runPrivacy` or equivalent if needed by current architecture, but preserve cancellation/error/progress semantics and thread safety.
+`retarget` in the planner no longer closes the scene for pointer motion. It
+appends a follow point. A split happens only for a **strong** new click/typing
+intent that is far from the current target (existing test
+`distinctTargetsDoNotMergeIntoEmptySpace`). This removes the per-gesture
+double move.
 
-## D. Typing sound (never silent)
+---
 
-### D1-D4 Assets, mapping, mixing (`LumenAudio/TypingPacks`, `Mixer`, `LumenDirector` cues, bundling)
-- **Assets:** use existing `App/public/assets/typing/...` packs (and any required fallback sample) and ensure bundled into app (`Tools/make-app.sh` currently copies typing); packaged runtime must find them via bundle resources.
-- **Resolver:** single source of truth for pack root/dir/list (bundle first, dev/checkout fallback) with no cwd dependence.
-- **Key mapping:** cross-check against pack `config.json` `defines` (current default pack defines only 14,15,28,30,36,42,57). Map mac keycodes to pack codes/samples that exist; for unmapped keys choose a deterministic available fallback sample from the pack (never silence, never invalid code).
-- **Mixing:** resample pack audio to engine/timeline rate as needed, normalize sensibly, apply consistent gain staging (`typingLevelDb`/cue gain) without double-stacking unintended SFX gain, add light velocity/gap gain shaping if appropriate, and ensure cues fire when enabled.
+## 2. Attention planner — `Sources/LumenDirector/Planner.swift`
 
-## E. Privacy: accurate, fast, clean, fail-closed
+### 2.1 Intent kinds
 
-### E1 OCR (`Sources/LumenAnalysis/OCR.swift`, shared luma/rect helpers)
-- OCR only changed/dirty regions when possible (with padding/merge/full-frame fallback as needed), tile large regions, limit concurrency appropriately, and keep tracking/sampling strategy efficient.
-- On timeout/cancel/failure: return/publish **partial detections found so far** (do not discard to empty) with clear error state; do not cache invalid/empty-due-to-timeout results as successful scans.
+```swift
+enum Kind { case click, typing, hover, visual }
+```
 
-### E2 Privacy/export gate (`Service`, `LumenUI`/`App` export gate)
-- Gate/progress must always resolve on all terminal states (success, partial, error, timeout, cancel, disabled). UI must clear “Scanning…/Export disabled…” states accordingly (including defensive timeout/grace if needed). Never leak a stuck gate.
+Add `.hover`. `.visual` is unchanged in spirit.
 
-### E3 Exact secret boxes
-- Use Vision’s range/bounding-box for the matched secret when available; fall back safely (mask more, not less) when exact bounds unavailable. Keep `OCRDetection` normalization correct.
+### 2.2 Build intents
 
-### E4 Conservative mask envelope
-- Track/interpolate with a conservative spatial/temporal envelope (and padding relative to text height/region) so motion/scroll/zoom doesn’t expose secrets. Tune for safety over tightness.
+**Clicks** (unchanged priority):
+- left down, no cmd/ctrl, inside source, not a double-click.
+- rect = smallest usable AX frame containing the point (see 2.4).
+- weight `p.clickWeight` (default 3).
 
-### E5/E6 Mask rendering & quality (`LumenRender` masks/emphasis/renderer/shaders, GPU structs)
-- Reconcile mask data packing, shader, and renderer with current types (`rect`/height semantics, mode encoding, padding/cell sizing). Produce clean styles (e.g. frost/pixelate/redact) with rounded edges, in-rect sampling (no outside bleed), mipmapped textures/blits as needed, no unnecessary per-frame buffer churn, and no upscale/quality pop when masks appear/disappear. Update upscale/cache signatures if masked output affects reuse.
-- Update UI labels/defaults and sensitivity→threshold/confidence mapping consistently with `PrivacyPlan`/`SensitivePatterns`.
+**Typing** (rewritten):
+- For each `typingBursts()`:
+  - collect AX carets from key events **and** the last good caret (capture
+    publishes it into the AX array, see §5).
+  - choose the **smallest** AX field containing the caret (not the biggest).
+  - reject frames whose `anchor.resolved == false`.
+  - if no caret, use the typing trace's `line ?? rect` and its samples.
+  - if neither, and a click landed within `30 s` (was 20), synthesise a field
+    around the click.
+  - if none of the above, **no typing intent** (never invent).
+- `ok(t)` becomes `t <= trimEnd - 0.2` (was `- 0.8`).
 
-### E7 Layer A secure fields
-- Ensure secure/sensitive field sampling reaches password/secret inputs in browsers/apps (AX enablement, traversal strategy, budget). Coordinate with OCR/mask pipeline.
+**Hover / dwell** (new):
+- Walk consecutive `.move` events. A dwell is a window of at least
+  `dwell = 0.28 + 0.45 * (1 - sensitivity)` seconds in which the pointer stays
+  within `max(10, 0.012 * min(W,H))` px and there is no button-down, scroll,
+  drag or keyDown.
+- Emit `.hover` at the window end, position = window centroid.
+- Suppress if a click happened within 1.2 s or typing within 0.8 s.
+- If `p.sensitivity <= 0.05`, emit none.
+- Hover never splits an active click/typing scene (preserves
+  `clickClusterCenterStaysOnClickNotHoverCentroid`). It only opens a scene if
+  no scene is active and the dwell is long enough.
 
-### E8 Sensitive patterns (`Sources/LumenCore/Sensitive.swift`)
-- Confirm required detectors exist and are not app/region gated; fix gaps only if found (with cache/version bump implications if output changes).
+**Visual** (relaxed):
+- `coverage` range `0.0012 ... 0.45`.
+- `count >= 2`, each within `0.75 s`.
+- area `0.004 ... 0.60` of the screen.
+- keep the scroll/drag veto and the click veto (±1 s).
+- if the region contains the current pointer, allow `count >= 2` and lower the
+  area floor to `0.0025`.
 
-## F. Audio, captions, UI/export, rest
+**Scroll / drag**: keep-alive only; never creates a scene.
 
-### F1/F2 Processed voice & denoise
-- Keep real dereverb path effective; bump voice cache revision if output changes. Remove/avoid discarding completed denoise results after the fact; rely on real cancellation/timeouts.
+### 2.3 Scale (the real zoom control)
 
-### F3 Mic controls/comments
-- Fix misleading comments/config descriptions and surface relevant system mic voice-isolation controls in audio UI if applicable.
+```
+hi = clamp(max(p.maxScale, p.baseScale * 1.2), 1.3, 6.0)
+lo = clamp(p.minScale, 1.0, hi)
+s  = p.baseScale
+if let r = intent.rect {
+    let coverage = r.w*r.h / (W*H)
+    s *= clamp(pow(0.06 / max(coverage, 1e-4), 0.18), 0.85, 1.45)
+}
+if kind == .visual { s = min(s, 1.6) }
+s = clamp(s, lo, hi)
+```
 
-### F4 Transcription (`LumenAnalysis`/`LumenSpeech`/call sites)
-- Ensure transcription receives cleaned voice audio (`cleanVoiceURL` or equivalent) at all relevant call sites. Wire/use the intended engine (Moonshine, per `LumenSpeech`) and remove stale engine/picker paths if product direction requires; adapt to actual available models/APIs.
+- `baseScale` is now the primary control, so the UI slider works.
+- Tiny targets get up to +45 %, large targets -15 %.
+- `maxScale` is honoured up to 6.0.
+- `minScale` is the floor.
+- Keep the existing "don't jitter" rule: if
+  `|log(s/prev)| < log(1.12)`, reuse `prev`.
 
-### F5 Captions
-- Preserve user/proper nouns and existing casing where possible (vocab-aware, minimal sentence-casing). Default captions off unless explicitly enabled; find and remove unexpected enablement in toggles/migrations/normalizers/load paths.
+Checked against the existing contract:
+- default `baseScale = 1.8`; `fiveNearbyClicks` → 1.8 ✓
+- AX 40×20 → 2.61 ✓ (test range 1.3…3.2)
+- AX 0,0,960,540 rejected by `usableAX` → 1.8; click y=300 clamps exactly to
+  the feasible centre → the two "popup" tests now assert the evaluated camera,
+  which is the real guarantee ✓
+- visual 500×280 → 1.6 ✓ (test expects ≤ 1.6)
 
-### F6 Wallpaper/background blur
-- Implement smooth, mip-aware blur without ghosting/double blur; create/upload/generate mips correctly; keep slider bounds/defaults sane and remove redundant blur stages.
+### 2.4 AX selection
 
-### F7 Lanes & recovery (`LumenUI`, `LumenProject`/editing, recovery/finalize paths)
-- Main timeline/lane must render `recordingSegments` and `clips`; show empty state only when both empty. Ensure recovery/finalize maintain valid source duration/trim/time-map invariants.
+`usableAX` stays. Add:
 
-### F8 Stop hang (static trace)
-- Trace `session.stop()` and all post-stop/open work in `App`/`LumenUI`: project load, derive, analysis kickoff, thumbnails, waveform, UI refresh. Move heavy/blocking work off `@MainActor` (e.g. detached/background tasks) while keeping UI state/progress updates on main.
+```swift
+static func smallestField(containing p: SIMD2<Double>, in frames: [AXFrame],
+                          slack: Double, minW: Double, minH: Double) -> AXFrame?
+```
 
-## Packaging/build integration
-- Keep `Package.swift` resources/targets consistent with any moved/added assets or shaders. Keep `Tools/make-app.sh` bundling correct (typing packs, wallpapers, metallib, frameworks, signing). No cwd-dependent runtime assets.
+- filter: finite, `w >= minW`, `h >= minH`, `p` inside `frame ± slack`,
+  `anchor.resolved == true`.
+- return the frame with the smallest area.
+- if several frames have the same area, prefer the one whose `anchor` matches
+  the event's app/window context (we have `anchor.appName/windowID`).
 
-## Final checklist (mark done / not done / n/a + reason; list files changed)
-- [ ] A1 migrations/defaults + rederive-on-open reconciled for old projects
-- [ ] A2 cache/revision bumps applied from current versions where outputs changed
-- [ ] B1/B4/B5 planner: bounded context scale, stable typing scenes, caret focus, hold/tail
-- [ ] B2/B3 camera/live: smooth param-driven springs and live behavior
-- [ ] C1–C4 AX/input: launcher focus, insertion caret, Chromium AX, secure-field traversal
-- [ ] C5 typing trace anchors + previous-frame diff verified/fixed
-- [ ] C6 typing analysis publishes early; OCR/privacy non-blocking integration
-- [ ] D1–D4 typing sound: bundled assets resolved, mapping vs config, resample/levels, never silent
-- [ ] E1–E3 OCR: incremental/partial-safe/accurate boxes
-- [ ] E2 privacy/export gate always resolves in UI and service
-- [ ] E4–E7 masks: conservative envelope, clean rendering, no quality pop, Layer A reach
-- [ ] E8 SensitivePatterns audited (no app/region gate)
-- [ ] F1–F5 audio/voice/transcript/captions corrected and wired
-- [ ] F6 wallpaper blur/mips corrected
-- [ ] F7 lanes and recovery/finalize invariants correct
-- [ ] F8 stop/open main-thread work traced and moved off main
-- [ ] `make build` passes (only build run)
+For clicks, the same helper returns the smallest control under the pointer.
+If it is too large (`usableAX` fails), rect = nil and the click point is used.
+
+### 2.5 Follow paths
+
+For every auto scene, after the segments are chosen:
+
+```
+path = []
+for each raw move event in [start - 0.4, end + 0.4]:
+    p = (x/W, y/H)
+    if p inside (scene centre ± 0.65 * view): path.append(t, p)
+if kind == .typing: prepend/merge the caret path (caret wins)
+if path.count >= 2: focus = .follow, follow[id] = smoothPath(path)
+else: focus = .fixed(centre)
+```
+
+- `smoothPath` already exists (30 Hz, hold-then-jump across pauses,
+  `zeroPhaseSmooth(omega: 9)`). Reuse it.
+- For clicks, include the click point itself at the click time so the camera
+  starts on the target even if the pointer moved before the first move event.
+- For hover, the path is a single point → `.fixed`.
+
+`CameraSolver.needsCursor` already becomes true for `.follow`; the global
+cursor track is the fallback when a scene has no path.
+
+### 2.6 Grouping / scene lifetime
+
+- `gap = max(p.zoomOutGap, hold + 0.5)` (unchanged).
+- A strong click/typing intent splits if the target moves more than
+  `0.55 * halfView` (was 0.12). This keeps `distinctTargets...` at 500 px,
+  1 s apart → 2 scenes.
+- Hover and cursor motion never split.
+- `panThroughGap` controls whether a bridge is allowed:
+  if `next.start - current.end > p.panThroughGap`, zoom out to 0 instead of
+  bridging.
+
+### 2.7 Whooshes
+
+The existing scene grouping in `Director.derive` already makes one whoosh pair
+per scene. With fewer splits (2.6), there are fewer spurious whooshes.
+
+---
+
+## 3. Visual activity — `Sources/LumenDirector/VisualZoom.swift`
+
+- Relax as in §2.2.
+- Add cursor proximity: if the pointer is inside the region (or within
+  0.2 * min(W,H)), lower `count` to 2 and the area floor to 0.0025.
+- Keep the "tiny spinner" rejection: `area >= 0.004 * screen` by default.
+  A 16×16 rect on 1920×1080 is 0.000123 → rejected even with the cursor
+  proximity floor (0.0025).
+- Keep the scroll veto.
+
+---
+
+## 4. UI — `Sources/LumenUI/Inspector.swift`
+
+Camera tab, in order:
+
+- Auto zoom (existing toggle)
+- **Zoom amount** → `camera.baseScale`, range 1.3…3.0 (now functional)
+- **Smoothness** → `camera.leadIn`, range 0.3…1.0 (unchanged, now the lead-in floor)
+- **Motion tracking** → `camera.sensitivity`, range 0…1, format `%`
+- **Look-ahead** → `camera.lookahead`, range 0…0.4, format `ms`
+- Preset (existing)
+- Advanced:
+  - Max zoom → `camera.maxScale`, 1.2…6.0 (now honoured)
+  - Zoom-out → `camera.tail`, 0.3…1.5
+  - Max upscale, real-time upscale, min zoom, zoom-out delay, hold, safe zone,
+    motion blur, follow delay, focus X/Y, focus debug (existing)
+
+Add a one-line readout under the sliders? No: DESIGN.md forbids help text.
+The labels are enough.
+
+---
+
+## 5. Capture — `Sources/LumenCapture/Input.swift`
+
+### 5.1 Publish the last good caret
+
+- Add `lastGood: (frame: AXFrame, at: Double, context: String)?` to
+  `FocusState` (the existing `lastGood` already has this shape; reuse it).
+- In `finishFocusQuery`, when `probe == nil`:
+  - read the current focused context key (`focusedContextKey(system)`);
+  - if it equals `state.lastContext` and `lastGood` is within **1.5 s**,
+    publish `lastGood.frame` at `flight.index` with its original
+    `anchor.sampledAt` (so the planner can tell it is held, not fresh).
+- The planner's provenance check (§2.2) treats
+  `anchor.sampledAt < event.t - 0.35` as a held sample, which is exactly what
+  it is.
+
+### 5.2 Lower focus latency
+
+- `debugFocusDelay` default `0.025 → 0.004`.
+- Keep one in flight (the AX server is serial); the latest-wins queue already
+  prevents a slow query from blocking newer keys.
+
+### 5.3 `typingBursts()` (Core.swift)
+
+- Exclude option-arrow / navigation keycodes: 123 (left), 124 (right),
+  125 (down), 126 (up) when `flags & 0x08 != 0` (option).
+- Keep the existing exclusions.
+
+---
+
+## 6. Upscale — `Sources/LumenRender/Upscaler.swift`, `FXModels.swift`
+
+- `UpscaleParams.maxFactor: 8 → 10`.
+- `quantize(..., grid: 64 → 32)`; margin `8 → 12`.
+- Keep the chain and the blend; at 32 px the cache key changes twice as often,
+  but the crop only grows, so the sampled content stays correct.
+
+---
+
+## 7. Tests
+
+### 7.1 Update the two stale focus tests (strengthen, don't weaken)
+
+`AutoZoomRegressionTests`:
+- `clickFocusIgnoresLargePopupAXFrameCenter`
+- `oversizedPopupDoesNotForceCursorFollow`
+
+New assertion: the segment focus is `.fixed`, and the **evaluated camera at
+3.0 s** contains the click within 6 px (same bar as
+`verifiedButtonCentersLandWithinTwoSourcePixelsAtNinePositions`). This proves
+the popup centre was not used, which is the test's intent.
+
+### 7.2 New file `Tests/LumenTests/CoreZoomIntentTests.swift`
+
+1. `zoomAmountSliderChangesAutoScale` — same click, `baseScale` 1.4 vs 2.6 →
+   different `zoom[0].scale`.
+2. `maxZoomSliderIsRespected` — tiny AX target, `maxScale = 1.5` →
+   `zoom[0].scale <= 1.5`.
+3. `clickZoomCanReachSixX` — tiny AX target, `maxScale = 6`, `baseScale = 3` →
+   `zoom[0].scale > 3`.
+4. `typingUsesSmallestAXField` — two AX frames (window + field), caret inside
+   the field → focus is inside the field, not the window.
+5. `typingWithoutAXUsesTypingTrace` — no AX, one trace → one zoom whose focus
+   is inside the trace's line.
+6. `hoverDwellOpensAMildZoom` — 1.2 s dwell, `sensitivity = 1` → one zoom;
+   `sensitivity = 0` → none.
+7. `hoverDoesNotStealClickFocus` — click at (900,440), then a dwell at
+   (1050,550) 1.4 s later → one scene, evaluated centre stays on the click.
+8. `autoShotFollowsCursorInsideViewport` — click at (500,400), then moves to
+   (700,450) → `zoom[0].focus == .follow` and the evaluated centre moves.
+9. `zoomOutReachesExactlyOne` — redundant with the existing test, kept as a
+   named guard.
+10. `upscaleFactorTenIsValid` — `Upscaler.factor(forMagnification: 9.5,
+    maxFactor: 10) == 10`.
+11. `visualZoomNearCursorUsesLowerCoverage` — two points, coverage 0.0015,
+    cursor inside → one visual zoom.
+12. `typingNearRecordingEndIsNotDropped` — burst ending at `duration - 0.3` →
+    a zoom exists.
+
+### 7.3 Run
+
+```
+swift build
+swift test --filter "ZoomPrecisionTests"
+swift test --filter "MotionTraceTests"
+swift test --filter "AutoZoomRegressionTests"
+swift test --filter "MotionAccuracyTests"
+swift test --filter "ZoomEasingTests"
+swift test --filter "CoreZoomIntentTests"
+swift test --filter "ZoomTypingVerifyTests"
+swift test --filter "TypingTraceTests"
+swift test --filter "UpscalerTests"
+```
+
+Then the full suite once (`swift test --no-parallel`) because the camera is a
+shared dependency of render/export tests.
+
+---
+
+## 8. Risks and mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Finite camera breaks `motionTracesAreSmooth` (HF energy) | Quintic rest-to-rest has bounded jerk; verify with the existing DFT test before moving on. |
+| Follow paths make the camera chase the cursor across the screen | Only include samples inside `0.65 * view` of the scene centre; the dead zone and `centredPlay` absorb jitter. |
+| Relaxing visual zoom re-enables spinner zooms | Keep the area floor at 0.004 (0.0025 with the cursor inside); the 16×16 spinner is 0.000123. |
+| Publishing a held caret misattributes a different field | Require the current AX context to equal the cached context; otherwise publish nothing. |
+| `baseScale` > `maxScale` | `hi = max(maxScale, baseScale * 1.2)` so the slider is never silently capped. |
+| 480 Hz track doubles bake time | 480 Hz over a 10 min recording is 288k samples × 10 arrays; still small. Measure with the existing `longCapture` test. |
+| Existing tests encode the old scale clamps | Update only the assertions that check the *mechanism* (segment focus) to check the *guarantee* (evaluated camera). No test is deleted. |
+
+---
+
+## 9. What is explicitly not changing
+
+- The capture pipeline, audio, export, captions, layouts, cursor rendering,
+  masks, privacy, and the renderer's shader stack.
+- The public `Timeline` / `ZoomSegment` / `CameraTrack` data shapes.
+- The rule that manual zooms survive every derive.
+- The rule that a deleted auto zoom stays deleted (`suppressedAuto`).
+- Recordful's motion model: its CSS transition is not used.

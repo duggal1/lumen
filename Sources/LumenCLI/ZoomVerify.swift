@@ -91,7 +91,8 @@ struct ZoomVerify: AsyncParsableCommand {
                     try? FrameImage.writePNG(pb, to: URL(fileURLWithPath: "\(dumpDir)/export-\(String(format: "%.2f", c.t)).png"))
                 }
             }
-            let idx = min(Int(ot * gridRate), (cam?.lz.count ?? 1) - 1)
+            let rate = cam?.rate ?? gridRate
+            let idx = min(Int(ot * rate), (cam?.lz.count ?? 1) - 1)
             let scale = exp(Double(cam?.lz[max(idx, 0)] ?? 0))
             let center = SIMD2(Double(cam?.nx[max(idx, 0)] ?? 0.5) * srcSize.x, Double(cam?.ny[max(idx, 0)] ?? 0.5) * srcSize.y)
             let tr = ZoomTransform(canvas: exportSize, source: srcSize, style: tl.style, cameraCenter: center, scale: scale)
@@ -127,7 +128,7 @@ struct ZoomVerify: AsyncParsableCommand {
         var maxLzPre = 0.0
         if let cam {
             let upto = max(0.3, firstClick - 1.0)
-            let n = min(Int(upto * gridRate), cam.lz.count)
+            let n = min(Int(upto * cam.rate), cam.lz.count)
             if n > 1 { maxLzPre = cam.lz[..<n].map { Double($0.magnitude) }.max() ?? 0 }
         }
 
@@ -149,7 +150,8 @@ struct ZoomVerify: AsyncParsableCommand {
                 } else {
                     expSrc = SIMD2(srcSize.x / 2, 120)   // omnibox / input fallback
                 }
-                let idx = min(Int(ot * gridRate), (cam?.lz.count ?? 1) - 1)
+            let rate = cam?.rate ?? gridRate
+            let idx = min(Int(ot * rate), (cam?.lz.count ?? 1) - 1)
                 let scale = exp(Double(cam?.lz[max(idx, 0)] ?? 0))
                 let center = SIMD2(Double(cam?.nx[max(idx, 0)] ?? 0.5) * srcSize.x, Double(cam?.ny[max(idx, 0)] ?? 0.5) * srcSize.y)
                 let tr = ZoomTransform(canvas: exportSize, source: srcSize, style: tl.style, cameraCenter: center, scale: scale)
@@ -200,7 +202,7 @@ struct ZoomVerify: AsyncParsableCommand {
         // ---- A10: camera smoothness at gridRate from derived.camera ----
         var smoothLine = "A10: no camera"
         if let cam, cam.lz.count > 2 {
-            let rate = gridRate
+            let rate = cam.rate
             func maxDelta(_ a: [Float]) -> Double {
                 var m = 0.0
                 for i in 1..<a.count { m = max(m, abs(Double(a[i]) - Double(a[i - 1]))) }

@@ -551,16 +551,7 @@ struct Inspector: View {
             }.card(padding: 16)
             VStack(spacing: 0) {
                 ToggleRow(label: "Hide when idle", on: Binding(get: { m.timeline.cursor.idleHide != nil }, set: { v in m.edit { $0.cursor.idleHide = v ? 2.0 : nil } }))
-                Row(label: "Click sound") {
-                    HStack(spacing: 4) {
-                        LDropdown(sel: Binding(get: { m.timeline.audio.clickTone }, set: { sound in
-                            m.edit { $0.audio.clickTone = sound; $0.audio.clickSounds = true; $0.audio.soundEffectsEnabled = true }
-                            m.previewClick()
-                        }), options: ClickSound.allCases.map { ($0, $0.rawValue.capitalized, "speaker.wave.2") })
-                        .frame(width: 110)
-                        LIconButton(icon: "play.fill", label: "Preview click sound") { m.previewClick() }
-                    }
-                }
+                ClickSoundGrid(selected: m.timeline.audio.clickTone) { m.chooseClick($0) }
                 ToggleRow(label: "Click ring", on: Binding(get: { m.timeline.cursor.clickRing != nil }, set: { v in m.edit { $0.cursor.clickRing = v ? 0.45 : nil } }))
                 Row(label: "Click effect") {
                     LDropdown(sel: m.bind(\.cursor.clickEffect),
@@ -593,6 +584,10 @@ struct Inspector: View {
                           range: 1.3...3.0, fmt: { String(format: "%.1f×", $0) })
                 SliderRow(label: "Smoothness", v: m.bind(\.camera.leadIn), range: 0.3...1.0,
                           fmt: { "\(Int($0 * 1000)) ms" })
+                SliderRow(label: "Motion tracking", v: m.bind(\.camera.sensitivity), range: 0...1,
+                          fmt: { "\(Int($0 * 100))%" })
+                SliderRow(label: "Look-ahead", v: m.bind(\.camera.lookahead), range: 0...0.4,
+                          fmt: { "\(Int($0 * 1000)) ms" })
                 Row(label: "Preset") { LDropdown(sel: Binding(get: { m.timeline.camera.preset }, set: { v in m.edit { $0.camera.apply(preset: v) } }), options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "plus.magnifyingglass") }).frame(width: 130) }
             }.card(padding: 16)
             DisclosureGroup("Advanced") {
@@ -603,6 +598,8 @@ struct Inspector: View {
                     ToggleRow(label: "Real-time upscale", on: m.bind(\.camera.upscaleEnabled))
                     SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.0...2.5, fmt: { String(format: "%.2f×", $0) })
                     SliderRow(label: "Zoom-out delay", v: m.bind(\.camera.zoomOutGap), range: 2.0...6.0,
+                              fmt: { String(format: "%.1f s", $0) })
+                    SliderRow(label: "Zoom-out", v: m.bind(\.camera.tail), range: 0.3...1.5,
                               fmt: { String(format: "%.1f s", $0) })
                     SliderRow(label: "Hold", v: m.bind(\.camera.hold), range: 0.5...2.5,
                               fmt: { String(format: "%.1f s", $0) })

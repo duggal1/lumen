@@ -181,8 +181,13 @@ public extension Array where Element == InputEvent {
     /// Printable key-downs, each within 0.9 s of the previous, no cmd/ctrl.
     /// One definition shared by the planner and the typing analyzer.
     func typingBursts() -> [(t0: Double, t1: Double)] {
-        let k = filter { $0.kind == .keyDown && $0.flags & 0x14 == 0 && $0.keyCode < 53 && ![36, 48, 51].contains($0.keyCode) }
-            .sorted { $0.t < $1.t }
+        let k = filter { e -> Bool in
+            guard e.kind == .keyDown, e.flags & 0x14 == 0, e.keyCode < 53, ![36, 48, 51].contains(e.keyCode) else { return false }
+            // Option-arrow / option-option navigation is not typing.
+            if e.flags & 0x08 != 0, [123, 124, 125, 126].contains(e.keyCode) { return false }
+            return true
+        }
+        .sorted { $0.t < $1.t }
         var out: [(t0: Double, t1: Double)] = [], s = 0
         for i in k.indices where i == k.count - 1 || k[i + 1].t - k[i].t > 0.9 {
             out.append((k[s].t, k[i].t))

@@ -39,8 +39,9 @@ enum Tok {
     static let text = Color(light: 0x0A0A0A, dark: 0xFAFAFA)
     static let text2 = Color(light: 0x666666, dark: 0xA3A3A3)
     static let textAction = Color(light: 0x2E2E2E, dark: 0xE5E5E5)
-    // action (orange): filled Record + Export only. accent (violet): selection,
-    // zoom blocks, active transcript row, focus rings, tags. All else neutral.
+    static let floatingText = Color(light: 0x000000, dark: 0x000000)
+    // Orange is reserved for recording activity and export actions. All
+    // selection surfaces remain neutral and translucent.
     static let action = Color(light: 0xF05A00, dark: 0xFF6A00)
     static let accent = Color(light: 0xF05A00, dark: 0xFF6A00)
     static let selection = Color(light: 0x7C3AED, dark: 0x8B5CF6)
@@ -68,6 +69,11 @@ enum Tok {
     // alpha washes, scrims (translucent backdrops only)
     static let wash = Color(washLight: 0.05, washDark: 0.07)
     static let washStrong = Color(washLight: 0.09, washDark: 0.12)
+    static let floatingWashOpacity = 0.48
+    static let floatingRest = surface.opacity(0.08)
+    static let floatingHover = surface.opacity(0.16)
+    static let floatingSelected = surface.opacity(0.25)
+    static let floatingSelectedHover = surface.opacity(0.33)
     static let modalScrim = Color(scrim: 0.28, dark: 0.55)
     static let scrim = Color(hex: 0x000000).opacity(0.18)
 }
@@ -132,6 +138,8 @@ enum Motion {
     static let menuOpen = Animation.smooth(duration: 0.20)
     static let menuClose = Animation.easeOut(duration: 0.12)
     static let menuHighlight = Animation.smooth(duration: 0.18)
+    static let floatingHighlight = Animation.easeInOut(duration: 0.28)
+    static let floatingTransition = Animation.easeInOut(duration: 0.32)
     static let toggle = Animation.snappy(duration: 0.22)
     static let settle = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.28)
 }

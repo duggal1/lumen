@@ -1012,6 +1012,7 @@ enum TimelineSelection: Equatable {
         else if timeline.overlays.highlights.contains(where: { $0.id == id }) { dispatch(.deleteHighlight(id)) }
         else if timeline.overlays.loupes.contains(where: { $0.id == id }) { dispatch(.deleteLoupe(id)) }
         else if timeline.clips.contains(where: { $0.id == id }) { dispatch(.rippleDeleteClip(id: id)) }
+        else if timeline.audio.lanes.contains(where: { $0.id == id && $0.role == .music }) { removeMusicLane(id) }
         else { return }
         selection = nil
     }
@@ -1059,9 +1060,39 @@ enum TimelineSelection: Equatable {
         player.previewClick(plan)
     }
 
+    /// Clicking a sound tile both selects that click and auditions it, so the
+    /// grid never needs a separate preview button or a dropdown.
+    func chooseClick(_ sound: ClickSound) {
+        edit { $0.audio.clickTone = sound; $0.audio.clickSounds = true; $0.audio.soundEffectsEnabled = true }
+        var plan = timeline.audio
+        plan.soundEffectsEnabled = true; plan.clickSounds = true
+        player.previewClick(plan)
+    }
+
     func importMusic() {
         let p = NSOpenPanel(); p.allowedContentTypes = [.audio]; p.allowsMultipleSelection = false
         if p.runModal() == .OK, let u = p.url { edit { $0.audio.musicPath = u.path } }
+    }
+
+    /// Adds a music track as a lane at the playhead so it appears on the music
+    /// timeline lane. `nil` gain uses a bed level under the voice.
+    func addMusicLane(path: String, at start: Double? = nil) {
+        let place = max(0, start ?? playhead)
+        edit { $0.audio.lanes.append(AudioLane(role: .music, path: path, placement: place, gainDb: -18)) }
+    }
+
+    func updateMusicLane(_ id: UUID, placement: Double? = nil, trimStart: Double? = nil, trimDuration: Double? = nil) {
+        edit(coalesce: true) { tl in
+            guard let i = tl.audio.lanes.firstIndex(where: { $0.id == id && $0.role == .music }) else { return }
+            if let placement { tl.audio.lanes[i].placement = max(0, placement) }
+            if let trimStart { tl.audio.lanes[i].trimStart = max(0, trimStart) }
+            if let trimDuration { tl.audio.lanes[i].trimDuration = max(0.05, trimDuration) }
+        }
+    }
+
+    func removeMusicLane(_ id: UUID) {
+        edit { tl in tl.audio.lanes.removeAll { $0.id == id && $0.role == .music } }
+        if selection == id { selection = nil }
     }
 
     /// External voice-over sits on an independent OUTPUT-time lane so translated

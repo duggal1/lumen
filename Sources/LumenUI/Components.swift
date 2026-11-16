@@ -87,7 +87,11 @@ struct LToggle: View {
                 Capsule().fill(on ? Tok.accent : Tok.controlPressed)
                 Circle().fill(.white).frame(width: 20, height: 20).padding(2)
             }.frame(width: 40, height: 24).animation(reduceMotion ? nil : Motion.toggle, value: on)
-        }.buttonStyle(.plain).pointerStyle(.link).accessibilityLabel(label).accessibilityValue(on ? "On" : "Off")
+        }
+        .buttonStyle(.plain)
+        .floatingHandCursor()
+        .accessibilityLabel(label)
+        .accessibilityValue(on ? "On" : "Off")
     }
 }
 

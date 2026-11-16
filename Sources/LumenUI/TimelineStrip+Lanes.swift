@@ -3,6 +3,7 @@ import AppKit
 import LumenCore
 import LumenProject
 import LumenDirector
+import LumenAudio
 
 extension TimelineStrip {
     // MARK: - Strip base + run layout
@@ -374,5 +375,56 @@ extension TimelineStrip {
         }
         .frame(height: TimelineStrip.Lanes.lane)
         .accessibilityHidden(true)
+    }
+
+    // MARK: - Music: one violet block per music lane. Width is its real
+    // placement + duration on the output timeline, so the bed is visible, not
+    // described. Body drag moves it; edges trim it.
+
+    func musicDuration(for lane: AudioLane) -> Double {
+        if let d = lane.trimDuration, d > 0 { return d }
+        let full = musicDurations[lane.id] ?? model.timeline.compositionDuration
+        return max(full - (lane.trimStart ?? 0), 0.05)
+    }
+
+    @ViewBuilder func musicLane(_ vp: Viewport) -> some View {
+        let lanes = musicLanes()
+        Canvas { c, size in
+            let lat = vp.lattice
+            var runs: [Run] = []
+            for lane in lanes {
+                let start = lane.placement, end = start + musicDuration(for: lane)
+                let sel = lane.id == model.selection, hov = lane.id == hoveredMusic
+                let tone: Color = sel ? MusicInk.laneDeep : (hov ? MusicInk.laneHover : MusicInk.lane)
+                let name = lane.path.map { Self.musicName($0) } ?? "Music"
+                if let run = layoutRun(lat, c0: vp.colFloor(start), c1: vp.colCeil(end),
+                                       bodyH: 18, capH: 22, capCols: 1, body: tone, cap: tone,
+                                       labels: [name], truncate: true, selected: sel) {
+                    runs.append(run)
+                }
+            }
+            drawBase(c, size, lat, dust: !lanes.isEmpty, holes: runs.map(\.hole))
+            if lanes.isEmpty { drawEmpty(c, "No music. Add a track in the Studio tab.") }
+            for r in runs where !r.selected { drawRun(c, lat, r) }
+            for r in runs where r.selected { drawRun(c, lat, r) }
+        }
+        .frame(height: TimelineStrip.Lanes.lane)
+        .accessibilityLabel(musicAccessibility())
+    }
+
+    func musicLanes() -> [AudioLane] { model.timeline.audio.lanes.filter { $0.role == .music } }
+
+    static func musicName(_ path: String) -> String {
+        if let track = BundledAudioAssets.music.first(where: { $0.url.path == path }) { return track.title }
+        let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        return stem.isEmpty ? "Music" : stem
+    }
+
+    func musicAccessibility() -> String {
+        let items = musicLanes().map { lane in
+            String(format: "%@ at %.1f seconds for %.1f seconds",
+                   Self.musicName(lane.path ?? ""), lane.placement, musicDuration(for: lane))
+        }
+        return items.isEmpty ? "No music" : items.joined(separator: ". ")
     }
 }

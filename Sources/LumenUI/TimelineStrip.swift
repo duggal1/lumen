@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 import LumenCore
 import LumenProject
 import LumenDirector
@@ -17,6 +18,9 @@ struct TimelineStrip: View {
     @State var hoveredZoom: UUID?
     @State var hoveredClip: UUID?
     @State var hoveredCut: UUID?
+    @State var hoveredMusic: UUID?
+    @State var musicDurations: [UUID: Double] = [:]
+    @State var musicDragOrigin: AudioLane?
     @State var hoveredCol: Int?   // event column under the pointer
     @State var scrubCol: Int?     // ghost line column
     @State var zoom: CGFloat = 1  // 1 = the default readable window
@@ -24,10 +28,12 @@ struct TimelineStrip: View {
     @State var panning = false
 
     struct Drag {
-        enum Kind { case seek, move, left, right, reorder, tapMove, pan, pendingStart, pendingEnd, pendingBody, cutStart, cutEnd, clipStart, clipEnd, seam }
+        enum Kind { case seek, move, left, right, reorder, tapMove, pan, pendingStart, pendingEnd, pendingBody, cutStart, cutEnd, clipStart, clipEnd, seam, musicMove, musicLeft, musicRight }
         var kind: Kind; var id: UUID?; var orig: ZoomSegment?; var origClip: TimelineClip?; var origTap: TapIndicator?
         var t0: Double; var o0: Double = 0
         var pending0: PendingCut?
+
+        var isMusic: Bool { switch kind { case .musicMove, .musicLeft, .musicRight: return true; default: return false } }
     }
     struct Marker { var t: Double; var kind: String; var isTap: Bool }
 
@@ -43,6 +49,10 @@ struct TimelineStrip: View {
         let vp = viewport(width: width)
         return timelineInteraction(width: width, vp: vp)
             .onChange(of: model.playhead) { _, t in follow(t, width: width) }
+            .onChange(of: musicSignature) { _, _ in
+                Task { await loadMusicDurations() }
+            }
+            .task { await loadMusicDurations() }
             .onChange(of: model.timelineFitRequest) { _, _ in
                 zoom = minZoom(width: width)
                 origin = 0
@@ -81,6 +91,7 @@ struct TimelineStrip: View {
                     hoveredCol = nil
                     hoveredClip = nil
                     hoveredCut = nil
+                    hoveredMusic = nil
                     scrubCol = nil
                     NSCursor.arrow.set()
                 }
@@ -101,6 +112,7 @@ struct TimelineStrip: View {
             zoomLane(vp)
             eventsLane(vp)
             audioLane(vp)
+            musicLane(vp)
         }
         .overlay { threadLayer(vp) }
         .overlay { GhostLine(vp: vp, col: drag == nil ? scrubCol : nil) }
@@ -170,6 +182,22 @@ struct TimelineStrip: View {
     }
 
     // MARK: - Shared model reads
+
+    var musicSignature: String {
+        musicLanes().map { $0.id.uuidString + ":" + ($0.path ?? "") }.joined(separator: "|")
+    }
+
+    /// Cache each music file's real duration so a band's width equals its
+    /// audible length. Off the main thread; keyed by lane id.
+    func loadMusicDurations() async {
+        let lanes = musicLanes().filter { musicDurations[$0.id] == nil && !($0.path ?? "").isEmpty }
+        guard !lanes.isEmpty else { return }
+        let missing: [(UUID, String)] = lanes.compactMap { lane in lane.path.map { (lane.id, $0) } }
+        for (id, path) in missing {
+            let seconds = (try? await AVURLAsset(url: URL(fileURLWithPath: path)).load(.duration))?.seconds ?? 0
+            if seconds.isFinite, seconds > 0 { musicDurations[id] = seconds }
+        }
+    }
 
     func outEvents() -> [Marker] {
         let tl = model.timeline, tm = tl.timeMap

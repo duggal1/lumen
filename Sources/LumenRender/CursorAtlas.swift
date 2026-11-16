@@ -254,6 +254,9 @@ public final class CursorAtlas {
         case .wood: rgb = (0.604, 0.369, 0.173)
         case .chrome: rgb = (0.420, 0.451, 0.502)
         case .grass: rgb = (0.243, 0.620, 0.180)
+        case .ember: rgb = (0.937, 0.267, 0.110)
+        case .mono: rgb = (0.098, 0.098, 0.098)
+        case .outline: rgb = (0.098, 0.098, 0.098)
         default: rgb = (0.11, 0.098, 0.09)
         }
         let ink = CGColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
@@ -451,13 +454,62 @@ public final class CursorAtlas {
             }
             return [16, 16]
         }
+        if pack == .pixel {
+            // A true 1-bit arrow on a 16-unit grid: square cells, no curve,
+            // no anti-alias. Drawn at 2 pt per cell with a paper rim so it
+            // stays legible on any wallpaper.
+            let cell: CGFloat = 2
+            func px(_ x: Int, _ y: Int) -> CGRect { CGRect(x: 6 + CGFloat(x) * cell, y: 6 + CGFloat(y) * cell, width: cell, height: cell) }
+            let rows = [
+                "X.............",
+                "XX............",
+                "X.X...........",
+                "X..X..........",
+                "X...X.........",
+                "X....X........",
+                "X.X..X........",
+                "X..X.X........",
+                "X...XX........",
+                "X....X........",
+                "X.....X.......",
+                "X......X......",
+                "X.......X.....",
+                "X........X....",
+                "X.........X...",
+                "X..........X..",
+            ]
+            shadowed {
+                c.setFillColor(paper)
+                for (y, row) in rows.enumerated() {
+                    for (x, ch) in row.enumerated() where ch == "X" {
+                        c.fill(px(x, y).insetBy(dx: -0.6, dy: -0.6))
+                    }
+                }
+            }
+            c.setFillColor(ink)
+            for (y, row) in rows.enumerated() {
+                for (x, ch) in row.enumerated() where ch == "X" { c.fill(px(x, y)) }
+            }
+            return [6 + cell / 2, 6 + cell / 2]
+        }
+        if pack == .outline {
+            // A hollow arrow: a single 2 pt stroke, no fill. The paper under-
+            // stroke keeps it readable over dark frames.
+            let p = SVGPath.parse(arrowD)
+            var t = CGAffineTransform(translationX: 3.5 - 3.2 * 1.4, y: 3.5 - 3.2 * 1.4).scaledBy(x: 1.4, y: 1.4)
+            guard let q = p.copy(using: &t) else { return [3.5, 3.5] }
+            c.setLineJoin(.round); c.setLineCap(.round)
+            c.setStrokeColor(paper); c.setLineWidth(4.0); c.addPath(q); c.strokePath()
+            c.setStrokeColor(ink); c.setLineWidth(1.8); c.addPath(q); c.strokePath()
+            return [3.5, 3.5]
+        }
         return [16, 16]
     }
 }
 
 extension CursorPack {
     /// Packs that keep the recorded pointer's identity, so every stock shape gets
-    /// its own artwork. The stylized packs (dot, ring, holiday) are an explicit
-    /// user override and keep one glyph for every shape.
-    var preservesShape: Bool { self != .dot && self != .ring && self != .holiday }
+    /// its own artwork. The stylized packs (dot, ring, holiday, pixel, outline)
+    /// are an explicit user override and keep one glyph for every shape.
+    var preservesShape: Bool { self != .dot && self != .ring && self != .holiday && self != .pixel && self != .outline }
 }

@@ -33,7 +33,7 @@ public final class ContentPass {
         // texture is reused while the camera drifts.
         let region = Upscaler.quantize(
             Upscaler.region(center: SIMD2(Double(c.x), Double(c.y)), view: view,
-                            source: SIMD2(Double(L.srcSize.x), Double(L.srcSize.y)), margin: 8 + extraMargin),
+                            source: SIMD2(Double(L.srcSize.x), Double(L.srcSize.y)), margin: 12 + extraMargin),
             source: SIMD2(Double(L.srcSize.x), Double(L.srcSize.y)))
         let f = Upscaler.factor(forMagnification: m, maxFactor: p.maxFactor)
         return (try up.upscale(cb, source: source, region: region, factor: f, params: p, frameID: sourceID), blend)

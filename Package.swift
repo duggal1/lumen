@@ -45,5 +45,6 @@ let package = Package(
             "LumenControl", "LumenAnalysis",
             .product(name: "ArgumentParser", package: "swift-argument-parser")]),
         .executableTarget(name: "LumenRecordDemo", dependencies: ["LumenCapture"]),
+        .executableTarget(name: "LumenSeed", dependencies: ["LumenProject", "LumenCore"]),
     ]
 )

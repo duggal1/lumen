@@ -162,11 +162,12 @@ extension TimelineStrip {
         var timeRange: ClosedRange<Double> { origin...(origin + visible) }
     }
 
-    /// Ruler 24, then four lanes of 40 (strip 36, 2 pt air above and below) = 184.
+    /// Ruler 24, then five lanes of 40 (strip 36, 2 pt air above and below).
+    /// clip → zoom → events → audio (voice) → music (violet). = 224.
     enum Lanes {
         static let ruler: CGFloat = 24, lane: CGFloat = 40
-        static let clip: CGFloat = 24, zoom: CGFloat = 64, events: CGFloat = 104, audio: CGFloat = 144
-        static let total: CGFloat = 184
+        static let clip: CGFloat = 24, zoom: CGFloat = 64, events: CGFloat = 104, audio: CGFloat = 144, music: CGFloat = 184
+        static let total: CGFloat = 224
         static let mid: CGFloat = 20   // strip centre inside a lane
     }
 

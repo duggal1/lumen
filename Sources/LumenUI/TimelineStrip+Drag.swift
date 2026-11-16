@@ -12,7 +12,7 @@ extension TimelineStrip {
         let lat = vp.lattice
         let sc = lat.col(atX: p.x)
         if scrubCol != sc { scrubCol = sc }
-        var clip: UUID? = nil, zoomID: UUID? = nil, col: Int? = nil, cutID: UUID? = nil
+        var clip: UUID? = nil, zoomID: UUID? = nil, col: Int? = nil, cutID: UUID? = nil, musicID: UUID? = nil
         var cursor = NSCursor.arrow
         // Pending handles win.
         if let pc = model.pendingCut {
@@ -52,8 +52,18 @@ extension TimelineStrip {
                 if d < bestD { bestD = d; col = vp.col(m.t) }
             }
             if col != nil { cursor = .pointingHand }
+        } else if p.y >= TimelineStrip.Lanes.music && p.y < TimelineStrip.Lanes.music + TimelineStrip.Lanes.lane {
+            for lane in musicLanes().reversed() {
+                let a = vp.x(lane.placement), b = vp.x(lane.placement + musicDuration(for: lane))
+                if p.x >= a - 7 && p.x <= b + 7 {
+                    musicID = lane.id
+                    if abs(p.x - a) < 7 || abs(p.x - b) < 7 { cursor = .resizeLeftRight }
+                    break
+                }
+            }
         }
         if hoveredClip != clip { hoveredClip = clip }
+        if hoveredMusic != musicID { hoveredMusic = musicID }
         if hoveredZoom != zoomID { hoveredZoom = zoomID }
         if hoveredCut != cutID { hoveredCut = cutID }
         if hoveredCol != col { hoveredCol = col }
@@ -114,6 +124,15 @@ extension TimelineStrip {
                 if abs(p.x - tx) < 8 { return Drag(kind: .tapMove, id: tap.id, orig: nil, origClip: nil, origTap: tap, t0: vp.t(atX: p.x)) }
             }
         }
+        if p.y >= TimelineStrip.Lanes.music && p.y < TimelineStrip.Lanes.music + TimelineStrip.Lanes.lane {
+            for lane in musicLanes().reversed() {
+                let a = vp.x(lane.placement), b = vp.x(lane.placement + musicDuration(for: lane))
+                if p.x >= a - 7 && p.x <= b + 7 {
+                    let kind: Drag.Kind = abs(p.x - a) < 7 ? .musicLeft : (abs(p.x - b) < 7 ? .musicRight : .musicMove)
+                    return Drag(kind: kind, id: lane.id, orig: nil, origClip: nil, origTap: nil, t0: vp.t(atX: p.x))
+                }
+            }
+        }
         return Drag(kind: .seek, id: nil, orig: nil, origClip: nil, origTap: nil, t0: 0)
     }
 
@@ -145,6 +164,7 @@ extension TimelineStrip {
         if drag == nil {
             drag = hit(v.startLocation, w)
             model.selection = drag?.id
+            if let d = drag, d.isMusic { musicDragOrigin = musicLanes().first { $0.id == d.id } }
             // Clicking a marker seeks to it exactly.
             if drag?.kind == .seek, v.startLocation.y >= TimelineStrip.Lanes.events, v.startLocation.y < TimelineStrip.Lanes.audio {
                 var bestT: Double? = nil, bestD: CGFloat = 6
@@ -219,6 +239,27 @@ extension TimelineStrip {
             guard let id = d.id, let tap = d.origTap else { return }
             let tm = model.timeline.timeMap
             model.moveTap(id: id, x: tap.x, y: tap.y, atSource: tm.source(atOutput: t))
+        case .musicMove, .musicLeft, .musicRight:
+            guard let id = d.id, let orig = musicDragOrigin else { return }
+            let len = max(musicDuration(for: orig), 0.05)
+            let full = musicDurations[id] ?? model.timeline.compositionDuration
+            let ts = orig.trimStart ?? 0
+            switch d.kind {
+            case .musicMove:
+                let newPlace = min(max(orig.placement + (t - d.t0), 0), max(model.timeline.compositionDuration - len, 0))
+                model.updateMusicLane(id, placement: newPlace)
+            case .musicRight:
+                let maxLen = max(full - ts, 0.3)
+                let newLen = min(max(snapTime(t, dur: dur, vp: vp) - orig.placement, 0.3), maxLen)
+                model.updateMusicLane(id, trimDuration: newLen)
+            case .musicLeft:
+                let rightEdge = orig.placement + len
+                let newPlace = min(max(snapTime(t, dur: dur, vp: vp), 0), rightEdge - 0.3)
+                let shift = newPlace - orig.placement
+                model.updateMusicLane(id, placement: newPlace, trimStart: max(0, ts + shift), trimDuration: rightEdge - newPlace)
+            default:
+                break
+            }
         }
     }
 

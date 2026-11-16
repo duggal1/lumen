@@ -176,26 +176,45 @@ public final class CAFWriter: @unchecked Sendable {
 
     private static func inputLevel(_ buffer: AVAudioPCMBuffer) -> Float {
         let count = Int(buffer.frameLength)
-        guard count > 0 else { return 0 }
-        let stride = buffer.format.isInterleaved ? Int(buffer.format.channelCount) : 1
+        let channels = Int(buffer.format.channelCount)
+        guard count > 0, channels > 0 else { return 0 }
+        let interleaved = buffer.format.isInterleaved
+        let stride = interleaved ? channels : 1
         var sum = 0.0
+        var sampleCount = 0
         switch buffer.format.commonFormat {
         case .pcmFormatFloat32:
-            guard let samples = buffer.floatChannelData?[0] else { return 0 }
-            for i in 0..<count {
-                let value = Double(samples[i * stride])
-                if value.isFinite { sum += value * value }
+            guard let data = buffer.floatChannelData else { return 0 }
+            for channel in 0..<channels {
+                let samples = data[interleaved ? 0 : channel]
+                for frame in 0..<count {
+                    let value = Double(samples[frame * stride + (interleaved ? channel : 0)])
+                    if value.isFinite { sum += value * value; sampleCount += 1 }
+                }
             }
         case .pcmFormatInt16:
-            guard let samples = buffer.int16ChannelData?[0] else { return 0 }
-            for i in 0..<count { let value = Double(samples[i * stride]) / 32768; sum += value * value }
+            guard let data = buffer.int16ChannelData else { return 0 }
+            for channel in 0..<channels {
+                let samples = data[interleaved ? 0 : channel]
+                for frame in 0..<count {
+                    let value = Double(samples[frame * stride + (interleaved ? channel : 0)]) / 32768
+                    sum += value * value; sampleCount += 1
+                }
+            }
         case .pcmFormatInt32:
-            guard let samples = buffer.int32ChannelData?[0] else { return 0 }
-            for i in 0..<count { let value = Double(samples[i * stride]) / 2147483648; sum += value * value }
+            guard let data = buffer.int32ChannelData else { return 0 }
+            for channel in 0..<channels {
+                let samples = data[interleaved ? 0 : channel]
+                for frame in 0..<count {
+                    let value = Double(samples[frame * stride + (interleaved ? channel : 0)]) / 2147483648
+                    sum += value * value; sampleCount += 1
+                }
+            }
         default:
             return 0
         }
-        return Float((sum / Double(count)).squareRoot())
+        guard sampleCount > 0 else { return 0 }
+        return Float((sum / Double(sampleCount)).squareRoot())
     }
 
     /// Writes `buf` to `file`, converting format if needed with the carried converter.
@@ -328,6 +347,14 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private var vin: AVAssetWriterInput?
     private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
     private var started = false
+    // Window capture: the chrome band above the content is cropped off every
+    // frame, and re-measured while recording so a toolbar appearing later is
+    // cropped too. `cropper == nil` means the whole frame is content.
+    private var cropper: FrameCropper?
+    private struct WindowTrack: Sendable { var id: CGWindowID; var pid: pid_t; var frame: CGRect }
+    private let windowTrack = OSAllocatedUnfairLock<WindowTrack?>(initialState: nil)
+    private var chromeTimer: DispatchSourceTimer?
+    private let chromeFraction = OSAllocatedUnfairLock<Double>(initialState: 0)
     private var pendingVideo: (buffer: CVPixelBuffer, pts: CMTime)?
     private var meta: FrameMetaWriter?
     private let dropped = OSAllocatedUnfairLock(initialState: 0)
@@ -411,10 +438,20 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
             } else {
                 scale = 1
             }
-            origin = w.frame.origin
-            points = w.frame.size
+            // Content-only capture: measure the title bar and toolbar band once,
+            // then crop it off every frame. Nothing of the window chrome ever
+            // reaches the writer.
+            let chrome = WindowContent.resolve(windowID: wid, processID: w.owningApplication?.processID ?? 0, frame: w.frame)?.topInset ?? 0
+            windowTrack.withLock {
+                $0 = WindowTrack(id: wid, pid: w.owningApplication?.processID ?? 0, frame: w.frame)
+            }
+            chromeFraction.withLock { $0 = w.frame.height > 0 ? chrome / w.frame.height : 0 }
+            if chrome > 0 { cropper = FrameCropper() }
+            let contentHeight = max(w.frame.height - chrome, 1)
+            origin = CGPoint(x: w.frame.minX, y: w.frame.minY + chrome)
+            points = CGSize(width: w.frame.width, height: contentHeight)
             pw = Int((w.frame.width * scale).rounded()) & ~1
-            ph = Int((w.frame.height * scale).rounded()) & ~1
+            ph = Int((contentHeight * scale).rounded()) & ~1
         }
         let fps = min(cfg.fps, 120)
         // Capture resolution: cap native pixels, never above native.
@@ -431,6 +468,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
             ph = maxH & ~1
         }
         sc.width = pw; sc.height = ph
+        cropper?.configure(width: pw, height: ph)
         sc.pixelFormat = kCVPixelFormatType_32BGRA
         sc.colorSpaceName = CGColorSpace.displayP3
         sc.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
@@ -488,12 +526,41 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         stream = s
     }
 
-    public func start() async throws { try await stream?.startCapture() }
+    public func start() async throws {
+        startChromeTracking()
+        try await stream?.startCapture()
+    }
+
+    /// Re-measures the chrome band twice a second while recording. A window can
+    /// gain a toolbar, enter full screen, or be resized; the crop follows.
+    private func startChromeTracking() {
+        guard cropper != nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + 1, repeating: .milliseconds(1200), leeway: .milliseconds(300))
+        timer.setEventHandler { [weak self] in
+            guard let self, let track = self.windowTrack.withLock({ $0 }) else { return }
+            guard let info = CGWindowListCopyWindowInfo([.optionIncludingWindow], track.id) as? [NSDictionary],
+                  let entry = info.first,
+                  let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  frame.height > 8 else { return }
+            let chrome = WindowContent.resolve(windowID: track.id, processID: track.pid, frame: frame)?.topInset ?? 0
+            self.chromeFraction.withLock { $0 = chrome / frame.height }
+            self.windowTrack.withLock { $0?.frame = frame }
+        }
+        timer.resume()
+        chromeTimer = timer
+    }
+
+    private func stopChromeTracking() {
+        chromeTimer?.cancel(); chromeTimer = nil
+    }
 
     /// Correct shutdown order: stop capture, drain the SCK sample queue,
     /// mark the video input finished, then await finishWriting off main.
     /// Signposted so a stop hang is visible in Instruments/Console.
     public func stop() async throws {
+        stopChromeTracking()
         let sp = OSSignposter(logger: Logger(subsystem: "com.lumen.studio", category: "capture"))
         let state = sp.beginInterval("engine.stop")
         defer { sp.endInterval("engine.stop", state) }
@@ -511,6 +578,24 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         if w.status == .failed { throw CaptureError.writer(w.error?.localizedDescription ?? "writer failed") }
     }
 
+    /// Abandons a prepared capture that never produced a recording. The stream
+    /// is stopped if it was started, the writer is cancelled rather than
+    /// finalized, and every open file is closed — the bundle is about to be
+    /// deleted, so no playable output is needed.
+    public func cancel() async {
+        stopChromeTracking()
+        try? await stream?.stopCapture()
+        writer?.cancelWriting()
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            videoQ.async {
+                self.pendingVideo = nil
+                if self.started { self.vin?.markAsFinished() }
+                c.resume()
+            }
+        }
+        meta?.close(); mic?.close(); system?.close()
+    }
+
     public func stream(_ s: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
         guard sb.isValid, !paused.withLock({ $0 }) else { return }
         switch type {
@@ -526,7 +611,11 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let info = arr.first, let raw = info[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete,
               let pb = CMSampleBufferGetImageBuffer(sb), let w = writer, vin != nil, adaptor != nil else { return }
-        updateSourceScale(from: pb)
+        // Window capture: the title bar and toolbar band are cropped away here,
+        // so the writer only ever sees content pixels.
+        let frame = cropped(pb)
+        guard let frame else { return }
+        updateSourceScale(from: frame)
         let pts = sb.presentationTimeStamp
         if !started {
             guard w.startWriting() else { return }
@@ -534,11 +623,25 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
             ptsRange.withLock { $0.first = pts.seconds }
         }
         if pendingVideo != nil { dropped.withLock { $0 += 1 } }
-        pendingVideo = (pb, pts)
+        pendingVideo = (frame, pts)
         drainVideo()
         var rect = CGRect.zero
         if let d = info[.contentRect] as? [String: Any], let r = CGRect(dictionaryRepresentation: d as CFDictionary) { rect = r }
         meta?.write(pts: pts.seconds, status: raw, rect: rect)
+    }
+
+    /// Crops the chrome band off a window frame. Display and region captures
+    /// pass straight through with no copy.
+    private func cropped(_ pb: CVPixelBuffer) -> CVPixelBuffer? {
+        guard let cropper else { return pb }
+        let fraction = chromeFraction.withLock { $0 }
+        guard fraction > 0.0005 else { return pb }
+        guard let result = cropper.crop(pb, topFraction: fraction) else {
+            cropper.logIfNeeded("no output buffer for \(CVPixelBufferGetWidth(pb))x\(CVPixelBufferGetHeight(pb))")
+            dropped.withLock { $0 += 1 }
+            return nil
+        }
+        return result
     }
 
     private func updateSourceScale(from pixelBuffer: CVPixelBuffer) {

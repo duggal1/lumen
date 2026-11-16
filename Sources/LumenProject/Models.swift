@@ -169,7 +169,7 @@ public struct Style: Codable, Equatable, Sendable {
     }
 }
 
-public enum CursorPack: String, Codable, CaseIterable, Sendable { case system, minimal, dot, ring, pro, holiday, lavender, coral, sky, mint, lemon, pink, wood, chrome, grass }
+public enum CursorPack: String, Codable, CaseIterable, Sendable { case system, minimal, dot, ring, pro, holiday, lavender, coral, sky, mint, lemon, pink, wood, chrome, grass, pixel, outline, ember, mono }
 public struct CursorStyle: Codable, Equatable, Sendable {
     public var pack: CursorPack = .system
     public var size: Double = 1.0
