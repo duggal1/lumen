@@ -49,18 +49,22 @@ enum ZoomPlanner {
         var segments: [ZoomSegment] = []
         var follow: [UUID: [FollowPoint]] = [:]
     }
-    enum IntentKind { case click, typing, hover, visual }
+    enum IntentKind { case click, typing, hover, visual, marker }
     struct Intent {
         var kind: IntentKind
         var t: Double, tEnd: Double            // source seconds
         var x: Double, y: Double               // click pixel, or caret at burst start (source px)
         var rect: CGRect? = nil                // click: verified AX element; typing: the field
+        /// Rect to frame as a whole, independent of the scale-only `rect`.
+        /// Set for marker beats and for clicks centred on their control.
+        var frameRect: CGRect? = nil
         var path: [PathPoint] = []             // typing only: smoothed caret path
     }
     private struct Open {
         var start: Double, scale: Double, c: SIMD2<Double>
         var path: [FollowPoint] = []
         var kind: IntentKind = .click
+        var frameRect: CGRect? = nil
     }
     private struct Fix { var t: Double; var p: SIMD2<Double>; var field: CGRect? }
 
@@ -237,12 +241,15 @@ enum ZoomPlanner {
     /// Segments only — the old signature, kept for callers that do not need
     /// the continuous follow paths.
     static func planSegments(events: [InputEvent], ax: [AXFrame], typing: [TypingTrace], activity: [ActivityPoint],
-                             src: SourceInfo, p: CameraParams, tm: TimeMap, avoid: [ClosedRange<Double>]) -> [ZoomSegment] {
-        plan(events: events, ax: ax, typing: typing, activity: activity, src: src, p: p, tm: tm, avoid: avoid).segments
+                             src: SourceInfo, p: CameraParams, tm: TimeMap, avoid: [ClosedRange<Double>],
+                             markers: [DirectorMarker] = []) -> [ZoomSegment] {
+        plan(events: events, ax: ax, typing: typing, activity: activity, src: src, p: p, tm: tm,
+             avoid: avoid, markers: markers).segments
     }
 
     static func plan(events: [InputEvent], ax: [AXFrame], typing: [TypingTrace], activity: [ActivityPoint],
-                     src: SourceInfo, p: CameraParams, tm: TimeMap, avoid: [ClosedRange<Double>]) -> ZoomPlan {
+                     src: SourceInfo, p: CameraParams, tm: TimeMap, avoid: [ClosedRange<Double>],
+                     markers: [DirectorMarker] = []) -> ZoomPlan {
         let W = Double(src.width), H = Double(src.height), b = max(src.backingScale, 1)
         guard W > 0, H > 0 else { return ZoomPlan() }
         if p.preset == .fixed {
@@ -271,7 +278,21 @@ enum ZoomPlanner {
                     rect = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
                 }
             }
-            let i = Intent(kind: .click, t: e.t, tEnd: e.t, x: x, y: y, rect: rect)
+            // Frame the whole control only when the click is close to its
+            // centre. A click far off-centre keeps its exact pixel target —
+            // the recorded click is the more precise evidence there.
+            var frameRect: CGRect?
+            if let r = rect {
+                let centre = SIMD2(Double(r.midX), Double(r.midY))
+                let halfRect = SIMD2(Double(r.width), Double(r.height)) / 2
+                if halfRect.x > 0, halfRect.y > 0,
+                   abs(x - centre.x) <= halfRect.x * 0.25,
+                   abs(y - centre.y) <= halfRect.y * 0.25,
+                   r.width <= W * 0.6, r.height <= H * 0.6 {
+                    frameRect = r
+                }
+            }
+            let i = Intent(kind: .click, t: e.t, tEnd: e.t, x: x, y: y, rect: rect, frameRect: frameRect)
             intents.append(i); lastClick = i
         }
         let keys = sorted.filter { $0.kind == .keyDown }
@@ -290,6 +311,24 @@ enum ZoomPlanner {
                 intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: lc.x, y: lc.y,
                                       rect: synth, path: []))
             }
+        }
+        // Marker beats are explicit intent. An agent step carries the rect of
+        // the thing it was about; a plain marker inherits the nearest recent
+        // click as its location. Never invent a location from nothing.
+        for m in markers where ok(m.start) {
+            var x = 0.0, y = 0.0, frame: CGRect?
+            if let r = m.rect, r.width >= 0.005, r.height >= 0.005 {
+                x = r.midX * W; y = r.midY * H
+                frame = CGRect(x: r.minX * W, y: r.minY * H, width: r.width * W, height: r.height * H)
+            } else if let e = sorted.last(where: { ev in
+                ev.t <= m.start && m.start - ev.t <= 1.2 &&
+                    (ev.kind == .down || ev.kind == .keyDown)
+            }) {
+                x = Double(e.x); y = Double(e.y)
+            } else { continue }
+            intents.append(Intent(kind: .marker, t: m.start,
+                                  tEnd: max(m.end, m.start + 0.4),
+                                  x: x, y: y, frameRect: frame))
         }
         intents += VisualZoom.intents(activity, events: sorted, input: intents, src: src, tm: tm)
         intents += hoverIntents(events: sorted, src: src, p: p, tm: tm, existing: intents)
@@ -331,7 +370,11 @@ enum ZoomPlanner {
                 path.insert(FollowPoint(t: o.start, p: SIMD2(o.c.x / W, o.c.y / H)), at: 0)
             }
             let focus: Focus
-            if path.count >= 2, pathExtent(path) > 0.008 {
+            if let r = o.frameRect, r.width >= 8, r.height >= 6, r.width <= W * 0.6, r.height <= H * 0.6 {
+                // A marked or well-centred control is the subject itself;
+                // framing its whole rect keeps the action readable.
+                focus = .element(x: r.minX / W, y: r.minY / H, w: r.width / W, h: r.height / H)
+            } else if path.count >= 2, pathExtent(path) > 0.008 {
                 focus = .follow
                 followPaths[id] = path
             } else {
@@ -352,7 +395,7 @@ enum ZoomPlanner {
                 s = min(clamp(fit, lo, hi), 1.6)
             case .hover:
                 s = clamp(1.2 + 0.5 * clamp(p.sensitivity, 0, 1), lo, min(hi, 1.6))
-            case .click, .typing:
+            case .click, .typing, .marker:
                 s = clamp(p.baseScale, 1.0, hi)
                 if let r = i.rect {
                     // A small control earns a closer look; a large surface only
@@ -360,6 +403,12 @@ enum ZoomPlanner {
                     let coverage = (r.width * r.height) / (W * H)
                     let factor = clamp(pow(0.06 / max(coverage, 1e-4), 0.18), 0.85, 1.45)
                     s = clamp(p.baseScale * factor, lo, hi)
+                }
+                if let r = i.frameRect {
+                    // Fit the marked rect with breathing room, but never pull
+                    // back from the user's chosen zoom amount.
+                    let fit = min(W / max(r.width * 1.25, 1), H / max(r.height * 1.25, 1))
+                    s = clamp(max(s, min(fit, hi)), lo, hi)
                 }
                 if i.kind == .typing, !i.path.isEmpty, s < 1.4 { s = min(clamp(1.5, lo, hi), hi) }
             }
@@ -371,13 +420,13 @@ enum ZoomPlanner {
         for it in intents {
             let want = chooseScale(it, prev: prevScale)
             let anchor = SIMD2(it.x, it.y)
-            let strong = it.kind == .click || it.kind == .typing
+            let strong = it.kind == .click || it.kind == .typing || it.kind == .marker
             if want <= 1.001 {
                 if cur != nil { last = max(last, it.tEnd) }
                 continue
             }
             guard var o = cur else {
-                var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind)
+                var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
                 fresh = withPoint(fresh, it.t, anchor)
                 if it.kind == .typing { fresh.path.append(contentsOf: it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) }) }
                 cur = fresh
@@ -389,7 +438,7 @@ enum ZoomPlanner {
             let moved = hypot(anchor.x - o.c.x, anchor.y - o.c.y) / max(half(want).x, 1)
             if strong, !gapOK || moved > 0.55 {
                 close(at: min(last + hold, tm.trimEnd))
-                var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind)
+                var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
                 fresh = withPoint(fresh, it.t, anchor)
                 if it.kind == .typing { fresh.path.append(contentsOf: it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) }) }
                 cur = fresh
@@ -410,12 +459,12 @@ enum ZoomPlanner {
                     if o.kind != .click && o.kind != .typing { o.c = clampC(anchor, o.scale) }
                     o = withPoint(o, it.t, anchor)
                 }
-            case .click, .typing:
+            case .click, .typing, .marker:
                 if inside(anchor, o.c, o.scale) {
                     o = withPoint(o, it.t, anchor)
                 } else {
                     close(at: min(last + hold, tm.trimEnd))
-                    var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind)
+                    var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
                     fresh = withPoint(fresh, it.t, anchor)
                     if it.kind == .typing { fresh.path.append(contentsOf: it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) }) }
                     cur = fresh
@@ -427,6 +476,7 @@ enum ZoomPlanner {
             if it.kind == .typing {
                 o.path.append(contentsOf: it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) })
             }
+            if it.frameRect != nil { o.frameRect = it.frameRect }
             o.kind = it.kind
             cur = o
             last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
@@ -437,11 +487,12 @@ enum ZoomPlanner {
         // Hover and visual scenes get the pointer motion inside their viewport;
         // a click scene gets drag motion only (the click itself is the target,
         // and a later hover must not steal it); a typing scene keeps the caret
-        // path, which is the better signal.
+        // path, which is the better signal. A marker's rect is the subject and
+        // cursor motion must not replace it.
         let drags = sorted.filter { $0.kind == .drag && $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
         for i in shots.indices {
             let kind = kinds[shots[i].id] ?? .click
-            if kind == .typing { continue }
+            if kind == .typing || kind == .marker { continue }
             let s = shots[i]
             let c = centers[s.id] ?? SIMD2(s.focusX * W, s.focusY * H)
             var path = followPaths[s.id] ?? []

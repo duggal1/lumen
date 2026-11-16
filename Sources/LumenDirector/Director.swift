@@ -2,6 +2,21 @@ import Foundation
 import LumenCore
 import LumenProject
 
+/// A moment an agent or a human explicitly marked, already converted to
+/// source seconds and normalized source coordinates. A marker is a statement
+/// that this moment matters, so the zoom planner treats it as intent rather
+/// than inferring importance from raw input alone.
+public struct DirectorMarker: Sendable, Equatable {
+    public var start: Double
+    public var end: Double
+    /// Normalized source rect of the thing the step was about, when known.
+    public var rect: CGRect?
+    public var label: String?
+    public init(start: Double, end: Double, rect: CGRect? = nil, label: String? = nil) {
+        self.start = start; self.end = end; self.rect = rect; self.label = label
+    }
+}
+
 public struct DirectorInput: Sendable {
     public var events: [InputEvent]
     public var source: SourceInfo
@@ -14,12 +29,14 @@ public struct DirectorInput: Sendable {
     public var ocr: [OCRDetection]
     public var personMask: PersonMaskInfo?
     public var typing: [TypingTrace]
+    public var markers: [DirectorMarker]
     public init(events: [InputEvent], source: SourceInfo, vad: [ClosedRange<Double>] = [], ax: [AXFrame] = [],
                 face: [FaceSample] = [], webcamAspect: Float = 16.0 / 9, activity: [ActivityPoint] = [],
                 transcript: Transcript? = nil, ocr: [OCRDetection] = [], personMask: PersonMaskInfo? = nil,
-                typing: [TypingTrace] = []) {
+                typing: [TypingTrace] = [], markers: [DirectorMarker] = []) {
         self.events = events; self.source = source; self.vad = vad; self.ax = ax; self.face = face
         self.webcamAspect = webcamAspect; self.activity = activity; self.transcript = transcript; self.ocr = ocr; self.personMask = personMask; self.typing = typing
+        self.markers = markers
     }
 }
 
@@ -150,7 +167,7 @@ public enum Director {
                 planned = cached
             } else {
                 planned = ZoomPlanner.plan(events: input.events, ax: input.ax, typing: input.typing, activity: input.activity, src: src, p: t.camera,
-                                           tm: tm, avoid: avoid)
+                                           tm: tm, avoid: avoid, markers: input.markers)
                 cache.planKey = pkey; cache.plan = planned
             }
             // AGENT: applying suppression here covers normal derives as well as explicit replans.
@@ -307,6 +324,11 @@ public enum Director {
             h.combine(a.t); h.combine(a.x); h.combine(a.y); h.combine(a.coverage)
             h.combine(a.region?.minX); h.combine(a.region?.minY)
             h.combine(a.region?.width); h.combine(a.region?.height)
+        }
+        for m in input.markers {
+            h.combine(m.start); h.combine(m.end)
+            h.combine(m.rect?.minX); h.combine(m.rect?.minY)
+            h.combine(m.rect?.width); h.combine(m.rect?.height)
         }
         return UInt64(bitPattern: Int64(h.finalize()))
     }
