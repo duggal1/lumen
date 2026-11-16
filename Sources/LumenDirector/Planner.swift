@@ -40,8 +40,9 @@ enum SpeedRamps {
 ///
 /// The planner is attention-first. Every input (click, typing burst, hover
 /// dwell, visual change) is an intent with a position, a rect and a time. The
-/// intents are grouped into scenes, and every scene carries a follow path so
-/// the camera can glide with the pointer instead of freezing on the click.
+/// intents are grouped into scenes. Pointer-led scenes carry a follow path so
+/// the camera can glide with the pointer; a typing burst is framed whole on
+/// its resolved field and deliberately carries no follow path.
 enum ZoomPlanner {
     struct PathPoint { var t: Double; var p: SIMD2<Double> }
     typealias FollowPoint = PathPoint
@@ -53,12 +54,12 @@ enum ZoomPlanner {
     struct Intent {
         var kind: IntentKind
         var t: Double, tEnd: Double            // source seconds
-        var x: Double, y: Double               // click pixel, or caret at burst start (source px)
+        var x: Double, y: Double               // click pixel, or resolved field centre (source px)
         var rect: CGRect? = nil                // click: verified AX element; typing: the field
         /// Rect to frame as a whole, independent of the scale-only `rect`.
-        /// Set for marker beats and for clicks centred on their control.
+        /// Set for marker beats, for clicks centred on their control, and for
+        /// the resolved text field of a typing burst.
         var frameRect: CGRect? = nil
-        var path: [PathPoint] = []             // typing only: smoothed caret path
     }
     private struct Open {
         var start: Double, scale: Double, c: SIMD2<Double>
@@ -66,7 +67,6 @@ enum ZoomPlanner {
         var kind: IntentKind = .click
         var frameRect: CGRect? = nil
     }
-    private struct Fix { var t: Double; var p: SIMD2<Double>; var field: CGRect? }
 
     /// Same source-time window -> same id across replans.
     static func stableID(_ s: Double, _ e: Double) -> UUID {
@@ -118,11 +118,18 @@ enum ZoomPlanner {
         return best
     }
 
-    private static func caretFixes(t0: Double, t1: Double, keys: [InputEvent], ax: [AXFrame], traces: [TypingTrace],
-                                   W: Double, H: Double, b: Double) -> (fixes: [Fix], tracked: Bool, field: CGRect?) {
-        var carets: [Fix] = []
-        var fields: [CGRect] = []
+    /// Resolve one steady subject for a typing burst: the smallest
+    /// accessibility field that actually contains the caret. Per-keystroke
+    /// caret positions are deliberately NOT kept as a camera target. A caret
+    /// holds then jumps on every key (and jumps further on a line wrap); feeding
+    /// that staircase into the camera's dead-zone + zero-phase follow made the
+    /// shot wander left/right and up/down and keep ringing after the last key.
+    /// The field is the thing being typed into — frame that instead.
+    private static func resolvedField(t0: Double, t1: Double, keys: [InputEvent], ax: [AXFrame],
+                                      traces: [TypingTrace], W: Double, H: Double, b: Double) -> CGRect? {
         let slack = 24 * b
+        var carets: [CGPoint] = []
+        var fields: [CGRect] = []
         for e in keys where e.t >= t0 && e.t <= t1 {
             guard e.axFrameIndex > 0, Int(e.axFrameIndex) <= ax.count else { continue }
             let f = ax[Int(e.axFrameIndex) - 1]
@@ -143,58 +150,30 @@ enum ZoomPlanner {
                 let py = c.y + c.h / 2
                 if px >= 0, px <= W, py >= 0, py <= H,
                    field.insetBy(dx: -slack, dy: -slack).contains(CGPoint(x: px, y: py)) {
-                    carets.append(Fix(t: e.t, p: SIMD2(px, py), field: field))
+                    carets.append(CGPoint(x: px, y: py))
                 }
             }
         }
-        if !carets.isEmpty {
-            // The framing rect is the smallest field that actually contains the
-            // caret, not the largest field seen during the burst.
-            let first = carets[0].p
-            let smallest = fields
-                .filter { $0.insetBy(dx: -slack, dy: -slack).contains(CGPoint(x: first.x, y: first.y)) }
+        if let first = carets.first {
+            // The smallest field that contains the caret, not the largest
+            // container seen during the burst.
+            return fields
+                .filter { $0.insetBy(dx: -slack, dy: -slack).contains(first) }
                 .min { $0.width * $0.height < $1.width * $1.height }
-            return (carets, true, smallest)
         }
+        // No AX caret: fall back to the pixel tracer's resolved text line.
         if let tr = traces.first(where: { $0.t0 <= t1 + 0.15 && $0.t1 >= t0 - 0.15 }) {
             let samples = tr.samples.filter { $0.confidence >= 0.4 && $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
-            if samples.count >= 2 {
-                let line = tr.line ?? tr.rect
-                return (samples.map { Fix(t: $0.t, p: SIMD2($0.x, $0.y), field: line) }, true, line)
-            }
+            if samples.count >= 2 { return tr.line ?? tr.rect }
         }
-        return ([], false, nil)
-    }
-
-    /// 30 Hz caret path, hold-then-jump across pauses, zero-phase smoothed.
-    private static func smoothPath(_ fx: [Fix], t0: Double, t1: Double) -> [PathPoint] {
-        guard let first = fx.first, let lastFix = fx.last else { return [] }
-        let dt = 1.0 / 30
-        let start = min(t0, first.t), end = max(t1, lastFix.t) + 0.1
-        let n = max(Int((end - start) / dt) + 1, 2)
-        var xs: [Double] = [], ys: [Double] = []
-        xs.reserveCapacity(n); ys.reserveCapacity(n)
-        var j = 0
-        for i in 0..<n {
-            let t = start + Double(i) * dt
-            while j + 1 < fx.count, fx[j + 1].t <= t { j += 1 }
-            let a = fx[j]
-            if j + 1 < fx.count, t > a.t {
-                let c = fx[j + 1], gap = c.t - a.t
-                let u = gap > 0.6 ? clamp((t - (c.t - 0.15)) / 0.15, 0, 1) : clamp((t - a.t) / max(gap, 1e-6), 0, 1)
-                xs.append(a.p.x + (c.p.x - a.p.x) * u); ys.append(a.p.y + (c.p.y - a.p.y) * u)
-            } else { xs.append(a.p.x); ys.append(a.p.y) }
-        }
-        xs = zeroPhaseSmooth(xs, omega: 9, dt: dt)
-        ys = zeroPhaseSmooth(ys, omega: 9, dt: dt)
-        return (0..<n).map { PathPoint(t: start + Double($0) * dt, p: SIMD2(xs[$0], ys[$0])) }
+        return nil
     }
 
     /// Pointer paths are continuous: a cursor crossing the screen is one
     /// glide, not a hold followed by a jump. Catmull-Rom keeps velocity
     /// through every recorded point, so the camera does not stop at each
-    /// click on its way to the next one. (Caret paths keep the hold-then-jump
-    /// model in `smoothPath`; a caret really does jump.)
+    /// click on its way to the next one. Typing no longer carries a follow
+    /// path — its field is framed whole, as a steady target.
     private static func smoothFollow(_ pts: [FollowPoint]) -> [FollowPoint] {
         guard pts.count >= 2 else { return pts }
         let sorted = pts.sorted { $0.t < $1.t }
@@ -297,19 +276,18 @@ enum ZoomPlanner {
         }
         let keys = sorted.filter { $0.kind == .keyDown }
         for burst in sorted.typingBursts() where ok(burst.t0) {
-            let r = caretFixes(t0: burst.t0, t1: burst.t1, keys: keys, ax: ax, traces: typing, W: W, H: H, b: b)
-            if r.tracked {
-                let path = smoothPath(r.fixes, t0: burst.t0, t1: burst.t1)
-                guard let first = path.first else { continue }
-                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: first.p.x, y: first.p.y,
-                                      rect: r.field, path: path))
-            } else if let field = r.field, field.height <= 0.45 * H {
-                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: field.midX, y: field.midY,
-                                      rect: field, path: []))
+            if let field = resolvedField(t0: burst.t0, t1: burst.t1, keys: keys, ax: ax,
+                                         traces: typing, W: W, H: H, b: b) {
+                // One steady shot on the field. There is no caret follow path:
+                // the field is the subject, so the centre does not chase every
+                // keystroke (or jump on a line wrap).
+                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1,
+                                      x: field.midX, y: field.midY, rect: field, frameRect: field))
             } else if let lc = lastClick, burst.t0 - lc.t <= 30 {
+                // No resolved field: keep the last-click anchor rather than
+                // inventing a centre from nothing.
                 let synth = CGRect(x: lc.x - W * 0.175, y: lc.y - H * 0.05, width: W * 0.35, height: H * 0.10)
-                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: lc.x, y: lc.y,
-                                      rect: synth, path: []))
+                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: lc.x, y: lc.y, rect: synth))
             }
         }
         // Marker beats are explicit intent. An agent step carries the rect of
@@ -396,21 +374,28 @@ enum ZoomPlanner {
             case .hover:
                 s = clamp(1.2 + 0.5 * clamp(p.sensitivity, 0, 1), lo, min(hi, 1.6))
             case .click, .typing, .marker:
-                s = clamp(p.baseScale, 1.0, hi)
-                if let r = i.rect {
-                    // A small control earns a closer look; a large surface only
-                    // a gentle one. The base scale stays the primary control.
-                    let coverage = (r.width * r.height) / (W * H)
-                    let factor = clamp(pow(0.06 / max(coverage, 1e-4), 0.18), 0.85, 1.45)
-                    s = clamp(p.baseScale * factor, lo, hi)
+                if i.kind == .typing, let r = i.frameRect {
+                    // The whole field is the subject and the camera does not
+                    // move during the burst. Fit it, with breathing room, so
+                    // every caret position inside it stays in the viewport.
+                    let fit = min(W / max(r.width * 1.2, 1), H / max(r.height * 1.6, 1))
+                    s = clamp(min(fit, hi), lo, hi)
+                } else {
+                    s = clamp(p.baseScale, 1.0, hi)
+                    if let r = i.rect {
+                        // A small control earns a closer look; a large surface
+                        // only a gentle one. The base scale is the control.
+                        let coverage = (r.width * r.height) / (W * H)
+                        let factor = clamp(pow(0.06 / max(coverage, 1e-4), 0.18), 0.85, 1.45)
+                        s = clamp(p.baseScale * factor, lo, hi)
+                    }
+                    if let r = i.frameRect {
+                        // Fit the marked rect with breathing room, but never
+                        // pull back from the user's chosen zoom amount.
+                        let fit = min(W / max(r.width * 1.25, 1), H / max(r.height * 1.25, 1))
+                        s = clamp(max(s, min(fit, hi)), lo, hi)
+                    }
                 }
-                if let r = i.frameRect {
-                    // Fit the marked rect with breathing room, but never pull
-                    // back from the user's chosen zoom amount.
-                    let fit = min(W / max(r.width * 1.25, 1), H / max(r.height * 1.25, 1))
-                    s = clamp(max(s, min(fit, hi)), lo, hi)
-                }
-                if i.kind == .typing, !i.path.isEmpty, s < 1.4 { s = min(clamp(1.5, lo, hi), hi) }
             }
             guard s > 1.001 else { return 1 }
             if let prev, prev > 1.001, abs(log(s / prev)) < log(1.12) { return clamp(prev, lo, hi) }
@@ -428,7 +413,6 @@ enum ZoomPlanner {
             guard var o = cur else {
                 var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
                 fresh = withPoint(fresh, it.t, anchor)
-                if it.kind == .typing { fresh.path.append(contentsOf: it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) }) }
                 cur = fresh
                 prevScale = want
                 last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
@@ -440,7 +424,6 @@ enum ZoomPlanner {
                 close(at: min(last + hold, tm.trimEnd))
                 var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
                 fresh = withPoint(fresh, it.t, anchor)
-                if it.kind == .typing { fresh.path.append(contentsOf: it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) }) }
                 cur = fresh
                 prevScale = want
                 last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
@@ -466,15 +449,11 @@ enum ZoomPlanner {
                     close(at: min(last + hold, tm.trimEnd))
                     var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
                     fresh = withPoint(fresh, it.t, anchor)
-                    if it.kind == .typing { fresh.path.append(contentsOf: it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) }) }
                     cur = fresh
                     prevScale = want
                     last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
                     continue
                 }
-            }
-            if it.kind == .typing {
-                o.path.append(contentsOf: it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) })
             }
             if it.frameRect != nil { o.frameRect = it.frameRect }
             o.kind = it.kind
@@ -486,9 +465,9 @@ enum ZoomPlanner {
         // ---- 3. cursor paths ----
         // Hover and visual scenes get the pointer motion inside their viewport;
         // a click scene gets drag motion only (the click itself is the target,
-        // and a later hover must not steal it); a typing scene keeps the caret
-        // path, which is the better signal. A marker's rect is the subject and
-        // cursor motion must not replace it.
+        // and a later hover must not steal it). Typing and marker scenes keep
+        // their steady subject — a field rect or a marker rect — and cursor
+        // motion must never replace it.
         let drags = sorted.filter { $0.kind == .drag && $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
         for i in shots.indices {
             let kind = kinds[shots[i].id] ?? .click
