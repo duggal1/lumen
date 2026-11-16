@@ -252,7 +252,7 @@ enum ZoomPlanner {
         }
         let sorted = events.sorted { $0.t < $1.t }
         func ok(_ t: Double) -> Bool { t.isFinite && t >= tm.trimStart + 0.2 && t <= tm.trimEnd - 0.2 && !tm.isCut(t) }
-        let hi = clamp(max(p.maxScale, p.baseScale * 1.2), 1.3, 6.0)
+        let hi = clamp(max(p.maxScale, 1.3), 1.3, 6.0)
         let lo = clamp(p.minScale, 1.0, hi)
         let hold = max(p.hold.isFinite ? p.hold : 0.9, 0.3)
         let gap = max(p.zoomOutGap.isFinite ? p.zoomOutGap : 2.6, hold + 0.5)
