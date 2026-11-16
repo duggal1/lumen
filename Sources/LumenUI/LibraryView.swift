@@ -94,9 +94,11 @@ struct LibrarySurface: View {
                 app.showRecordingControls()
             }
         case .recording:
+            // No live clock here: the bar owns the timer. Reading `stats` in
+            // this body made the hidden Library re-render at the poll rate for
+            // text nobody could see.
             HStack(spacing: Space.s3) {
                 PixelStop(cell: 2)
-                Text(time(app.stats?.elapsed ?? 0)).font(AppType.label.monospacedDigit()).foregroundStyle(Tok.text)
                 LButton(title: "Stop", icon: "stop.fill", kind: .primary) { app.toggle() }
             }
         case .preparing:
@@ -116,13 +118,13 @@ struct LibrarySurface: View {
     // MARK: Permission and failure rows
 
     private var permissionNotice: (text: String, action: () -> Void)? {
-        if !Permissions.screen {
+        if !app.permissions.screen {
             return ("Screen recording is off.", { Permissions.requestScreen(); Permissions.open("ScreenCapture") })
         }
-        if !Permissions.input {
+        if !app.permissions.input {
             return ("Input Monitoring is off.", { Permissions.requestInput(); Permissions.open("ListenEvent") })
         }
-        if app.mic && !Permissions.mic {
+        if app.mic && !app.permissions.mic {
             return ("Microphone is off.", { Task { await Permissions.requestMedia() }; Permissions.open("Microphone") })
         }
         return nil
@@ -458,10 +460,6 @@ struct LibrarySurface: View {
         undoTask?.cancel()
         app.restore(pending.row, from: pending.trashURL)
         undo = nil
-    }
-
-    private func time(_ t: Double) -> String {
-        String(format: "%d:%02d", Int(t) / 60, Int(t) % 60)
     }
 }
 
