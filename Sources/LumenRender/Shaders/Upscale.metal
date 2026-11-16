@@ -48,6 +48,22 @@ kernel void up_directed(texture2d<float, access::read> src [[texture(0)]],
     float mag = sqrt(max(tr, 0.0));
     float coh = sqrt(max((J.x - J.z) * (J.x - J.z) + 4.0 * J.y * J.y, 0.0)) / (tr + 1e-6);
     float anis = coh * smoothstep(0.02, 0.12, mag);
+    // A 1 px on / 1 px off pattern (text stems at source resolution) is fully
+    // coherent, so the anisotropic squeeze locks onto one phase and erases the
+    // whole pattern — the opposite of a sharp result. Detect local sign
+    // alternation and reconstruct those patches isotropically instead; a sinc
+    // family kernel reproduces alternating samples exactly.
+    float mean = 0.25 * (l[1][1] + l[1][2] + l[2][1] + l[2][2]);
+    float alternations = 0.0;
+    for (int j = 1; j <= 2; ++j) {
+        float s = (l[j][1] - mean) * (l[j][2] - mean);
+        alternations += 1.0 - smoothstep(-0.05, 0.0, s);
+    }
+    for (int i = 1; i <= 2; ++i) {
+        float s = (l[1][i] - mean) * (l[2][i] - mean);
+        alternations += 1.0 - smoothstep(-0.05, 0.0, s);
+    }
+    anis *= 1.0 - 0.95 * smoothstep(1.0, 2.0, alternations);
     float sAcross = 1.0 + anis * P.sharp * 0.7;
     float sAlong = 1.0 - anis * 0.45;
 
@@ -61,9 +77,34 @@ kernel void up_directed(texture2d<float, access::read> src [[texture(0)]],
         }
     }
     float3 res = acc / (abs(wsum) > 1e-4 ? wsum : 1.0);
-    float3 mn = min(min(c[1][1], c[1][2]), min(c[2][1], c[2][2]));
-    float3 mx = max(max(c[1][1], c[1][2]), max(c[2][1], c[2][2]));
-    dst.write(float4(clamp(res, mn, mx), 1.0), gid);
+    // Clamp to the whole reconstruction patch, not just its inner 2x2. The
+    // inner clamp threw away the contrast of any stroke that sat on a patch
+    // edge — exactly the one-pixel UI detail a zoom must preserve. A small
+    // slack keeps the edge directed overshoot from being flattened while the
+    // 4x4 envelope still bounds it (no visible ringing).
+    float3 mn = float3(1.0), mx = float3(0.0);
+    for (int j = 0; j < 4; ++j) {
+        for (int i = 0; i < 4; ++i) { mn = min(mn, c[j][i]); mx = max(mx, c[j][i]); }
+    }
+    // One-pixel UI detail (text stems, carets, hairlines) alternates every
+    // source pixel. The Lanczos lobe spreads that across ~2 source pixels and
+    // the local clamp collapses the alternating phase to black. Reconstruct
+    // those patches from the four nearest source samples with a steep but
+    // continuous step: crisp like nearest-neighbour, yet still continuous as
+    // the camera drifts sub-pixel so the zoom does not shimmer.
+    float hf = smoothstep(1.0, 2.0, alternations);
+    float sx = smoothstep(0.35, 0.65, f.x);
+    float sy = smoothstep(0.35, 0.65, f.y);
+    float3 crisp = mix(mix(c[1][1], c[1][2], sx), mix(c[2][1], c[2][2], sx), sy);
+    // The Lanczos division can be non-finite on a pure Nyquist patch, and
+    // `mix(NaN, crisp, 1)` is still NaN because NaN * 0 is NaN. Sanitise it
+    // first, then blend so the switch to the crisp path is continuous.
+    res = clamp(res, float3(-1.0e6), float3(1.0e6));
+    if (any(res != res)) { res = crisp; }
+    res = mix(res, crisp, hf);
+
+    float3 slack = (mx - mn) * 0.02;
+    dst.write(float4(clamp(res, mn - slack, mx + slack), 1.0), gid);
 }
 
 struct ShockParams { int2 size; float strength; float edgeLo; float edgeHi; float k; };
@@ -123,9 +164,20 @@ kernel void up_sharpen(texture2d<float, access::read> src [[texture(0)]],
             mn = min(mn, c[j][i]); mx = max(mx, c[j][i]);
         }
     }
-    float3 blur = (c[0][1] + c[2][1] + c[1][0] + c[1][2] + 4.0 * c[1][1]) * 0.125;
+    // Proper 3x3 Gaussian (1-2-1 / 2-4-2 / 1-2-1). The old /12 kernel put
+    // too little energy in the neighbours, so the unsharp term barely moved
+    // mid-tone edge samples.
+    float3 blur = (c[0][0] + 2.0 * c[0][1] + c[0][2]
+                 + 2.0 * c[1][0] + 4.0 * c[1][1] + 2.0 * c[1][2]
+                 + c[2][0] + 2.0 * c[2][1] + c[2][2]) * 0.0625;
     float range = max(max(mx.r - mn.r, mx.g - mn.g), mx.b - mn.b);
-    float adapt = 1.0 - smoothstep(0.25, 0.7, range);
+    // Only back off at true extremes. The old curve zeroed sharpening on any
+    // high-contrast 3x3 — which is exactly a one-pixel white stroke on black.
+    float adapt = 1.0 - 0.5 * smoothstep(0.45, 0.95, range);
     float3 o = c[1][1] + P.amount * adapt * 2.0 * (c[1][1] - blur);
-    dst.write(float4(clamp(o, mn, mx), 1.0), gid);
+    // A bounded overshoot steepens the 10-90% transition instead of clipping
+    // every edge sample back to the local extrema. 3% of local range is well
+    // below visible halo threshold and stays inside 8-bit quantisation.
+    float3 slack = (mx - mn) * 0.03;
+    dst.write(float4(clamp(o, mn - slack, mx + slack), 1.0), gid);
 }

@@ -14,9 +14,9 @@ public struct UpscaleParams: Codable, Equatable, Sendable {
     public var enabled = true
     public var blendStart = 1.5, blendEnd = 2.2
     public var maxFactor = 10
-    public var edgeSharpness = 0.6
-    public var shock = 0.55
-    public var shockIterations = 2
-    public var finalSharpen = 0.35
+    public var edgeSharpness = 0.85
+    public var shock = 0.7
+    public var shockIterations = 4
+    public var finalSharpen = 0.6
     public init() {}
 }
