@@ -36,3 +36,6 @@
 - Activity dots use Ramp.heat mixed tokens with neutral controlPressed for zero.
 - Studio Canvas keeps Gradii's 27 named palettes and seven families as fixed, deterministic Metal presets; its web editor's effect controls and loop animation are omitted so the picker stays click-first.
 - Activity empty days are neutral dust dots, never white or BG.
+- Auto zoom treats markers as explicit intent: a marker rect frames its control through `Focus.element`, a bare marker borrows the nearest click within 1.2 s, and a marker with no location creates no zoom.
+- A click centred on its verified AX control frames the whole control; an off-centre click keeps the exact clicked pixel, because the click is the more precise evidence there.
+- Recordful's GPL-3.0 source was studied for architecture only and then removed from the checkout; its auto-zoom engine is not in that repository. Its signal ideas (click plus clicked-control box, downsampled pointer path, labelled markers) were reimplemented clean-room in Swift — no source was copied.
