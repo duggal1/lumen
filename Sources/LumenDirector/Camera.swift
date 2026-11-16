@@ -230,7 +230,7 @@ enum CameraSolver {
         for i in scenes.indices {
             if cancelled() { return nil }
             let s = scenes[i]
-            let bridged = i > 0 && prevLz > 0.001 && (s.event - prevOff) <= max(panGap, tout + 0.3)
+            let bridged = i > 0 && prevLz > 0 && (s.event - prevOff) <= max(panGap, tout + 0.3)
             let transStart: Double
             if i == 0 {
                 transStart = s.on
@@ -257,9 +257,22 @@ enum CameraSolver {
             prevLz = s.lz
             prevC = holdCenter(i, min(max(Int((s.off * rate).rounded()), 0), n - 1))
         }
-        if prevLz > 0.001, let last = scenes.indices.last {
-            let v = holdVelocity(last, Int(clamp((prevOff * rate).rounded(), 0, Double(n - 1))))
-            fill(prevOff, min(prevOff + tout, outDur), prevLz, 0, prevC, SIMD2(0.5, 0.5), v, .zero)
+        // The last return to full frame is mandatory, not opportunistic. The
+        // planner clamps the final hold to the end of the composition, so
+        // `prevOff` can equal or exceed `outDur`. Writing the tail from there
+        // to `outDur` degenerates to a single sample and silently leaves the
+        // camera zoomed in (worst when activity keeps extending the last shot).
+        // Pull the tail back into the available samples so it always has a
+        // finite window and lands exactly on the final tick. Starting no
+        // earlier than the arrival keeps the zoom-in intact; the quintic then
+        // overwrites only the trailing part of the hold, like a bridge does.
+        if prevLz > 0, let last = scenes.indices.last {
+            let finalTick = Double(n - 1) / rate
+            let tailStart = min(prevOff, max(scenes[last].event, finalTick - tout))
+            let tailEnd = min(tailStart + tout, finalTick)
+            let k = min(max(Int((tailStart * rate).rounded()), 0), n - 1)
+            fill(tailStart, tailEnd, prevLz, 0, holdCenter(last, k), SIMD2(0.5, 0.5),
+                 holdVelocity(last, k), .zero)
         }
 
         // Clamp the centre to the feasible range at the final scale. A centre
