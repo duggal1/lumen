@@ -1,92 +1,93 @@
 # Camera motion contract — model 5
 
-The planner chooses source-time scenes and framing. The recorded camera turns
-those scenes into step targets for log-scale and normalized centre x/y, then
-applies the same forward/backward critically damped response to all channels.
-There are no per-scene quintic moves, sparse follow waypoints or pan-space
-conversion in the solver. `Motion.swift` stays: timeline sample interpolation
-still uses its quintic position/velocity/acceleration primitive.
+The planner chooses shots in source time. The recorded camera turns those shots
+into a single baked track of centre x/y and log-scale, and `Timeline.evaluate`
+reads that track with quintic Hermite interpolation. There is no live filter to
+retarget, no caret follow path and no second animation system. Preview and export
+consume the same track.
 
 ## Recorded camera
 
-- Default `omegaZoom = 7.5`, `omegaPan = 4`, `leadIn = 0.30` seconds.
-- Automatic entrance targets start leadIn before the interaction.
-- Exit targets start 0.15 seconds after a scene ends.
-- If the next entrance is less than 1.6 seconds after the exit target, retain
-  the current scale and centre until the next entrance. Never start that exit.
-- Targets are clamped to their intended scale before filtering. Centre and
-  scale share a response; pan is never multiplied by a growing zoom margin.
-- Typing passes the full 30 Hz caret path, rather than thresholded waypoints.
-  Caret framing reserves reading room at 38% viewport x, with horizontal and
-  vertical dead zones of ±10% and ±16% of the viewport, followed by the gentle
-  omegaPan response. This reading composition is recorded-footage policy.
-- Missing caret evidence frames the complete single-line field with 25%
-  horizontal breathing room when possible; otherwise it creates no typing zoom.
+- The track is baked at **480 Hz**, an exact multiple of 24 / 30 / 60 / 120 /
+  240 fps. Every export frame lands on a sample. Velocity and acceleration are
+  published alongside position, computed by numerical differentiation, and the
+  evaluator uses all three for its quintic interpolation.
+- A shot is a rest-to-rest quintic: 1.0× → target over the lead-in, landing
+  **exactly** on the target at the settle time; the hold is then written per grid
+  tick. Entrance velocities are matched to the hold's own velocity so the camera
+  does not stop dead on arrival.
+- `leadIn = 0.30` is a floor, not a fixed duration: the runway grows with
+  magnification and saved easing. `tail = 0.70` seconds; `hold = 0.9` seconds;
+  `zoomOutGap = 2.6` seconds.
+- Shots are ordered by **settle time** and written in one forward pass. One camera
+  has one target, so the planner never emits two overlapping segments. A subject
+  that arrives before the open shot can close is reached by panning inside that
+  shot, not by opening a second one.
+- When shots do not bridge, the outgoing shot returns fully to 1.0× before the
+  next lead-in begins. The recording always ends on the full frame, centred —
+  the final tail is mandatory and anchored to whichever shot holds furthest
+  forward, so a click near the trim end cannot leave the export zoomed in.
+- Every sample is clamped into the feasible centre box for its own scale; the
+  frame never shows canvas outside the source.
+- `maxScale` is a hard cap at every stage, including `minScale` clamping. The
+  Inspector exposes it down to 1.2×.
+- Clicks retain exact pixel targets. A resolved accessibility frame makes the
+  control itself the subject and the shot centres on its rect. Typing frames the
+  whole resolved field **once** — there is no caret follow path, so the camera
+  cannot drift while the caret moves, selects or wraps. Hover only steers a shot
+  that hover itself opened.
 - Saved easing values contribute a geometric-mean frequency multiplier to the
   whole camera. There is no per-segment transition-duration engine or UI control.
-- Publish centre/log-scale, velocity and acceleration at 240 Hz. Evaluation,
-  preview and export consume this same track. Tilt retains its existing policy.
+  Tilt retains its existing policy.
 
 ## Live input
 
-Live input cannot use future events or a zero-phase pass. One exact critically
-damped three-channel spring integrates normalized centre x/y and log-scale at
-240 Hz using the same spring primitive as the offline filter. Retargeting
-preserves its velocity. Clicks always update the target. Typing uses resolved
-caret evidence with no directional offset; absent caret evidence may frame a
-complete single-line field. Bare keys sustain activity without aiming at the
-pointer. Focus enrichment updates the target, without replaying a press or
-resetting camera state. Older event times cannot replace newer focus.
-
-The pointer uses one live spring. Offline cursor resampling retains its PCHIP,
-one zero-lag Gaussian pass, saved glide setting and exact click pins; the extra
-median filter is removed. Live and offline share camera coordinates and spring
-math, while future-aware framing and causal input timing remain different.
+Live input cannot use future events. `LiveCamera` keeps its own causal response
+on centre x/y and log-scale so the recording monitor reacts immediately;
+retargeting preserves velocity. It is deliberately a different path from the
+future-aware recorded framing. Focus enrichment updates the live target without
+replaying a press or resetting camera state; older event times cannot replace
+newer focus. The two paths share coordinates, not timing.
 
 ## Saved projects and preview
 
 Camera parameters migrate to model 5: maximum 2×, minimum 1.25×, hold 0.9 seconds,
 scene gap 2.6 seconds, base scale 1.8×. Manual zoom segments remain intact.
-Legacy minimum-hold metadata is ignored. Cinematic uses leadIn 0.45 seconds,
-omegaZoom 5.5 and omegaPan 3.
+Legacy minimum-hold metadata is ignored. Cinematic uses a longer lead-in and a
+slower response multiplier.
 
 Preview returns one sharp sample below a three-pixel shutter streak. Larger
 streaks request approximately one sample per pixel within the measured GPU
 budget and saved cap (default 12); export uses the same streak calculation.
 
-## Verification for this change
-
-Per the user's instruction, run `make build` only; no new tests, suite, render
-matrix or benchmark. `LUMEN_ZOOM_DEBUG=1` exposes `LUMEN_TYPING` and `LUMEN_DIP`
-for reviewing a real recording. Do not claim measured caret accuracy, dip
-thresholds, minimum full-scale hold duration or visual smoothness from a build.
-AXObserver capture changes are deferred until those recording diagnostics have
-been reviewed. Existing immediate key delivery and asynchronous enrichment stay.
-
 ## Autonomous product shots
 
 Visual activity is analyzed for ordinary desktop recordings as well as imported
-and device footage. It no longer requires an empty mouse-event log. Analysis
-version 2 records changed-region bounds and coverage at 10 Hz. A newly static
-result is checked against its pre-change frame for 0.4 seconds, so a single
-persistent result can trigger a shot while a one-frame flash cannot.
+and device footage. Analysis version 2 records changed-region bounds and coverage
+at 10 Hz. A newly static result is checked against its pre-change frame for 0.4
+seconds, so a single persistent result can trigger a shot while a one-frame flash
+cannot.
 
 The planner groups nearby changes (gap up to 0.6 seconds, spatial drift up to
 16% of the source diagonal) into a stable region. At least three observations
-spanning 0.3 seconds are required. Tiny regions below 0.8% of frame area,
-changes across more than 55% of the frame, and heavy full-screen change are
-ignored. These are visual heuristics, not semantic recognition of AI tasks.
+spanning 0.3 seconds are required. Tiny regions below 0.8% of frame area, changes
+across more than 55% of the frame and heavy full-screen change are ignored. These
+are visual heuristics, not semantic recognition of AI tasks.
 
 Clicks/typing within a second and scrolling/dragging near the change take
-priority. Eligible regions use at most 1.6× magnification with 35% framing room,
-hold through the change plus reading time, and have a three-second cooldown.
-They feed the existing shared centre/log-scale filter, including its lead-in,
-bridging and derivative publication. No new motion mode or filter is added.
-Manual shots, the fixed preset, auto-zoom off and suppressed automatic shots
-retain their existing behavior. Visual activity also interrupts idle speed-ramp
-planning so generated results are not skipped as if nothing happened.
+priority. Eligible regions use at most 1.6× magnification with 35% framing room
+and hold through the change plus reading time. Manual shots, the fixed preset,
+auto-zoom off and suppressed automatic shots retain their behavior. Visual
+activity also interrupts idle speed-ramp planning so generated results are not
+skipped as if nothing happened. Activity publishes as soon as its background
+analyzer completes; Studio replans without waiting for the other scans.
 
-Activity publishes as soon as its background analyzer completes; Studio replans
-without waiting for the other scans. Enabling automatic zoom starts analysis
-if it was initially off. Completed Studio preview and export share these shots;
-this does not add autonomous camera motion to the live recording monitor.
+## Verification
+
+Accuracy is verified headlessly, without a window or a render. The brutal suites
+in `Tests/LumenTests` seed a scenario generator and check every camera invariant
+across 200 sessions, replay derivation for determinism, mutate every input the
+digest is supposed to cover, sweep click times and export frame rates for
+pixel-exact arrival, hold the frame still through typing bursts, feed degenerate
+inputs, and bound derive/evaluate cost. No visual smoothness or caret accuracy
+claim is made from a build alone.

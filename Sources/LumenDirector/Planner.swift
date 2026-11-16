@@ -238,8 +238,11 @@ enum ZoomPlanner {
         }
         let sorted = events.sorted { $0.t < $1.t }
         func ok(_ t: Double) -> Bool { t.isFinite && t >= tm.trimStart + 0.2 && t <= tm.trimEnd - 0.2 && !tm.isCut(t) }
-        let hi = clamp(max(p.maxScale, 1.3), 1.3, 6.0)
-        let lo = clamp(p.minScale, 1.0, hi)
+        // `maxScale` is a hard cap, not a suggestion: the Inspector's "Max zoom"
+        // slider goes down to 1.2×, and quietly clamping the cap up to 1.3×
+        // pushed the camera past what the user asked for.
+        let hi = clamp(p.maxScale, 1.001, 6.0)
+        let lo = clamp(min(p.minScale, hi), 1.001, hi)
         let hold = max(p.hold.isFinite ? p.hold : 0.9, 0.3)
         let gap = max(p.zoomOutGap.isFinite ? p.zoomOutGap : 2.6, hold + 0.5)
 
@@ -402,6 +405,38 @@ enum ZoomPlanner {
             return s
         }
 
+        /// Start a new scene for `it`, or continue the open one.
+        ///
+        /// A camera has exactly one target at a time, so two segments may never
+        /// overlap: the solver holds them in an ordered pass, and an overlap
+        /// makes a later write stomp an earlier one mid-curve — the track then
+        /// jumps a third of the screen in one tick. When the new subject is too
+        /// close to the open shot's minimum length, it is not a separate shot at
+        /// all; the camera pans inside the current one.
+        func beginScene(_ it: Intent, _ want: Double, _ anchor: SIMD2<Double>) {
+            if var o = cur {
+                let cut = min(last + hold, tm.trimEnd, it.t)
+                if cut >= o.start + 0.2 {
+                    close(at: cut)
+                } else {
+                    o.scale = want
+                    o.c = clampC(anchor, want)
+                    if let r = it.frameRect { o.frameRect = r }
+                    o = withPoint(o, it.t, anchor)
+                    o.kind = it.kind
+                    cur = o
+                    prevScale = want
+                    last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
+                    return
+                }
+            }
+            var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
+            fresh = withPoint(fresh, it.t, anchor)
+            cur = fresh
+            prevScale = want
+            last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
+        }
+
         for it in intents {
             let want = chooseScale(it, prev: prevScale)
             let anchor = SIMD2(it.x, it.y)
@@ -410,23 +445,16 @@ enum ZoomPlanner {
                 if cur != nil { last = max(last, it.tEnd) }
                 continue
             }
-            guard var o = cur else {
-                var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
-                fresh = withPoint(fresh, it.t, anchor)
-                cur = fresh
-                prevScale = want
-                last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
-                continue
-            }
+            if cur == nil { beginScene(it, want, anchor); continue }
+            guard let o = cur else { continue }
             let gapOK = it.t - last <= gap
-            let moved = hypot(anchor.x - o.c.x, anchor.y - o.c.y) / max(half(want).x, 1)
+            // Distance from where the camera is looking *now*, not from where
+            // the shot opened. A run of clicks walking across a toolbar stays
+            // one shot; a jump to the other side of the screen opens a new one.
+            let ref = o.path.last.map { SIMD2($0.p.x * W, $0.p.y * H) } ?? o.c
+            let moved = hypot(anchor.x - ref.x, anchor.y - ref.y) / max(half(want).x, 1)
             if strong, !gapOK || moved > 0.55 {
-                close(at: min(last + hold, tm.trimEnd))
-                var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
-                fresh = withPoint(fresh, it.t, anchor)
-                cur = fresh
-                prevScale = want
-                last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
+                beginScene(it, want, anchor)
                 continue
             }
             switch it.kind {
@@ -434,30 +462,30 @@ enum ZoomPlanner {
                 // A dwell only steers a scene that hover itself opened. It must
                 // never pull the camera off a click or a typing target.
                 if o.kind == .hover {
-                    o.c = clampC(anchor, o.scale)
-                    o = withPoint(o, it.t, anchor)
+                    var n = o
+                    n.c = clampC(anchor, o.scale)
+                    n = withPoint(n, it.t, anchor)
+                    cur = n
                 }
             case .visual:
                 if o.kind == .visual || o.kind == .hover || inside(anchor, o.c, o.scale) {
-                    if o.kind != .click && o.kind != .typing { o.c = clampC(anchor, o.scale) }
-                    o = withPoint(o, it.t, anchor)
+                    var n = o
+                    if o.kind != .click && o.kind != .typing { n.c = clampC(anchor, o.scale) }
+                    n = withPoint(n, it.t, anchor)
+                    cur = n
                 }
             case .click, .typing, .marker:
                 if inside(anchor, o.c, o.scale) {
-                    o = withPoint(o, it.t, anchor)
+                    var n = o
+                    n = withPoint(n, it.t, anchor)
+                    cur = n
                 } else {
-                    close(at: min(last + hold, tm.trimEnd))
-                    var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
-                    fresh = withPoint(fresh, it.t, anchor)
-                    cur = fresh
-                    prevScale = want
-                    last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
+                    beginScene(it, want, anchor)
                     continue
                 }
             }
-            if it.frameRect != nil { o.frameRect = it.frameRect }
-            o.kind = it.kind
-            cur = o
+            if let o2 = cur, it.frameRect != nil { var n = o2; n.frameRect = it.frameRect; cur = n }
+            if let o2 = cur { var n = o2; n.kind = it.kind; cur = n }
             last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
         }
         close(at: min(last + hold, tm.trimEnd))

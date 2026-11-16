@@ -402,11 +402,53 @@ nothing. The "Safe zone" slider was a control that did nothing, so it was delete
 along with the fields. `shutter` was kept — it *is* live, in the renderer's motion
 blur (`Renderer.swift:588, 758–764`).
 
-### 11.7 Still open
-- **§5 doc drift.** `PLAN.md §10.3–10.4` and `Docs/ZOOM-MOTION-PLAN.md` still
-  describe the 240 Hz zero-phase model. The code ships per-scene velocity-matched
-  quintics at 480 Hz. The spec describes a solver that does not exist.
-- **Non-final tail cut.** A non-bridged scene whose tail is cut short by the next
-  scene's lead-in still snaps at the handoff. Only the final return was fixed.
-- **Not verified visually.** No exported video was reviewed; `zoom-verify` needs a
-  real recording. All numbers above are the camera track the renderer consumes.
+### 11.7 Brutal headless accuracy campaign
+New suites in `Tests/LumenTests/BrutalZoomInvariantsTests.swift` and
+`BrutalZoomSweepTests.swift` run with no window, no render and no interaction.
+
+| suite | what it attacks | result |
+|---|---|---|
+| `fuzzInvariantsHold` | 200 seeded mixed sessions; scale cap, feasible centre, full-frame ending, no per-tick teleport, no overlapping shots | clean |
+| `derivationIsDeterministic` | 20 sessions derived twice, byte-identical camera and zoom | clean |
+| `cacheNeverServesAStalePlan` | 60 sessions × 12 targeted mutations of every field the digest reads | clean |
+| `elementClicksArrivePixelExact` | 5 field positions × 60/120/240 fps, control framed and centred to < 0.75 px | clean |
+| `arrivalLandsInsideOneFrame` | arrival pose equals hold pose one frame later, at all three rates | clean |
+| `lateClicksStillReturnToFullFrame` | click swept across the whole recording, ends exactly 1.0× centred | clean |
+| `idleStretchesAreExactlyFullFrame` | before/after shots, 1.0× to 1e-5 | clean |
+| `cameraHoldsStillWhileTyping` | 3 field sizes × 3 frame rates, caret walks the field | 0 px drift |
+| `caretJumpDoesNotMoveTheFrame` | caret jumps end-to-end mid-burst | 0 px |
+| `degenerateInputsNeverProduceABrokenCamera` | zero duration, empty log, NaN, ∞, 1×1 source, click at/past trim end, maxScale 1.0, zero-size element | clean |
+| `rapidNearbyClicksStayOneShot` / `distantClicksOpenDisjointShots` | single-target invariant at both ends | clean |
+| `longDenseSessionDerivesQuickly` / `evaluateIsCheapEnoughForADisplayLoop` | 60 s / 200 clicks; 40k evaluate calls | within budget |
+
+Four real defects surfaced and were fixed:
+
+1. **Per-tick teleports up to 0.31 of the screen.** The planner emitted
+   overlapping segments and the solver sorted scenes by lead-in start, so a
+   later write stomped an earlier one mid-curve. Scenes are now ordered by
+   settle time; overlapping shots are impossible — a too-close subject pans
+   inside the open shot (`beginScene`). The 200-seed worst tick is now below
+   the 0.02 detection threshold.
+2. **Velocity spike at the end of a follow path.** `rawCenter` fell back to the
+   shot's *first* centre once the path ended, so a finite difference across
+   that seam invented a huge arrival velocity. The path now holds its nearest
+   endpoint outside the sampled window.
+3. **`maxScale` was not a hard cap.** The planner floored the cap at 1.3×, so
+   the Inspector's 1.2× setting silently zoomed past it. Fixed at the source,
+   including `minScale` clamping.
+4. **Distance to the new subject was measured from the shot's opening anchor,
+   not from where the camera was looking.** Four clicks walking across a
+   toolbar split into two shots. The reference is now the last path point.
+
+The solver also bridges directly when the next lead-in starts inside the current
+hold, rather than writing a backwards exit that collapses to one sample.
+
+Doc drift is resolved: `PLAN.md §10.4` and `Docs/ZOOM-MOTION-PLAN.md` now describe
+the shipped 480 Hz velocity-matched quintic solver.
+
+### 11.8 Still open
+- **Not verified visually.** No exported video was reviewed; `zoom-verify` needs
+  a real recording. All numbers above are the camera track the renderer consumes.
+- **One known unrelated flake.** `analyzerDecodesOverlappingBurstsInOnePass`
+  (LumenAnalysis) fails under parallel suite execution because
+  `AnalysisMetrics.shared` is global; it passes in isolation.

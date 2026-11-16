@@ -80,6 +80,12 @@ enum CameraSolver {
         }
         func manualRise(_ ease: Double) -> Double { clamp(0.9 / max(ease, 0.3), 0.25, 2.0) }
 
+        // Ordered by settle time, not by lead-in start. The camera holds one
+        // target at a time and the track is written in a single forward pass,
+        // so the pass must follow the order the shots actually land. Sorting by
+        // `on` lets a later shot's lead-in begin before an earlier shot's
+        // arrival, which reorders the pass and leaves a one-tick cut where the
+        // two writes meet.
         let scenes: [Scene] = zoom.compactMap { z -> Scene? in
             let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
             guard a.isFinite, b.isFinite, b - a > 0.02, z.scale.isFinite, z.scale > 1.001, a < outDur else { return nil }
@@ -105,7 +111,7 @@ enum CameraSolver {
             }
             return Scene(on: on, event: event, off: max(b, event + 0.02), lz: lz,
                          center: center, segment: z, path: path)
-        }.sorted { $0.on < $1.on }
+        }.sorted { $0.event < $1.event }
 
         // Global cursor track for follow scenes that have no explicit path.
         // A scene with a recorded path is driven by `pathCenters` instead.
@@ -166,7 +172,15 @@ enum CameraSolver {
         func rawCenter(_ i: Int, _ k: Int) -> SIMD2<Double> {
             let s = scenes[i]
             let j = min(max(k, 0), n - 1)
-            if let d = tracks[i], j >= d.start, j < d.start + d.centers.count { return d.centers[j - d.start] }
+            if let d = tracks[i], !d.centers.isEmpty {
+                // Outside the sampled window the path holds its nearest end
+                // value. Falling back to `s.center` here would snap the frame
+                // back to the shot's *first* centre at the end of a follow, and
+                // a finite difference across that seam reports a velocity the
+                // camera never had.
+                let idx = min(max(j - d.start, 0), d.centers.count - 1)
+                return d.centers[idx]
+            }
             if case .follow = s.segment.focus { return SIMD2(followX[j], followY[j]) }
             return s.center
         }
@@ -227,10 +241,21 @@ enum CameraSolver {
         var prevOff = 0.0
         var prevLz = 0.0
         var prevC = SIMD2(0.5, 0.5)
+        /// The shot whose hold reaches furthest forward. The mandatory final
+        /// return to full frame is anchored to this one, not to whichever scene
+        /// happened to be written last, so a short trailing shot can never leave
+        /// the tail starting inside an earlier, longer shot.
+        var tailIdx: Int?
         for i in scenes.indices {
             if cancelled() { return nil }
             let s = scenes[i]
-            let bridged = i > 0 && prevLz > 0 && (s.event - prevOff) <= max(panGap, tout + 0.3)
+            // A shot is either bridged into the next one or returns to the full
+            // frame before it. If the next lead-in starts inside the current
+            // hold there is no room for that return — writing a backwards exit
+            // would collapse to one sample and cut the camera. Join the new
+            // scene directly instead, from the value already on the track.
+            let bridged = i > 0 && prevLz > 0 &&
+                ((s.event - prevOff) <= max(panGap, tout + 0.3) || s.on < prevOff)
             let transStart: Double
             if i == 0 {
                 transStart = s.on
@@ -244,15 +269,20 @@ enum CameraSolver {
                 fill(prevOff, min(prevOff + tout, s.on), prevLz, 0, prevC, SIMD2(0.5, 0.5), v, .zero)
                 transStart = s.on
             }
-            let fromLz = bridged ? prevLz : 0
             let fromK = Int(clamp((transStart * rate).rounded(), 0, Double(n - 1)))
             let toK = Int(clamp((s.event * rate).rounded(), 0, Double(n - 1)))
-            let fromC = bridged ? holdCenter(i - 1, fromK) : SIMD2(0.5, 0.5)
+            let fromLz = bridged ? lzT[fromK] : 0
+            // Join onto the value that is actually on the track, not onto a
+            // recomputed hold formula. If an earlier scene wrote a different
+            // value at this tick, the recomputed one is wrong and the handoff
+            // becomes a one-tick step — a visible cut, not a pan.
+            let fromC = bridged ? SIMD2(cxT[fromK], cyT[fromK]) : SIMD2(0.5, 0.5)
             let fromV = bridged ? holdVelocity(i - 1, fromK) : .zero
             let toC = holdCenter(i, toK)
             let toV = holdVelocity(i, toK)
             fill(transStart, s.event, fromLz, s.lz, fromC, toC, fromV, toV)
             fillHold(i, s.event, s.off)
+            if tailIdx == nil || s.off > scenes[tailIdx!].off { tailIdx = i }
             prevOff = s.off
             prevLz = s.lz
             prevC = holdCenter(i, min(max(Int((s.off * rate).rounded()), 0), n - 1))
@@ -266,12 +296,12 @@ enum CameraSolver {
         // finite window and lands exactly on the final tick. Starting no
         // earlier than the arrival keeps the zoom-in intact; the quintic then
         // overwrites only the trailing part of the hold, like a bridge does.
-        if prevLz > 0, let last = scenes.indices.last {
+        if let last = tailIdx, scenes[last].lz > 0 {
             let finalTick = Double(n - 1) / rate
             let tailStart = min(prevOff, max(scenes[last].event, finalTick - tout))
             let tailEnd = min(tailStart + tout, finalTick)
             let k = min(max(Int((tailStart * rate).rounded()), 0), n - 1)
-            fill(tailStart, tailEnd, prevLz, 0, holdCenter(last, k), SIMD2(0.5, 0.5),
+            fill(tailStart, tailEnd, lzT[k], 0, SIMD2(cxT[k], cyT[k]), SIMD2(0.5, 0.5),
                  holdVelocity(last, k), .zero)
         }
 

@@ -877,28 +877,44 @@ in [the motion contract](Docs/ZOOM-MOTION-PLAN.md).
 
 ### 10.4 Camera solver (the smoothness engine)
 
-The model-5 solver smooths three step targets: log-scale and source-normalized
-centre x/y. One forward/backward exact critically damped filter uses the same
-response on all channels (`omegaZoom = 7.5`), with automatic steps placed
-`leadIn = 0.30` seconds early. Exit steps start 0.15 seconds after scene end;
-entrances within 1.6 seconds bridge the gap without a zoom-out.
+The solver bakes three channels — log-scale and source-normalized centre x/y —
+on a **480 Hz** grid, then `Timeline.evaluate` reads them with quintic Hermite
+interpolation (`qhm`) plus numerically differentiated velocity and acceleration.
+480 is an exact multiple of 24 / 30 / 60 / 120 / 240, so every export frame lands
+on a sample and never on an interpolated guess.
 
-Typing supplies continuous caret samples. Its target uses reading room at 38%
-viewport x, ±10%/±16% viewport dead zones and `omegaPan = 4`. Without caret
-samples, frame the entire single-line field with 25% extra width or skip zoom.
-Clicks retain exact pixel targets. The planner uses a 0.9-second hold and a
-2.6-second scene gap, without a second minimum-hold rule.
+A shot is one rest-to-rest quintic on each channel: 1.0× → target over the
+lead-in, ending exactly on the target at the scene's settle time; then the hold,
+written per grid tick. Entrance velocities are matched to the hold's own velocity
+so the camera does not stop dead on arrival. `leadIn = 0.30` is the floor; the
+runway grows with magnification. Exit moves are `tail = 0.70` seconds.
 
-Centre and log-scale plus their numerical first/second derivatives are published
-at 240 Hz. `Timeline.evaluate` retains quintic interpolation between samples;
-there are no quintic scene moves or pan-margin multiplication in the solver.
+Scenes are ordered by **settle time**, not by lead-in start, and written in one
+forward pass. A camera has one target at a time, so the planner never emits two
+overlapping segments: a further subject that arrives inside the open shot's
+minimum length is reached by panning within that shot, not by opening a second
+one. When scenes do not bridge, the outgoing shot returns to 1.0× before the
+incoming lead-in begins.
+
+The recording always ends on the full frame, centred. The tail is mandatory, not
+opportunistic: it is anchored to whichever shot holds furthest forward and pulled
+back inside the last samples, so a click near the trim end cannot strand the
+export at 2×.
+
+Every sample is then clamped into the feasible centre box for its own scale, so
+zooming out never reveals canvas outside the source.
+
+Clicks retain exact pixel targets; a resolved control frame makes the control the
+subject and the shot centres on its rect. Typing frames the whole field once —
+there is **no caret follow path**, so the camera cannot drift while the caret
+moves or wraps. Hover only steers a shot it opened itself. The planner uses a
+0.9-second hold and a 2.6-second scene gap. `maxScale` is a hard cap at every
+stage, including `minScale` clamping.
+
 Saved easing values set one project-wide geometric-mean frequency multiplier.
-
-The live camera uses one causal exact spring on the same three coordinates,
-retaining velocity through retargeting and using resolved caret coordinates
-without an offset. Future-aware recorded framing and live response have different
-timing. CameraParams migrates saved projects to model 5 while retaining manual
-zoom segments. Preview/export use the same derived camera track.
+CameraParams migrates saved projects to model 5 while retaining manual zoom
+segments. Preview and export use the same derived camera track; there is no
+second animation system.
 
 #### 10.4.1 3D camera moves (T2, deterministic, no 3D engine)
 
