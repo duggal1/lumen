@@ -213,7 +213,7 @@ public final class InputRecorder: @unchecked Sendable {
     // server only when a test sets them; production never does.
     private let debugAXTrusted = OSAllocatedUnfairLock<Bool?>(initialState: nil)
     private let debugFocusProbe = OSAllocatedUnfairLock<(@Sendable (UInt32, InputEvent) -> FocusProbe?)?>(initialState: nil)
-    private let debugFocusDelay = OSAllocatedUnfairLock(initialState: 0.025)
+    private let debugFocusDelay = OSAllocatedUnfairLock(initialState: 0.004)
     private let debugRunning = OSAllocatedUnfairLock(initialState: false)
 
     @MainActor public init(url: URL, axURL: URL, origin: CGPoint, scale: Double, clock: RecordingClock,
@@ -299,17 +299,18 @@ public final class InputRecorder: @unchecked Sendable {
         }
     }
 
-    /// Samples the stock cursor at ~display rate, not once per 100 ms. A shape
-    /// that changes and changes back between two 100 ms ticks used to vanish;
-    /// at 60 Hz a stationary hover/selection change is caught. The catalog
-    /// compares object identity first, so an unchanged cursor costs one
-    /// pointer compare per tick and no bitmap work.
+    /// Samples the stock cursor shape at 10 Hz. Identity is the change
+    /// detector, so a tick costs one pointer compare, but every tick still
+    /// wakes the main actor; at 60 Hz that competed with the stop click for no
+    /// visible gain. Click events stamp the last sampled shape, and a shape
+    /// that lives for less than a tenth of a second is not something a viewer
+    /// of the recording can see.
     private func startCursorShapeSampler() {
         Task { @MainActor [weak self] in
             while let self, self.running.withLock({ $0 }) {
                 let sampled = self.catalog.classify()
                 self.shape.withLock { $0 = sampled }
-                try? await Task.sleep(for: .milliseconds(16))
+                try? await Task.sleep(for: .milliseconds(100))
             }
         }
     }
@@ -328,27 +329,42 @@ public final class InputRecorder: @unchecked Sendable {
         timer?.cancel()
         axTimer?.cancel(); axTimer = nil
         windowOriginTimer?.cancel(); windowOriginTimer = nil
-        await withCheckedContinuation { continuation in
-            writeQ.async { [self] in
-                flush(); try? fh?.close()
-                continuation.resume()
-            }
-        }
-        await withCheckedContinuation { continuation in
-            axQ.async { continuation.resume() }
-        }
-        await withCheckedContinuation { continuation in
-            focusQ.async { continuation.resume() }
-        }
-        await withCheckedContinuation { continuation in
-            liveQ.async { continuation.resume() }
-        }
+        // Every drain below is bounded. A wedged AX query (a hung app, VoiceOver
+        // walking a dead tree) used to hold Stop forever, because the wait was a
+        // plain continuation with no way out.
+        await Self.drain(writeQ) { [self] in flush(); try? fh?.close() }
+        await Self.drain(axQ)
+        await Self.drain(focusQ)
+        await Self.drain(liveQ)
         let cursors = catalog.encodedSnapshot()
         let frames = axFramesSnapshot
         await Task.detached(priority: .userInitiated) { [self] in
             try? cursors?.write(to: url.deletingLastPathComponent().appendingPathComponent("cursors.json"), options: .atomic)
             if let d = try? JSONEncoder().encode(frames) { try? d.write(to: axURL, options: .atomic) }
         }.value
+    }
+
+    /// Runs `work` on `queue`, then continues — but never waits longer than
+    /// `seconds`. The timeout lives on a separate queue: a timer scheduled on a
+    /// blocked queue would never fire, which is the hang it must escape.
+    private static func drain(_ queue: DispatchQueue, seconds: Double = 2,
+                              _ work: (@Sendable () -> Void)? = nil) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let fired = OSAllocatedUnfairLock(initialState: false)
+            let resume: @Sendable () -> Void = {
+                let first = fired.withLock { done -> Bool in
+                    if done { return false }
+                    done = true
+                    return true
+                }
+                if first { continuation.resume() }
+            }
+            queue.async {
+                work?()
+                resume()
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + seconds) { resume() }
+        }
     }
 
     private func flush() {
@@ -596,6 +612,33 @@ public final class InputRecorder: @unchecked Sendable {
                 }
             }
         } else {
+            // A failed query is not "no evidence" when the same field is still
+            // focused and a recent sample exists. Publish the held caret under
+            // this event's own reservation, keeping its original anchor so the
+            // planner can tell a held sample from a fresh one.
+            let held: AXFrame? = focusState.withLock { state -> AXFrame? in
+                guard let g = state.lastGood, g.frame.w > 0, g.frame.h > 0,
+                      HostClock.now() - g.at <= 1.5, g.context == state.lastContext else { return nil }
+                return g.frame
+            }
+            if let held, focusedContextKey(AXUIElementCreateSystemWide()) == focusState.withLock({ $0.lastContext }) {
+                publish(held, at: flight.index)
+                if flight.live == .event {
+                    var focused = flight.event
+                    let point = caretCenter(held)
+                    focused.x = Float(point.x)
+                    focused.y = Float(point.y)
+                    liveQ.async { [self] in
+                        let stale = focusState.withLock { state -> Bool in
+                            guard flight.index > state.lastFocusIndex else { return true }
+                            state.lastFocusIndex = flight.index
+                            return false
+                        }
+                        guard !stale, let hook = liveFocusHook.withLock({ $0 }) else { return }
+                        hook(focused, held)
+                    }
+                }
+            }
             next = focusState.withLock { state -> FocusFlight? in
                 if state.inFlight?.index == flight.index { state.inFlight = nil }
                 let queued = state.queued
