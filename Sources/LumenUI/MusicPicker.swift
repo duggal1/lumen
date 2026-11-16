@@ -114,7 +114,14 @@ struct MusicPicker: View {
     /// start a preview.
     @ViewBuilder private func trailing(_ track: BundledAudioAssets.Music, added: Bool, hue: Color) -> some View {
         if added {
-            Button { model.removeMusicLane(model.timeline.audio.lanes.first(where: { $0.path == track.url.path })?.id ?? UUID()) } label: {
+            Button {
+                // Resolve the real lane id. Inventing a UUID here silently
+                // dispatched a delete for a lane that cannot exist, which is
+                // exactly the "delete does nothing" report.
+                if let id = model.timeline.audio.lanes.first(where: { $0.path == track.url.path })?.id {
+                    model.removeMusicLane(id)
+                }
+            } label: {
                 Image(systemName: "check").font(.system(size: 11)).foregroundStyle(Tok.text2)
                     .frame(width: 24, height: 24).background(Circle().fill(Tok.control))
             }

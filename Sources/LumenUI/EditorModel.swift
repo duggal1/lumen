@@ -1012,7 +1012,7 @@ enum TimelineSelection: Equatable {
         else if timeline.overlays.highlights.contains(where: { $0.id == id }) { dispatch(.deleteHighlight(id)) }
         else if timeline.overlays.loupes.contains(where: { $0.id == id }) { dispatch(.deleteLoupe(id)) }
         else if timeline.clips.contains(where: { $0.id == id }) { dispatch(.rippleDeleteClip(id: id)) }
-        else if timeline.audio.lanes.contains(where: { $0.id == id && $0.role == .music }) { removeMusicLane(id) }
+        else if timeline.audio.lanes.contains(where: { $0.id == id && $0.role == .music }) { dispatch(.deleteAudioLane(id)) }
         else { return }
         selection = nil
     }
@@ -1091,7 +1091,7 @@ enum TimelineSelection: Equatable {
     }
 
     func removeMusicLane(_ id: UUID) {
-        edit { tl in tl.audio.lanes.removeAll { $0.id == id && $0.role == .music } }
+        dispatch(.deleteAudioLane(id))
         if selection == id { selection = nil }
     }
 

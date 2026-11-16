@@ -48,6 +48,7 @@ public enum Command: Codable, Sendable {
     case updateLoupe(Loupe)
     case addTapAtPlayhead(x: Double, y: Double), deleteTap(UUID), moveTap(tap: UUID, x: Double, y: Double, atSource: Double?)
     case addText(TextBlock), editText(UUID, String), deleteText(UUID)
+    case deleteAudioLane(UUID)
     case addClip(TimelineClip), deleteClip(UUID), moveClip(UUID, start: Double), trimClip(UUID, inPoint: Double, duration: Double)
     case splitClip(atOutput: Double), rippleDeleteClip(id: UUID), joinClips(ids: [UUID]),
          duplicateClip(id: UUID), pasteClip(clip: TimelineClip, atOutput: Double)
@@ -301,6 +302,7 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         guard let i = t.overlays.texts.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
         t.overlays.texts[i].text = String(value.prefix(500)); return .captions
     case .deleteText(let id): t.overlays.texts.removeAll { $0.id == id }; return .captions
+    case .deleteAudioLane(let id): t.audio.lanes.removeAll { $0.id == id }; return .audio
 
     case .applyAutoTidy(let cuts):
         t.timeMap.cuts.removeAll { $0.origin == .autoTidy }
