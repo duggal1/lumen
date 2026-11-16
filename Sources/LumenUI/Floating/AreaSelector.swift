@@ -16,6 +16,8 @@ import LumenCapture
         let mouse = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main,
               let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
+        let scale = screen.backingScaleFactor
+        func snap(_ v: CGFloat) -> CGFloat { (v * scale).rounded() / scale }
         return await withCheckedContinuation { (continuation: CheckedContinuation<Selection?, Never>) in
             let window = AreaWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
             window.level = .screenSaver
@@ -29,12 +31,14 @@ import LumenCapture
             view.finish = { rect in
                 hud.close()
                 window.orderOut(nil)
+                NSCursor.arrow.set()
                 guard let rect, rect.width >= 16, rect.height >= 16 else { continuation.resume(returning: nil); return }
                 // AppKit (bottom-left, points) -> ScreenCaptureKit (top-left,
-                // display relative).
-                let flipped = CGRect(x: rect.minX, y: screen.frame.height - rect.maxY,
-                                     width: rect.width, height: rect.height)
-                continuation.resume(returning: Selection(displayID: displayID, rect: flipped.integral))
+                // display relative). Snap to whole device pixels at this
+                // display's backing scale, not to whole points.
+                let flipped = CGRect(x: snap(rect.minX), y: snap(screen.frame.height - rect.maxY),
+                                     width: snap(rect.width), height: snap(rect.height))
+                continuation.resume(returning: Selection(displayID: displayID, rect: flipped))
             }
             view.previous = previous.map { CGRect(x: $0.minX, y: screen.frame.height - $0.maxY,
                                                   width: $0.width, height: $0.height) }
@@ -180,9 +184,8 @@ private final class AreaView: NSView {
         NSColor.clear.setFill()
         selection.fill(using: .copy)
 
-        let mark = NSColor(srgbRed: 240 / 255, green: 90 / 255, blue: 0, alpha: 1)
-        mark.setFill()
-        let arm: CGFloat = 14, thick: CGFloat = 2
+        AppKitToken.accent.setFill()
+        let arm: CGFloat = 8, thick: CGFloat = 2
         let corners: [(CGPoint, CGFloat, CGFloat)] = [
             (CGPoint(x: selection.minX, y: selection.maxY), 1, -1),
             (CGPoint(x: selection.maxX, y: selection.maxY), -1, -1),
@@ -196,17 +199,7 @@ private final class AreaView: NSView {
                                   y: sy > 0 ? corner.y - arm : corner.y, width: thick, height: arm)
             horizontal.fill(); vertical.fill()
         }
-        // Precision handles: 6 pt squares on the corners and edge midpoints.
-        NSColor.white.setFill()
-        let points = [
-            CGPoint(x: selection.minX, y: selection.minY), CGPoint(x: selection.midX, y: selection.minY),
-            CGPoint(x: selection.maxX, y: selection.minY), CGPoint(x: selection.minX, y: selection.midY),
-            CGPoint(x: selection.maxX, y: selection.midY), CGPoint(x: selection.minX, y: selection.maxY),
-            CGPoint(x: selection.midX, y: selection.maxY), CGPoint(x: selection.maxX, y: selection.maxY),
-        ]
-        for point in points {
-            CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6).fill()
-        }
+
     }
 
     override func resetCursorRects() {

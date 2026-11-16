@@ -80,30 +80,44 @@ private func perfInput() -> DirectorInput {
 
 // MARK: - Voice work: one lock, single flight, parallel independent jobs
 //
-// Measured before and after the mixer restructure on this machine (Apple M1,
-// 8 cores, macOS 27.2). The numbers below are the ones printed by
-// `voiceWorkIsSingleFlightAndNotSerialised`.
+// Scheduling and duplicate work, not inference speed. A fake denoiser that
+// records its render intervals makes both properties observable directly.
 
-/// Counts renders and stands in for a slow neural denoiser, so the test measures
-/// scheduling and duplicate work rather than inference speed.
-private func milliseconds(_ d: Duration) -> Double {
-    Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15
+private func concurrently(_ a: @escaping () -> Void, _ b: @escaping () -> Void) {
+    let group = DispatchGroup()
+    DispatchQueue.global(qos: .userInitiated).async(group: group, execute: a)
+    DispatchQueue.global(qos: .userInitiated).async(group: group, execute: b)
+    group.wait()
 }
 
 private final class CountingDenoiser: Denoiser, @unchecked Sendable {
     private let lock = NSLock()
     private let renderSeconds: Double
     private var renders = 0
+    private var nextID = 0
+    private var spans: [Int: (start: Date, end: Date)] = [:]
     init(renderSeconds: Double) { self.renderSeconds = renderSeconds }
     var count: Int { lock.lock(); defer { lock.unlock() }; return renders }
+    /// Render intervals, so "not serialised" can be asserted directly instead
+    /// of inferred from a wall-clock budget that inflates under suite load.
+    var intervals: [(start: Date, end: Date)] {
+        lock.lock(); defer { lock.unlock() }
+        return spans.values.sorted { $0.start < $1.start }
+    }
     func process(_ x: [Float]) -> [Float] {
-        lock.lock(); renders += 1; lock.unlock()
+        lock.lock()
+        renders += 1
+        let id = nextID
+        nextID += 1
+        spans[id] = (Date(), .distantPast)
+        lock.unlock()
         Thread.sleep(forTimeInterval: renderSeconds)
+        lock.lock(); spans[id]?.end = Date(); lock.unlock()
         return x
     }
 }
 
-@Test func voiceWorkIsSingleFlightAndNotSerialised() throws {
+@Test(.serialized) func voiceWorkIsSingleFlightAndNotSerialised() throws {
     let fs = AudioIO.fs
     let samples = (0..<Int(fs * 2)).map { i -> Float in Float(0.1 * sin(2 * Double.pi * 200 * Double(i) / fs)) }
     var base = Timeline(duration: 2)
@@ -119,17 +133,9 @@ private final class CountingDenoiser: Denoiser, @unchecked Sendable {
     let denoiser = CountingDenoiser(renderSeconds: 0.4)
     let mixer = AudioMixer(mic: samples, micOffset: 0, system: nil, systemOffset: 0)
     mixer.denoiser = denoiser
-    let start = ContinuousClock.now
-    DispatchQueue.concurrentPerform(iterations: 2) { _ in _ = mixer.mix(base) }
-    // `Duration` splits into whole seconds and attoseconds. Seconds are 1e9 ns
-    // and attoseconds are 1e-18 s, so milliseconds are seconds*1e3 +
-    // attoseconds/1e15; dividing attoseconds by 1e9 yields seconds, not ms.
-    let duplicateMs = milliseconds(start.duration(to: .now))
-    print(String(format: "VOICE same-plan concurrent renders=%d wall=%.0fms", denoiser.count, duplicateMs))
+    concurrently({ _ = mixer.mix(base) }, { _ = mixer.mix(base) })
+    print("VOICE same-plan concurrent renders=\(denoiser.count)")
     #expect(denoiser.count == 1, "two callers for one voice key must not both render")
-    // One 400 ms render plus this machine's fixed mix cost. Duplicate work
-    // would add a second 400 ms render on top, so the gap is unambiguous.
-    #expect(duplicateMs < 1000, "concurrent callers of one key took \(duplicateMs) ms")
 
     // Two different voice settings on the same mixer are independent work: the
     // old single lock serialised them, so the second waited for the whole
@@ -140,12 +146,15 @@ private final class CountingDenoiser: Denoiser, @unchecked Sendable {
     var a = base, b = base
     a.audio.noiseReductionStrength = 0.4
     b.audio.noiseReductionStrength = 1.0
-    let started = ContinuousClock.now
-    DispatchQueue.concurrentPerform(iterations: 2) { index in _ = shared.mix(index == 0 ? a : b) }
-    let wallMs = milliseconds(started.duration(to: .now))
-    print(String(format: "VOICE different-plans concurrent renders=%d wall=%.0fms", parallelDenoiser.count, wallMs))
+    concurrently({ _ = shared.mix(a) }, { _ = shared.mix(b) })
+    print("VOICE different-plans concurrent renders=\(parallelDenoiser.count)")
     #expect(parallelDenoiser.count == 2)
-    // Two 600 ms renders that overlap finish in about one render's time; a
-    // serialised pair would take both, plus the fixed cost twice.
-    #expect(wallMs < 1400, "independent voice jobs were serialised: \(wallMs) ms for two 600 ms renders")
+    // Direct overlap, independent of machine speed: a single lock would make
+    // the second render start only after the first had ended.
+    let spans = parallelDenoiser.intervals
+    #expect(spans.count == 2)
+    if spans.count == 2 {
+        #expect(spans[0].start < spans[1].end && spans[1].start < spans[0].end,
+                "independent voice jobs did not overlap")
+    }
 }

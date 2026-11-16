@@ -57,9 +57,14 @@ public struct Geometry: Sendable {
         radii = SIMD4(r.tl, r.tr, r.br, r.bl) * ui
     }
     /// Source px -> canvas px for a given camera.
-    public func toCanvas(_ p: SIMD2<Double>, cam: SIMD2<Double>, scale: Double) -> SIMD2<Double> {
-        let center = ZoomTransform.clamp(cam, source: src, scale: scale)
-        let view = src / max(scale, 1), n = (p - (center - view / 2)) / view
+    public func toCanvas(_ p: SIMD2<Double>, cam: SIMD2<Double>, scale: Double, crop: CGRect? = nil) -> SIMD2<Double> {
+        let bounds = crop ?? CGRect(x: 0, y: 0, width: src.x, height: src.y)
+        let relCam = SIMD2<Double>(cam.x - bounds.minX, cam.y - bounds.minY)
+        let cropSrc = SIMD2<Double>(bounds.width, bounds.height)
+        let center = ZoomTransform.clamp(relCam, source: cropSrc, scale: scale)
+        let view: SIMD2<Double> = cropSrc / max(scale, 1)
+        let origin = SIMD2<Double>(bounds.minX, bounds.minY) + center - view / 2
+        let n = (p - origin) / view
         return SIMD2(content.x + n.x * content.z, content.y + n.y * content.w)
     }
 }
@@ -71,6 +76,7 @@ private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; 
                            var saturation: Float; var canvasCenter: SIMD2<Float>; var canvasGround: SIMD4<Float> }
 private struct ContentU {
     var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>
+    var cropSize: SIMD2<Float>
     var scale: Float; var radius: Float; var border: Float; var p: Float
     var tilt: SIMD2<Float>; var radii: SIMD4<Float>
     var upRegion: SIMD4<Float>; var upTexSize: SIMD2<Float>; var upFactor: Float; var upBlend: Float
@@ -794,7 +800,15 @@ public final class Renderer: @unchecked Sendable {
         let tl = r.timeline
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y)), content = SIMD4<Float>(g.content)
         let sc = max(Double(st.cameraScale), 1)
-        let cam = ZoomTransform.clamp(SIMD2<Double>(Double(st.cameraCenter.x), Double(st.cameraCenter.y)), source: g.src, scale: sc)
+        // Intelligent Area crop: the compositor samples only this rect, and
+        // the camera centre is clamped within it. Zero means no smart crop.
+        let cropBounds: CGRect = st.cropRect.width > 1 && st.cropRect.height > 1
+            ? st.cropRect : CGRect(x: 0, y: 0, width: g.src.x, height: g.src.y)
+        let camRel = ZoomTransform.clamp(
+            SIMD2(Double(st.cameraCenter.x) - cropBounds.minX, Double(st.cameraCenter.y) - cropBounds.minY),
+            source: SIMD2(cropBounds.width, cropBounds.height), scale: sc)
+        let cam = SIMD2<Double>(camRel.x + cropBounds.minX, camRel.y + cropBounds.minY)
+        let cropSize = SIMD2<Float>(Float(cropBounds.width), Float(cropBounds.height))
         let pxPerSrc = g.content.z / g.src.x
         let drawingContent = !r.cursorOnly
         // Real-time upscaler. SMOOTHNESS: the upscale chain still runs as compute
@@ -830,7 +844,8 @@ public final class Renderer: @unchecked Sendable {
         // content (fragment path; the upscaler, when engaged, is sampled here)
         if drawingContent {
             enc.setRenderPipelineState(pContent); quad(enc, content, canvasF)
-            frag(enc, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam), scale: Float(sc),
+            frag(enc, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam),
+                             cropSize: cropSize, scale: Float(sc),
                              radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0,
                              tilt: st.cameraTilt, radii: SIMD4<Float>(g.radii),
                              upRegion: upscaled?.0.region ?? .zero, upTexSize: upscaled?.0.texSize ?? .one,
@@ -845,9 +860,9 @@ public final class Renderer: @unchecked Sendable {
         if drawingContent, !st.emphasis.highlights.isEmpty {
             enc.setRenderPipelineState(pHighlight)
             for mark in st.emphasis.highlights where mark.opacity > 0.001 {
-                let start = g.toCanvas(SIMD2(Double(mark.rect.x), Double(mark.rect.y)), cam: cam, scale: sc)
+                let start = g.toCanvas(SIMD2(Double(mark.rect.x), Double(mark.rect.y)), cam: cam, scale: sc, crop: cropBounds)
                 let end = g.toCanvas(SIMD2(Double(mark.rect.x + mark.rect.z),
-                                            Double(mark.rect.y + mark.rect.w)), cam: cam, scale: sc)
+                                            Double(mark.rect.y + mark.rect.w)), cam: cam, scale: sc, crop: cropBounds)
                 let bounds = SIMD4<Float>(Float(min(start.x, end.x)), Float(min(start.y, end.y)),
                                            Float(abs(end.x - start.x)), Float(abs(end.y - start.y)))
                 let mode: Int32 = switch mark.style {
@@ -900,7 +915,7 @@ public final class Renderer: @unchecked Sendable {
             // full strength, at 1 it would leave a hard edge. Both are skipped
             // so the wave always starts and ends on nothing.
             let live = st.clickFX.filter { $0.progress > 0 && $0.progress < 1 }
-            let centers = live.map { g.toCanvas(SIMD2(Double($0.position.x), Double($0.position.y)), cam: cam, scale: sc) }
+            let centers = live.map { g.toCanvas(SIMD2(Double($0.position.x), Double($0.position.y)), cam: cam, scale: sc, crop: cropBounds) }
             var ringSource: MTLTexture?
             // SMOOTHNESS: copy only the union of the ring quads (plus the wave's
             // displacement), not the whole canvas, once per frame.
@@ -960,7 +975,7 @@ public final class Renderer: @unchecked Sendable {
         let cs = st.cursor
         if cs.opacity > 0.01, let atlas, let ent = atlas.entry(cs.shape) {
             let S = 32 * r.backingScale * tl.cursor.size * pxPerSrc * pow(sc, 1 - tl.cursor.effectiveCompensation) * Double(cs.press)
-            let c = g.toCanvas(SIMD2<Double>(Double(cs.position.x), Double(cs.position.y)), cam: cam, scale: sc)
+            let c = g.toCanvas(SIMD2<Double>(Double(cs.position.x), Double(cs.position.y)), cam: cam, scale: sc, crop: cropBounds)
             enc.setRenderPipelineState(pCursor)
             quad(enc, SIMD4<Float>(Float(c.x - ent.hot.x * S), Float(c.y - ent.hot.y * S), Float(S), Float(S)), canvasF)
             frag(enc, CursorU(content: content, radius: Float(g.radius), opacity: cs.opacity, layer: UInt32(ent.layer), p: 0))

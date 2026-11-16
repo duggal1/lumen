@@ -252,7 +252,7 @@ static float3 sampleMip(texture2d<float> t, float2 uv, float minif) {
 // sell depth without ever sampling outside the source: the warp is clamped so
 // the visible rectangle can never exceed the original frame.
 struct ContentU {
-    float4 content; float2 src; float2 cam; float scale; float radius; float border; float p;
+    float4 content; float2 src; float2 cam; float2 cropSize; float scale; float radius; float border; float p;
     float2 tilt; float4 radii;
     // SMOOTHNESS: the upscaler now feeds this pass directly (texture 1) instead
     // of a separate full-canvas compute pass. `upBlend` 0 keeps plain Catmull.
@@ -279,7 +279,7 @@ fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]]
     float w = max(fwidth(d), 1e-3);
     float a = clamp(0.5 - d / w, 0.0, 1.0);
     if (a <= 0.0) return float4(0.0);
-    float2 view = u.src / u.scale;
+    float2 view = u.cropSize / u.scale;
     float2 n = (in.px - u.content.xy) / u.content.zw - 0.5;
     if (abs(u.tilt.x) + abs(u.tilt.y) > 0.001) {
         float ky = tan(clamp(u.tilt.x, -18.0, 18.0) * 0.01745329252);

@@ -473,6 +473,7 @@ public actor RecordingSession {
         if let t = webcam?.first.withLock({ $0 }) { meta.webcam = TrackMeta(file: "webcam.mov", startHostSeconds: t) }
         meta.additionalMicrophones = extraMicrophones.compactMap(\.track)
         var tl = Timeline(duration: info.duration)
+        tl.smartCrop = cfg?.smartCrop ?? SmartCropConfig()
         let pauses = engine.pauseIntervals.compactMap { p -> CutRange? in
             let a = max(p.start - origin, 0), e = min(p.end - origin, info.duration)
             return e - a > 0.05 ? CutRange(start: a, end: e, origin: .manual) : nil

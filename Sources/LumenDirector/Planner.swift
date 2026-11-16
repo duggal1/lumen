@@ -125,7 +125,7 @@ enum ZoomPlanner {
     /// that staircase into the camera's dead-zone + zero-phase follow made the
     /// shot wander left/right and up/down and keep ringing after the last key.
     /// The field is the thing being typed into — frame that instead.
-    private static func resolvedField(t0: Double, t1: Double, keys: [InputEvent], ax: [AXFrame],
+    static func resolvedField(t0: Double, t1: Double, keys: [InputEvent], ax: [AXFrame],
                                       traces: [TypingTrace], W: Double, H: Double, b: Double) -> CGRect? {
         let slack = 24 * b
         var carets: [CGPoint] = []
@@ -393,10 +393,12 @@ enum ZoomPlanner {
                         s = clamp(p.baseScale * factor, lo, hi)
                     }
                     if let r = i.frameRect {
-                        // Fit the marked rect with breathing room, but never
-                        // pull back from the user's chosen zoom amount.
+                        // The marked rect is a ceiling, not a target: a large
+                        // control should earn a gentler move than a small one.
+                        // Taking max() here pushed every resolved click to the
+                        // cap and made target size irrelevant.
                         let fit = min(W / max(r.width * 1.25, 1), H / max(r.height * 1.25, 1))
-                        s = clamp(max(s, min(fit, hi)), lo, hi)
+                        s = clamp(min(s, fit), lo, hi)
                     }
                 }
             }

@@ -108,6 +108,44 @@ public struct CaptionChunk: Sendable, Equatable {
     public var text: String { lines.map { $0.map(\.text).joined(separator: " ") }.joined(separator: "\n") }
 }
 
+/// A time-varying source-pixel crop. Keyframes are in OUTPUT seconds and
+/// interpolated with a rest-to-rest quintic per channel, so arrival is exact
+/// and there is no velocity step at a keyframe.
+public struct CropTrack: Sendable, Equatable {
+    public struct Keyframe: Sendable, Equatable {
+        public var t: Double
+        public var rect: CGRect
+        public init(t: Double, rect: CGRect) { self.t = t; self.rect = rect }
+    }
+    public var rate: Double
+    public var keys: [Keyframe]
+    public init(rate: Double = 480, keys: [Keyframe] = []) {
+        self.rate = rate
+        self.keys = keys.sorted { $0.t < $1.t }
+    }
+
+    public func evaluate(at t: Double) -> CGRect {
+        guard let first = keys.first else { return .zero }
+        if t <= first.t { return first.rect }
+        guard let last = keys.last else { return first.rect }
+        if t >= last.t { return last.rect }
+        var lo = 0, hi = keys.count - 1
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2
+            if keys[mid].t <= t { lo = mid } else { hi = mid }
+        }
+        let a = keys[lo], b = keys[hi]
+        let T = max(b.t - a.t, 1e-4)
+        func axis(_ x0: Double, _ x1: Double) -> Double {
+            QuinticMove(t0: a.t, T: T, x0: x0, v0: 0, a0: 0, x1: x1).sample(t).x
+        }
+        return CGRect(x: axis(Double(a.rect.minX), Double(b.rect.minX)),
+                      y: axis(Double(a.rect.minY), Double(b.rect.minY)),
+                      width: axis(Double(a.rect.width), Double(b.rect.width)),
+                      height: axis(Double(a.rect.height), Double(b.rect.height)))
+    }
+}
+
 public struct DerivedTracks: Sendable, Equatable {
     public var revision: Int
     public var sourceSize: SIMD2<Double>
@@ -124,13 +162,16 @@ public struct DerivedTracks: Sendable, Equatable {
     public var captions: [CaptionChunk]
     public var autoMasks: [Mask]
     public var personMask: PersonMaskInfo?
+    /// Empty keys mean "no smart crop"; FrameState.cropRect is then .zero.
+    public var crop: CropTrack
     public init(revision: Int, sourceSize: SIMD2<Double>, outputDuration: Double, cursor: CursorTrack, camera: CameraTrack,
                 clicks: [ClickFX], cues: [SFXCue], duck: [Float], face: [SIMD3<Float>], webcamAspect: Float,
                 layout: LayoutTrack = LayoutTrack(), placement: PlacementTrack = PlacementTrack(), captions: [CaptionChunk] = [],
-                autoMasks: [Mask] = [], personMask: PersonMaskInfo? = nil) {
+                autoMasks: [Mask] = [], personMask: PersonMaskInfo? = nil, crop: CropTrack = CropTrack()) {
         self.revision = revision; self.sourceSize = sourceSize; self.outputDuration = outputDuration; self.cursor = cursor
         self.camera = camera; self.clicks = clicks; self.cues = cues; self.duck = duck; self.face = face; self.webcamAspect = webcamAspect
         self.layout = layout; self.placement = placement; self.captions = captions; self.autoMasks = autoMasks; self.personMask = personMask
+        self.crop = crop
     }
     public static func == (a: Self, b: Self) -> Bool { a.revision == b.revision }
 }

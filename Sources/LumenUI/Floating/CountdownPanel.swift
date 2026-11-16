@@ -100,7 +100,6 @@ private struct CountdownView: View {
             .padding(.top, 2)
         }
         .frame(width: 208, height: 196)
-        .blur(radius: model.visible ? 0 : 9)
         .opacity(model.visible ? 1 : 0)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Recording starts in \(model.number)")

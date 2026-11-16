@@ -571,6 +571,28 @@ public struct SplitSeam: Codable, Identifiable, Equatable, Sendable {
     public init(id: UUID = UUID(), t: Double) { self.id = id; self.t = t }
 }
 
+/// Time-varying crop for Area capture. `roi` is stored normalized to the
+/// source frame, the same coordinate space the planner uses for focus rects.
+/// A nil or empty ROI means "no smart crop" and keeps the static sourceRect
+/// behaviour.
+public struct SmartCropConfig: Codable, Equatable, Sendable {
+    public var enabled: Bool = false
+    public var roi: CGRect? = nil
+    /// Points, in the source display's own scale; converted to source px before use.
+    public var revealMarginPt: Double = 24
+    /// Output seconds from the end of an intent to the fully restored crop.
+    public var returnSeconds: Double = 0.45
+    public init() {}
+    public init(enabled: Bool, roi: CGRect? = nil, revealMarginPt: Double = 24, returnSeconds: Double = 0.45) {
+        self.enabled = enabled; self.roi = roi
+        self.revealMarginPt = revealMarginPt; self.returnSeconds = returnSeconds
+    }
+    public var isActive: Bool {
+        guard enabled, let r = roi else { return false }
+        return r.width > 0 && r.height > 0
+    }
+}
+
 public struct Timeline: Sendable, Codable, Equatable {
     public var schemaVersion = 4
     public var timeMap: TimeMap
@@ -591,9 +613,10 @@ public struct Timeline: Sendable, Codable, Equatable {
     public var captions = CaptionPlan()
     /// Imported video appended after the recording, in OUTPUT seconds.
     public var clips: [TimelineClip] = []
+    public var smartCrop = SmartCropConfig()
     public var derived: DerivedTracks?
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, timeMap, zoom, suppressedAuto, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips, seams
+        case schemaVersion, timeMap, zoom, suppressedAuto, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips, seams, smartCrop
     }
     public init(duration: Double) { timeMap = TimeMap(sourceDuration: duration) }
     public init(from d: Decoder) throws {
@@ -613,6 +636,7 @@ public struct Timeline: Sendable, Codable, Equatable {
         overlays = c.opt(.overlays, overlays); layouts = c.opt(.layouts, layouts); layoutSettings = c.opt(.layoutSettings, layoutSettings)
         captions = c.opt(.captions, captions)
         clips = c.opt(.clips, clips)
+        smartCrop = c.opt(.smartCrop, smartCrop)
     }
 
     /// Total length of the deliverable: the edited recording plus any imported clips.

@@ -56,6 +56,9 @@ public struct RecordingConfig: Sendable {
     public var webcamQuality: String = "auto"
     /// AGENT: carries the agent's auto-mask choice from the tool into finalize.
     public var privacyAutoMask = false
+    /// Intelligent Area crop. When enabled the capture is the full display and
+    /// the crop lives in the derived camera track, not in SCStream.sourceRect.
+    public var smartCrop = SmartCropConfig()
     public init(source: Source) { self.source = source }
 }
 

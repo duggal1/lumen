@@ -300,6 +300,14 @@ struct AreaPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             PanelHeader(title: "Area")
+            PanelToggleRow(title: "Intelligent crop", on: Binding(get: { app.smartCrop.enabled },
+                                                                  set: { app.smartCrop.enabled = $0 }))
+            Text("Frames the page, reveals chrome while you type.").font(.system(size: 10))
+                .foregroundStyle(Tok.text2).padding(.horizontal, 10).padding(.bottom, 4)
+            if app.smartCrop.enabled {
+                Text("Raw footage keeps the full display.").font(.system(size: 10))
+                    .foregroundStyle(Tok.text2).padding(.horizontal, 10).padding(.bottom, 4)
+            }
             PanelRow(icon: "rectangle.dashed", title: app.lastArea == nil ? "Select an area…" : "Select a new area…") {
                 FloatingBarController.current?.selectArea(openPicker: true)
             }

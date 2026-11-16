@@ -23,9 +23,15 @@ public struct SpectralGate: Denoiser {
             fft.transform(&real, &imaginary)
             for k in 0..<bins { profile[k].append(real[k] * real[k] + imaginary[k] * imaginary[k]) }
         }
+        // A purely relative Wiener estimate converges on any stationary sound:
+        // its noise profile becomes the signal and it gates sustained speech,
+        // notes and hums regardless of how loud they are. Cap the estimate at a
+        // small absolute floor so a strong stationary component is treated as
+        // signal, while bins that are quieter than the floor are still gated.
+        let gatePower = Float(size * size) * 1e-7
         let noise = profile.map { values -> Float in
             let sorted = values.sorted()
-            return max(sorted[sorted.count / 5], 1e-12)
+            return min(max(sorted[sorted.count / 5], 1e-12), gatePower)
         }
         let padded = [Float](repeating: 0, count: size) + x + [Float](repeating: 0, count: size)
         var output = [Float](repeating: 0, count: padded.count), normalization = output

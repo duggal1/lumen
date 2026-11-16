@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import LumenCore
 import LumenProject
 
@@ -64,6 +65,17 @@ public struct DeriveCache: Sendable {
     }
     var planKey: PlanKey?
     var plan: ZoomPlanner.ZoomPlan?
+
+    /// Smart crop depends on its own config and the same recorded evidence.
+    /// PlanKey is the zoom-planner cache and must not be repurposed.
+    struct CropKey: Equatable {
+        var config: SmartCropConfig
+        var digest: UInt64
+        var signature: [Double]
+        var source: SIMD3<Double>
+    }
+    var cropKey: CropKey?
+    var crop: CropTrack?
 
     /// Same idea for the speed-ramp planner.
     struct RampKey: Equatable {
@@ -224,6 +236,19 @@ public enum Director {
             (cursor, clicks) = result
         }
         if cancelled() { return nil }
+        let cropKey = DeriveCache.CropKey(config: t.smartCrop, digest: digest,
+                                          signature: tm.sourceSignature,
+                                          source: SIMD3(Double(src.width), Double(src.height), src.backingScale))
+        let crop: CropTrack
+        if cache.cropKey == cropKey, let cached = cache.crop {
+            crop = cached
+        } else {
+            let intents = SmartCropPlanner.intents(events: input.events, ax: input.ax, typing: input.typing,
+                                                   source: src, tm: tm)
+            crop = SmartCropPlanner.plan(config: t.smartCrop, source: src, tm: tm, intents: intents)
+            cache.cropKey = cropKey; cache.crop = crop
+        }
+        if cancelled() { return nil }
         let size = SIMD2(Double(src.width), Double(src.height))
         guard let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size,
                                            outDur: tm.outputDuration, loop: t.cursor.loop,
@@ -296,7 +321,7 @@ public enum Director {
         t.derived = DerivedTracks(revision: revision, sourceSize: size, outputDuration: tm.outputDuration, cursor: cursor, camera: cam,
                                   clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm, camera: cam, layout: t.webcam),
                                   webcamAspect: input.webcamAspect, layout: layout, placement: placement,
-                                  captions: captions, autoMasks: autoMasks, personMask: input.personMask)
+                                  captions: captions, autoMasks: autoMasks, personMask: input.personMask, crop: crop)
         if ProcessInfo.processInfo.environment["LUMEN_ZOOM_DEBUG"] == "1" {
             let cam = t.derived?.camera
             for event in input.events where event.kind == .down && event.button == 0 {
@@ -401,6 +426,8 @@ public struct FrameState: Sendable {
     public var cameraCenter: SIMD2<Float>     // source px
     public var cameraScale: Float
     public var cameraTilt: SIMD2<Float> = .zero       // (yaw, pitch) degrees; renderer homography consumes this in Part 5
+    /// Source-pixel crop for intelligent Area capture. `.zero` means no crop.
+    public var cropRect: CGRect = .zero
     public var cursor: CursorSample
     public var clickFX: [ClickRing]
     public var webcamCrop: SIMD4<Float>       // uv x, y, w, h
@@ -413,10 +440,11 @@ public struct FrameState: Sendable {
     public var emphasis: EmphasisFrame
 
     public init(cameraCenter: SIMD2<Float>, cameraScale: Float, cameraTilt: SIMD2<Float> = .zero,
+                cropRect: CGRect = .zero,
                 cursor: CursorSample, clickFX: [ClickRing], webcamCrop: SIMD4<Float>, sourceTime: Double,
                 layout: ResolvedLayout = .full, layoutKind: LayoutKind = .screenOnly, webcamCorner: WebcamLayout.Corner? = nil,
                 webcamOpacity: Float = 1, caption: CaptionChunk? = nil, emphasis: EmphasisFrame = EmphasisFrame()) {
-        self.cameraCenter = cameraCenter; self.cameraScale = cameraScale; self.cameraTilt = cameraTilt; self.cursor = cursor
+        self.cameraCenter = cameraCenter; self.cameraScale = cameraScale; self.cameraTilt = cameraTilt; self.cropRect = cropRect; self.cursor = cursor
         self.clickFX = clickFX; self.webcamCrop = webcamCrop; self.sourceTime = sourceTime; self.layout = layout
         self.layoutKind = layoutKind; self.webcamCorner = webcamCorner; self.webcamOpacity = webcamOpacity
         self.caption = caption; self.emphasis = emphasis
@@ -517,7 +545,11 @@ extension Timeline {
             let c = d.captions[lo]
             if t >= c.start, t < c.end { caption = c }
         }
-        return FrameState(cameraCenter: cam, cameraScale: scale, cameraTilt: tilt, cursor: cs, clickFX: rings, webcamCrop: crop,
+        let smartRect = d.crop.evaluate(at: t)
+        // `crop` above is the webcam UV rect; this is the source-pixel screen crop.
+        let screenCrop = smartRect.width > 1 && smartRect.height > 1 ? smartRect : .zero
+        return FrameState(cameraCenter: cam, cameraScale: scale, cameraTilt: tilt, cropRect: screenCrop,
+                          cursor: cs, clickFX: rings, webcamCrop: crop,
                           sourceTime: sourceTime, layout: d.layout.sample(at: t), layoutKind: layoutKind,
                           webcamCorner: d.placement.corner(at: t), webcamOpacity: d.placement.visibility(at: t),
                           caption: caption, emphasis: emphasis)

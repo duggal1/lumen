@@ -80,6 +80,9 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         didSet { UserDefaults.standard.set(kind.rawValue, forKey: "LumenDefaultSource") }
     }
     var displayID = CGMainDisplayID()
+    /// Intelligent Area crop settings for the next recording. Kept in memory;
+    /// the derived crop is persisted in the project's Timeline.
+    var smartCrop = SmartCropConfig()
     var windowID: CGWindowID = 0
     var fps = UserDefaults.standard.object(forKey: "LumenDefaultFPS") as? Int ?? 60 {
         didSet { UserDefaults.standard.set(fps, forKey: "LumenDefaultFPS") }
@@ -272,6 +275,20 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone, .external],
                                          mediaType: .audio, position: .unspecified)
             .devices.map { ($0.uniqueID, $0.localizedName) }
+    }
+
+    /// Normalizes a saved Area (display-relative top-left points) into the
+    /// source-relative coordinates the crop planner uses.
+    private func normalizedSmartCrop(for area: AreaPreset) -> SmartCropConfig {
+        var config = smartCrop
+        let screen = NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == area.displayID
+        } ?? NSScreen.main
+        if let screen, screen.frame.width > 0, screen.frame.height > 0 {
+            config.roi = CGRect(x: area.x / screen.frame.width, y: area.y / screen.frame.height,
+                                width: area.width / screen.frame.width, height: area.height / screen.frame.height)
+        }
+        return config
     }
 
     func setArea(display: CGDirectDisplayID, rect: CGRect) {
@@ -671,14 +688,20 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         case .window: cfg = RecordingConfig(source: .window(windowID))
         case .region:
             // AGENT: an agent's explicit region must not invoke the human region picker.
+            // Intelligent crop captures the whole display and carries the chosen
+            // rectangle as a normalized ROI instead of a hard sourceRect.
+            let useSmart = smartCrop.enabled && agentTarget == nil
             if let target = agentTarget { cfg = RecordingConfig(source: .display(target.displayID ?? CGMainDisplayID())) }
             else if let area = lastArea {
-                cfg = RecordingConfig(source: .region(area.displayID, area.rect))
+                cfg = useSmart ? RecordingConfig(source: .display(area.displayID)) : RecordingConfig(source: .region(area.displayID, area.rect))
             } else {
                 guard let picked = await AreaSelector.pick() else { return }
                 setArea(display: picked.displayID, rect: picked.rect)
                 guard let area = lastArea else { return }
-                cfg = RecordingConfig(source: .region(area.displayID, area.rect))
+                cfg = useSmart ? RecordingConfig(source: .display(area.displayID)) : RecordingConfig(source: .region(area.displayID, area.rect))
+            }
+            if useSmart, let area = lastArea {
+                cfg.smartCrop = normalizedSmartCrop(for: area)
             }
         }
         // An agent may ask for an exact target; it wins over the UI selection.
@@ -724,7 +747,10 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         if !headless && agentTarget == nil {
             presentBar(on: recordingScreen)
             hideLibraryForRecording()
-            if livePreview { livePreviewController = LivePreviewController(); livePreviewController?.show() }
+            if livePreview {
+                livePreviewController = LivePreviewController(config: cfg.smartCrop.isActive ? cfg.smartCrop : nil)
+                livePreviewController?.show()
+            }
         }
         do {
             // One preparation pass, then the countdown. The engine is warm

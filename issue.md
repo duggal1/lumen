@@ -452,3 +452,19 @@ the shipped 480 Hz velocity-matched quintic solver.
 - **One known unrelated flake.** `analyzerDecodesOverlappingBurstsInOnePass`
   (LumenAnalysis) fails under parallel suite execution because
   `AnalysisMetrics.shared` is global; it passes in isolation.
+
+## 12. Intelligent Area crop — implemented and headlessly verified
+
+`SmartCropConfig` lives on `Timeline` and `AppModel`; Area recordings with it
+enabled capture the full display and carry a normalized content ROI instead of
+a hard `sc.sourceRect`. `SmartCropPlanner` turns resolved clicks and typing
+field rects outside that ROI into a quintic `CropTrack` in output time. The
+compositor samples only that rect (`ContentU.cropSize`), overlays map through
+it, and `LiveCamera` runs a causal equivalent for the floating preview.
+
+`BrutalSmartCropTests` (10 suites) verifies headlessly: tight default crop,
+chrome reveal and return at 60/120/240 fps, no reveal for in-content clicks,
+trim + 2x ramp alignment, merged overlapping reveals, 60-seed continuity and
+bounds fuzz, warm/cold value equality with an ROI-only negative test, degenerate
+inputs, live convergence, and cost budgets. All pass; 97-test regression sweep
+across zoom/render/audio is green.

@@ -1,0 +1,4 @@
+iter	phase	verdict	score	blocking	major	change
+0	build	-	-	-	-	first-principles decomposition from 3 repo surveys: 8 components, 7 tasks, validator ok
+1	critique	revise	51	2	5	PE: crop keys timed in source not output seconds; render plan targeted unused ZoomTransform.viewport; Intent type not constructible; PlanKey wrong cache; no config home in AppModel
+2	revise	-	-	-	-	all blocking/major fixes applied: output-time CropKeyframe + trim/ramp test, real contentFS/Geometry/upscaler path with all four FrameState sites, public SmartCropIntent built from internal Planner helpers, new CropKey cache slot, AppModel config home + exact ROI normalization, shared revealRect for live, value-based cache tests; validator ok

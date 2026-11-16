@@ -11,12 +11,15 @@ private struct LayerBox: @unchecked Sendable { let v: CAMetalLayer }
 
 final class LiveHub: @unchecked Sendable {
     let source: LiveFrameSource
+    private let config: SmartCropConfig?
     private let cam = OSAllocatedUnfairLock<LiveCamera?>(initialState: nil)
-    init(source: LiveFrameSource) { self.source = source }
+    init(source: LiveFrameSource, config: SmartCropConfig? = nil) {
+        self.source = source; self.config = config
+    }
     func frame(_ pb: CVPixelBuffer) {
         source.submit(pb)
         let size = SIMD2(Double(CVPixelBufferGetWidth(pb)), Double(CVPixelBufferGetHeight(pb)))
-        cam.withLock { if $0 == nil { $0 = LiveCamera(source: size) } }
+        cam.withLock { if $0 == nil { $0 = LiveCamera(source: size, smartCrop: config) } }
     }
     func focus(_ e: InputEvent, _ frame: AXFrame) { cam.withLock { $0?.ingest(e, focus: frame) } }
     func event(_ e: InputEvent) { cam.withLock { $0?.ingest(e) } }
@@ -26,10 +29,10 @@ final class LiveHub: @unchecked Sendable {
 @MainActor final class LivePreviewController {
     let hub: LiveHub
     private var panel: NSPanel?
-    init?() {
+    init?(config: SmartCropConfig? = nil) {
         guard let r = try? Renderer(), let src = LiveFrameSource(device: r.device) else { return nil }
         r.setCustomCursors([])
-        hub = LiveHub(source: src)
+        hub = LiveHub(source: src, config: config)
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 488, height: 278), styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
         p.appearance = NSAppearance(named: .darkAqua)

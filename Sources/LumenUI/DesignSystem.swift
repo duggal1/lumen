@@ -23,6 +23,16 @@ extension Color {
     }
 }
 
+enum AppKitToken {
+    /// The same signal orange as `Tok.accent`, for the few AppKit `draw(_:)`
+    /// paths (area brackets) that cannot use a SwiftUI `Color`.
+    static let accent = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 255 / 255, green: 106 / 255, blue: 0 / 255, alpha: 1)
+            : NSColor(srgbRed: 240 / 255, green: 90 / 255, blue: 0 / 255, alpha: 1)
+    }
+}
+
 /// Lumen design tokens. Surfaces separate by one luminance step; no hex outside this file.
 enum Tok {
     // surfaces (dark is near-black elite: bg 030303, steps 5-7 pts)
@@ -138,8 +148,8 @@ enum Motion {
     static let menuOpen = Animation.smooth(duration: 0.20)
     static let menuClose = Animation.easeOut(duration: 0.12)
     static let menuHighlight = Animation.smooth(duration: 0.18)
-    static let floatingHighlight = Animation.easeInOut(duration: 0.28)
-    static let floatingTransition = Animation.easeInOut(duration: 0.32)
+    static let floatingHighlight = Animation.smooth(duration: 0.28)
+    static let floatingTransition = Animation.smooth(duration: 0.32)
     static let toggle = Animation.snappy(duration: 0.22)
     static let settle = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.28)
 }

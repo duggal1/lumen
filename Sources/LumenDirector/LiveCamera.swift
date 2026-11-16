@@ -15,9 +15,24 @@ public struct LiveCamera: Sendable {
     private var tgt = SIMD2<Double>(0.5, 0.5)
     private var rings: [(t: Double, x: Float, y: Float)] = []
     private var focusTime = -Double.infinity
+    /// Causal intelligent crop. No future events: a revealed rect is held for
+    /// a fixed window and then springs back to the content ROI.
+    private var cropConfig: SmartCropConfig?
+    private var roiPx = CGRect.zero
+    private var cropTarget = CGRect.zero
+    private var cropCurrent = CGRect.zero
+    private var cropUntil = -Double.infinity
 
-    public init(source: SIMD2<Double>) {
+    public init(source: SIMD2<Double>, smartCrop: SmartCropConfig? = nil) {
         src = source; raw = source / 2
+        if let c = smartCrop, c.isActive, let r = c.roi {
+            cropConfig = c
+            roiPx = SmartCropPlanner.aspectFit(
+                CGRect(x: r.minX * source.x, y: r.minY * source.y,
+                       width: r.width * source.x, height: r.height * source.y),
+                source: CGRect(x: 0, y: 0, width: source.x, height: source.y))
+            cropTarget = roiPx; cropCurrent = roiPx
+        }
         pointer = Spring3(x: SIMD3(source.x / 2, source.y / 2, 0))
         camera = Spring3(x: SIMD3(0.5, 0.5, 0))
         press = Spring3(x: SIMD3(1, 0, 0))
@@ -29,6 +44,24 @@ public struct LiveCamera: Sendable {
         lzShot = log(scale)
     }
     public mutating func ingest(_ e: InputEvent, focus: AXFrame? = nil) {
+        if let config = cropConfig {
+            var rect: CGRect?
+            if let f = focus, f.anchor?.resolved == true, f.w > 0, f.h > 0 {
+                rect = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
+            } else if e.kind == .down, e.hasPosition {
+                let p = SIMD2(Double(e.x), Double(e.y))
+                if p.x < roiPx.minX || p.x > roiPx.maxX || p.y < roiPx.minY || p.y > roiPx.maxY {
+                    rect = CGRect(x: p.x - 100, y: p.y - 20, width: 200, height: 40)
+                }
+            }
+            if let r = rect, r.intersection(roiPx).isNull {
+                let bounds = CGRect(x: 0, y: 0, width: src.x, height: src.y)
+                cropTarget = SmartCropPlanner.aspectFit(
+                    SmartCropPlanner.revealRect(for: r, roi: roiPx, config: config, backingScale: 1)
+                        .intersection(bounds), source: bounds)
+                cropUntil = e.t + max(config.returnSeconds, 0.05)
+            }
+        }
         if e.hasPosition {
             let p = SIMD2(Double(e.x), Double(e.y))
             if rawT == 0 { pointer.x = SIMD3(p.x, p.y, 0) }
@@ -77,6 +110,16 @@ public struct LiveCamera: Sendable {
         let active = down || tt - lastActivity <= hold
         let target = active ? SIMD3(tgt.x, tgt.y, lzShot) : SIMD3(0.5, 0.5, 0)
         camera.step(target: target, omega: SIMD3(repeating: omegaZoom), dt: dt)
+        if cropConfig != nil {
+            let targetCrop = tt > cropUntil ? roiPx : cropTarget
+            let a = 1 - exp(-dt / 0.12)
+            func approach(_ x: Double, _ y: Double) -> Double { x + (y - x) * a }
+            cropCurrent = CGRect(
+                x: approach(cropCurrent.minX, targetCrop.minX),
+                y: approach(cropCurrent.minY, targetCrop.minY),
+                width: approach(cropCurrent.width, targetCrop.width),
+                height: approach(cropCurrent.height, targetCrop.height))
+        }
     }
     private func state(at now: Double) -> FrameState {
         let lz = max(camera.x.z, 0)
@@ -97,7 +140,9 @@ public struct LiveCamera: Sendable {
             fx = rings.filter { now >= $0.t && now - $0.t <= dur }
                 .map { ClickRing(position: SIMD2($0.x, $0.y), progress: Float((now - $0.t) / dur)) }
         }
-        return FrameState(cameraCenter: center, cameraScale: scale, cursor: cs,
+        return FrameState(cameraCenter: center, cameraScale: scale,
+                          cropRect: cropConfig == nil ? .zero : cropCurrent,
+                          cursor: cs,
                           clickFX: fx, webcamCrop: SIMD4(0, 0, 1, 1), sourceTime: now)
     }
 }
