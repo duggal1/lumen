@@ -415,9 +415,10 @@ extension TimelineStrip {
     func musicLanes() -> [AudioLane] { model.timeline.audio.lanes.filter { $0.role == .music } }
 
     static func musicName(_ path: String) -> String {
-        if let track = BundledAudioAssets.music.first(where: { $0.url.path == path }) { return track.title }
         let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-        return stem.isEmpty ? "Music" : stem
+        if let title = BundledAudioAssets.musicTitles[stem] { return title }
+        if let track = BundledAudioAssets.music.first(where: { $0.url.path == path }) { return track.title }
+        return stem.isEmpty ? "Music" : BundledAudioAssets.cleanStem(stem)
     }
 
     func musicAccessibility() -> String {
