@@ -177,10 +177,10 @@ enum CameraSolver {
         /// at this velocity; otherwise the camera stops dead on the action and
         /// accelerates again a frame later — a visible jerk impulse.
         func holdVelocity(_ i: Int, _ k: Int) -> SIMD2<Double> {
-            let s = scenes[i], j = min(max(k, 0), n - 1)
+            let j = min(max(k, 0), n - 1)
             let a = max(j - 3, 0), b = min(j + 3, n - 1)
             guard b > a else { return .zero }
-            return (holdCenter(i, b) - holdCenter(i, a)) * rate / Double(b - a) * exp(-s.lz)
+            return (holdCenter(i, b) - holdCenter(i, a)) * rate / Double(b - a)
         }
 
         var lzT = [Double](repeating: 0, count: n)
@@ -200,7 +200,7 @@ enum CameraSolver {
             func coeff(_ x0: Double, _ x1: Double, _ va: Double, _ vb: Double) -> (Double, Double, Double) {
                 let dx = x1 - x0 - T * va
                 let dv = T * (vb - va)
-                return (10 * dx - 9 * dv, -15 * dx + 15 * dv, 6 * dx - 6 * dv)
+                return (10 * dx - 4 * dv, 7 * dv - 15 * dx, 6 * dx - 3 * dv)
             }
             let (c3x, c4x, c5x) = coeff(c0.x, c1.x, v0.x, v1.x)
             let (c3y, c4y, c5y) = coeff(c0.y, c1.y, v0.y, v1.y)
