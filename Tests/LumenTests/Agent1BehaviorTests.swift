@@ -86,9 +86,9 @@ private let a1Source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 
 }
 
 @Test func zoomControlsAreLive() {
-    // Zoom v3: hover-only activity never zooms (old sensitivity-driven hover
-    // zoom was the bug). Max scale caps every segment; center offset moves
-    // the camera.
+    // A purposeful hover dwell opens exactly one mild zoom at full
+    // sensitivity; sensitivity zero disables hover intent entirely.
+    // Max scale still caps every segment; center offset moves the camera.
     let hovers = [InputEvent(t: 0.5, kind: .move, x: 200, y: 200),
                   InputEvent(t: 0.6, kind: .move, x: 900, y: 600),
                   InputEvent(t: 1.5, kind: .move, x: 900, y: 600)]
@@ -98,7 +98,7 @@ private let a1Source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 
         tl.camera.sensitivity = sensitivity
         return Director.derive(tl, input: DirectorInput(events: hovers, source: a1Source), revision: 1).zoom.count
     }
-    #expect(zoomCount(sensitivity: 1) == 0)
+    #expect(zoomCount(sensitivity: 1) == 1)
     #expect(zoomCount(sensitivity: 0) == 0)
     // Max scale caps every segment.
     var capped = Timeline(duration: 3)
