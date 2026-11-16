@@ -51,5 +51,4 @@ audio-code-all.md
 # --- Local design-reference clones (nested git repos, never vendored) ---
 /filmcraft/
 /gradii/
-/recordful/
 /tinyhand/
