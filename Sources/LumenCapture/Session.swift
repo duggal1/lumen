@@ -496,8 +496,10 @@ public actor RecordingSession {
                     let ax = (try? JSONDecoder().decode([AXFrame].self, from: Data(contentsOf: b.axURL))) ?? []
                     progress(0.4)
                     if !recordedEvents.isEmpty {
-                        working.zoom = Director.planRecordingZoom(events: recordedEvents, ax: ax,
-                                                                  source: infoCopy, timeline: working)
+                        working.zoom = Director.planRecordingZoom(
+                            events: recordedEvents, ax: ax, source: infoCopy, timeline: working,
+                            markers: Director.directorMarkers(b.sourceMarkers(meta: finalMeta),
+                                                              source: infoCopy))
                     }
                 } catch {
                     os_log("finalize: event sidecar unreadable: %@", log: .default, type: .error, String(describing: error))

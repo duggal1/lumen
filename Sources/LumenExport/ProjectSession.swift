@@ -244,26 +244,9 @@ public final class ProjectSession: @unchecked Sendable {
                let sz = try? await tr.load(.naturalSize), sz.height > 0 { aspect = Float(sz.width / sz.height) }
         }
         // Markers are explicit "this moment matters" beats. Agent steps carry
-        // the rect of the thing they were about; convert its screen points to
-        // normalized source coordinates so the planner can frame it, and drop
-        // rects that are too small or off-screen instead of inventing a target.
-        let markerSrc = meta.source
-        let markerScale = max(markerSrc.backingScale, 1)
-        let markers: [DirectorMarker] = b.sourceMarkers(meta: meta).compactMap { item in
-            var rect: CGRect?
-            if let r = item.marker.rect, markerSrc.width > 0, markerSrc.height > 0 {
-                let x = (r.minX - markerSrc.originX) * markerScale / Double(markerSrc.width)
-                let y = (r.minY - markerSrc.originY) * markerScale / Double(markerSrc.height)
-                let w = r.width * markerScale / Double(markerSrc.width)
-                let h = r.height * markerScale / Double(markerSrc.height)
-                if w >= 0.005, h >= 0.005, x >= -0.05, y >= -0.05,
-                   x + w <= 1.05, y + h <= 1.05 {
-                    rect = CGRect(x: x, y: y, width: w, height: h)
-                }
-            }
-            return DirectorMarker(start: item.start, end: max(item.end, item.start),
-                                  rect: rect, label: item.marker.label)
-        }
+        // the rect of the thing they were about; the shared converter turns
+        // that screen rect into normalized source coordinates.
+        let markers = Director.directorMarkers(b.sourceMarkers(meta: meta), source: meta.source)
         // VAD is empty until the background preparation publishes it. A derive
         // with no voice regions simply has no speed ramps yet; it is replanned
         // when the regions arrive.

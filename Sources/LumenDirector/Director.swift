@@ -97,16 +97,50 @@ extension TimeMap {
 }
 
 public enum Director {
+    /// Convert stored markers into planner markers: screen points become
+    /// normalized source coordinates. Rects that are too small, off-screen or
+    /// implausible are dropped instead of inventing a target.
+    ///
+    /// One implementation on purpose — the stop-time plan and the editor derive
+    /// must read the same evidence, or the same recording gets two different
+    /// zoom plans depending on whether the editor was opened.
+    public static func directorMarkers(_ items: [(marker: CaptureMarker, start: Double, end: Double)],
+                                       source: SourceInfo) -> [DirectorMarker] {
+        let scale = max(source.backingScale, 1)
+        let W = Double(source.width), H = Double(source.height)
+        return items.map { item in
+            var rect: CGRect?
+            if let r = item.marker.rect, W > 0, H > 0 {
+                let x = (r.minX - source.originX) * scale / W
+                let y = (r.minY - source.originY) * scale / H
+                let w = r.width * scale / W
+                let h = r.height * scale / H
+                if w >= 0.005, h >= 0.005, x >= -0.05, y >= -0.05,
+                   x + w <= 1.05, y + h <= 1.05 {
+                    rect = CGRect(x: x, y: y, width: w, height: h)
+                }
+            }
+            return DirectorMarker(start: item.start, end: max(item.end, item.start),
+                                  rect: rect, label: item.marker.label)
+        }
+    }
+
     /// Run only the event-based zoom planner at recording stop, without
     /// rendering, speech analysis, waveform work or audio mixing.
+    ///
+    /// Markers are passed because the capture sidecar already has them; typing
+    /// and visual activity are not, because they come from the background
+    /// analysis that runs after the editor opens. That analysis re-derives the
+    /// plan from the full evidence set, so this is a seed, not the last word.
     public static func planRecordingZoom(events: [InputEvent], ax: [AXFrame],
-                                         source: SourceInfo, timeline: Timeline) -> [ZoomSegment] {
+                                         source: SourceInfo, timeline: Timeline,
+                                         markers: [DirectorMarker] = []) -> [ZoomSegment] {
         guard timeline.camera.autoZoom else { return timeline.zoom }
         let manual = timeline.zoom.filter { $0.origin == .manual }
         let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
         return (manual + ZoomPlanner.planSegments(events: events, ax: ax, typing: [], activity: [],
                                                    src: source, p: timeline.camera, tm: timeline.timeMap,
-                                                   avoid: avoid)).sorted { $0.start < $1.start }
+                                                   avoid: avoid, markers: markers)).sorted { $0.start < $1.start }
     }
 
     /// Pure and deterministic: same input, same Timeline. Replaces only .auto zoom/ramps; .manual survive.
@@ -315,10 +349,31 @@ public enum Director {
             h.combine(e.button); h.combine(e.keyCode); h.combine(e.flags)
             h.combine(e.cursorShape); h.combine(e.axFrameIndex); h.combine(e.scrollDelta)
         }
-        for f in input.ax { h.combine(f.x); h.combine(f.y); h.combine(f.w); h.combine(f.h) }
+        for f in input.ax {
+            h.combine(f.x); h.combine(f.y); h.combine(f.w); h.combine(f.h)
+            // The caret is the exact point typing zoom aims at, and the anchor
+            // says whether it is fresh enough to trust. Hashing only the field
+            // frame let a caret move (or a stale anchor) reuse a cached plan
+            // that lands on the old point — the "accuracy is almost 0" report.
+            h.combine(f.caret?.x); h.combine(f.caret?.y)
+            h.combine(f.caret?.w); h.combine(f.caret?.h)
+            h.combine(f.anchor?.epoch); h.combine(f.anchor?.sampledAt)
+            h.combine(f.anchor?.resolved)
+            h.combine(f.sampledAt)
+        }
         for t in input.typing {
-            h.combine(t.t0); h.combine(t.t1); h.combine(t.samples.count)
-            h.combine(t.rect?.origin.x); h.combine(t.rect?.origin.y); h.combine(t.rect?.size.width)
+            h.combine(t.t0); h.combine(t.t1)
+            h.combine(t.rect?.origin.x); h.combine(t.rect?.origin.y)
+            h.combine(t.rect?.size.width); h.combine(t.rect?.size.height)
+            h.combine(t.line?.origin.x); h.combine(t.line?.origin.y)
+            h.combine(t.line?.size.width); h.combine(t.line?.size.height)
+            // Hash what the planner actually reads from a trace: how many
+            // samples are usable, i.e. their time and confidence. The sample
+            // coordinates are NOT hashed any more — typing frames the field
+            // rect (`line`/`rect` above), never the individual caret points, so
+            // hashing x/y would force a full replan on every caret pixel for a
+            // plan that is identical.
+            for s in t.samples { h.combine(s.t); h.combine(s.confidence) }
         }
         for a in input.activity {
             h.combine(a.t); h.combine(a.x); h.combine(a.y); h.combine(a.coverage)
