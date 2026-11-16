@@ -25,6 +25,39 @@ public enum Permissions {
     }
 }
 
+/// A cached reading of the system permission state.
+///
+/// Every property on `Permissions` that answers "is this granted?" is a
+/// cross-process call into the TCC daemon, and TCC answers can block while the
+/// capture stack is being torn down. Reading them from a SwiftUI view body made
+/// the Library issue several of those calls per redraw, including the redraw
+/// that Stop triggers — the main thread then waited on TCC exactly as
+/// ScreenCaptureKit shut the stream down. Read once, off the main thread, and
+/// publish the result instead.
+public struct PermissionSnapshot: Sendable, Equatable {
+    public var screen: Bool
+    public var input: Bool
+    public var accessibility: Bool
+    public var mic: Bool
+    public var camera: Bool
+
+    public init(screen: Bool = false, input: Bool = false, accessibility: Bool = false,
+                mic: Bool = false, camera: Bool = false) {
+        self.screen = screen
+        self.input = input
+        self.accessibility = accessibility
+        self.mic = mic
+        self.camera = camera
+    }
+
+    /// Reads every permission. Blocking IPC: never call this on the main thread.
+    public nonisolated static func read() -> PermissionSnapshot {
+        PermissionSnapshot(screen: Permissions.screen, input: Permissions.input,
+                           accessibility: Permissions.accessibility,
+                           mic: Permissions.mic, camera: Permissions.camera)
+    }
+}
+
 /// Webcam to its own HEVC file. PTS stays on the host clock.
 final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let session = AVCaptureSession()
@@ -495,5 +528,42 @@ public actor RecordingSession {
         let b = try await finalize()
         transition(to: .ready)
         return b
+    }
+
+    /// Cancels capture without project finalization. Used for both a cancelled
+    /// start and an explicit discard; finalization would waste time and can
+    /// block the UI for a recording the user asked to remove.
+    @discardableResult
+    public func abandon() async -> String? {
+        let pendingJournal = journalTask
+        journalTask = nil
+        pendingJournal?.cancel()
+        stopWatchdog()
+        if isPaused {
+            engine?.resume()
+            isPaused = false
+        }
+        for recorder in extraMicrophones { await recorder.stop() }
+        extraMicrophones = []
+        if let webcam { await webcam.stop() }
+        if let input { await input.stop() }
+        if let engine { await engine.cancel() }
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+        activity = nil
+        var discardError: String?
+        if let bundleURL = bundle?.url {
+            do {
+                try await Task.detached(priority: .utility) {
+                    try FileManager.default.trashItem(at: bundleURL, resultingItemURL: nil)
+                }.value
+            } catch {
+                discardError = error.localizedDescription
+            }
+        }
+        RecordingGate.recordingStopped()
+        MainThreadWatchdog.shared.stop()
+        engine = nil; input = nil; webcam = nil; bundle = nil; cfg = nil
+        transition(to: .idle)
+        return discardError
     }
 }
