@@ -108,6 +108,21 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var webcamQuality = WebcamQuality(rawValue: UserDefaults.standard.string(forKey: "LumenWebcamQuality") ?? "") ?? .auto {
         didSet { UserDefaults.standard.set(webcamQuality.rawValue, forKey: "LumenWebcamQuality") }
     }
+    var cameraDeviceID = UserDefaults.standard.string(forKey: "LumenCameraDevice") ?? "" {
+        didSet { UserDefaults.standard.set(cameraDeviceID, forKey: "LumenCameraDevice") }
+    }
+    var showCameraPreview = UserDefaults.standard.bool(forKey: "LumenCameraPreview") {
+        didSet { UserDefaults.standard.set(showCameraPreview, forKey: "LumenCameraPreview") }
+    }
+    /// 0 or 3. The countdown is a setting, not a surprise.
+    var countdownSeconds = UserDefaults.standard.object(forKey: "LumenCountdown") as? Int ?? 3 {
+        didSet { UserDefaults.standard.set(countdownSeconds, forKey: "LumenCountdown") }
+    }
+    /// The last area the user picked, and the short list they can return to.
+    var lastArea: AreaPreset? {
+        didSet { if let lastArea { addAreaPreset(lastArea) } }
+    }
+    private(set) var areaPresets: [AreaPreset] = AreaPreset.load()
     var livePreview = false
     private var livePreviewController: LivePreviewController?
     var displays: [(id: CGDirectDisplayID, name: String)] = []
@@ -119,30 +134,55 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var windows: [(id: CGWindowID, name: String, appID: String, appName: String)] = []
     var error: String?
     var stats: CaptureStats?
+    /// Cached TCC state. Views read this; nothing in a view body may call
+    /// `Permissions.*`, because those are blocking IPC into tccd and the
+    /// redraw that Stop triggers landed on the main thread mid-teardown.
+    var permissions = PermissionSnapshot()
     let recordingMeter = RecordingMeter()
     var projects: [ProjectRow] = []
     public var onFinished: ((URL) -> Void)?
     var onShowLibrary: (() -> Void)?
-    public let library: URL
+    public private(set) var library: URL
     /// The capture session. Internal so the agent runtime adapter can drive
     /// the same lifecycle the UI buttons drive.
     let session = RecordingSession()
     private var appUsageRecorder: RecordingAppUsage?
-    private var hud: HUDController?
+    private var bar: FloatingBarController?
     /// Set while the app is quitting so a saved recording does not reopen UI.
     private var terminating = false
     private var hotKey: HotKey?
     private var pauseHotKey: HotKey?
     private var poll: Task<Void, Never>?
+    private var permissionObserver: NSObjectProtocol?
     private var hiddenWindows: [NSWindow] = []
+    private var cancelRequested = false
 
     public init(library: URL? = nil) {
-        self.library = library ?? FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
+        self.library = library ?? AppModel.defaultLibrary()
         try? FileManager.default.createDirectory(at: self.library, withIntermediateDirectories: true)
         refresh()
         hotKey = HotKey(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.toggle() } }
         // Cmd+Opt+P toggles pause while recording (start/stop is Cmd+Opt+R).
         pauseHotKey = HotKey(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(optionKey | cmdKey)) { [weak self] in Task { @MainActor in self?.togglePause() } }
+        // Seed the cache once at launch, before any capture runs. Later reads
+        // are off-main; this one cannot deadlock because nothing is recording.
+        permissions = PermissionSnapshot.read()
+        // A grant or revoke happens in System Settings, which deactivates us.
+        // Re-read when the user comes back instead of on every redraw.
+        permissionObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshPermissions() }
+        }
+    }
+
+    /// Re-reads TCC off the main thread and publishes the result. Cheap enough
+    /// to call on activation; never called from a view body.
+    func refreshPermissions() {
+        Task { [weak self] in
+            let snapshot = await Task.detached(priority: .utility) { PermissionSnapshot.read() }.value
+            self?.permissions = snapshot
+        }
     }
 
     func refresh() {
@@ -152,10 +192,11 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         maxFPS = Self.probeMaxFPS(displayID: displayID)
         // Project metas + recovery scan are disk work: load off-main so the
         // shell appears immediately, then publish incrementally.
+        let library = self.library
         Task { @MainActor [weak self] in
             guard let self else { return }
             let rows = await Task.detached(priority: .userInitiated) {
-                let urls = (try? FileManager.default.contentsOfDirectory(at: self.library,
+                let urls = (try? FileManager.default.contentsOfDirectory(at: library,
                     includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
                 return urls.filter { $0.pathExtension == "lumen" }.compactMap { u -> ProjectRow in
                     let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
@@ -174,7 +215,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                 }.sorted { $0.date > $1.date }
             }.value
             self.projects = rows
-            self.recoverable = await Task.detached(priority: .userInitiated) { RecoveryScanner.scan(library: self.library) }.value
+            self.recoverable = await Task.detached(priority: .userInitiated) { RecoveryScanner.scan(library: library) }.value
             let c = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
             self.windows = (c?.windows ?? []).filter { $0.isOnScreen && ($0.title?.isEmpty == false) && $0.owningApplication?.bundleIdentifier != Bundle.main.bundleIdentifier }
                 .map { ($0.windowID, "\($0.owningApplication?.applicationName ?? "") — \($0.title ?? "")", $0.owningApplication?.bundleIdentifier ?? "", $0.owningApplication?.applicationName ?? "") }
@@ -203,11 +244,91 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     }
 
     public func showRecordingControls() {
-        if hud == nil { hud = HUDController(self, screen: NSScreen.main) }
-        hud?.show()
+        presentBar(on: NSScreen.main)
+        Task { await refreshWindows() }
     }
 
-    public var hasRecordingControls: Bool { hud != nil }
+    public func showBarPanel(_ id: String) {
+        bar?.present(options: id, in: self)
+    }
+
+    public var hasRecordingControls: Bool { bar != nil }
+
+    private func presentBar(on screen: NSScreen?) {
+        if bar == nil { bar = FloatingBarController(self, screen: screen ?? NSScreen.main) }
+        bar?.show()
+    }
+
+    // MARK: What the floating bar configures
+
+    /// Cameras the bar can offer. Real devices only; never a fabricated name.
+    var cameraDevices: [(id: String, name: String)] {
+        AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
+                                         mediaType: .video, position: .unspecified)
+            .devices.map { ($0.uniqueID, $0.localizedName) }
+    }
+
+    var microphoneDevices: [(id: String, name: String)] {
+        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone, .external],
+                                         mediaType: .audio, position: .unspecified)
+            .devices.map { ($0.uniqueID, $0.localizedName) }
+    }
+
+    func setArea(display: CGDirectDisplayID, rect: CGRect) {
+        lastArea = AreaPreset.make(display: display, rect: rect)
+        kind = .region
+    }
+
+    private func addAreaPreset(_ preset: AreaPreset) {
+        var list = areaPresets.filter { $0.displayID != preset.displayID || $0.rect != preset.rect }
+        list.insert(preset, at: 0)
+        areaPresets = Array(list.prefix(5))
+        preset.save(areaPresets)
+    }
+
+    func removeAreaPreset(_ id: UUID) {
+        areaPresets.removeAll { $0.id == id }
+        if lastArea?.id == id { lastArea = nil }
+        AreaPreset(name: "", displayID: 0, x: 0, y: 0, width: 0, height: 0).save(areaPresets)
+    }
+
+    /// The window list the bar's picker shows, refreshed on demand so it is
+    /// never a stale snapshot from launch.
+    func refreshWindows() async {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true) else { return }
+        let own = Bundle.main.bundleIdentifier
+        windows = content.windows
+            .filter { $0.isOnScreen && ($0.title?.isEmpty == false) && $0.owningApplication?.bundleIdentifier != own }
+            .sorted { ($0.owningApplication?.applicationName ?? "") < ($1.owningApplication?.applicationName ?? "") }
+            .map { ($0.windowID, $0.title ?? "", $0.owningApplication?.bundleIdentifier ?? "", $0.owningApplication?.applicationName ?? "") }
+        if windowID == 0 || !windows.contains(where: { $0.id == windowID }) {
+            windowID = windows.first?.id ?? 0
+        }
+    }
+
+    static func defaultLibrary() -> URL {
+        FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Lumen")
+    }
+
+    /// Moves the recording library. Files stay where they are; new recordings
+    /// land in the chosen folder.
+    func chooseLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Record here"
+        panel.directoryURL = library
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            library = url
+            refresh()
+        } catch {
+            self.error = "Couldn’t use that folder. \(error.localizedDescription)"
+        }
+    }
+
 
     func showLibrary() {
         onShowLibrary?()
@@ -222,7 +343,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     // Keep the selected desktop visible, not the Library floating over it.
     // The recording controls are an independent, capture-excluded NSPanel.
     private func hideLibraryForRecording() {
-        hiddenWindows = NSApp.windows.filter { $0.isVisible && $0.title != "Lumen recording controls" }
+        let controls = bar?.recordingWindow
+        hiddenWindows = NSApp.windows.filter { $0.isVisible && $0 !== controls }
         for window in hiddenWindows { window.orderOut(nil) }
     }
 
@@ -402,7 +524,12 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: break
         case .notDetermined:
-            Task { await Permissions.requestMedia(); if !Permissions.mic { micTestError = "Microphone is off." } else { testMicrophone() } }
+            Task {
+                await Permissions.requestMedia()
+                // Re-read off main: the answer is TCC IPC, not a view concern.
+                let granted = await Task.detached(priority: .userInitiated) { Permissions.mic }.value
+                if !granted { micTestError = "Microphone is off." } else { testMicrophone() }
+            }
             return
         default: micTestError = "Microphone is off. Allow mic access in Settings."; return
         }
@@ -489,34 +616,55 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     /// Discards the in-progress recording entirely: stops capture, deletes
     /// the bundle, and returns to the library without opening the project.
     public func discard() {
-        if phase != .recording && phase != .preparing {
-            if case .countdown = phase {} else { return }
+        switch phase {
+        case .recording:
+            phase = .finishing; poll?.cancel()
+            _ = appUsageRecorder?.finish(); appUsageRecorder = nil
+            Task {
+                if let message = await session.abandon() {
+                    self.error = "Couldn’t discard this recording. \(message)"
+                }
+                endDiscard()
+            }
+        case .preparing, .countdown:
+            // Nothing recorded yet: tear the prepared engine down instead of
+            // finalizing frames that never existed.
+            cancelRequested = true
+            phase = .finishing
+            Task { await abandon() }
+        default:
+            return
         }
-        phase = .finishing; poll?.cancel()
-        _ = appUsageRecorder?.finish(); appUsageRecorder = nil
-        Task {
-            do {
-                let bundle = try await session.stop()
-                try FileManager.default.trashItem(at: bundle.url, resultingItemURL: nil)
-            } catch { self.error = "Couldn’t discard this recording. \(error.localizedDescription)" }
-            paused = false
-            hud?.close(); hud = nil; livePreviewController?.close(); livePreviewController = nil
-            phase = .idle; refresh()
-            restoreLibraryAfterFailure()
-        }
+    }
+
+    private func endDiscard() {
+        paused = false
+        CameraBubbleController.shared.setVisible(false)
+        livePreviewController?.close(); livePreviewController = nil
+        phase = .idle; refresh()
+        restoreLibraryAfterFailure()
     }
 
     func start() async {
         guard phase == .idle else { return }
         phase = .preparing
+        cancelRequested = false
         recordingMeter.level = 0
         stats = nil
         defer { if phase == .preparing { phase = .idle } }
         error = nil
-        guard Permissions.screen else { Permissions.requestScreen(); error = "Screen Recording is off. Grant it, then relaunch Lumen."; return }
-        guard Permissions.input else { Permissions.requestInput(); error = "Input Monitoring is off. Grant it, then relaunch Lumen."; return }
-        if !Permissions.accessibility { Permissions.requestAccessibility() }
-        if mic || webcam { await Permissions.requestMedia() }
+        // One read, off main. The start gate must never block the main thread
+        // on tccd, and the answer is reused for the config below.
+        var perms = await Task.detached(priority: .userInitiated) { PermissionSnapshot.read() }.value
+        permissions = perms
+        guard perms.screen else { Permissions.requestScreen(); error = "Screen Recording is off. Grant it, then relaunch Lumen."; return }
+        guard perms.input else { Permissions.requestInput(); error = "Input Monitoring is off. Grant it, then relaunch Lumen."; return }
+        if !perms.accessibility { Permissions.requestAccessibility() }
+        if mic || webcam {
+            await Permissions.requestMedia()
+            perms = await Task.detached(priority: .userInitiated) { PermissionSnapshot.read() }.value
+            permissions = perms
+        }
         var cfg: RecordingConfig
         switch kind {
         case .display: cfg = RecordingConfig(source: .display(displayID))
@@ -524,9 +672,13 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         case .region:
             // AGENT: an agent's explicit region must not invoke the human region picker.
             if let target = agentTarget { cfg = RecordingConfig(source: .display(target.displayID ?? CGMainDisplayID())) }
-            else {
-                guard let r = await RegionSelector.pick() else { return }
-                cfg = RecordingConfig(source: .region(r.display, r.rect))
+            else if let area = lastArea {
+                cfg = RecordingConfig(source: .region(area.displayID, area.rect))
+            } else {
+                guard let picked = await AreaSelector.pick() else { return }
+                setArea(display: picked.displayID, rect: picked.rect)
+                guard let area = lastArea else { return }
+                cfg = RecordingConfig(source: .region(area.displayID, area.rect))
             }
         }
         // An agent may ask for an exact target; it wins over the UI selection.
@@ -543,20 +695,22 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                                                        target.rect ?? CGRect(x: 0, y: 0, width: 1, height: 1)))
             }
         }
-        cfg.fps = fps; cfg.mic = mic && Permissions.mic; cfg.systemAudio = system
+        cfg.fps = fps; cfg.mic = mic && perms.mic; cfg.systemAudio = system
         cfg.micDeviceID = micDeviceID.isEmpty ? nil : micDeviceID
         cfg.webcamQuality = webcamQuality.rawValue
         cfg.resolution = captureResolution; cfg.quality = captureQuality; cfg.customMbps = captureMbps
-        cfg.webcamDeviceID = webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
+        // A chosen camera beats the system default; never silently substitute.
+        cfg.webcamDeviceID = webcam && perms.camera
+            ? (AVCaptureDevice(uniqueID: cameraDeviceID) ?? AVCaptureDevice.default(for: .video))?.uniqueID
+            : nil
         if let options = agentOptions {
             cfg.fps = options.fps
-            cfg.mic = options.microphone && Permissions.mic
+            cfg.mic = options.microphone && perms.mic
             cfg.systemAudio = options.systemAudio
-            cfg.webcamDeviceID = options.webcam && Permissions.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
+            cfg.webcamDeviceID = options.webcam && perms.camera ? AVCaptureDevice.default(for: .video)?.uniqueID : nil
             // AGENT: the option existed but was never copied, so auto-mask did nothing.
             cfg.privacyAutoMask = options.privacyAutoMask
         }
-        phase = .preparing
         let sourceDisplay: CGDirectDisplayID?
         switch cfg.source {
         case .display(let id), .region(let id, _): sourceDisplay = id
@@ -568,38 +722,45 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         // The daemon runs without a window: no floating recorder panel, no
         // library. The agent drives the same engine through tools.
         if !headless && agentTarget == nil {
-            if hud == nil { hud = HUDController(self, screen: recordingScreen) }
+            presentBar(on: recordingScreen)
             hideLibraryForRecording()
-            hud?.show()
             if livePreview { livePreviewController = LivePreviewController(); livePreviewController?.show() }
         }
         do {
-            // Preparation runs CONCURRENTLY during the countdown (spec §3.2).
-            // HUD/countdown visible within 100 ms of the click; SCShareableContent
-            // and writers warm up in parallel instead of blocking the countdown.
-            hud?.showCountdown()
-            let ticks = max(0, min(agentOptions?.countdownSeconds ?? 3, 10))
-            if ticks > 0 { phase = .countdown(ticks) }
+            // One preparation pass, then the countdown. The engine is warm
+            // before "3" appears, so "1" is followed by the first frame instead
+            // of another wait.
             let prepareTask = Task { try await session.prepare(cfg, library: library) }
-            // Countdown ticks while prepare runs; if prepare finishes early we
-            // hold in countdown(1), if it overruns we wait below (no dead spinner).
-            var firstTick = true
-            // AGENT: agent recordings use their requested countdown without delaying normal captures.
-            for n in stride(from: ticks, through: 1, by: -1) where ticks > 0 {
-                phase = .countdown(n)
-                if firstTick { try? await Task.sleep(for: .milliseconds(800)) } else { try? await Task.sleep(for: .seconds(1)) }
-                firstTick = false
-            }
             try await prepareTask.value
-            await session.markCountdown()
-            if let hub = livePreviewController?.hub { await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }, focus: { hub.focus($0, $1) }) }
+            guard !cancelRequested else { await abandon(); return }
+            if let hub = livePreviewController?.hub {
+                await session.setLiveHooks(frame: { hub.frame($0) }, event: { hub.event($0) }, focus: { hub.focus($0, $1) })
+            }
+            let ticks = max(0, min(agentOptions?.countdownSeconds ?? countdownSeconds, 10))
+            if ticks > 0 {
+                await session.markCountdown()
+                let clock = ContinuousClock()
+                let start = clock.now
+                bar?.countdown.show(on: recordingScreen, number: ticks)
+                for n in stride(from: ticks, through: 1, by: -1) {
+                    phase = .countdown(n)
+                    bar?.countdown.set(n)
+                    let deadline = start.advanced(by: .seconds(ticks - n + 1))
+                    guard await hold(until: deadline, clock: clock) else {
+                        bar?.countdown.hide()
+                        await abandon()
+                        return
+                    }
+                }
+                bar?.countdown.hide()
+            }
             try await session.start()
             phase = .recording
             let usage = RecordingAppUsage()
             let selectedWindow = kind == .window ? windows.first(where: { $0.id == windowID }) : nil
             usage.start(fixedApp: selectedWindow.map { (id: $0.appID, name: $0.appName) })
             appUsageRecorder = usage
-            hud?.showControls()
+            if showCameraPreview { CameraBubbleController.shared.setVisible(true) }
             poll = Task {
                 var nextStatus = ContinuousClock.now
                 var lastLevel: Float = -1
@@ -610,7 +771,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                     // busy enough that clicking Pause or Stop waited behind
                     // the redraw. Only publish a level that actually moved.
                     let level = max(sample.micLevel, sample.systemLevel)
-                    if abs(level - lastLevel) > 0.004 {
+                    if abs(level - lastLevel) > 0.0001 {
                         lastLevel = level
                         recordingMeter.level = level
                     }
@@ -625,6 +786,39 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         } catch { fail(error) }
     }
 
+    /// Countdown clock. Absolute deadlines, 50 ms cancellability, no drift.
+    /// Returns false when the user cancelled.
+    private func hold(until deadline: ContinuousClock.Instant, clock: ContinuousClock) async -> Bool {
+        while ContinuousClock.now < deadline {
+            if cancelRequested { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return true
+    }
+
+    /// Cancels a start that has not recorded a frame: the prepared engine is
+    /// torn down and its empty bundle removed. Called from the bar's Cancel.
+    func cancelStart() {
+        guard phase == .preparing || isCountingDown else { return }
+        cancelRequested = true
+        bar?.countdown.hide()
+        phase = .preparing
+    }
+
+    private var isCountingDown: Bool {
+        if case .countdown = phase { return true }
+        return false
+    }
+
+    private func abandon() async {
+        cancelRequested = false
+        bar?.countdown.hide()
+        await session.abandon()
+        paused = false
+        phase = .idle
+        restoreLibraryAfterFailure()
+    }
+
     func stop() async {
         guard phase == .recording else { return }
         finalizeProgress = 0
@@ -634,6 +828,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         // HUD dismisses within 200 ms of the click (spec §3.2): close it now,
         // finalize in the background with "Finishing…" progress in Library.
         livePreviewController?.close(); livePreviewController = nil
+        CameraBubbleController.shared.setVisible(false)
         do {
             try await session.stopCapture()
             let b = try await session.finalize { [weak self] value in
@@ -671,7 +866,10 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
 
     private func fail(_ e: Error) {
         poll?.cancel(); paused = false
+        cancelRequested = false
         _ = appUsageRecorder?.finish(); appUsageRecorder = nil
+        bar?.countdown.hide()
+        CameraBubbleController.shared.setVisible(false)
         livePreviewController?.close(); livePreviewController = nil
         restoreLibraryAfterFailure()
         phase = .idle; error = "Recording failed. \(e)"
@@ -713,93 +911,4 @@ final class HotKey: @unchecked Sendable {
         RegisterEventHotKey(keyCode, modifiers, EventHotKeyID(signature: OSType(0x4C554D4E), id: id), GetApplicationEventTarget(), 0, &ref)
     }
     deinit { if let ref { UnregisterEventHotKey(ref) }; Self.handlers[id] = nil }
-}
-
-// MARK: Region selector (borderless overlay, drag to select, Esc cancels)
-
-@MainActor enum RegionSelector {
-    static func pick() async -> (display: CGDirectDisplayID, rect: CGRect)? {
-        let mouse = NSEvent.mouseLocation
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main,
-              let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
-        return await withCheckedContinuation { (c: CheckedContinuation<(display: CGDirectDisplayID, rect: CGRect)?, Never>) in
-            let w = KeyWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
-            w.level = .screenSaver; w.isOpaque = false; w.backgroundColor = .clear; w.ignoresMouseEvents = false
-            let v = RegionView(frame: NSRect(origin: .zero, size: screen.frame.size))
-            v.finish = { rect in
-                w.orderOut(nil)
-                c.resume(returning: rect.map { (id, CGRect(x: $0.minX, y: screen.frame.height - $0.maxY, width: $0.width, height: $0.height)) })   // AppKit -> top-left
-            }
-            w.contentView = v; w.makeKeyAndOrderFront(nil); w.makeFirstResponder(v); NSCursor.crosshair.push()
-        }
-    }
-}
-private final class KeyWindow: NSWindow { override var canBecomeKey: Bool { true } }
-private final class RegionView: NSView {
-    var finish: ((CGRect?) -> Void)?
-    private var selection: CGRect?
-    private var anchor = CGPoint.zero
-    private var original = CGRect.zero
-    private var mode = 0
-    override var acceptsFirstResponder: Bool { true }
-    override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        anchor = point
-        if let rect = selection {
-            original = rect
-            let nearX = abs(point.x - rect.minX) < 12 ? -1 : (abs(point.x - rect.maxX) < 12 ? 1 : 0)
-            let nearY = abs(point.y - rect.minY) < 12 ? -1 : (abs(point.y - rect.maxY) < 12 ? 1 : 0)
-            if nearX != 0 || nearY != 0, rect.insetBy(dx: -12, dy: -12).contains(point) {
-                mode = (nearX + 1) + (nearY + 1) * 3 + 2
-                return
-            }
-            if rect.contains(point) { mode = 1; return }
-        }
-        mode = 0
-        selection = CGRect(origin: point, size: .zero)
-        needsDisplay = true
-    }
-    override func mouseDragged(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if mode == 0 {
-            selection = CGRect(x: min(anchor.x, point.x), y: min(anchor.y, point.y),
-                               width: abs(point.x - anchor.x), height: abs(point.y - anchor.y))
-        } else if mode == 1 {
-            let x = min(max(original.minX + point.x - anchor.x, 0), bounds.width - original.width)
-            let y = min(max(original.minY + point.y - anchor.y, 0), bounds.height - original.height)
-            selection = CGRect(x: x, y: y, width: original.width, height: original.height)
-        } else {
-            let edge = mode - 2
-            let xEdge = edge % 3 - 1, yEdge = edge / 3 - 1
-            let x = min(max(point.x, 0), bounds.width), y = min(max(point.y, 0), bounds.height)
-            let left = xEdge == -1 ? min(x, original.maxX - 40) : original.minX
-            let right = xEdge == 1 ? max(x, original.minX + 40) : original.maxX
-            let bottom = yEdge == -1 ? min(y, original.maxY - 40) : original.minY
-            let top = yEdge == 1 ? max(y, original.minY + 40) : original.maxY
-            selection = CGRect(x: left, y: bottom, width: right - left, height: top - bottom)
-        }
-        needsDisplay = true
-    }
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { NSCursor.pop(); finish?(nil) }
-        if event.keyCode == 36, let rect = selection, rect.width > 40, rect.height > 40 {
-            NSCursor.pop(); finish?(rect)
-        }
-    }
-    override func draw(_ dirty: NSRect) {
-        NSColor.black.withAlphaComponent(0.35).setFill(); bounds.fill()
-        guard let rect = selection else {
-            ("Drag to select an area · Return to confirm · Escape to cancel" as NSString).draw(at: CGPoint(x: 24, y: bounds.height - 40), withAttributes: [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.white])
-            return
-        }
-        NSColor.clear.setFill(); rect.fill(using: .copy)
-        NSColor.white.setFill()
-        for x in [rect.minX, rect.midX, rect.maxX] {
-            for y in [rect.minY, rect.midY, rect.maxY] where x != rect.midX || y != rect.midY {
-                NSRect(x: x - 3, y: y - 3, width: 6, height: 6).fill()
-            }
-        }
-        let text = "\(Int(rect.width)) × \(Int(rect.height)) · Return to confirm" as NSString
-        text.draw(at: CGPoint(x: max(0, rect.minX), y: min(bounds.height - 18, rect.maxY + 8)), withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.white])
-    }
 }
