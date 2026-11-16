@@ -511,5 +511,5 @@ extension CursorPack {
     /// Packs that keep the recorded pointer's identity, so every stock shape gets
     /// its own artwork. The stylized packs (dot, ring, holiday, pixel, outline)
     /// are an explicit user override and keep one glyph for every shape.
-    var preservesShape: Bool { self != .dot && self != .ring && self != .holiday && self != .pixel && self != .outline }
+    public var preservesShape: Bool { self != .dot && self != .ring && self != .holiday && self != .pixel && self != .outline }
 }

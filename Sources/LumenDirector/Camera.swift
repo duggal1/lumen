@@ -153,8 +153,8 @@ enum CameraSolver {
                 xs.append(c.x + lean - offset.x * exp(-s.lz))
                 ys.append(c.y - offset.y * exp(-s.lz))
             }
-            xs = zeroPhaseSmooth(centredPlay(xs, halfZone: 0.10 / scale), omega: omegaPan, dt: dt)
-            ys = zeroPhaseSmooth(centredPlay(ys, halfZone: 0.16 / scale), omega: omegaPan, dt: dt)
+            xs = zeroPhaseSmooth(centredPlay(xs, halfZone: 0.04 / scale), omega: omegaPan, dt: dt)
+            ys = zeroPhaseSmooth(centredPlay(ys, halfZone: 0.06 / scale), omega: omegaPan, dt: dt)
             return (a, zip(xs, ys).map { clampCenter(SIMD2($0, $1), s.lz) })
         }
 
@@ -163,31 +163,54 @@ enum CameraSolver {
             if cancelled() { return nil }
             tracks.append(pathCenters(s))
         }
-        func holdCenter(_ i: Int, _ k: Int) -> SIMD2<Double> {
+        func rawCenter(_ i: Int, _ k: Int) -> SIMD2<Double> {
             let s = scenes[i]
-            if let d = tracks[i], k >= d.start, k < d.start + d.centers.count { return d.centers[k - d.start] }
-            if case .follow = s.segment.focus {
-                let j = min(max(k, 0), n - 1)
-                return clampCenter(SIMD2(followX[j], followY[j]) - offset * exp(-s.lz), s.lz)
-            }
-            return clampCenter(s.center - offset * exp(-s.lz), s.lz)
+            let j = min(max(k, 0), n - 1)
+            if let d = tracks[i], j >= d.start, j < d.start + d.centers.count { return d.centers[j - d.start] }
+            if case .follow = s.segment.focus { return SIMD2(followX[j], followY[j]) }
+            return s.center
+        }
+        func holdCenter(_ i: Int, _ k: Int) -> SIMD2<Double> {
+            clampCenter(rawCenter(i, k) - offset * exp(-scenes[i].lz), scenes[i].lz)
+        }
+        /// Velocity of the hold at tick `k`. A transition must join the hold
+        /// at this velocity; otherwise the camera stops dead on the action and
+        /// accelerates again a frame later — a visible jerk impulse.
+        func holdVelocity(_ i: Int, _ k: Int) -> SIMD2<Double> {
+            let s = scenes[i], j = min(max(k, 0), n - 1)
+            let a = max(j - 3, 0), b = min(j + 3, n - 1)
+            guard b > a else { return .zero }
+            return (holdCenter(i, b) - holdCenter(i, a)) * rate / Double(b - a) * exp(-s.lz)
         }
 
         var lzT = [Double](repeating: 0, count: n)
         var cxT = [Double](repeating: 0.5, count: n)
         var cyT = [Double](repeating: 0.5, count: n)
 
+        /// Quintic with matched endpoint velocities. With zero velocities this
+        /// is smootherstep; the velocity terms let a move flow into a moving
+        /// hold (or out of one) without a velocity step.
         func fill(_ a: Double, _ b: Double, _ l0: Double, _ l1: Double,
-                  _ c0: SIMD2<Double>, _ c1: SIMD2<Double>) {
+                  _ c0: SIMD2<Double>, _ c1: SIMD2<Double>,
+                  _ v0: SIMD2<Double> = .zero, _ v1: SIMD2<Double> = .zero) {
             let ia = min(max(Int((a * rate).rounded()), 0), n - 1)
             let ib = min(max(Int((b * rate).rounded()), ia), n - 1)
             let T = max(b - a, 1e-3)
+            // x(u) = x0 + T·v0·u + c3u³ + c4u⁴ + c5u⁵, zero endpoint accel.
+            func coeff(_ x0: Double, _ x1: Double, _ va: Double, _ vb: Double) -> (Double, Double, Double) {
+                let dx = x1 - x0 - T * va
+                let dv = T * (vb - va)
+                return (10 * dx - 9 * dv, -15 * dx + 15 * dv, 6 * dx - 6 * dv)
+            }
+            let (c3x, c4x, c5x) = coeff(c0.x, c1.x, v0.x, v1.x)
+            let (c3y, c4y, c5y) = coeff(c0.y, c1.y, v0.y, v1.y)
+            let (c3l, c4l, c5l) = coeff(l0, l1, 0, 0)
             for k in ia...ib {
                 let u = clamp((Double(k) / rate - a) / T, 0, 1)
-                let e = u * u * u * (10 + u * (-15 + 6 * u))
-                lzT[k] = l0 + (l1 - l0) * e
-                cxT[k] = c0.x + (c1.x - c0.x) * e
-                cyT[k] = c0.y + (c1.y - c0.y) * e
+                let u2 = u * u, u3 = u2 * u
+                lzT[k] = l0 + c3l * u3 + c4l * u3 * u + c5l * u3 * u2
+                cxT[k] = c0.x + T * v0.x * u + c3x * u3 + c4x * u3 * u + c5x * u3 * u2
+                cyT[k] = c0.y + T * v0.y * u + c3y * u3 + c4y * u3 * u + c5y * u3 * u2
             }
         }
         func fillHold(_ i: Int, _ a: Double, _ b: Double) {
@@ -217,22 +240,26 @@ enum CameraSolver {
                 // "start early, settle on the action" behaviour.
                 transStart = max(min(prevOff, s.on), 0)
             } else {
-                fill(prevOff, min(prevOff + tout, s.on), prevLz, 0, prevC, SIMD2(0.5, 0.5))
+                let v = holdVelocity(i - 1, Int(clamp((prevOff * rate).rounded(), 0, Double(n - 1))))
+                fill(prevOff, min(prevOff + tout, s.on), prevLz, 0, prevC, SIMD2(0.5, 0.5), v, .zero)
                 transStart = s.on
             }
             let fromLz = bridged ? prevLz : 0
-            let fromC = bridged
-                ? holdCenter(i - 1, Int(clamp((transStart * rate).rounded(), 0, Double(n - 1))))
-                : SIMD2(0.5, 0.5)
-            let toC = holdCenter(i, Int(clamp((s.event * rate).rounded(), 0, Double(n - 1))))
-            fill(transStart, s.event, fromLz, s.lz, fromC, toC)
+            let fromK = Int(clamp((transStart * rate).rounded(), 0, Double(n - 1)))
+            let toK = Int(clamp((s.event * rate).rounded(), 0, Double(n - 1)))
+            let fromC = bridged ? holdCenter(i - 1, fromK) : SIMD2(0.5, 0.5)
+            let fromV = bridged ? holdVelocity(i - 1, fromK) : .zero
+            let toC = holdCenter(i, toK)
+            let toV = holdVelocity(i, toK)
+            fill(transStart, s.event, fromLz, s.lz, fromC, toC, fromV, toV)
             fillHold(i, s.event, s.off)
             prevOff = s.off
             prevLz = s.lz
             prevC = holdCenter(i, min(max(Int((s.off * rate).rounded()), 0), n - 1))
         }
-        if prevLz > 0.001 {
-            fill(prevOff, min(prevOff + tout, outDur), prevLz, 0, prevC, SIMD2(0.5, 0.5))
+        if prevLz > 0.001, let last = scenes.indices.last {
+            let v = holdVelocity(last, Int(clamp((prevOff * rate).rounded(), 0, Double(n - 1))))
+            fill(prevOff, min(prevOff + tout, outDur), prevLz, 0, prevC, SIMD2(0.5, 0.5), v, .zero)
         }
 
         // Clamp the centre to the feasible range at the final scale. A centre

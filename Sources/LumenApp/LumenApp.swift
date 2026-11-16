@@ -23,14 +23,6 @@ final class LumenAppDelegate: NSObject, NSApplicationDelegate {
         guard let model = LumenAppDelegate.model else { return }
         startDaemon(model)
         #if DEBUG
-        // Launch straight into a project's editor for visual verification.
-        if let i = CommandLine.arguments.firstIndex(of: "--open-editor"), i + 1 < CommandLine.arguments.count {
-            let url = URL(fileURLWithPath: CommandLine.arguments[i + 1])
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(500))
-                EditorDebugWindow.show(url: url)
-            }
-        }
         if CommandLine.arguments.contains("--bar-preview") {
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(600))
@@ -90,25 +82,6 @@ enum LumenMain {
         }
     }
 }
-
-#if DEBUG
-/// DEBUG-only: opens a real editor window on a project, so a design pass can
-/// screenshot the actual timeline, inspector and music lane.
-@MainActor
-enum EditorDebugWindow {
-    static func show(url: URL) {
-        let root = EditorRoot(url: url)
-        let hosting = NSHostingController(rootView: root)
-        hosting.view.frame = NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let win = NSWindow(contentViewController: hosting)
-        win.title = "Lumen Editor (debug)"
-        win.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
-        win.setContentSize(NSSize(width: 1440, height: 900))
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-}
-#endif
 
 /// The daemon: accessory policy, no windows, one private socket.
 @MainActor

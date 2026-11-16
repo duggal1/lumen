@@ -186,14 +186,41 @@ enum ZoomPlanner {
         return (0..<n).map { PathPoint(t: start + Double($0) * dt, p: SIMD2(xs[$0], ys[$0])) }
     }
 
-    private static func smoothFollow(_ pts: [FollowPoint], W: Double, H: Double) -> [FollowPoint] {
+    /// Pointer paths are continuous: a cursor crossing the screen is one
+    /// glide, not a hold followed by a jump. Catmull-Rom keeps velocity
+    /// through every recorded point, so the camera does not stop at each
+    /// click on its way to the next one. (Caret paths keep the hold-then-jump
+    /// model in `smoothPath`; a caret really does jump.)
+    private static func smoothFollow(_ pts: [FollowPoint]) -> [FollowPoint] {
         guard pts.count >= 2 else { return pts }
         let sorted = pts.sorted { $0.t < $1.t }
-        let fixes = sorted.map { Fix(t: $0.t, p: SIMD2($0.p.x * W, $0.p.y * H), field: nil) }
-        let t0 = fixes.first!.t, t1 = fixes.last!.t
-        return smoothPath(fixes, t0: t0, t1: t1).map {
-            FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H))
+        let t0 = sorted.first!.t, t1 = sorted.last!.t
+        let dt = 1.0 / 60
+        let n = max(Int((t1 - t0) / dt) + 1, 2)
+        func catmull(_ p0: Double, _ p1: Double, _ p2: Double, _ p3: Double, _ u: Double) -> Double {
+            let u2 = u * u, u3 = u2 * u
+            return 0.5 * ((2 * p1) + (-p0 + p2) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u2 + (-p0 + 3 * p1 - 3 * p2 + p3) * u3)
         }
+        var xs: [Double] = [], ys: [Double] = []
+        xs.reserveCapacity(n); ys.reserveCapacity(n)
+        var j = 0
+        for i in 0..<n {
+            let t = t0 + Double(i) * dt
+            while j + 1 < sorted.count, sorted[j + 1].t <= t { j += 1 }
+            let a = sorted[j]
+            if j + 1 < sorted.count, t > a.t {
+                let b = sorted[j + 1]
+                let p0 = sorted[max(j - 1, 0)].p, p1 = a.p, p2 = b.p, p3 = sorted[min(j + 2, sorted.count - 1)].p
+                let u = clamp((t - a.t) / max(b.t - a.t, 1e-6), 0, 1)
+                xs.append(catmull(p0.x, p1.x, p2.x, p3.x, u))
+                ys.append(catmull(p0.y, p1.y, p2.y, p3.y, u))
+            } else {
+                xs.append(a.p.x); ys.append(a.p.y)
+            }
+        }
+        xs = zeroPhaseSmooth(xs, omega: 7, dt: dt)
+        ys = zeroPhaseSmooth(ys, omega: 7, dt: dt)
+        return (0..<n).map { FollowPoint(t: t0 + Double($0) * dt, p: SIMD2(xs[$0], ys[$0])) }
     }
 
     /// Normalised bounding-box diagonal of a follow path. A static path is a
@@ -361,7 +388,7 @@ enum ZoomPlanner {
             let gapOK = it.t - last <= gap
             let moved = hypot(anchor.x - o.c.x, anchor.y - o.c.y) / max(half(want).x, 1)
             if strong, !gapOK || moved > 0.55 {
-                close(at: it.t)
+                close(at: min(last + hold, tm.trimEnd))
                 var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind)
                 fresh = withPoint(fresh, it.t, anchor)
                 if it.kind == .typing { fresh.path.append(contentsOf: it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) }) }
@@ -387,7 +414,7 @@ enum ZoomPlanner {
                 if inside(anchor, o.c, o.scale) {
                     o = withPoint(o, it.t, anchor)
                 } else {
-                    close(at: it.t)
+                    close(at: min(last + hold, tm.trimEnd))
                     var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind)
                     fresh = withPoint(fresh, it.t, anchor)
                     if it.kind == .typing { fresh.path.append(contentsOf: it.path.map { FollowPoint(t: $0.t, p: SIMD2($0.p.x / W, $0.p.y / H)) }) }
@@ -430,7 +457,7 @@ enum ZoomPlanner {
                 k += 1
             }
             guard path.count >= 2 else { continue }
-            let cleaned = smoothFollow(path, W: W, H: H)
+            let cleaned = smoothFollow(path)
             guard cleaned.count >= 2, pathExtent(cleaned) > 0.008 else { continue }
             followPaths[s.id] = cleaned
             shots[i].focus = .follow
