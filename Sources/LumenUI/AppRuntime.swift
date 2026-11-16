@@ -22,12 +22,15 @@ extension AppModel: LumenRuntime {
         }
         status.paused = paused
         status.recording = phase == .recording
+        // TCC answers are blocking IPC: never ask them from the main actor.
+        let perms = await Task.detached(priority: .userInitiated) { PermissionSnapshot.read() }.value
+        permissions = perms
         var permissions = RuntimePermissions()
-        permissions.screenRecording = Permissions.screen
-        permissions.accessibility = Permissions.accessibility
-        permissions.inputMonitoring = Permissions.input
-        permissions.microphone = Permissions.mic
-        permissions.camera = Permissions.camera
+        permissions.screenRecording = perms.screen
+        permissions.accessibility = perms.accessibility
+        permissions.inputMonitoring = perms.input
+        permissions.microphone = perms.mic
+        permissions.camera = perms.camera
         status.permissions = permissions
         status.libraryPath = library.path
         status.projects = projects.count
