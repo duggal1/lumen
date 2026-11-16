@@ -50,7 +50,7 @@ import LumenRender
     #expect(titles.contains("Echoes in the Dark"))
 }
 
-@Test func musicNamesResolveFromPathToCuratedTitle() {
+@MainActor @Test func musicNamesResolveFromPathToCuratedTitle() {
     let path = "/assets/music/calm/Majestic Hills - Kevin MacLeod [USUAN1100423].mp3"
     let name = TimelineStrip.musicName(path)
     #expect(name == "Majestic Hills")
