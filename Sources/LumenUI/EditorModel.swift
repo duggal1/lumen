@@ -222,6 +222,10 @@ enum TimelineSelection: Equatable {
         // click never pays engine startup inside the transport gap.
         let p = player
         Task.detached(priority: .utility) { p.warm() }
+        // Age out raw footage in the background. This is pure file-system work
+        // and never removes a project file or an exported deliverable.
+        let library = session.bundle.url.deletingLastPathComponent()
+        Task.detached(priority: .utility) { _ = RawFootageSweep.sweep(library: library) }
     }
 
     // AGENT: stale undo snapshots must not put a superseded timeline back over an accepted agent edit.
@@ -981,19 +985,35 @@ enum TimelineSelection: Equatable {
 
     func editTranscriptWord(_ index: Int, _ text: String) { dispatch(.editWord(index: index, text: text)) }
 
+    /// Deleting a transcript word removes the matching VIDEO span too, via a
+    /// `.transcript` cut. The word itself stays in the project so it can be
+    /// restored; deletion is a mask over both captions and picture, never data loss.
     func setTranscriptWord(_ index: Int, deleted: Bool) {
-        dispatch(deleted ? .deleteWords([index]) : .restoreWords([index]))
+        let spans = TranscriptEdits.spans(for: transcriptWords, at: [index])
+        dispatch(deleted
+                 ? .deleteTranscriptWords([index], cuts: spans)
+                 : .restoreTranscriptWords([index], cuts: spans))
     }
 
-    /// Removes filler words from both captions and the cut map. The word list
-    /// stays intact in the project: deletion is a mask, never data loss.
+    /// Delete a whole sentence by its word range. One cut, one undo step.
+    func deleteSentence(words range: Range<Int>) {
+        let indices = Array(range).filter { transcriptWords.indices.contains($0) }
+        guard let cut = TranscriptEdits.sentenceSpan(for: transcriptWords, range: range) else { return }
+        dispatch(.deleteTranscriptWords(indices, cuts: [cut]))
+    }
+
+    /// Bulk cleanup: filler words and long pauses go in one pass, and each one
+    /// removes its picture span as well as its caption. A pause with a click or
+    /// key press inside it is kept — that is deliberate interaction, not dead air.
     func removeFillerWords() {
-        let fillers: Set<String> = ["um", "uh", "erm", "hmm", "like", "basically", "actually", "you know", "i mean", "sort of", "kind of"]
+        let transcript = Transcript(words: transcriptWords, locale: timeline.captions.locale)
+        let terms = TranscriptEdits.terms(forLocale: transcript.locale)
         let indices = transcriptWords.enumerated().compactMap { index, word in
-            fillers.contains(word.text.lowercased().trimmingCharacters(in: .punctuationCharacters)) ? index : nil
+            terms.contains(TranscriptEdits.normalized(word.text)) ? index : nil
         }
-        guard !indices.isEmpty else { return }
-        dispatch(.deleteWords(indices))
+        let cuts = TranscriptEdits.cleanupCuts(transcript: transcript, events: session.input.events)
+        guard !indices.isEmpty || !cuts.isEmpty else { return }
+        dispatch(.deleteTranscriptWords(indices, cuts: cuts))
     }
     func dispatch(_ c: Command) {
         let ctx = ReduceContext(playhead: playhead, selection: selection, duration: duration, fps: frameRate)
@@ -1312,12 +1332,28 @@ enum TimelineSelection: Equatable {
                     self.notice = "Copied to clipboard."
                 }
                 self.exportState = .done(lastURL)
+                self.recordExportFinished()
                 Task { await EmailNotificationService.shared.exportFinished(file: lastURL) }
             } catch is CancellationError {
                 if self?.activeExportID == exportID { self?.exportState = .idle }
             } catch {
                 if self?.activeExportID == exportID { self?.exportState = .failed(error.localizedDescription) }
             }
+        }
+    }
+
+    /// Restarts the raw-footage retention clock after a successful export and
+    /// honours "Delete raw after export". No replan is needed: privacy fields
+    /// do not affect the picture, so the timeline is saved directly.
+    private func recordExportFinished() {
+        var updated = timeline
+        updated.overlays.privacy.lastExportAt = Date()
+        timeline = updated
+        box.set(updated)
+        session.save(updated)
+        if updated.overlays.privacy.deleteRawAfterExport {
+            let removed = RawFootageSweep.deleteRaw(in: session.bundle)
+            notice = removed.isEmpty ? nil : "Removed raw footage after export."
         }
     }
 

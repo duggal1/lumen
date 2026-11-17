@@ -588,12 +588,21 @@ public final class Renderer: @unchecked Sendable {
         // instead of re-evaluating the timeline per sample.
         let K = sampleCount(r, g)
         let dt = 1 / max(r.fps, 1)
+        let tiltMode = tl.camera.tilt
         var states: [FrameState] = []
         states.reserveCapacity(K)
         for i in 0..<K {
             let off = ((Double(i) + 0.5) / Double(K) - 0.5) * tl.camera.shutter * dt
             var st = r.live ?? tl.evaluate(at: r.t + off)
             if r.live == nil, tl.derived == nil { st.cameraCenter = SIMD2<Float>(Float(g.src.x / 2), Float(g.src.y / 2)) }
+            // 3D is content and mode-controlled. Gate EVERY sub-frame here so a
+            // leaked or stale tilt can never reach contentFS or the export.
+            // Each sub-frame keeps its own evaluated tilt; only the mode-aware
+            // clamp is applied, so 60/120/240 fps stay deterministic.
+            st.cameraTilt = CameraTilt.effective(st.cameraTilt, mode: tiltMode,
+                                                maxYaw: tl.camera.maxYaw,
+                                                maxPitch: tl.camera.maxPitch,
+                                                floatDeg: tl.camera.floatDeg)
             states.append(st)
         }
         // SMOOTHNESS: the mip chain is only read when the source is minified.
@@ -741,7 +750,7 @@ public final class Renderer: @unchecked Sendable {
         if let e = cb.makeRenderCommandEncoder(descriptor: pd) {
             e.setRenderPipelineState(pr); quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
             frag(e, ResU(levels: fmt == .bgr10a2Unorm ? 1023 : 255,
-                         seed: UInt32(truncatingIfNeeded: Int(r.t * 1000)),
+                         seed: UInt32(truncatingIfNeeded: r.t.isFinite ? Int(r.t * 1000) : 0),
                          blur: 0,
                          alpha: r.transparent || r.cursorOnly ? 0 : 1))
             e.setFragmentTexture(K > 1 ? accum[s] : work[s], index: 0); e.setFragmentTexture(bd, index: 1)
@@ -767,7 +776,16 @@ public final class Renderer: @unchecked Sendable {
         let cam = Double(simd_length(b.cameraCenter - a.cameraCenter)) * k * sc
         let zoom = abs(log(Double(b.cameraScale) / Double(a.cameraScale))) * g.content.z * 0.5
         let cur = Double(simd_length(b.cursor.position - a.cursor.position)) * k * sc
-        let blurPx = max(cam, zoom, cur) * tl.camera.shutter
+        // Tilt is a moving camera too: a Lean/Float/Reveal change needs the
+        // same 180-degree shutter as pan/zoom/cursor. ~0.4% of frame width per
+        // degree matches the bounded homography at its 8 degree limit.
+        let tiltA = CameraTilt.effective(a.cameraTilt, mode: tl.camera.tilt, maxYaw: tl.camera.maxYaw,
+                                         maxPitch: tl.camera.maxPitch, floatDeg: tl.camera.floatDeg)
+        let tiltB = CameraTilt.effective(b.cameraTilt, mode: tl.camera.tilt, maxYaw: tl.camera.maxYaw,
+                                         maxPitch: tl.camera.maxPitch, floatDeg: tl.camera.floatDeg)
+        let tiltDelta = max(abs(Double(tiltB.x - tiltA.x)), abs(Double(tiltB.y - tiltA.y)))
+        let tiltPx = tiltDelta * g.content.z * 0.004
+        let blurPx = max(cam, zoom, cur, tiltPx) * tl.camera.shutter
         if r.quality == .preview, blurPx < 3 {
             blurK = 1; blurCooldown = 0
             return 1
@@ -799,7 +817,22 @@ public final class Renderer: @unchecked Sendable {
                        src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
         let tl = r.timeline
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y)), content = SIMD4<Float>(g.content)
+        let tiltMode = tl.camera.tilt
+        let tilt = CameraTilt.effective(st.cameraTilt, mode: tiltMode,
+                                        maxYaw: tl.camera.maxYaw,
+                                        maxPitch: tl.camera.maxPitch,
+                                        floatDeg: tl.camera.floatDeg)
         let sc = max(Double(st.cameraScale), 1)
+        // Reveal's 0.92 entrance scale shrinks the framed video inside the
+        // canvas and grows it back to full size. It is a content-rect scale,
+        // NOT a source zoom-out: the sample view stays at `sc`, so the smart
+        // camera clamp and the crop containment are untouched.
+        let reveal = CameraTilt.revealScale(mode: tiltMode, tilt: tilt)
+        var contentRect = content
+        if reveal < 0.9999 {
+            let w = content.z * Float(reveal), h = content.w * Float(reveal)
+            contentRect = SIMD4(content.x + (content.z - w) / 2, content.y + (content.w - h) / 2, w, h)
+        }
         // Intelligent Area crop: the compositor samples only this rect, and
         // the camera centre is clamped within it. Zero means no smart crop.
         let cropBounds: CGRect = st.cropRect.width > 1 && st.cropRect.height > 1
@@ -843,11 +876,11 @@ public final class Renderer: @unchecked Sendable {
 
         // content (fragment path; the upscaler, when engaged, is sampled here)
         if drawingContent {
-            enc.setRenderPipelineState(pContent); quad(enc, content, canvasF)
-            frag(enc, ContentU(content: content, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam),
+            enc.setRenderPipelineState(pContent); quad(enc, contentRect, canvasF)
+            frag(enc, ContentU(content: contentRect, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam),
                              cropSize: cropSize, scale: Float(sc),
                              radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0,
-                             tilt: st.cameraTilt, radii: SIMD4<Float>(g.radii),
+                             tilt: tilt, radii: SIMD4<Float>(g.radii),
                              upRegion: upscaled?.0.region ?? .zero, upTexSize: upscaled?.0.texSize ?? .one,
                              upFactor: upscaled?.0.factor ?? 1, upBlend: upscaled?.1 ?? 0))
             enc.setFragmentTexture(src, index: 0)

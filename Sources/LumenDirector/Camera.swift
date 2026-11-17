@@ -61,10 +61,16 @@ enum CameraSolver {
         let look = clamp(p.lookahead.isFinite ? p.lookahead : 0.12, 0, 0.5)
         let offset = SIMD2(clamp(p.centerOffsetX, -0.25, 0.25), clamp(p.centerOffsetY, -0.25, 0.25))
         let omegaPan = max(p.omegaPan.isFinite ? p.omegaPan : 4, 1)
+        // maxScale is a hard cap at every stage, not just in the planner. A
+        // manually edited or hostile segment must not slip past it, and the
+        // cap has to be applied to the *target* so the quintic never aims at
+        // a scale the final clamp would flatten into a stop-start plateau.
+        let maxLz = log(max(p.maxScale.isFinite ? p.maxScale : 2, 1.0001))
 
         struct Scene {
             var on: Double
-            var event: Double
+            var arrival: Double                 // where the move lands and the hold begins
+            var event: Double                   // the click / keystroke the shot anticipates
             var off: Double
             var lz: Double
             var center: SIMD2<Double>
@@ -72,26 +78,38 @@ enum CameraSolver {
             var path: [(t: Double, c: SIMD2<Double>)]
         }
 
-        /// Lead-in grows with magnification. A 1.2× move needs less runway than
-        /// a 6× move; a constant 0.30 s is either late or early.
-        func leadFor(_ lz: Double, _ ease: Double) -> Double {
+        /// Lead-in grows with magnification and with how far the frame has to
+        /// travel. A quintic's peak jerk is 60·d/T³, so a short runway on a
+        /// long pan snaps into place — the exact "stop-start" the settle is
+        /// meant to avoid. Give the move enough time for a filmed ease-out.
+        func leadFor(_ lz: Double, _ ease: Double, _ pan: Double) -> Double {
             let magnitude = 0.22 + 0.16 * (lz / 0.6931471805599453)
-            return clamp(max(leadBase, magnitude) / max(ease, 0.55), 0.20, 1.4)
+            let base = max(leadBase, magnitude) / max(ease, 0.55)
+            // 2560 px is a conservative source-width reference (covers 1920 and
+            // 2560 masters). Budget 7e5 px/s³ — below the 1e6 jerk invariant,
+            // with headroom for the follow path's own gentle drift.
+            let jerkFloor = pow(60 * pan * 2560 / 7.0e5, 1.0 / 3.0)
+            return clamp(max(base, jerkFloor), 0.20, 1.6)
         }
         func manualRise(_ ease: Double) -> Double { clamp(0.9 / max(ease, 0.3), 0.25, 2.0) }
 
+        // TimeMap.output converts a source time into an array index; NaN or an
+        // infinity there traps before the finite-result guard below can see it.
+        // Drop non-finite segment times up front so a corrupt or hostile plan
+        // degrades to a still frame instead of killing the process.
+        let finiteZoom = zoom.filter { $0.start.isFinite && $0.end.isFinite }
         // Ordered by settle time, not by lead-in start. The camera holds one
         // target at a time and the track is written in a single forward pass,
         // so the pass must follow the order the shots actually land. Sorting by
         // `on` lets a later shot's lead-in begin before an earlier shot's
         // arrival, which reorders the pass and leaves a one-tick cut where the
         // two writes meet.
-        let scenes: [Scene] = zoom.compactMap { z -> Scene? in
+        let scenes: [Scene] = finiteZoom.compactMap { z -> Scene? in
             let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
             guard a.isFinite, b.isFinite, b - a > 0.02, z.scale.isFinite, z.scale > 1.001, a < outDur else { return nil }
             let ease: Double
             if let e = z.easing?.omegaScale, e.isFinite, e > 0 { ease = e } else { ease = 1 }
-            let lz = log(min(z.scale, 16))
+            let lz = clamp(log(max(z.scale, 1.0001)), 0, maxLz)
             let path = (follow[z.id] ?? [])
                 .filter { $0.t.isFinite && $0.c.x.isFinite && $0.c.y.isFinite }
                 .sorted { $0.t < $1.t }
@@ -102,16 +120,28 @@ enum CameraSolver {
             case .follow: center = path.first.map { $0.c } ?? SIMD2(0.5, 0.5)
             }
             let on: Double, event: Double
+            // Anticipation budget. The lead-in must cover BOTH the move and the
+            // still settle before the action; subtracting settle from a fixed
+            // lead would shorten the quintic's runway and spike its jerk.
+            let pan = max(abs(center.x - 0.5), abs(center.y - 0.5))
+            let lead = leadFor(lz, ease, pan)
+            let settle = z.origin == .auto
+                ? min(clamp(0.11 / max(ease, 0.6), 0.06, 0.18), 0.35 * lead)
+                : 0
             if z.origin == .auto {
                 event = a
-                on = max(a - leadFor(lz, ease), 0)
+                on = max(a - lead - settle, 0)
             } else {
                 on = a
                 event = min(a + manualRise(ease), max(b - 0.05, a + 0.05))
             }
-            return Scene(on: on, event: event, off: max(b, event + 0.02), lz: lz,
+            // The lead-in is the anticipation; the settle is the breath at the
+            // end of it. Land a little *before* the action so the frame is
+            // already composed and perfectly still when the click/typing lands.
+            let arrival = max(on + 0.04, event - settle)
+            return Scene(on: on, arrival: arrival, event: event, off: max(b, event + 0.02), lz: lz,
                          center: center, segment: z, path: path)
-        }.sorted { $0.event < $1.event }
+        }.sorted { $0.arrival < $1.arrival }
 
         // Global cursor track for follow scenes that have no explicit path.
         // A scene with a recorded path is driven by `pathCenters` instead.
@@ -201,30 +231,44 @@ enum CameraSolver {
         var cxT = [Double](repeating: 0.5, count: n)
         var cyT = [Double](repeating: 0.5, count: n)
 
-        /// Quintic with matched endpoint velocities. With zero velocities this
-        /// is smootherstep; the velocity terms let a move flow into a moving
-        /// hold (or out of one) without a velocity step.
+        /// One camera move, one curve. Pan and dolly are driven by the same
+        /// quintic envelope so they accelerate and settle as a single filmed
+        /// gesture. A Hermite slope term adds only the velocity continuity a
+        /// handoff needs; it never moves the endpoints and, at rest, it is zero
+        /// so the move is the pure monotone envelope with no overshoot.
         func fill(_ a: Double, _ b: Double, _ l0: Double, _ l1: Double,
                   _ c0: SIMD2<Double>, _ c1: SIMD2<Double>,
-                  _ v0: SIMD2<Double> = .zero, _ v1: SIMD2<Double> = .zero) {
+                  _ v0: SIMD2<Double> = .zero, _ v1: SIMD2<Double> = .zero,
+                  _ vl0: Double = 0, _ vl1: Double = 0) {
             let ia = min(max(Int((a * rate).rounded()), 0), n - 1)
             let ib = min(max(Int((b * rate).rounded()), ia), n - 1)
             let T = max(b - a, 1e-3)
-            // x(u) = x0 + T·v0·u + c3u³ + c4u⁴ + c5u⁵, zero endpoint accel.
-            func coeff(_ x0: Double, _ x1: Double, _ va: Double, _ vb: Double) -> (Double, Double, Double) {
-                let dx = x1 - x0 - T * va
-                let dv = T * (vb - va)
-                return (10 * dx - 4 * dv, 7 * dv - 15 * dx, 6 * dx - 3 * dv)
+            let dl = l1 - l0
+            let dc = c1 - c0
+            // A noisy follow velocity must not turn the settle into a stop-start
+            // or push the pan past its target. Cap the continuity slopes at a
+            // fraction of the distance actually being travelled this move.
+            func bounded(_ v: Double, _ delta: Double) -> Double {
+                let cap = abs(delta) / T * 1.5 + 0.02
+                return clamp(v, -cap, cap)
             }
-            let (c3x, c4x, c5x) = coeff(c0.x, c1.x, v0.x, v1.x)
-            let (c3y, c4y, c5y) = coeff(c0.y, c1.y, v0.y, v1.y)
-            let (c3l, c4l, c5l) = coeff(l0, l1, 0, 0)
+            let va = SIMD2(bounded(v0.x, dc.x), bounded(v0.y, dc.y))
+            let vb = SIMD2(bounded(v1.x, dc.x), bounded(v1.y, dc.y))
+            // The dolly needs the same continuity slopes as the pan. When a
+            // bridge starts inside the previous move, the lens is still moving;
+            // restarting it from rest kills that momentum in one tick — a
+            // scale stop-start the viewer reads as a pump. The slope terms carry
+            // the incoming (and outgoing) log-scale velocity across the join.
+            // They are zero at both ends, so normal rest-to-rest moves are
+            // bit-for-bit unchanged and the target is still hit exactly.
+            let vla = bounded(vl0, dl), vlbb = bounded(vl1, dl)
             for k in ia...ib {
                 let u = clamp((Double(k) / rate - a) / T, 0, 1)
-                let u2 = u * u, u3 = u2 * u
-                lzT[k] = l0 + c3l * u3 + c4l * u3 * u + c5l * u3 * u2
-                cxT[k] = c0.x + T * v0.x * u + c3x * u3 + c4x * u3 * u + c5x * u3 * u2
-                cyT[k] = c0.y + T * v0.y * u + c3y * u3 + c4y * u3 * u + c5y * u3 * u2
+                let s = QuinticMove.envelope(u)
+                let lead = QuinticMove.leadSlope(u), trail = QuinticMove.trailSlope(u)
+                lzT[k] = l0 + dl * s + T * (vla * lead + vlbb * trail)
+                cxT[k] = c0.x + dc.x * s + T * (va.x * lead + vb.x * trail)
+                cyT[k] = c0.y + dc.y * s + T * (va.y * lead + vb.y * trail)
             }
         }
         func fillHold(_ i: Int, _ a: Double, _ b: Double) {
@@ -236,6 +280,26 @@ enum CameraSolver {
                 let c = holdCenter(i, k)
                 cxT[k] = c.x; cyT[k] = c.y
             }
+        }
+        /// Velocity of the camera as it is actually written on the track at
+        /// tick `k`. A bridge must leave from this velocity, not from a freshly
+        /// recomputed hold formula: an earlier scene may have overwritten the
+        /// value here, and joining to a different slope is the one-tick cut a
+        /// viewer reads as a jerk.
+        func trackVelocity(_ k: Int) -> SIMD2<Double> {
+            let j = min(max(k, 0), n - 1)
+            let a = max(j - 4, 0), b = min(j + 4, n - 1)
+            guard b > a else { return .zero }
+            return (SIMD2(cxT[b], cyT[b]) - SIMD2(cxT[a], cyT[a])) * rate / Double(b - a)
+        }
+        /// Log-scale twin of `trackVelocity`. A bridge that begins before the
+        /// previous lens move has settled must inherit its scale velocity too,
+        /// or the dolly stops dead for one tick while the pan keeps going.
+        func trackZVelocity(_ k: Int) -> Double {
+            let j = min(max(k, 0), n - 1)
+            let a = max(j - 4, 0), b = min(j + 4, n - 1)
+            guard b > a else { return 0 }
+            return (lzT[b] - lzT[a]) * rate / Double(b - a)
         }
 
         var prevOff = 0.0
@@ -255,7 +319,7 @@ enum CameraSolver {
             // would collapse to one sample and cut the camera. Join the new
             // scene directly instead, from the value already on the track.
             let bridged = i > 0 && prevLz > 0 &&
-                ((s.event - prevOff) <= max(panGap, tout + 0.3) || s.on < prevOff)
+                ((s.arrival - prevOff) <= max(panGap + tout, 1.6) || s.on < prevOff)
             let transStart: Double
             if i == 0 {
                 transStart = s.on
@@ -270,18 +334,19 @@ enum CameraSolver {
                 transStart = s.on
             }
             let fromK = Int(clamp((transStart * rate).rounded(), 0, Double(n - 1)))
-            let toK = Int(clamp((s.event * rate).rounded(), 0, Double(n - 1)))
+            let toK = Int(clamp((s.arrival * rate).rounded(), 0, Double(n - 1)))
             let fromLz = bridged ? lzT[fromK] : 0
             // Join onto the value that is actually on the track, not onto a
             // recomputed hold formula. If an earlier scene wrote a different
             // value at this tick, the recomputed one is wrong and the handoff
             // becomes a one-tick step — a visible cut, not a pan.
             let fromC = bridged ? SIMD2(cxT[fromK], cyT[fromK]) : SIMD2(0.5, 0.5)
-            let fromV = bridged ? holdVelocity(i - 1, fromK) : .zero
+            let fromV = bridged ? trackVelocity(fromK) : .zero
             let toC = holdCenter(i, toK)
             let toV = holdVelocity(i, toK)
-            fill(transStart, s.event, fromLz, s.lz, fromC, toC, fromV, toV)
-            fillHold(i, s.event, s.off)
+            fill(transStart, s.arrival, fromLz, s.lz, fromC, toC, fromV, toV,
+                 bridged ? trackZVelocity(fromK) : 0, 0)
+            fillHold(i, s.arrival, s.off)
             if tailIdx == nil || s.off > scenes[tailIdx!].off { tailIdx = i }
             prevOff = s.off
             prevLz = s.lz
@@ -309,7 +374,7 @@ enum CameraSolver {
         // outside it would show empty canvas at the edge of the recording.
         var X = [Double](repeating: 0.5, count: n), Y = X, Z = [Double](repeating: 0, count: n)
         for k in 0..<n {
-            let z = max(lzT[k], 0), h = 0.5 / exp(z)
+            let z = clamp(lzT[k], 0, maxLz), h = 0.5 / exp(z)
             Z[k] = z
             X[k] = clamp(cxT[k], h, 1 - h)
             Y[k] = clamp(cyT[k], h, 1 - h)

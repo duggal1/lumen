@@ -205,6 +205,15 @@ public struct CaptionStyle: Codable, Equatable, Sendable {
         pill = c.contains(.pill) ? ((try? c.decodeIfPresent(RGBA.self, forKey: .pill)) ?? nil) : pill
         font = c.opt(.font, font)
     }
+    /// A synthesized encoder omits a nil optional, which would make `init(from:)`
+    /// fall back to the default dark pill. "No pill" is a deliberate style, so
+    /// write an explicit null and let the decoder keep it across project reloads.
+    public func encode(to e: Encoder) throws {
+        var c = e.container(keyedBy: CodingKeys.self)
+        try c.encode(size, forKey: .size); try c.encode(color, forKey: .color)
+        if let pill { try c.encode(pill, forKey: .pill) } else { try c.encodeNil(forKey: .pill) }
+        try c.encode(font, forKey: .font)
+    }
 }
 public struct CaptionPlan: Codable, Equatable, Sendable {
     /// Captions are opt-in. A transcript arriving must never switch them on
@@ -403,7 +412,19 @@ public struct PrivacyPlan: Codable, Equatable, Sendable {
     public var pixelSize = 0.0
     public var entropyThreshold = 3.5
     public var decisions: [String: Bool] = [:]
-    enum CodingKeys: String, CodingKey { case privacyModel, enabled, autoDetect, autoApply, customPatterns, padding, mode, pixelSize, entropyThreshold, decisions }
+    /// Raw capture tracks stay 7 days after the last export unless the user
+    /// picks 1 or 30 days. Stored per project so a shared project carries its
+    /// own retention promise.
+    public var rawRetentionDays = RawRetention.sevenDays.rawValue
+    /// Delete the original tracks the moment an export finishes.
+    public var deleteRawAfterExport = false
+    /// Anchor for the retention clock; set when an export completes.
+    public var lastExportAt: Date? = nil
+    public var rawRetention: RawRetention {
+        get { RawRetention(rawValue: rawRetentionDays) ?? .sevenDays }
+        set { rawRetentionDays = newValue.rawValue }
+    }
+    enum CodingKeys: String, CodingKey { case privacyModel, enabled, autoDetect, autoApply, customPatterns, padding, mode, pixelSize, entropyThreshold, decisions, rawRetentionDays, deleteRawAfterExport, lastExportAt }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -414,5 +435,8 @@ public struct PrivacyPlan: Codable, Equatable, Sendable {
             mode = .blur; pixelSize = 0
         }
         entropyThreshold = c.opt(.entropyThreshold, entropyThreshold); decisions = c.opt(.decisions, decisions)
+        rawRetentionDays = RawRetention.normalize(c.opt(.rawRetentionDays, rawRetentionDays))
+        deleteRawAfterExport = c.opt(.deleteRawAfterExport, deleteRawAfterExport)
+        lastExportAt = try? c.decodeIfPresent(Date.self, forKey: .lastExportAt)
     }
 }

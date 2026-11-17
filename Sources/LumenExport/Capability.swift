@@ -44,9 +44,13 @@ public struct ExportPreset: Codable, Hashable, Sendable, Identifiable {
     }
 
     public func width(aspect: Double) -> Int {
-        if let customWidth { return customWidth }
-        if aspect < 1 { return (Int((Double(1920) * aspect).rounded()) + 1) & ~1 }
-        return ((Int((Double(height) * aspect).rounded()) + 1) & ~1)
+        if let customWidth { return max(2, customWidth) & ~1 }
+        let a = aspect.isFinite && aspect > 0 ? aspect : 16.0 / 9
+        // `height` is the real frame height in every orientation: 1080 for
+        // landscape 1080p, 1920 for portrait 1080p, 3840 for portrait 4K.
+        // Deriving width from it keeps 9:16 exports at the chosen resolution
+        // instead of collapsing every portrait clip to 1080x1920.
+        return ((Int((Double(height) * a).rounded()) + 1) & ~1)
     }
 
     static func label(forHeight h: Int) -> String {

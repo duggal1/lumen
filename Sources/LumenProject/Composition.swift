@@ -105,13 +105,39 @@ public struct RecordingJournal: Codable, Sendable {
     public var lastFramePTS: Double
     public var firstFramePTS: Double?
     public var droppedFrames: Int
+    /// Area-recording crop configuration in force while this take was captured.
+    /// Absent on older journals (and on full-screen takes), so a crashed Area
+    /// recording can rebuild the same intelligent crop instead of losing it.
+    public var smartCrop: SmartCropConfig?
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion, started, updated, source, fps, mic, system, webcam,
+             pauseIntervals, lastFramePTS, firstFramePTS, droppedFrames, smartCrop
+    }
     public init(started: Date = Date(), updated: Date? = nil, source: SourceInfo, fps: Double, mic: Bool, system: Bool,
                 webcam: Bool, pauseIntervals: [PauseInterval] = [], lastFramePTS: Double = 0,
-                firstFramePTS: Double? = nil, droppedFrames: Int = 0) {
+                firstFramePTS: Double? = nil, droppedFrames: Int = 0, smartCrop: SmartCropConfig? = nil) {
         self.started = started; self.updated = updated ?? started; self.source = source; self.fps = fps
         self.mic = mic; self.system = system; self.webcam = webcam
         self.pauseIntervals = pauseIntervals; self.lastFramePTS = lastFramePTS
         self.firstFramePTS = firstFramePTS; self.droppedFrames = droppedFrames
+        self.smartCrop = smartCrop
+    }
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        schemaVersion = c.opt(.schemaVersion, 1)
+        let decodedStart = (try? c.decode(Date.self, forKey: .started)) ?? Date()
+        started = decodedStart
+        updated = (try? c.decode(Date.self, forKey: .updated)) ?? decodedStart
+        source = try c.decode(SourceInfo.self, forKey: .source)
+        fps = c.opt(.fps, 60)
+        mic = c.opt(.mic, false); system = c.opt(.system, false); webcam = c.opt(.webcam, false)
+        pauseIntervals = c.opt(.pauseIntervals, [])
+        lastFramePTS = c.opt(.lastFramePTS, 0)
+        firstFramePTS = try? c.decodeIfPresent(Double.self, forKey: .firstFramePTS)
+        droppedFrames = c.opt(.droppedFrames, 0)
+        // Backward compatible: journals written before smartCrop existed decode
+        // to nil and recover exactly as they did before.
+        smartCrop = try? c.decodeIfPresent(SmartCropConfig.self, forKey: .smartCrop)
     }
 
     func validate() throws {
@@ -132,6 +158,12 @@ public struct RecordingJournal: Codable, Sendable {
         }
         guard pauseIntervals.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.end >= $0.start }) else {
             throw RecoveryJournalError.invalidValue("pause intervals")
+        }
+        if let roi = smartCrop?.roi {
+            guard roi.origin.x.isFinite, roi.origin.y.isFinite, roi.size.width.isFinite, roi.size.height.isFinite,
+                  roi.size.width >= 0, roi.size.height >= 0 else {
+                throw RecoveryJournalError.invalidValue("smart crop")
+            }
         }
     }
 }
@@ -200,6 +232,9 @@ public extension ProjectBundle {
         if j.system, FileManager.default.fileExists(atPath: systemURL.path) { meta.system = TrackMeta(file: "system.caf", startHostSeconds: origin) }
         if j.webcam, FileManager.default.fileExists(atPath: webcamURL.path) { meta.webcam = TrackMeta(file: "webcam.mov", startHostSeconds: origin) }
         var tl = Timeline(duration: duration)
+        // An Area take must come back with the same intelligent crop it was
+        // recording with, not a fresh full-frame timeline.
+        tl.smartCrop = j.smartCrop ?? SmartCropConfig()
         // Paused spans carry no footage; replay them as cuts so recovered
         // projects match what a clean stop would have produced.
         let pauses = j.pauseIntervals.compactMap { p -> CutRange? in

@@ -114,7 +114,11 @@ public enum SmartCropPlanner {
             let eOut = tm.output(atSource: max(i.tEnd, i.t))
             let s = tOut - leadIn, a = tOut, e = max(eOut, a), r = e + ret
             if var last = spans.last, s <= last.restore + 0.05 {
-                last.rect = last.rect.union(expanded).intersection(bounds)
+                // Both merged rects carry the source aspect, but the union of
+                // two same-aspect rects at different positions generally does
+                // not. Re-fit it or the compositor stretches the revealed frame.
+                let merged = last.rect.union(expanded).intersection(bounds)
+                last.rect = SmartCropPlanner.aspectFit(merged, source: bounds)
                 last.end = max(last.end, e)
                 last.restore = max(last.restore, r)
                 spans[spans.count - 1] = last

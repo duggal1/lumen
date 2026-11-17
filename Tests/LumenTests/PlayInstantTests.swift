@@ -162,7 +162,7 @@ import LumenExport
         width: 320, height: 180, fps: 30, duration: 30, backingScale: 1, originX: 0, originY: 0)), revision: 1)
     let mixer = AudioMixer(mic: samples, micOffset: 0, system: nil, systemOffset: 0, cacheDir: dir,
                            keyTimes: (0..<30).map { Double($0) + 0.3 })
-    let task = Task.detached(priority: .userInitiated) { mixer.prepareVoice(tl.audio) }
+    let task = Task.detached(priority: .userInitiated) { [plan = tl.audio] in mixer.prepareVoice(plan) }
     task.cancel()
     await task.value
     // Give any detached work that ignored cancellation time to finish and write.

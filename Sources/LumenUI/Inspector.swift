@@ -6,10 +6,65 @@ import LumenExport
 import LumenAudio
 import LumenCapture
 
+/// Pure state mapping for the Studio's 3D (tilt) control. Kept free of SwiftUI
+/// so the enable/disable contract is exercised headlessly, and so the toggle,
+/// the style segmented control and the model all read the same single setting:
+/// `CameraParams.tilt`. `.off` is disabled; any other mode is enabled.
+enum Cinematic3D {
+    /// Mode selected the first time 3D is switched on. Matches the cinematic
+    /// preset's own choice, so the toggle never disagrees with the preset.
+    static let enabledMode: TiltMode = .lean
+
+    static func isEnabled(_ mode: TiltMode) -> Bool { mode != .off }
+
+    /// Toggling on from `.off` selects the default; toggling off always returns
+    /// to `.off`. Re-enabling never silently replaces a style the user picked.
+    static func mode(_ current: TiltMode, enabling: Bool) -> TiltMode {
+        enabling ? (current == .off ? enabledMode : current) : .off
+    }
+
+    /// The visual styles offered once 3D is on. `.off` is the toggle's job,
+    /// never a fourth segment of the style control.
+    static let styles: [(TiltMode, String)] = [(.lean, "Lean"), (.float, "Float"), (.reveal, "Reveal")]
+
+    static func label(_ mode: TiltMode) -> String {
+        switch mode {
+        case .off: "3D motion, off"
+        case .lean: "3D motion, lean"
+        case .float: "3D motion, float"
+        case .reveal: "3D motion, reveal"
+        }
+    }
+
+    /// A quiet readout under the style control (a tooltip's job, without a tooltip).
+    static func hint(_ mode: TiltMode) -> String {
+        switch mode {
+        case .off: "Flat 2D framing."
+        case .lean: "The frame banks with cursor motion."
+        case .float: "A slow drift, even when the cursor is still."
+        case .reveal: "Each zoom enters at an angle, then settles."
+        }
+    }
+}
+
 struct Inspector: View {
     let model: EditorModel
     enum Tab: String, CaseIterable { case background = "Studio", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
 
+    /// Groups transcript words into sentences at terminal punctuation so the
+    /// "delete a sentence cuts the video" action has a real UI trigger.
+    static func sentenceRanges(_ words: [WordToken]) -> [Range<Int>] {
+        var out: [Range<Int>] = []
+        var start = 0
+        for (i, word) in words.enumerated() {
+            let t = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard t.hasSuffix(".") || t.hasSuffix("?") || t.hasSuffix("!") else { continue }
+            if i >= start { out.append(start..<(i + 1)) }
+            start = i + 1
+        }
+        if start < words.count { out.append(start..<words.count) }
+        return out
+    }
 
     static func visibleFor(model: EditorModel) -> [Inspector.Tab] {
         Inspector.Tab.allCases.filter { $0 != Inspector.Tab.webcam || model.timeline.webcam != nil }
@@ -572,29 +627,88 @@ struct Inspector: View {
         }
     }
 
+    /// One card per idea: cinematic framing, 3D depth, then the fine lens knobs.
     private var camera: some View {
+        VStack(spacing: 16) {
+            cinematicCard
+            threeDCard
+            lensCard
+        }
+    }
+
+    /// Zoom v3: Auto zoom · Zoom amount · Smoothness on top. Smoothness is
+    /// the lead-in (0.3-1.0 s); the camera arrives 95% at the click.
+    private var cinematicCard: some View {
         let m = model
-        // Zoom v3: Auto zoom · Zoom amount · Smoothness on top. Smoothness is
-        // the lead-in (0.3-1.0 s); the camera arrives 95% at the click.
-        return VStack(spacing: 16) {
-            VStack(spacing: 0) {
-                ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
-                SliderRow(label: "Zoom amount", v: Binding(get: { m.timeline.camera.baseScale },
-                                        set: { v in m.edit { $0.camera.baseScale = v } }),
-                          range: 1.3...3.0, fmt: { String(format: "%.1f×", $0) })
-                SliderRow(label: "Smoothness", v: m.bind(\.camera.leadIn), range: 0.3...1.0,
-                          fmt: { "\(Int($0 * 1000)) ms" })
-                SliderRow(label: "Motion tracking", v: m.bind(\.camera.sensitivity), range: 0...1,
-                          fmt: { "\(Int($0 * 100))%" })
-                SliderRow(label: "Look-ahead", v: m.bind(\.camera.lookahead), range: 0...0.4,
-                          fmt: { "\(Int($0 * 1000)) ms" })
-                Row(label: "Preset") { LDropdown(sel: Binding(get: { m.timeline.camera.preset }, set: { v in m.edit { $0.camera.apply(preset: v) } }), options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "plus.magnifyingglass") }).frame(width: 130) }
-            }.card(padding: 16)
-            DisclosureGroup("Advanced") {
+        return VStack(spacing: 0) {
+            Row(label: "Cinematic") {
+                LDropdown(sel: Binding(get: { m.timeline.camera.preset },
+                                       set: { v in m.edit { $0.camera.apply(preset: v) } }),
+                          options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "camera.aperture") })
+                    .frame(width: 130)
+                    .focusBrackets()
+            }
+            ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
+            SliderRow(label: "Zoom amount", v: Binding(get: { m.timeline.camera.baseScale },
+                                    set: { v in m.edit { $0.camera.baseScale = v } }),
+                      range: 1.3...3.0, fmt: { String(format: "%.1f×", $0) })
+            SliderRow(label: "Smoothness", v: m.bind(\.camera.leadIn), range: 0.3...1.0,
+                      fmt: { "\(Int($0 * 1000)) ms" })
+            SliderRow(label: "Motion tracking", v: m.bind(\.camera.sensitivity), range: 0...1,
+                      fmt: { "\(Int($0 * 100))%" })
+            SliderRow(label: "Look-ahead", v: m.bind(\.camera.lookahead), range: 0...0.4,
+                      fmt: { "\(Int($0 * 1000)) ms" })
+        }.card(padding: 16)
+    }
+
+    /// The 3D switch is a toggle over the existing `camera.tilt` field: `.off`
+    /// is flat, every other mode is 3D. No second setting is introduced.
+    private var threeDCard: some View {
+        let mode = model.timeline.camera.tilt
+        let enabled = Cinematic3D.isEnabled(mode)
+        return VStack(spacing: 0) {
+            Row(label: "3D motion") {
+                LToggle(on: tiltEnabled, label: Cinematic3D.label(mode))
+                    .focusBrackets()
+            }
+            if enabled {
+                Row(label: "Style") {
+                    LSegmented(sel: tiltStyle, items: Cinematic3D.styles)
+                        .frame(width: 180)
+                        .focusBrackets()
+                }
+                Text(Cinematic3D.hint(mode))
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.bottom, 4)
+                // Only the controls that affect the selected style stay live.
+                DisclosureGroup("Fine tuning") {
+                    SliderRow(label: "Bank", v: model.bind(\.camera.maxYaw), range: 0...18,
+                              fmt: { "\(Int($0))°" }).disabled(mode != .lean)
+                    SliderRow(label: "Pitch", v: model.bind(\.camera.maxPitch), range: 0...14,
+                              fmt: { "\(Int($0))°" }).disabled(mode != .lean)
+                    SliderRow(label: "Drift", v: model.bind(\.camera.floatDeg), range: 0...4,
+                              fmt: { String(format: "%.1f°", $0) }).disabled(mode != .float)
+                }
+                .font(AppType.body).foregroundStyle(Tok.text)
+                SliderRow(label: "Response", v: model.bind(\.camera.omegaTilt), range: 1...12,
+                          fmt: { "\(Int($0))" })
+            } else {
+                Text(Cinematic3D.hint(.off))
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.bottom, 4)
+            }
+        }.card(padding: 16)
+    }
+
+    private var lensCard: some View {
+        let m = model
+        return VStack(spacing: 0) {
+            DisclosureGroup("Fine tuning") {
                 VStack(spacing: 0) {
-                    Row(label: "Tilt") { LDropdown(sel: m.bind(\.camera.tilt), options: TiltMode.allCases.map { ($0, $0.rawValue.capitalized, "move.3d") }).frame(width: 130) }
                     SliderRow(label: "Max zoom", v: m.bind(\.camera.maxScale), range: 1.2...6.0, fmt: { String(format: "%.2f×", $0) })
-                    Row(label: "Max upscale") { LDropdown(sel: m.bind(\.camera.upscaleMaxFactor), options: [2, 3, 4, 5, 6, 8, 10].map { ($0, "\($0)×", "arrow.up.right.and.arrow.down.right") }).frame(width: 130) }
+                    Row(label: "Max upscale") { LDropdown(sel: m.bind(\.camera.upscaleMaxFactor), options: [2, 3, 4, 5, 6, 8, 10].map { ($0, "\($0)×", "arrow.up.and.down") }).frame(width: 130) }
                     ToggleRow(label: "Real-time upscale", on: m.bind(\.camera.upscaleEnabled))
                     SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.0...2.5, fmt: { String(format: "%.2f×", $0) })
                     SliderRow(label: "Zoom-out delay", v: m.bind(\.camera.zoomOutGap), range: 2.0...6.0,
@@ -611,9 +725,27 @@ struct Inspector: View {
                     SliderRow(label: "Focus Y", v: m.bind(\.camera.centerOffsetY), range: (-0.2)...0.2,
                               fmt: { "\(Int($0 * 100))%" })
                     ToggleRow(label: "Focus debug", on: Binding(get: { m.zoomDebug }, set: { m.zoomDebug = $0 }))
-                }.card(padding: 16)
+                }
             }
-        }
+        }.card(padding: 16)
+    }
+
+    /// Read/write adapters for the single `camera.tilt` field.
+    private var tiltEnabled: Binding<Bool> {
+        Binding(get: { Cinematic3D.isEnabled(model.timeline.camera.tilt) },
+                set: { enabled in
+                    model.edit { timeline in
+                        timeline.camera.tilt = Cinematic3D.mode(timeline.camera.tilt, enabling: enabled)
+                    }
+                })
+    }
+
+    private var tiltStyle: Binding<TiltMode> {
+        Binding(get: { Cinematic3D.isEnabled(model.timeline.camera.tilt) ? model.timeline.camera.tilt : Cinematic3D.enabledMode },
+                set: { mode in
+                    guard Cinematic3D.isEnabled(mode) else { return }
+                    model.edit { $0.camera.tilt = mode }
+                })
     }
 
     private var layout: some View {
@@ -749,6 +881,18 @@ struct Inspector: View {
                     Text("Transcript appears after speech analysis finishes.")
                         .font(AppType.caption).foregroundStyle(Tok.text2)
                 } else {
+                    let sentences = Self.sentenceRanges(m.transcriptWords)
+                    if !sentences.isEmpty {
+                        Text("Sentences").font(AppType.caption).foregroundStyle(Tok.text2)
+                            .padding(.bottom, 2)
+                        HStack(spacing: Space.s2) {
+                            ForEach(sentences.prefix(12), id: \.lowerBound) { range in
+                                LButton(title: "Delete sentence", kind: .quiet) {
+                                    m.deleteSentence(words: range)
+                                }
+                            }
+                        }
+                    }
                     ForEach(Array(m.transcriptWords.prefix(200).enumerated()), id: \.offset) { index, word in
                         let deleted = m.timeline.captions.deletedWords.contains(index)
                         HStack(spacing: Space.s2) {

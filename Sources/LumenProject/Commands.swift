@@ -40,6 +40,10 @@ public enum Command: Codable, Sendable {
     case setStyle(Style), setCursor(CursorStyle), setCamera(CameraParams), setAudio(AudioPlan), setWebcam(WebcamLayout?), setCaptions(CaptionPlan)
     case setPrivacy(PrivacyPlan)
     case deleteWords([Int]), restoreWords([Int]), editWord(index: Int, text: String)
+    /// Transcript edits that also cut the picture. `cuts` are SOURCE-second
+    /// spans derived from word timings by `TranscriptEdits`. Keeping them in
+    /// the command makes the reducer pure and gives one undo step per edit.
+    case deleteTranscriptWords([Int], cuts: [CutRange]), restoreTranscriptWords([Int], cuts: [CutRange])
     case setCaptionsEnabled(Bool)
     case setLayout(LayoutSegment), deleteLayout(UUID), setLayoutSettings(LayoutKind, LayoutSettings)
     case addMask(Mask), addMaskAtPlayhead(x: Double, y: Double, w: Double, h: Double, mode: MaskMode)
@@ -101,7 +105,17 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
     case .setZoomScale(let id, let sc): let i = try zi(id); t.zoom[i].scale = max(sc, 1.1); t.zoom[i].origin = .manual; return zoomFx
     case .setZoomFocus(let id, let f): let i = try zi(id); t.zoom[i].focus = f; t.zoom[i].origin = .manual; return zoomFx
     case .setZoomEasing(let id, let e): let i = try zi(id); t.zoom[i].easing = e; t.zoom[i].origin = .manual; return zoomFx
-    case .deleteZoom(let id): t.zoom.removeAll { $0.id == id }; return zoomFx
+    case .deleteZoom(let id):
+        // A planner-owned zoom is deterministic: without suppression the next
+        // derive plans the very same id straight back, so "Delete zoom" in
+        // Studio would not stick. Suppress before removing, deduplicated so
+        // callers that already suppress (CLI/MCP) stay idempotent.
+        if let removed = t.zoom.first(where: { $0.id == id }), removed.origin == .auto,
+           !t.suppressedAuto.contains(id.uuidString) {
+            t.suppressedAuto.append(id.uuidString)
+        }
+        t.zoom.removeAll { $0.id == id }
+        return zoomFx
     case .setZoomPreset(let p): t.camera.apply(preset: p); return zoomFx
 
     case .setStyle(let s):
@@ -118,6 +132,14 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
     case .setPrivacy(let p): t.overlays.privacy = p; return .masks
     case .deleteWords(let ix): t.captions.deletedWords = Array(Set(t.captions.deletedWords).union(ix)).sorted(); return .replan
     case .restoreWords(let ix): t.captions.deletedWords.removeAll { ix.contains($0) }; return .replan
+    case .deleteTranscriptWords(let ix, let cuts):
+        t.captions.deletedWords = Array(Set(t.captions.deletedWords).union(ix)).sorted()
+        applyTranscriptCuts(&t, adding: cuts)
+        return .replan
+    case .restoreTranscriptWords(let ix, let cuts):
+        t.captions.deletedWords.removeAll { ix.contains($0) }
+        applyTranscriptCuts(&t, removing: cuts)
+        return .replan
     case .editWord(let i, let s): t.captions.textEdits[String(i)] = s; return .captions
     case .setCaptionsEnabled(let b): t.captions.enabled = b; return .captions
 
@@ -309,6 +331,26 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         t.timeMap.cuts.append(contentsOf: cuts.map { CutRange(id: $0.id, start: $0.start, end: $0.end, origin: .autoTidy) }); return .replan
     case .clearAutoTidy: t.timeMap.cuts.removeAll { $0.origin == .autoTidy }; return .replan
     }
+}
+
+/// Add transcript-derived cuts without touching manually placed cuts. Merging
+/// only within the transcript group keeps restore able to find its own cuts.
+private func applyTranscriptCuts(_ t: inout Timeline, adding cuts: [CutRange]) {
+    let valid = cuts.filter { $0.end > $0.start }
+    guard !valid.isEmpty else { return }
+    let manual = t.timeMap.cuts.filter { $0.origin != .transcript }
+    let existing = t.timeMap.cuts.filter { $0.origin == .transcript }
+    t.timeMap.cuts = manual + TranscriptEdits.merge(existing + valid)
+}
+
+/// Restore word time by subtracting it from transcript cuts only. A manual cut
+/// is an independent decision and is never widened or split by a transcript edit.
+private func applyTranscriptCuts(_ t: inout Timeline, removing cuts: [CutRange]) {
+    let valid = cuts.filter { $0.end > $0.start }
+    guard !valid.isEmpty else { return }
+    let manual = t.timeMap.cuts.filter { $0.origin != .transcript }
+    let existing = t.timeMap.cuts.filter { $0.origin == .transcript }
+    t.timeMap.cuts = manual + TranscriptEdits.subtract(valid, from: existing)
 }
 
 /// Plain-language mapping so the readout can say why an edit was refused.
