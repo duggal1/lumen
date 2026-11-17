@@ -25,13 +25,12 @@ enum Cinematic3D {
 
     /// The visual styles offered once 3D is on. `.off` is the toggle's job,
     /// never a fourth segment of the style control.
-    static let styles: [(TiltMode, String)] = [(.lean, "Lean"), (.float, "Float"), (.reveal, "Reveal")]
+    static let styles: [(TiltMode, String)] = [(.lean, "Lean"), (.reveal, "Reveal")]
 
     static func label(_ mode: TiltMode) -> String {
         switch mode {
         case .off: "3D motion, off"
         case .lean: "3D motion, lean"
-        case .float: "3D motion, float"
         case .reveal: "3D motion, reveal"
         }
     }
@@ -41,7 +40,6 @@ enum Cinematic3D {
         switch mode {
         case .off: "Flat 2D framing."
         case .lean: "The frame banks with cursor motion."
-        case .float: "A slow drift, even when the cursor is still."
         case .reveal: "Each zoom enters at an angle, then settles."
         }
     }
@@ -49,7 +47,7 @@ enum Cinematic3D {
 
 struct Inspector: View {
     let model: EditorModel
-    enum Tab: String, CaseIterable { case background = "Studio", tools = "Tools", cursor = "Cursor", camera = "Camera", layout = "Layout", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
+    enum Tab: String, CaseIterable { case background = "Studio", tools = "Tools", focus = "Focus", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
 
     /// Groups transcript words into sentences at terminal punctuation so the
     /// "delete a sentence cuts the video" action has a real UI trigger.
@@ -78,9 +76,6 @@ struct Inspector: View {
     private static func canvasIcon(_ c: CanvasAspect) -> String {
         switch c { case .r16x9: "rectangle"; case .r16x10: "rectangle"; case .r4x3: "rectangle.righthalf.inset.filled"; case .r5x4: "rectangle"; case .r3x2: "rectangle"; case .r1x1: "square"; case .r4x5: "rectangle.portrait"; case .r9x16: "rectangle.portrait"; case .r21x9: "aspectratio" }
     }
-    private static func layoutIcon(_ k: LayoutKind) -> String {
-        switch k { case .screenOnly: "display"; case .cameraOverlay: "rectangle.3.group"; case .split: "rectangle.split.2x1"; case .cameraFullscreen: "video"; case .cameraCutout: "person" }
-    }
     private static func micModeIcon(_ m: MicMode) -> String {
         switch m { case .standard: "mic"; case .loud: "mic.fill"; case .podcast: "waveform.and.mic"; case .off: "mic.slash" }
     }
@@ -94,9 +89,11 @@ struct Inspector: View {
             }
             .onAppear {
                 if let saved = UserDefaults.standard.string(forKey: "lumen.inspector.tab") {
-                    if saved == "Transcript" { tab = .captions }
-                    else if saved == "Background" { tab = .background }
-                    else if let t = Inspector.Tab(rawValue: saved) { tab = t }
+                    let normalized = FocusTabMigration.normalize(saved)
+                    if normalized == "Captions" { tab = .captions }
+                    else if normalized == "Studio" { tab = .background }
+                    else if let t = Inspector.Tab(rawValue: normalized) { tab = t }
+                    else { tab = .background }
                 } else {
                     tab = .background
                 }
@@ -141,9 +138,7 @@ struct Inspector: View {
         switch tab {
         case .background: backgroundPage
         case .tools: tools
-        case .cursor: cursor
-        case .camera: camera
-        case .layout: layout
+        case .focus: UnifiedFocusPage(model: model)
         case .audio: audio
         case .webcam: webcam
         case .captions: captions
@@ -164,8 +159,6 @@ struct Inspector: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             LButton(title: "Speed 2×", icon: "gauge") { addSpeedRamp(speed: 2) }
                 .frame(maxWidth: .infinity, alignment: .leading)
-            SliderRow(label: "Cursor size", v: model.bind(\.cursor.size), range: 0.5...2.5)
-            SliderRow(label: "Smoothing", v: model.bind(\.cursor.smoothingSigma), range: 0...0.12, fmt: { "\(Int($0 * 1000)) ms" })
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .card(padding: 16)
@@ -185,8 +178,8 @@ struct Inspector: View {
     private func icon(_ t: Inspector.Tab) -> String {
         switch t {
         case .background: "photo.stack"
-        case .tools: "slider.horizontal.3"; case .cursor: "cursorarrow"; case .camera: "video"
-        case .layout: "rectangle.3.group"; case .audio: "waveform"; case .webcam: "person.crop.circle"
+        case .tools: "slider.horizontal.3"; case .focus: "cursorarrow"
+        case .audio: "waveform"; case .webcam: "person.crop.circle"
         case .captions: "captions.bubble"; case .timeline: "timeline.selection"; case .privacy: "lock"; case .export: "square.and.arrow.up"
         }
     }
@@ -567,228 +560,6 @@ struct Inspector: View {
         }
     }
 
-    private func clickColor(_ m: EditorModel) -> Binding<Color> {
-        Binding(get: {
-            let c = m.timeline.cursor.clickColor
-            return Color(.sRGB, red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
-        }, set: { color in
-            guard let c = NSColor(color).usingColorSpace(.sRGB) else { return }
-            m.edit(coalesce: true) { timeline in
-                // Preserve alpha so tint-off (transparent) survives the picker.
-                timeline.cursor.clickColor = RGBA(r: Float(c.redComponent), g: Float(c.greenComponent), b: Float(c.blueComponent), a: Float(c.alphaComponent))
-            }
-        })
-    }
-
-    private var cursor: some View {
-        let m = model
-        return VStack(alignment: .leading, spacing: 24) {
-            if m.session.input.events.isEmpty {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(Tok.accentText)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("No pointer events saved.").font(AppType.caption).foregroundStyle(Tok.text)
-                        HStack(spacing: 8) {
-                            LButton(title: "Open Input Monitoring", kind: .quiet, height: 24) { LumenCapture.Permissions.requestInput() }
-                            LButton(title: "Add tap manually", kind: .quiet, height: 24) { model.addTapAtPlayhead() }
-                        }
-                    }
-                }
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: Radius.nested).fill(Tok.control))
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            CursorAppearance(model: m)
-            VStack(spacing: 0) {
-                SliderRow(label: "Size", v: m.bind(\.cursor.size), range: 0.5...2.5)
-                SliderRow(label: "Smoothing", v: m.bind(\.cursor.smoothingSigma), range: 0...0.12, fmt: { "\(Int($0 * 1000)) ms" })
-                SliderRow(label: "Glide", v: m.bind(\.cursor.glide), range: 0...1)
-            }.card(padding: 16)
-            VStack(spacing: 0) {
-                ToggleRow(label: "Hide when idle", on: Binding(get: { m.timeline.cursor.idleHide != nil }, set: { v in m.edit { $0.cursor.idleHide = v ? 2.0 : nil } }))
-                ClickSoundGrid(selected: m.timeline.audio.clickTone) { m.chooseClick($0) }
-                ToggleRow(label: "Click ring", on: Binding(get: { m.timeline.cursor.clickRing != nil }, set: { v in m.edit { $0.cursor.clickRing = v ? 0.45 : nil } }))
-                Row(label: "Click effect") {
-                    LDropdown(sel: m.bind(\.cursor.clickEffect),
-                              options: ClickEffect.allCases.map { ($0, $0.rawValue.capitalized, "cursorarrow.click") })
-                        .frame(width: 130)
-                }
-                SliderRow(label: "Click size", v: m.bind(\.cursor.clickSize), range: 0.5...2.0, fmt: { String(format: "%.1f×", $0) })
-                SliderRow(label: "Click intensity", v: m.bind(\.cursor.clickIntensity), range: 0...1.5, fmt: { String(format: "%.1f×", $0) })
-                Row(label: "Click color") {
-                    ColorPicker("", selection: clickColor(m), supportsOpacity: true).labelsHidden()
-                }
-                SliderRow(label: "Click duration", v: m.bind(\.cursor.clickDuration), range: 0.2...0.9, fmt: { String(format: "%.2f s", $0) })
-                ToggleRow(label: "Constant size", on: m.bind(\.cursor.constantSize))
-                ToggleRow(label: "Loop position", on: Binding(get: { m.timeline.cursor.loop != nil }, set: { v in m.edit { $0.cursor.loop = v ? 1.2 : nil } }))
-                SliderRow(label: "Press scale", v: m.bind(\.cursor.pressScale), range: 0.7...1)
-                SliderRow(label: "Zoom comp.", v: m.bind(\.cursor.zoomCompensation), range: 0...1)
-            }.card(padding: 16)
-        }
-    }
-
-    /// One card per idea: cinematic framing, 3D depth, then the fine lens knobs.
-    private var camera: some View {
-        VStack(spacing: 16) {
-            cinematicCard
-            threeDCard
-            lensCard
-        }
-    }
-
-    /// Zoom v3: Auto zoom · Zoom amount · Smoothness on top. Smoothness is
-    /// the lead-in (0.3-1.0 s); the camera arrives 95% at the click.
-    private var cinematicCard: some View {
-        let m = model
-        return VStack(spacing: 0) {
-            Row(label: "Cinematic") {
-                LDropdown(sel: Binding(get: { m.timeline.camera.preset },
-                                       set: { v in m.edit { $0.camera.apply(preset: v) } }),
-                          options: ZoomPreset.allCases.map { ($0, $0.rawValue.capitalized, "camera.aperture") })
-                    .frame(width: 130)
-                    .focusBrackets()
-            }
-            ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
-            SliderRow(label: "Zoom amount", v: Binding(get: { m.timeline.camera.baseScale },
-                                    set: { v in m.edit { $0.camera.baseScale = v } }),
-                      range: 1.3...3.0, fmt: { String(format: "%.1f×", $0) })
-            SliderRow(label: "Smoothness", v: m.bind(\.camera.leadIn), range: 0.3...1.0,
-                      fmt: { "\(Int($0 * 1000)) ms" })
-            SliderRow(label: "Motion tracking", v: m.bind(\.camera.sensitivity), range: 0...1,
-                      fmt: { "\(Int($0 * 100))%" })
-            SliderRow(label: "Look-ahead", v: m.bind(\.camera.lookahead), range: 0...0.4,
-                      fmt: { "\(Int($0 * 1000)) ms" })
-        }.card(padding: 16)
-    }
-
-    /// The 3D switch is a toggle over the existing `camera.tilt` field: `.off`
-    /// is flat, every other mode is 3D. No second setting is introduced.
-    private var threeDCard: some View {
-        let mode = model.timeline.camera.tilt
-        let enabled = Cinematic3D.isEnabled(mode)
-        return VStack(spacing: 0) {
-            Row(label: "3D motion") {
-                LToggle(on: tiltEnabled, label: Cinematic3D.label(mode))
-                    .focusBrackets()
-            }
-            if enabled {
-                Row(label: "Style") {
-                    LSegmented(sel: tiltStyle, items: Cinematic3D.styles)
-                        .frame(width: 180)
-                        .focusBrackets()
-                }
-                Text(Cinematic3D.hint(mode))
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.bottom, 4)
-                // Only the controls that affect the selected style stay live.
-                DisclosureGroup("Fine tuning") {
-                    SliderRow(label: "Bank", v: model.bind(\.camera.maxYaw), range: 0...18,
-                              fmt: { "\(Int($0))°" }).disabled(mode != .lean)
-                    SliderRow(label: "Pitch", v: model.bind(\.camera.maxPitch), range: 0...14,
-                              fmt: { "\(Int($0))°" }).disabled(mode != .lean)
-                    SliderRow(label: "Drift", v: model.bind(\.camera.floatDeg), range: 0...4,
-                              fmt: { String(format: "%.1f°", $0) }).disabled(mode != .float)
-                }
-                .font(AppType.body).foregroundStyle(Tok.text)
-                SliderRow(label: "Response", v: model.bind(\.camera.omegaTilt), range: 1...12,
-                          fmt: { "\(Int($0))" })
-            } else {
-                Text(Cinematic3D.hint(.off))
-                    .font(AppType.caption).foregroundStyle(Tok.text2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.bottom, 4)
-            }
-        }.card(padding: 16)
-    }
-
-    private var lensCard: some View {
-        let m = model
-        return VStack(spacing: 0) {
-            DisclosureGroup("Fine tuning") {
-                VStack(spacing: 0) {
-                    SliderRow(label: "Max zoom", v: m.bind(\.camera.maxScale), range: 1.2...6.0, fmt: { String(format: "%.2f×", $0) })
-                    Row(label: "Max upscale") { LDropdown(sel: m.bind(\.camera.upscaleMaxFactor), options: [2, 3, 4, 5, 6, 8, 10].map { ($0, "\($0)×", "arrow.up.and.down") }).frame(width: 130) }
-                    ToggleRow(label: "Real-time upscale", on: m.bind(\.camera.upscaleEnabled))
-                    SliderRow(label: "Min zoom", v: m.bind(\.camera.minScale), range: 1.0...2.5, fmt: { String(format: "%.2f×", $0) })
-                    SliderRow(label: "Zoom-out delay", v: m.bind(\.camera.zoomOutGap), range: 2.0...6.0,
-                              fmt: { String(format: "%.1f s", $0) })
-                    SliderRow(label: "Zoom-out", v: m.bind(\.camera.tail), range: 0.3...1.5,
-                              fmt: { String(format: "%.1f s", $0) })
-                    SliderRow(label: "Hold", v: m.bind(\.camera.hold), range: 0.5...2.5,
-                              fmt: { String(format: "%.1f s", $0) })
-                    SliderRow(label: "Motion blur", v: m.bind(\.camera.shutter), range: 0...1)
-                    SliderRow(label: "Follow delay", v: m.bind(\.camera.followDelay), range: 0...0.5,
-                              fmt: { "\(Int($0 * 1000)) ms" })
-                    SliderRow(label: "Focus X", v: m.bind(\.camera.centerOffsetX), range: (-0.2)...0.2,
-                              fmt: { "\(Int($0 * 100))%" })
-                    SliderRow(label: "Focus Y", v: m.bind(\.camera.centerOffsetY), range: (-0.2)...0.2,
-                              fmt: { "\(Int($0 * 100))%" })
-                    ToggleRow(label: "Focus debug", on: Binding(get: { m.zoomDebug }, set: { m.zoomDebug = $0 }))
-                }
-            }
-        }.card(padding: 16)
-    }
-
-    /// Read/write adapters for the single `camera.tilt` field.
-    private var tiltEnabled: Binding<Bool> {
-        Binding(get: { Cinematic3D.isEnabled(model.timeline.camera.tilt) },
-                set: { enabled in
-                    model.edit { timeline in
-                        timeline.camera.tilt = Cinematic3D.mode(timeline.camera.tilt, enabling: enabled)
-                    }
-                })
-    }
-
-    private var tiltStyle: Binding<TiltMode> {
-        Binding(get: { Cinematic3D.isEnabled(model.timeline.camera.tilt) ? model.timeline.camera.tilt : Cinematic3D.enabledMode },
-                set: { mode in
-                    guard Cinematic3D.isEnabled(mode) else { return }
-                    model.edit { $0.camera.tilt = mode }
-                })
-    }
-
-    private var layout: some View {
-        let kind = currentLayout
-        return VStack(spacing: 16) {
-            VStack(spacing: 0) {
-                Row(label: "Layout") {
-                    LDropdown(sel: layoutKind, options: LayoutKind.allCases.map {
-                        ($0, $0 == .screenOnly ? "Screen only" : $0 == .cameraOverlay ? "Camera overlay"
-                            : $0 == .cameraFullscreen ? "Camera fullscreen" : $0 == .cameraCutout ? "Cutout" : "Split", Self.layoutIcon($0))
-                    }).frame(width: 150)
-                }
-                Row(label: "Camera size") {
-                    HStack(spacing: 8) {
-                        LSlider(value: layoutBinding(kind, \.size), range: 0.1...0.4, width: 100)
-                        Text("\(Int(layoutBinding(kind, \.size).wrappedValue * 100))%")
-                            .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2).frame(width: 40, alignment: .trailing)
-                    }
-                }
-                Row(label: "Corner") {
-                    LDropdown(sel: layoutBinding(kind, \.corner), options: WebcamLayout.Corner.allCases.map {
-                        ($0, $0.rawValue, "rectangle.inset.filled")
-                    }).frame(width: 130)
-                }
-                Row(label: "Shape") {
-                    LSegmented(sel: layoutBinding(kind, \.shape), items: [(.circle, "Circle"), (.roundRect, "Square")]).frame(width: 130)
-                }
-            }.card(padding: 16)
-            VStack(spacing: 0) {
-                ToggleRow(label: "Mirror", on: layoutBinding(kind, \.mirror))
-                ToggleRow(label: "Border", on: layoutBinding(kind, \.border))
-                ToggleRow(label: "Auto framing", on: layoutBinding(kind, \.autoFrame))
-            }.card(padding: 16)
-            VStack(spacing: 0) {
-                ToggleRow(label: "Avoid cursor", on: layoutBinding(kind, \.avoidCursor))
-                Row(label: "Behind face") {
-                    LSegmented(sel: layoutBinding(kind, \.behindFace), items: [(.move, "Move"), (.hide, "Hide"), (.fade, "Fade")]).frame(width: 170)
-                }
-                ToggleRow(label: "Hide on silence", on: layoutBinding(kind, \.hideOnSilence))
-            }.card(padding: 16)
-        }
-    }
-
     private var captions: some View {
         let m = model
         return VStack(spacing: 16) {
@@ -977,20 +748,6 @@ struct Inspector: View {
 
     // MARK: Nested bindings
 
-    private var currentLayout: LayoutKind {
-        let source = model.timeline.timeMap.source(atOutput: model.playhead)
-        return model.timeline.layouts.first { source >= $0.start && source < $0.end }?.kind
-            ?? (model.timeline.webcam != nil ? .cameraOverlay : .screenOnly)
-    }
-
-    private var layoutKind: Binding<LayoutKind> {
-        Binding(get: { currentLayout }, set: { kind in
-            model.edit { timeline in
-                timeline.layouts = [LayoutSegment(start: 0, end: timeline.timeMap.sourceDuration, kind: kind)]
-            }
-        })
-    }
-
     private func layoutBinding<V>(_ kind: LayoutKind, _ keyPath: WritableKeyPath<LayoutSettings, V>) -> Binding<V> {
         Binding(get: { model.timeline.layoutSettings[kind][keyPath: keyPath] },
                 set: { value in model.edit(coalesce: true) { $0.layoutSettings[kind][keyPath: keyPath] = value } })
@@ -1142,8 +899,7 @@ private struct WallpaperCell: View {
                         .aspectRatio(16 / 10, contentMode: .fill)
                 }
                 if selected {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Tok.accent, lineWidth: 2)
+                    NotchedRect(step: 2).fill(Tok.accentSoft)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -1240,10 +996,10 @@ extension Inspector.Tab {
         Inspector.Tab.allCases.filter { $0 != Inspector.Tab.webcam || model.timeline.webcam != nil }
     }
 
-    static var primaryTabs: [Inspector.Tab] { [Inspector.Tab.camera, Inspector.Tab.cursor, Inspector.Tab.captions, Inspector.Tab.audio] }
+    static var primaryTabs: [Inspector.Tab] { [Inspector.Tab.focus, Inspector.Tab.captions, Inspector.Tab.audio] }
 
     var isPrimary: Bool {
-        switch self { case Inspector.Tab.camera, Inspector.Tab.cursor, Inspector.Tab.captions, Inspector.Tab.audio: return true; default: return false }
+        switch self { case Inspector.Tab.focus, Inspector.Tab.captions, Inspector.Tab.audio: return true; default: return false }
     }
 
     @MainActor static func moreTabs(for model: EditorModel) -> [Inspector.Tab] {

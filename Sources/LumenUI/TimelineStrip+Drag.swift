@@ -5,6 +5,14 @@ import LumenProject
 import LumenDirector
 
 extension TimelineStrip {
+    /// Pure selection rule for a drag. A music lane is a list tile, not a
+    /// canvas region: it gets a flat selected surface, never corner brackets.
+    /// Kept separate from the gesture so it is testable without a window.
+    nonisolated static func dragSelectionID(_ id: UUID?, isMusic: Bool) -> UUID? {
+        guard let id else { return nil }
+        return isMusic && !StudioSelectionStyle.usesCornerBrackets(for: .musicTile) ? nil : id
+    }
+
     // MARK: - Hover
 
     func setHover(at p: CGPoint, width: CGFloat) {
@@ -163,8 +171,10 @@ extension TimelineStrip {
         let dur = model.timeline.compositionDuration, t = vp.t(atX: v.location.x)
         if drag == nil {
             drag = hit(v.startLocation, w)
-            model.selection = drag?.id
-            if let d = drag, d.isMusic { musicDragOrigin = musicLanes().first { $0.id == d.id } }
+            if let d = drag, d.isMusic {
+                musicDragOrigin = musicLanes().first { $0.id == d.id }
+            }
+            model.selection = TimelineStrip.dragSelectionID(drag?.id, isMusic: drag?.isMusic ?? false)
             // Clicking a marker seeks to it exactly.
             if drag?.kind == .seek, v.startLocation.y >= TimelineStrip.Lanes.events, v.startLocation.y < TimelineStrip.Lanes.audio {
                 var bestT: Double? = nil, bestD: CGFloat = 6

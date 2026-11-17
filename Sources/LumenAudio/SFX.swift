@@ -2,10 +2,12 @@ import Foundation
 import LumenProject
 
 /// Real recorded effects only. No synthetic noise, oscillators or procedural sound generation.
-/// Click sfx: new-click.mp3 is the fresh default; mouse-click.mp3 and Subtle-ui-tap-interactions.mp3 kept for backward projects.
-/// Per-key typing uses Mechvibes; the recorded tap remains a fallback for missing pack samples.
+/// Click sfx: new-click.mp3 is the fresh default; mouse-click.mp3 and Subtle-ui-tap-interactions.mp3
+/// are kept for backward projects. Per-key typing uses the bundled Mechvibes pack; the recorded
+/// tap is only a fallback for a missing pack sample.
+/// Zoom whooshes are gone: there is no whoosh asset to load and no whoosh is ever rendered.
 public struct SFXBank: Sendable {
-    private let mouse: [Float], subtle: [Float], zoomIn: [Float], zoomOut: [Float], key: [Float]
+    private let mouse: [Float], subtle: [Float], key: [Float]
 
     private static let touches: [ClickSound: [Float]] = {
         var sounds: [ClickSound: [Float]] = [:]
@@ -28,8 +30,6 @@ public struct SFXBank: Sendable {
         key = load("typing/mechvibes-default/fallback.mp3")
         mouse = load("mouse-click.mp3")
         subtle = load("Subtle-ui-tap-interactions.mp3")
-        zoomIn = load("zoom-in-whoosh.mp3")
-        zoomOut = load("zoom-out-whoosh.mp3")
     }
 
     public func render(_ kind: SFXCue.Kind, clickTone: ClickSound = .mouse) -> (samples: [Float], gainDb: Double) {
@@ -42,8 +42,9 @@ public struct SFXBank: Sendable {
             default: (Self.touches[clickTone] ?? [], 0)
             }
         case .key: (key, 0)
-        case .whooshIn: (zoomIn, 0)
-        case .whooshOut: (zoomOut, 0)
+        // Zoom whooshes were deleted. A stale cue from an old project renders silence,
+        // so no whoosh can ever reach the mix even if the source data still mentions one.
+        case .whooshIn, .whooshOut: ([], 0)
         }
     }
 }

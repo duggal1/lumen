@@ -86,12 +86,11 @@ private func script(_ clickScale: Double = 1) -> [InputEvent] {
     // A5/A4: first scene arrives 95% at its start click.
     let target = log(Double(out.zoom[0].scale))
     #expect(log(Double(out.evaluate(at: out.zoom[0].start).cameraScale)) >= 0.93 * target)
-    // A10 smoothness.
-    guard lz.count > 2 else { return }
-    var maxDelta = 0.0
-    for i in 1..<lz.count { maxDelta = max(maxDelta, abs(Double(lz[i]) - Double(lz[i - 1]))) }
-    var maxV = 0.0
-    for i in 1..<lz.count { maxV = max(maxV, abs(Double(lz[i]) - Double(lz[i - 1]))) * Double(gridRate) }
-    guard maxV > 0 else { return }
-    #expect(maxDelta * Double(gridRate) / maxV <= 0.02, "spiky")
+    // A10 smoothness. The previous version compounded `maxV` by gridRate on
+    // every tick, so the ratio collapsed toward zero and could never fail.
+    // Measure peak jerk of the baked log-zoom channel the same way the solver
+    // budgets its runway (MotionLimits), so this is a real smoothness gate.
+    guard lz.count > 3, let rate = out.derived?.camera.rate else { return }
+    let jerk = MotionLimits.peakJerk(lz, rate: rate)
+    #expect(jerk <= MotionLimits.cameraJerk, "spiky: peak jerk \(jerk) > \(MotionLimits.cameraJerk)")
 }

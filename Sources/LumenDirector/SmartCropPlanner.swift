@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import LumenCore
 import LumenProject
 
@@ -8,17 +9,114 @@ public struct SmartCropIntent: Sendable, Equatable {
     public var t: Double
     public var tEnd: Double
     public var rect: CGRect
-    public init(t: Double, tEnd: Double, rect: CGRect) {
-        self.t = t; self.tEnd = tEnd; self.rect = rect
+    /// Auto-detected browser page-content rect in source pixels. This is a
+    /// sentinel that carries the default crop to `plan()` without changing
+    /// Director's call signature; it is never a reveal span itself.
+    public var baseROI: CGRect? = nil
+    public init(t: Double, tEnd: Double, rect: CGRect, baseROI: CGRect? = nil) {
+        self.t = t; self.tEnd = tEnd; self.rect = rect; self.baseROI = baseROI
+    }
+}
+
+/// Detects the browser chrome that must be excluded by default.
+///
+/// Evidence is the AX vocabulary capture already records: a browser window's
+/// `window|…` label / `appName`, and the address-bar and tab element labels.
+/// Only the page content is returned; tabs, the address bar and the autocomplete
+/// panel above the page are chrome. No guess is made without browser evidence,
+/// and a detection that would eat into the page is rejected outright.
+public enum BrowserChrome {
+    static let windowPrefix = "window|"
+    static let browserNames = ["chrome", "chromium", "safari", "firefox", "edge",
+                               "arc", "brave", "opera", "vivaldi", "webbrowser"]
+    static let addressLabels = ["address and search bar", "address and search field",
+                                "search or enter address", "search or enter website name",
+                                "search google or type a url", "address bar", "address",
+                                "location bar", "location", "omnibox", "url bar"]
+    static let tabLabels = ["browser tab", "tab strip", "tabstrip", "tab bar",
+                            "new tab", "tabs", "tab"]
+
+    static func label(_ s: String?) -> String {
+        (s ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func isBrowserName(_ s: String?) -> Bool {
+        let l = label(s)
+        return !l.isEmpty && browserNames.contains { l.contains($0) }
+    }
+
+    static func isAddressBar(_ f: AXFrame) -> Bool {
+        let l = label(f.label)
+        return !l.isEmpty && addressLabels.contains { l.contains($0) }
+    }
+
+    static func isTab(_ f: AXFrame) -> Bool {
+        let l = label(f.label)
+        return !l.isEmpty && tabLabels.contains { l.contains($0) }
+    }
+
+    /// Page-content rect in source pixels, or nil when there is no browser to
+    /// crop or the geometry cannot be trusted. Full-display capture uses the
+    /// source bounds as the host when no window frame was resolved.
+    public static func detect(ax: [AXFrame], source: SourceInfo) -> CGRect? {
+        let W = Double(source.width), H = Double(source.height)
+        guard W > 1, H > 1 else { return nil }
+        let valid: [AXFrame] = ax.filter { f in
+            f.x.isFinite && f.y.isFinite && f.w.isFinite && f.h.isFinite
+        }
+        let browser = valid.filter { f in
+            isBrowserName(f.label) || isBrowserName(f.anchor?.appName)
+        }
+        guard !browser.isEmpty else { return nil }
+        let chrome = valid.filter { isAddressBar($0) || isTab($0) }
+        guard !chrome.isEmpty else { return nil }
+
+        let bounds = CGRect(x: 0, y: 0, width: W, height: H)
+        var host = bounds
+        var best = 0.0
+        for f in browser {
+            let r = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
+            guard r.width >= 0.40 * W, r.height >= 0.40 * H else { continue }
+            let area = r.width * r.height
+            if area > best { best = area; host = r.intersection(bounds) }
+        }
+        guard host.width > 1, host.height > 1 else { return nil }
+
+        // Tab strip and address bar only. An autocomplete popup is transient
+        // chrome that extends over the page; including it here would crop real
+        // page content even after the popup closes.
+        var chromeBottom = host.minY
+        var found = false
+        let topLimit = host.minY + 0.35 * host.height
+        for f in chrome {
+            if let a = f.anchor, !a.resolved { continue }
+            let r = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
+            guard r.width >= 0.05 * W, r.height >= 5,
+                  r.minY >= host.minY - 4, r.minY <= topLimit else { continue }
+            chromeBottom = max(chromeBottom, r.maxY)
+            found = true
+        }
+        guard found, chromeBottom > host.minY + 0.02 * host.height,
+              chromeBottom <= topLimit else { return nil }
+
+        let content = CGRect(x: host.minX, y: chromeBottom,
+                             width: host.width, height: host.maxY - chromeBottom)
+            .intersection(bounds)
+        // Never crop the page: require the vast majority of the frame to remain.
+        guard content.width >= 0.40 * W, content.height >= 0.45 * H else { return nil }
+        // Keep the source aspect by shrinking the wider axis inside the page,
+        // never by growing back into the chrome we just removed.
+        let fitted = SmartCropPlanner.fitInside(content, source: bounds)
+        return CGRect(x: fitted.minX.rounded(.down), y: fitted.minY.rounded(.down),
+                      width: fitted.width.rounded(.up), height: fitted.height.rounded(.up))
     }
 }
 
 /// Turns recorded input into a time-varying crop. Pure and deterministic.
 ///
-/// The crop is defined geometrically: the user's Area is the content ROI, and
-/// any resolved click or typing field that does not intersect it is "chrome"
-/// and earns a reveal. AXFrame has no structured role, so this is deliberately
-/// not a semantic browser-chrome classifier.
+/// The default crop is the browser's page content. A resolved click or typing
+/// field that does not intersect it is chrome interaction and earns a reveal;
+/// the reveal holds for the interaction and then restores the page crop.
 public enum SmartCropPlanner {
     /// Lead-in in OUTPUT seconds. Short enough to feel immediate, long enough
     /// for the quintic to have somewhere to travel.
@@ -33,6 +131,12 @@ public enum SmartCropPlanner {
         let sorted = events.sorted { $0.t < $1.t }
         var out: [SmartCropIntent] = []
 
+        // The browser's page rect travels with the intents so `plan()` stays a
+        // pure function of its existing arguments, including for full display.
+        if let auto = BrowserChrome.detect(ax: ax, source: source) {
+            out.append(SmartCropIntent(t: -1, tEnd: -1, rect: .zero, baseROI: auto))
+        }
+
         // Resolved clicks. A click without a resolved element has no rect and
         // cannot identify chrome, so it is ignored rather than guessed.
         for e in sorted where e.kind == .down && e.button == 0 && e.flags & 0x14 == 0 {
@@ -46,12 +150,13 @@ public enum SmartCropPlanner {
         }
 
         // Typing: the whole resolved field is the subject, never the caret.
-        let keys = sorted.filter { $0.kind == .keyDown }
-        for burst in sorted.typingBursts() where burst.t0 >= tm.trimStart + 0.2 && burst.t0 <= tm.trimEnd - 0.2 {
-            guard let field = ZoomPlanner.resolvedField(t0: burst.t0, t1: burst.t1, keys: keys,
-                                                        ax: ax, traces: typing, W: W, H: H, b: b) else { continue }
-            guard field.width > 0, field.height > 0 else { continue }
-            out.append(SmartCropIntent(t: burst.t0, tEnd: burst.t1, rect: field))
+        // Uses the same single field as the zoom planner, so the uncrop and the
+        // zoom shot start on the same keystroke and end on the same one.
+        for shot in TypingFocus.shots(events: sorted, ax: ax, traces: typing,
+                                      W: W, H: H, b: b,
+                                      trimStart: tm.trimStart, trimEnd: tm.trimEnd) {
+            guard shot.field.width > 0, shot.field.height > 0 else { continue }
+            out.append(SmartCropIntent(t: shot.t0, tEnd: shot.t1, rect: shot.field))
         }
 
         // A resolved, newly appearing dialog/sheet is a subject of its own.
@@ -89,18 +194,49 @@ public enum SmartCropPlanner {
         return CGRect(x: x, y: y, width: w, height: h)
     }
 
+    /// The inverse fit: keep the source aspect while staying INSIDE `rect`.
+    /// Used for the browser page crop — growing to the source aspect would put
+    /// the tab strip and address bar back in the frame.
+    public static func fitInside(_ rect: CGRect, source: CGRect) -> CGRect {
+        guard rect.width > 1, rect.height > 1, source.width > 1, source.height > 1 else { return rect }
+        let target = source.width / source.height
+        var w = rect.width, h = rect.height
+        if w / h > target { w = h * target } else { h = w / target }
+        if w > source.width { w = source.width; h = w / target }
+        if h > source.height { h = source.height; w = h * target }
+        return CGRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h)
+    }
+
     // MARK: - Plan
 
     public static func plan(config: SmartCropConfig, source: SourceInfo, tm: TimeMap,
-                            intents: [SmartCropIntent]) -> CropTrack {
-        guard config.isActive else { return CropTrack() }
+                             intents: [SmartCropIntent]) -> CropTrack {
         let W = Double(source.width), H = Double(source.height)
         let b = max(source.backingScale, 1)
         let bounds = CGRect(x: 0, y: 0, width: W, height: H)
-        guard let raw = config.roi else { return CropTrack() }
-        let roi = SmartCropPlanner.aspectFit(
-            CGRect(x: raw.minX * W, y: raw.minY * H, width: raw.width * W, height: raw.height * H)
-                .intersection(bounds), source: bounds)
+        let auto = intents.first { $0.baseROI != nil }?.baseROI
+        guard auto != nil || config.isActive else { return CropTrack() }
+
+        var chosen: CGRect?
+        if let auto {
+            let a = fitInside(auto.intersection(bounds), source: bounds)
+            if let raw = config.roi {
+                let c = CGRect(x: raw.minX * W, y: raw.minY * H,
+                               width: raw.width * W, height: raw.height * H)
+                    .intersection(bounds)
+                let fitted = aspectFit(c, source: bounds)
+                let inter = fitted.intersection(a)
+                chosen = inter.isNull ? a : aspectFit(inter, source: bounds)
+            } else {
+                chosen = a
+            }
+        } else if let raw = config.roi {
+            chosen = CGRect(x: raw.minX * W, y: raw.minY * H,
+                            width: raw.width * W, height: raw.height * H)
+                .intersection(bounds)
+        }
+        guard let rawROI = chosen else { return CropTrack() }
+        let roi = aspectFit(rawROI, source: bounds)
         guard roi.width > 1, roi.height > 1 else { return CropTrack() }
 
         struct Span {
@@ -113,7 +249,11 @@ public enum SmartCropPlanner {
             guard i.rect.origin.x.isFinite, i.rect.origin.y.isFinite,
                   i.rect.width.isFinite, i.rect.height.isFinite,
                   i.t.isFinite, i.tEnd.isFinite else { continue }
-            guard i.rect.intersection(roi).isNull else { continue } // inside content: no reveal
+            // A chrome element that merely touches the page edge (the address
+            // bar ends exactly where the page begins) is still chrome. Only a
+            // real, positive-area overlap means the subject is already framed.
+            let overlap = i.rect.intersection(roi)
+            guard overlap.isNull || overlap.width <= 0.5 || overlap.height <= 0.5 else { continue }
             let expanded = SmartCropPlanner.aspectFit(
                 revealRect(for: i.rect, roi: roi, config: config, backingScale: b).intersection(bounds),
                 source: bounds)

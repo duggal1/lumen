@@ -601,8 +601,7 @@ public final class Renderer: @unchecked Sendable {
             // clamp is applied, so 60/120/240 fps stay deterministic.
             st.cameraTilt = CameraTilt.effective(st.cameraTilt, mode: tiltMode,
                                                 maxYaw: tl.camera.maxYaw,
-                                                maxPitch: tl.camera.maxPitch,
-                                                floatDeg: tl.camera.floatDeg)
+                                                maxPitch: tl.camera.maxPitch,)
             states.append(st)
         }
         // SMOOTHNESS: the mip chain is only read when the source is minified.
@@ -779,9 +778,9 @@ public final class Renderer: @unchecked Sendable {
         // same 180-degree shutter as pan/zoom/cursor. ~0.4% of frame width per
         // degree matches the bounded homography at its 8 degree limit.
         let tiltA = CameraTilt.effective(a.cameraTilt, mode: tl.camera.tilt, maxYaw: tl.camera.maxYaw,
-                                         maxPitch: tl.camera.maxPitch, floatDeg: tl.camera.floatDeg)
+                                         maxPitch: tl.camera.maxPitch,)
         let tiltB = CameraTilt.effective(b.cameraTilt, mode: tl.camera.tilt, maxYaw: tl.camera.maxYaw,
-                                         maxPitch: tl.camera.maxPitch, floatDeg: tl.camera.floatDeg)
+                                         maxPitch: tl.camera.maxPitch,)
         let tiltDelta = max(abs(Double(tiltB.x - tiltA.x)), abs(Double(tiltB.y - tiltA.y)))
         return max(cam, zoom, cur, tiltDelta * g.content.z * 0.004)
     }
@@ -851,8 +850,7 @@ public final class Renderer: @unchecked Sendable {
         let tiltMode = tl.camera.tilt
         let tilt = CameraTilt.effective(st.cameraTilt, mode: tiltMode,
                                         maxYaw: tl.camera.maxYaw,
-                                        maxPitch: tl.camera.maxPitch,
-                                        floatDeg: tl.camera.floatDeg)
+                                        maxPitch: tl.camera.maxPitch,)
         let sc = max(Double(st.cameraScale), 1)
         // Reveal's 0.92 entrance scale shrinks the framed video inside the
         // canvas and grows it back to full size. It is a content-rect scale,

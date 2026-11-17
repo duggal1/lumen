@@ -653,6 +653,12 @@ public final class AudioMixer: @unchecked Sendable {
         }
         for cue in d.cues {
             guard a.soundEffectsEnabled else { continue }
+            // Feed the Focus page's live feedback tape from real rendered cues,
+            // not from the page's own preview taps.
+            NotificationCenter.default.post(
+                name: Notification.Name("lumen.focus.feedback.tap"),
+                object: nil,
+                userInfo: ["kind": cue.kind == .key ? "key" : "click"])
             let buf: [Float]
             if cue.kind == .key {
                 guard a.keySounds else { continue }

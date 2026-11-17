@@ -157,6 +157,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     private var pauseHotKey: HotKey?
     private var poll: Task<Void, Never>?
     private var permissionObserver: NSObjectProtocol?
+    private var menuBarToggleObserver: NSObjectProtocol?
     private var hiddenWindows: [NSWindow] = []
     private var cancelRequested = false
 
@@ -176,6 +177,13 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshPermissions() }
+        }
+        // Install the floating-bar toggle once the app is actually launching.
+        // Tests never post this notification, so no status item is created there.
+        menuBarToggleObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didFinishLaunchingNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { guard let self else { return }; FloatingBarMenuBarToggle.shared.install(app: self) }
         }
     }
 
@@ -247,9 +255,24 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     }
 
     public func showRecordingControls() {
+        // An explicit request for the controls (Library → Record) is a choice
+        // to show them; the default-hidden state only suppresses auto-display.
+        FloatingBarVisibility.show()
         presentBar(on: NSScreen.main)
+        FloatingBarMenuBarToggle.shared.syncAccessibility()
         Task { await refreshWindows() }
     }
+
+    /// Menu-bar toggle. Flips persisted state first, then applies it, so a
+    /// relaunch restores exactly what the user last chose.
+    public func toggleFloatingBar() {
+        let hidden = FloatingBarVisibility.toggle()
+        if hidden { bar?.hide() }
+        else { presentBar(on: NSScreen.main) }
+        FloatingBarMenuBarToggle.shared.syncAccessibility()
+    }
+
+    public var floatingBarHidden: Bool { FloatingBarVisibility.isHidden() }
 
     public func showBarPanel(_ id: String) {
         bar?.present(options: id, in: self)
@@ -259,7 +282,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
 
     private func presentBar(on screen: NSScreen?) {
         if bar == nil { bar = FloatingBarController(self, screen: screen ?? NSScreen.main) }
-        bar?.show()
+        bar?.applyVisibility()
     }
 
     // MARK: What the floating bar configures

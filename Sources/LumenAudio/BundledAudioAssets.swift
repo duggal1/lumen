@@ -22,6 +22,18 @@ public enum BundledAudioAssets {
         return path
     }
 
+    /// License/attribution text shipped beside a bundled typing pack. Read-only;
+    /// the pack itself is identified by its config.json `id`.
+    public static func typingAttribution(for packID: String) -> String? {
+        guard let url = effect(named: "typing/\(packID)/ATTRIBUTION.txt"),
+              let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty else { return nil }
+        return text
+    }
+
+    /// Zoom whoosh assets are no longer bundled or resolved. Kept as a named constant so
+    /// the removal is testable without importing a whoosh file path anywhere else.
+    public static let whooshAssetsBundled = false
+
     /// Fresh click sfx (new-click.mp3) — default clickTone .fresh.
     public static var freshClick: [Float] {
         guard let url = effect(named: "new-click.mp3"),

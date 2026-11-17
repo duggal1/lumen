@@ -80,6 +80,12 @@ public enum MotionLimits {
     /// camera budgets runway from it so a pan/dolly never needs a snap to arrive.
     public static let cameraJerk = 1.0e6
 
+    /// The solver's runway budget. It sits below the hard ceiling so the two
+    /// continuity slopes a bridged handoff adds cannot push a move over it.
+    /// Shared by the camera and its headless accuracy tests: one number, no magic
+    /// literals duplicated in each place.
+    public static let filmJerk = 7.0e5
+
     /// |envelope'''(u)| peaks at 60 (smootherstep); each Hermite slope basis
     /// peaks at 36 (|h'''(u)| of h10/h11). A rest-to-rest move carrying two
     /// continuity slopes therefore needs this much more runway than a plain one.
@@ -88,5 +94,20 @@ public enum MotionLimits {
                                    maxJerk: Double = cameraJerk) -> Double {
         let weight = 60.0 + 36.0 * Double(max(0, continuitySlopes))
         return pow(max(weight * abs(delta), 1e-12) / max(maxJerk, 1), 1.0 / 3.0)
+    }
+
+    /// The single jerk meter for a baked channel: peak |third difference| at the
+    /// sample rate, in the curve's own units. Both the solver's limit and the
+    /// headless invariant are measured this way, so "bounded jerk" means one
+    /// thing everywhere.
+    public static func peakJerk(_ values: [Float], rate: Double) -> Double {
+        guard values.count > 3 else { return 0 }
+        var peak = 0.0
+        for i in 2..<(values.count - 1) {
+            let j = (Double(values[i + 1]) - 3 * Double(values[i])
+                     + 3 * Double(values[i - 1]) - Double(values[i - 2])) * rate * rate * rate
+            peak = max(peak, abs(j))
+        }
+        return peak
     }
 }

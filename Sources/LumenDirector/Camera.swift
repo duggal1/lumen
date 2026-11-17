@@ -90,7 +90,7 @@ enum CameraSolver {
             // so the lens never arrives by snapping into place.
             let jerkFloor = MotionLimits.minDuration(delta: pan * 2560,
                                                      continuitySlopes: 0,
-                                                     maxJerk: 7.0e5)
+                                                     maxJerk: MotionLimits.filmJerk)
             return clamp(max(base, jerkFloor), 0.20, 1.6)
         }
         func manualRise(_ ease: Double) -> Double { clamp(0.9 / max(ease, 0.3), 0.25, 2.0) }
@@ -364,7 +364,7 @@ enum CameraSolver {
             let returnRunway = max(0.25,
                                    MotionLimits.minDuration(delta: panPx,
                                                             continuitySlopes: 1,
-                                                            maxJerk: 7.0e5))
+                                                            maxJerk: MotionLimits.filmJerk))
             let forcedEnd = max(prevArrival + returnRunway,
                                 min(prevOff, s.on - returnRoom))
             var previousFollows = false
@@ -478,26 +478,30 @@ enum CameraSolver {
             track.vx[i] = Float(dX.v[i]); track.vy[i] = Float(dY.v[i]); track.vz[i] = Float(dZ.v[i])
             track.ax[i] = Float(dX.acc[i]); track.ay[i] = Float(dY.acc[i]); track.az[i] = Float(dZ.acc[i])
         }
+        // Tilt is deterministic and shot-driven: `.lean` follows the camera's
+        // own pan velocity, `.reveal` is a one-shot entrance, `.off` is flat.
+        // The old Float oscillator (causeless left/right/top wander) is gone.
+        // What remains is deterministic and shot-driven: `.lean` follows the
+        // camera's own pan velocity, `.reveal` is a one-shot entrance, and
+        // `.off` is the hard off switch. Nothing moves without a move that asks
+        // for it, and nothing oscillates while the shot holds.
+        let tiltOmega = clamp(p.omegaTilt.isFinite ? p.omegaTilt : 5, 0.5, 60)
+        let tiltYaw = p.maxYaw.isFinite ? max(p.maxYaw, 0) : 8
+        let tiltPitch = p.maxPitch.isFinite ? max(p.maxPitch, 0) : 6
         var yaw = p.tilt == .reveal ? 12.0 : 0.0, yawVelocity = 0.0
         var pitch = 0.0, pitchVelocity = 0.0
-        func phase(_ channel: Int) -> Double {
-            Double((p.tiltSeed >> UInt64(channel * 8)) & 255) / 255 * 2 * .pi
-        }
         for sample in 0..<n {
-            let time = Double(sample) * dt
             let scale = exp(Z[sample])
             var yawTarget = 0.0, pitchTarget = 0.0
             switch p.tilt {
             case .lean:
-                yawTarget = clamp(Double(track.vx[sample]) * scale * 12, -p.maxYaw, p.maxYaw)
-                pitchTarget = clamp(-Double(track.vy[sample]) * scale * 9, -p.maxPitch, p.maxPitch)
-            case .float:
-                yawTarget = p.floatDeg * (0.6 * sin(2 * .pi * 0.11 * time + phase(0)) + 0.4 * sin(2 * .pi * 0.07 * time + phase(1)))
-                pitchTarget = p.floatDeg * (0.6 * sin(2 * .pi * 0.09 * time + phase(2)) + 0.4 * sin(2 * .pi * 0.05 * time + phase(3)))
-            case .reveal, .off: break
+                yawTarget = clamp(Double(track.vx[sample]) * scale * 12, -tiltYaw, tiltYaw)
+                pitchTarget = clamp(-Double(track.vy[sample]) * scale * 9, -tiltPitch, tiltPitch)
+            case .reveal, .off:
+                break
             }
-            springStep(&yaw, &yawVelocity, target: yawTarget, omega: p.omegaTilt, dt: dt)
-            springStep(&pitch, &pitchVelocity, target: pitchTarget, omega: p.omegaTilt, dt: dt)
+            springStep(&yaw, &yawVelocity, target: yawTarget, omega: tiltOmega, dt: dt)
+            springStep(&pitch, &pitchVelocity, target: pitchTarget, omega: tiltOmega, dt: dt)
             track.yaw[sample] = Float(yaw)
             track.pitch[sample] = Float(pitch)
         }

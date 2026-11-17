@@ -187,6 +187,29 @@ extension View {
     func focusBrackets() -> some View { modifier(FocusBrackets()) }
 }
 
+/// Keyboard focus for flat tiles that must not wear selection brackets: a 2 pt
+/// accent capsule at offset 2, shown only for keyboard navigation. The system
+/// ring is disabled at the root; this is ours.
+struct FocusRing: ViewModifier {
+    @Environment(\.isFocused) private var focused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func body(content: Content) -> some View {
+        content.overlay {
+            if focused {
+                Capsule().stroke(Tok.accent, lineWidth: 2).padding(-2)
+                    .allowsHitTesting(false)
+                    .animation(reduceMotion ? nil : Motion.hoverIn, value: focused)
+            }
+        }
+    }
+}
+
+extension View {
+    func focusRing() -> some View {
+        self.focusable().focusEffectDisabled().modifier(FocusRing())
+    }
+}
+
 // MARK: Menus (custom panels, never system glass)
 
 @MainActor @Observable final class MenuHost {

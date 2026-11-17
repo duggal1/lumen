@@ -1,0 +1,15 @@
+Keyboard sound asset attribution
+================================
+
+Pack: Cherry MX Blue PBT (bundled under the pack id "mechvibes-default").
+Source: https://github.com/hainguyents13/mechvibes/tree/master/soundpacks/keyboard/cherrymx-blue-pbt
+Project: Mechvibes - https://github.com/hainguyents13/mechvibes
+Author: Mechvibes
+License: MIT License, Copyright (c) 2026 Hai Nguyen
+
+Only the recorded audio asset (sound.ogg -> sound.aiff, PCM16 mono 44.1 kHz) and
+its timing definitions are bundled. No Mechvibes source code is used. The audio
+was converted from Ogg Vorbis to WAV because Apple's AVAudioFile does not decode
+Vorbis; the sample timings in config.json are unchanged from upstream.
+
+The full MIT license is in LICENSE beside this file.

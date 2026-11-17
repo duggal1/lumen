@@ -30,7 +30,7 @@ struct CinematicRender3DControlTests {
 
     @Test func offIsFlatEvenWithLeakedNonzeroState() {
         let leaked = SIMD2<Float>(12, -9)
-        let flat = CameraTilt.effective(leaked, mode: .off, maxYaw: 8, maxPitch: 6, floatDeg: 1.2)
+        let flat = CameraTilt.effective(leaked, mode: .off, maxYaw: 8, maxPitch: 6)
         #expect(flat == .zero, "off must discard any leaked tilt, got \(flat)")
         #expect(CameraTilt.isFlat(flat))
         // Homography is exactly identity => no sampling deviation => flat frame.
@@ -53,29 +53,27 @@ struct CinematicRender3DControlTests {
             SIMD2(.infinity, -.infinity), SIMD2(Float.greatestFiniteMagnitude, 0)
         ]
         for raw in hostile {
-            let t = CameraTilt.effective(raw, mode: .lean, maxYaw: 8, maxPitch: 6, floatDeg: 1.2)
+            let t = CameraTilt.effective(raw, mode: .lean, maxYaw: 8, maxPitch: 6)
             #expect(t.x.isFinite && t.y.isFinite)
             #expect(abs(t.x) <= CameraTilt.maxYaw + 1e-5, "yaw \(t.x) exceeded 8")
             #expect(abs(t.y) <= CameraTilt.maxPitch + 1e-5, "pitch \(t.y) exceeded 6")
         }
         // User knob below the hard cap wins; above the cap it is clamped.
-        let tight = CameraTilt.effective(SIMD2(12, -12), mode: .lean, maxYaw: 3, maxPitch: 2, floatDeg: 1.2)
+        let tight = CameraTilt.effective(SIMD2(12, -12), mode: .lean, maxYaw: 3, maxPitch: 2)
         #expect(abs(tight.x - 3) < 1e-5 && abs(tight.y + 2) < 1e-5)
-        let loose = CameraTilt.effective(SIMD2(99, -99), mode: .lean, maxYaw: 40, maxPitch: 40, floatDeg: 1.2)
+        let loose = CameraTilt.effective(SIMD2(99, -99), mode: .lean, maxYaw: 40, maxPitch: 40)
         #expect(abs(loose.x - 8) < 1e-5 && abs(loose.y + 6) < 1e-5)
     }
 
-    @Test func floatDriftNeverExceedsOnePointFiveDegrees() {
+    @Test func offModeIsCompletelyFlat() {
         let raw = SIMD2<Float>(1e9, -1e9)
-        let t = CameraTilt.effective(raw, mode: .float, maxYaw: 8, maxPitch: 6, floatDeg: 2)
-        #expect(abs(t.x) <= CameraTilt.maxFloat + 1e-5)
-        #expect(abs(t.y) <= CameraTilt.maxFloat + 1e-5)
-        let out = c3dDerived(.float)
+        let t = CameraTilt.effective(raw, mode: .off, maxYaw: 8, maxPitch: 6)
+        #expect(t.x == 0 && t.y == 0)
+        let out = c3dDerived(.off)
         let maxYaw = out.derived?.camera.yaw.map { abs(Double($0)) }.max() ?? .infinity
         let maxPitch = out.derived?.camera.pitch.map { abs(Double($0)) }.max() ?? .infinity
-        #expect(maxYaw <= Double(CameraTilt.maxFloat) + 1e-3, "float yaw \(maxYaw) > 1.5")
-        #expect(maxPitch <= Double(CameraTilt.maxFloat) + 1e-3, "float pitch \(maxPitch) > 1.5")
-        #expect(maxYaw > 0.01, "float must actually drift")
+        #expect(maxYaw < 1e-5, "off mode must be completely flat")
+        #expect(maxPitch < 1e-5, "off mode must be completely flat")
     }
 
     @Test func leanFollowsCameraVelocityAndSettles() {
@@ -96,7 +94,7 @@ struct CinematicRender3DControlTests {
     }
 
     @Test func revealEntranceAndSettle() {
-        let start = CameraTilt.effective(SIMD2(99, 99), mode: .reveal, maxYaw: 8, maxPitch: 6, floatDeg: 1.2)
+        let start = CameraTilt.effective(SIMD2(99, 99), mode: .reveal, maxYaw: 8, maxPitch: 6)
         #expect(abs(start.x - 12) < 1e-5, "reveal entrance yaw must be 12, got \(start.x)")
         #expect(abs(start.y - 6) < 1e-5)
         #expect(CameraTilt.revealScale(mode: .reveal, tilt: start) < 0.921)
@@ -267,13 +265,11 @@ struct CinematicRender3DDeterminismTests {
         // but a real .lean tilt must survive the render gate unchanged (within
         // its limit). This proves the gate is a mode filter, not a blanket zero.
         let raw = SIMD2<Float>(12, 6)
-        let off = CameraTilt.effective(raw, mode: .off, maxYaw: 8, maxPitch: 6, floatDeg: 1.2)
-        let lean = CameraTilt.effective(raw, mode: .lean, maxYaw: 8, maxPitch: 6, floatDeg: 1.2)
-        let float = CameraTilt.effective(raw, mode: .float, maxYaw: 8, maxPitch: 6, floatDeg: 1.2)
-        let reveal = CameraTilt.effective(raw, mode: .reveal, maxYaw: 8, maxPitch: 6, floatDeg: 1.2)
+        let off = CameraTilt.effective(raw, mode: .off, maxYaw: 8, maxPitch: 6)
+        let lean = CameraTilt.effective(raw, mode: .lean, maxYaw: 8, maxPitch: 6)
+        let reveal = CameraTilt.effective(raw, mode: .reveal, maxYaw: 8, maxPitch: 6)
         #expect(off == .zero)
         #expect(lean == SIMD2(8, 6))
-        #expect(float == SIMD2(1.2, 1.2))
         #expect(reveal == SIMD2(12, 6))
     }
 }

@@ -35,9 +35,14 @@ public struct ZoomTransform: Sendable {
 
     /// The source viewport is always contained within the recording, even at the corners.
     public static func clamp(_ focus: SIMD2<Double>, source: SIMD2<Double>, scale: Double) -> SIMD2<Double> {
-        let half = source / (2 * max(scale, 1))
-        return SIMD2(min(max(focus.x, half.x), source.x - half.x),
-                     min(max(focus.y, half.y), source.y - half.y))
+        let s = scale.isFinite ? max(scale, 1) : 1
+        let half = source / (2 * s)
+        func axis(_ v: Double, _ lo: Double, _ hi: Double) -> Double {
+            guard v.isFinite, lo.isFinite, hi.isFinite, hi >= lo else { return (lo + hi) / 2 }
+            return min(max(v, lo), hi)
+        }
+        return SIMD2(axis(focus.x, half.x, source.x - half.x),
+                     axis(focus.y, half.y, source.y - half.y))
     }
 
     public var viewport: SIMD4<Double> {

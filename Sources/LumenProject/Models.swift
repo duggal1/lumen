@@ -221,7 +221,7 @@ public enum ZoomPreset: String, Codable, CaseIterable, Sendable {
     case subtle, balanced, dramatic, cinematic, fixed
     public var maxScale: Double { switch self { case .subtle: 1.5; case .balanced: 2.0; case .dramatic: 2.4; case .cinematic: 2.2; case .fixed: 2.0 } }
 }
-public enum TiltMode: String, Codable, CaseIterable, Sendable { case off, lean, float, reveal }
+public enum TiltMode: String, Codable, CaseIterable, Sendable { case off, lean, reveal }
 public enum ZoomEasing: String, Codable, CaseIterable, Sendable {
     case snappy, smooth, cinematic
     public var omegaScale: Double { switch self { case .snappy: 1.35; case .smooth: 1.0; case .cinematic: 0.65 } }
@@ -248,11 +248,10 @@ public struct CameraParams: Codable, Equatable, Sendable {
     /// Master switch for the real-time upscaler (A/B testing, low-end GPUs).
     public var upscaleEnabled = true
     public var tilt: TiltMode = .off
-    public var maxYaw = 8.0, maxPitch = 6.0, floatDeg = 1.2, omegaTilt = 5.0
-    public var tiltSeed: UInt64 = 0xC11C
+    public var maxYaw = 8.0, maxPitch = 6.0, omegaTilt = 5.0
     enum CodingKeys: String, CodingKey {
         case preset, autoZoom, maxScale, minScale, leadIn, tail, panThroughGap, omegaPan, omegaZoom, lookahead, deadZone
-        case followDelay, centerOffsetX, centerOffsetY, sensitivity, shutter, maxSamples, upscaleMaxFactor, upscaleEnabled, tilt, maxYaw, maxPitch, floatDeg, omegaTilt, tiltSeed
+        case followDelay, centerOffsetX, centerOffsetY, sensitivity, shutter, maxSamples, upscaleMaxFactor, upscaleEnabled, tilt, maxYaw, maxPitch, omegaTilt
         case baseScale, zoomOutGap, hold, cameraModel
     }
     public init() {}
@@ -276,7 +275,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
         upscaleMaxFactor = min(max(savedUpscale == 8 ? 10 : savedUpscale, 2), 10)
         upscaleEnabled = c.opt(.upscaleEnabled, upscaleEnabled)
         tilt = c.opt(.tilt, tilt); maxYaw = c.opt(.maxYaw, maxYaw); maxPitch = c.opt(.maxPitch, maxPitch)
-        floatDeg = c.opt(.floatDeg, floatDeg); omegaTilt = c.opt(.omegaTilt, omegaTilt); tiltSeed = c.opt(.tiltSeed, tiltSeed)
+        omegaTilt = c.opt(.omegaTilt, omegaTilt)
     }
     /// Applies a preset's whole feel. Sliders edited afterwards stick (nothing re-applies the preset behind the user's back).
     public mutating func apply(preset p: ZoomPreset) {
@@ -357,7 +356,10 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var targetLUFS: Double { targetLUFSOverride ?? micMode.targetLUFS }
     public var studioMode: StudioMode = .standard
     public var soundEffectsEnabled = true
-    public var clickSounds = true, whooshes = true, keySounds = true
+    /// Zoom whooshes were removed. The symbol stays only because out-of-scope code and
+    /// older persisted projects still references it; it is forced off on every decode and
+    /// can never enable an audible whoosh.
+    public var clickSounds = true, whooshes = false, keySounds = true
     public var typingModel = 2
     public var typingPackId: String = "mechvibes-default"
     public var typingLevelDb: Double = -9.0
@@ -406,11 +408,12 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         dereverb = c.opt(.dereverb, dereverb); normalize = c.opt(.normalize, normalize)
         systemGainDb = c.opt(.systemGainDb, systemGainDb); declick = c.opt(.declick, declick); declickDepthDb = c.opt(.declickDepthDb, declickDepthDb)
         let legacyLUFS = (try? d.container(keyedBy: LegacyLUFSKeys.self).decodeIfPresent(Double.self, forKey: .targetLUFS)) ?? nil
-        targetLUFSOverride = AudioPlan.migrateLUFS(override: (try? c.decode(Double.self, forKey: .targetLUFSOverride)), legacy: legacyLUFS, mode: micMode); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = c.opt(.whooshes, whooshes)
+        targetLUFSOverride = AudioPlan.migrateLUFS(override: (try? c.decode(Double.self, forKey: .targetLUFSOverride)), legacy: legacyLUFS, mode: micMode); clickSounds = c.opt(.clickSounds, clickSounds); whooshes = false
         studioMode = c.opt(.studioMode, studioMode)
         soundEffectsEnabled = c.opt(.soundEffectsEnabled, soundEffectsEnabled)
         keySounds = c.opt(.keySounds, keySounds); typingPackId = c.opt(.typingPackId, typingPackId); typingLevelDb = c.opt(.typingLevelDb, typingLevelDb); clickTone = c.opt(.clickTone, clickTone); sfxGainDb = c.opt(.sfxGainDb, sfxGainDb)
-        zoomInGainDb = c.opt(.zoomInGainDb, zoomInGainDb); zoomOutGainDb = c.opt(.zoomOutGainDb, zoomOutGainDb); clickGainDb = c.opt(.clickGainDb, clickGainDb)
+        // Whoosh gain knobs are inert: no whoosh asset is bundled or rendered.
+        zoomInGainDb = 0; zoomOutGainDb = 0; clickGainDb = c.opt(.clickGainDb, clickGainDb)
         typingModel = c.opt(.typingModel, 1)
         if typingModel < 2 {
             keySounds = true; typingLevelDb = -9; typingPackId = "mechvibes-default"; typingModel = 2

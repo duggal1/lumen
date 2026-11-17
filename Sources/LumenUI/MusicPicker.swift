@@ -102,7 +102,7 @@ struct MusicPicker: View {
                     .padding(.trailing, 8)
             }
             .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well))
-            .overlay { if isPlaying { CornerBrackets().padding(-3) } }
+            .overlay { if isPlaying { RoundedRectangle(cornerRadius: Radius.field).fill(Tok.accentSoft) } }
         }
         .buttonStyle(.plain)
         .pointerStyle(.link)

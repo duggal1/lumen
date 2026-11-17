@@ -157,7 +157,16 @@ struct PreviewView: NSViewRepresentable {
     private let linkRunner = LinkRunner()
     private var link: CADisplayLink?
     private var playheadTimer: Timer?
+    /// Playback state for the timeline audio tape. Advanced by the same echo
+    /// that moves the playhead; kept as a value so it can be tested headlessly.
+    private var waveform = WaveformPlaybackState()
     private var pointerTrackingArea: NSTrackingArea?
+
+    /// The current live tape state, readable by debug/harness code without a
+    /// window. The lane renderer itself follows `model.playhead`.
+    var liveWaveformSnapshot: WaveformPlaybackSnapshot {
+        waveform.snapshot(columns: WaveformPlaybackState.tapeColumns)
+    }
     private let feed: AsyncStream<Tick>.Continuation
     private let loop: Task<Void, Never>
 
@@ -237,7 +246,14 @@ struct PreviewView: NSViewRepresentable {
                 self.shared.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
                 self.shared.exportRunning = if case .running = m.exportState { true } else { false }
                 guard m.clock.playing else { return }
-                m.tick(m.clock.time(at: HostClock.now()))
+                let t = m.clock.time(at: HostClock.now())
+                m.tick(t)
+                // The strip draws played cells from `model.playhead`; this keeps
+                // an explicit, testable playback state in lockstep with it.
+                self.waveform = WaveformPlaybackState(peaks: m.session.waveform,
+                                                      duration: m.timeline.compositionDuration,
+                                                      playhead: t,
+                                                      isPlaying: m.clock.playing)
             }
         }
     }
@@ -343,6 +359,89 @@ struct FocusOverlay: View {
                     let p0 = toSrc(v.startLocation), p1 = toSrc(v.location)
                     model.setFocus(box: CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y), width: abs(p0.x - p1.x), height: abs(p0.y - p1.y)))
                 })
+        }
+    }
+}
+
+// MARK: - Live waveform playback state
+
+/// The visible state of the timeline audio tape at one instant. Everything the
+/// tape needs to decide which cells are played, where the head is and whether
+/// it is live is a plain value, so it is verifiable without a running window.
+struct WaveformPlaybackSnapshot: Equatable, Sendable {
+    var headColumn: Int
+    var playedColumns: Int
+    var activeLevel: Int
+    var isLive: Bool
+    var isEmpty: Bool
+    var isSilent: Bool
+
+    static let empty = WaveformPlaybackSnapshot(
+        headColumn: 0, playedColumns: 0, activeLevel: 0,
+        isLive: false, isEmpty: true, isSilent: false)
+}
+
+/// Maps a playhead over the recorded envelope into the tape's cell language.
+struct WaveformPlaybackState: Equatable, Sendable {
+    /// One column per 4 pt on a 240 pt strip, per DESIGN.md §3.2 (60 columns).
+    static let tapeColumns = 60
+
+    var peaks: [Float]
+    var duration: Double
+    var playhead: Double
+    var isPlaying: Bool
+
+    init(peaks: [Float] = [], duration: Double = 0, playhead: Double = 0, isPlaying: Bool = false) {
+        self.peaks = peaks
+        self.duration = duration.isFinite ? max(duration, 0) : 0
+        self.playhead = playhead.isFinite ? max(playhead, 0) : 0
+        self.isPlaying = isPlaying
+    }
+
+    var isEmpty: Bool { peaks.isEmpty }
+    /// Digital silence is a dotted midline, never a coloured slab.
+    var isSilent: Bool { !isEmpty && peaks.allSatisfy { abs($0) < 0.0001 } }
+
+    func updated(playhead: Double, isPlaying: Bool) -> WaveformPlaybackState {
+        WaveformPlaybackState(peaks: peaks, duration: duration,
+                              playhead: playhead, isPlaying: isPlaying)
+    }
+
+    func snapshot(columns: Int) -> WaveformPlaybackSnapshot {
+        guard columns > 0, !isEmpty, duration > 0 else {
+            return WaveformPlaybackSnapshot(headColumn: 0, playedColumns: 0, activeLevel: 0,
+                                            isLive: false, isEmpty: isEmpty, isSilent: isSilent)
+        }
+        let progress = min(max(playhead / duration, 0), 1)
+        let head = min(columns - 1, Int((progress * Double(columns)).rounded(.down)))
+        let sample = min(peaks.count - 1, max(0, Int((progress * Double(peaks.count)).rounded(.down))))
+        return WaveformPlaybackSnapshot(
+            headColumn: head,
+            playedColumns: head,
+            activeLevel: TimelineGeometry.level(peak: peaks[sample]),
+            isLive: isPlaying && !isSilent,
+            isEmpty: false,
+            isSilent: isSilent)
+    }
+}
+
+// MARK: - Selection language
+
+/// Brackets are a canvas handle, never a tile outline (DESIGN.md §3.1.7, §2.20).
+/// List tiles use a flat selected surface only.
+enum StudioSelectionStyle {
+    enum Target {
+        case canvasCrop
+        case zoomRegion
+        case musicTile
+        case clipTile
+        case cursorTile
+    }
+
+    static func usesCornerBrackets(for target: Target) -> Bool {
+        switch target {
+        case .canvasCrop, .zoomRegion: return true
+        case .musicTile, .clipTile, .cursorTile: return false
         }
     }
 }

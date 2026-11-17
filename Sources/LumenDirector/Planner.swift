@@ -118,56 +118,8 @@ enum ZoomPlanner {
         return best
     }
 
-    /// Resolve one steady subject for a typing burst: the smallest
-    /// accessibility field that actually contains the caret. Per-keystroke
-    /// caret positions are deliberately NOT kept as a camera target. A caret
-    /// holds then jumps on every key (and jumps further on a line wrap); feeding
-    /// that staircase into the camera's dead-zone + zero-phase follow made the
-    /// shot wander left/right and up/down and keep ringing after the last key.
-    /// The field is the thing being typed into — frame that instead.
-    static func resolvedField(t0: Double, t1: Double, keys: [InputEvent], ax: [AXFrame],
-                                      traces: [TypingTrace], W: Double, H: Double, b: Double) -> CGRect? {
-        let slack = 24 * b
-        var carets: [CGPoint] = []
-        var fields: [CGRect] = []
-        for e in keys where e.t >= t0 && e.t <= t1 {
-            guard e.axFrameIndex > 0, Int(e.axFrameIndex) <= ax.count else { continue }
-            let f = ax[Int(e.axFrameIndex) - 1]
-            // Provenance: an unresolved sample, or one older than the burst,
-            // is not evidence about this keystroke.
-            if let a = f.anchor {
-                if !a.resolved { continue }
-                if a.sampledAt > 0, e.t - a.sampledAt > 2.0 { continue }
-            }
-            guard f.x.isFinite, f.y.isFinite, f.w.isFinite, f.h.isFinite,
-                  f.w >= 4 * b, f.h >= 6 * b, f.w <= 1.05 * W, f.h <= 1.05 * H,
-                  f.x + f.w > 0, f.y + f.h > 0, f.x < W, f.y < H else { continue }
-            let field = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
-            fields.append(field)
-            if let c = f.caret, c.x.isFinite, c.y.isFinite, c.w.isFinite, c.h.isFinite,
-               c.h >= 6 * b, c.h <= 120 * b, c.w <= 80 * b {
-                let px = c.w <= 3 * b ? c.x + c.w / 2 : c.x + c.w
-                let py = c.y + c.h / 2
-                if px >= 0, px <= W, py >= 0, py <= H,
-                   field.insetBy(dx: -slack, dy: -slack).contains(CGPoint(x: px, y: py)) {
-                    carets.append(CGPoint(x: px, y: py))
-                }
-            }
-        }
-        if let first = carets.first {
-            // The smallest field that contains the caret, not the largest
-            // container seen during the burst.
-            return fields
-                .filter { $0.insetBy(dx: -slack, dy: -slack).contains(first) }
-                .min { $0.width * $0.height < $1.width * $1.height }
-        }
-        // No AX caret: fall back to the pixel tracer's resolved text line.
-        if let tr = traces.first(where: { $0.t0 <= t1 + 0.15 && $0.t1 >= t0 - 0.15 }) {
-            let samples = tr.samples.filter { $0.confidence >= 0.4 && $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
-            if samples.count >= 2 { return tr.line ?? tr.rect }
-        }
-        return nil
-    }
+    /// Typing framing lives in `TypingFocus`. One resolved field, one shot,
+    /// starting on the first keystroke — no caret follow, no synthetic anchor.
 
     /// A marker rect that describes a dialog/panel rather than a control. AX
     /// capture emits these when a sheet, dropdown or modal resolves. Kept in one
@@ -383,22 +335,12 @@ enum ZoomPlanner {
             let i = Intent(kind: .click, t: e.t, tEnd: e.t, x: x, y: y, rect: rect, frameRect: frameRect)
             intents.append(i); lastClick = i
         }
-        let keys = sorted.filter { $0.kind == .keyDown }
-        for burst in sorted.typingBursts() where ok(burst.t0) {
-            if let field = resolvedField(t0: burst.t0, t1: burst.t1, keys: keys, ax: ax,
-                                         traces: typing, W: W, H: H, b: b) {
-                // One steady shot on the field. There is no caret follow path:
-                // the field is the subject, so the centre does not chase every
-                // keystroke (or jump on a line wrap).
-                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1,
-                                      x: field.midX, y: field.midY, rect: field, frameRect: field))
-            } else if let lc = lastClick, burst.t0 - lc.t <= 30 {
-                // No resolved field: keep the last-click anchor rather than
-                // inventing a centre from nothing.
-                let synth = CGRect(x: lc.x - W * 0.175, y: lc.y - H * 0.05, width: W * 0.35, height: H * 0.10)
-                intents.append(Intent(kind: .typing, t: burst.t0, tEnd: burst.t1, x: lc.x, y: lc.y, rect: synth))
-            }
-        }
+        // One resolved field = one shot, beginning on the first keystroke.
+        // Built entirely in TypingFocus; no caret follow and no last-click
+        // invention (that synthesis is what produced the 2.0x block cascade).
+        intents += TypingFocus.intents(events: sorted, ax: ax, traces: typing,
+                                       W: W, H: H, b: b,
+                                       trimStart: tm.trimStart, trimEnd: tm.trimEnd)
         // Marker beats are explicit intent. An agent step carries the rect of
         // the thing it was about; a plain marker inherits the nearest recent
         // click as its location. Never invent a location from nothing.
@@ -426,7 +368,10 @@ enum ZoomPlanner {
         // so hovering can never create a shot) and adds anticipation + bounded
         // holds. Do NOT also call VisualZoom.intents here — that duplicates shots.
         intents += VisualAutofocus.intents(activity, events: sorted, input: intents, src: src, tm: tm)
-        intents += hoverIntents(events: sorted, src: src, p: p, tm: tm, existing: intents)
+        // Hover never opens a shot. It may only steer a scene that is already
+        // open, and only when that scene was itself opened by a hover/visual
+        // intent — never a click, typing or dialog subject.
+        intents.removeAll { $0.kind == .hover }
         intents.sort { a, b in
             if a.t != b.t { return a.t < b.t }
             // Deterministic tie order: the subject that opened a dialog is not
@@ -574,10 +519,11 @@ enum ZoomPlanner {
         /// all; the camera pans inside the current one.
         func beginScene(_ it: Intent, _ want: Double, _ anchor: SIMD2<Double>, force: Bool = false) {
             let tail = it.kind == .typing ? 0.1 : 0.0
-            // One self-contained action (a typing burst) is longer than the
-            // cadence cap; hold it through the burst, with an absolute ceiling.
+            // One resolved field is one shot. It must cover every keystroke of
+            // the interaction, so the burst duration is the floor, not a value
+            // to be clipped down to the cadence cap of a rapid click run.
             let cap = it.kind == .typing
-                ? min(6.5, max(maxShot, it.tEnd - it.t + 0.6))
+                ? max(6.5, it.tEnd - it.t + 0.6)
                 : maxShot
             if var o = cur {
                 if force {
@@ -740,53 +686,6 @@ enum ZoomPlanner {
         return ZoomPlan(segments: kept, follow: followPaths.filter { ids.contains($0.key) })
     }
 
-    /// Purposeful pointer dwell. A user who moves to a control, pauses, reads
-    /// and moves on has told us where the attention is. Hover only speaks when
-    /// no click or typing burst has recently spoken louder.
-    private static func hoverIntents(events: [InputEvent], src: SourceInfo, p: CameraParams,
-                                     tm: TimeMap, existing: [Intent]) -> [Intent] {
-        guard p.sensitivity > 0.05 else { return [] }
-        let W = Double(src.width), H = Double(src.height)
-        let moves = events.filter { $0.kind == .move && $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
-        guard moves.count >= 2 else { return [] }
-        let loud = existing.filter { $0.kind == .click || $0.kind == .typing || $0.kind == .dialog }
-        let tol = max(8 * src.backingScale, 0.008 * min(W, H))
-        let dwell = 0.25 + 0.45 * (1 - clamp(p.sensitivity, 0, 1))
-        var out: [Intent] = []
-        var lastT = -Double.infinity
-        var lastX = -Double.greatestFiniteMagnitude, lastY = lastX
-        var i = 0
-        while i < moves.count {
-            let anchor = SIMD2(Double(moves[i].x), Double(moves[i].y))
-            let start = moves[i].t
-            var j = i
-            var maxDist = 0.0
-            while j + 1 < moves.count {
-                let next = moves[j + 1]
-                if next.t - start > 2.5 { break }
-                let d = hypot(Double(next.x) - anchor.x, Double(next.y) - anchor.y)
-                maxDist = max(maxDist, d)
-                if d > tol { break }
-                j += 1
-            }
-            let end = moves[j].t
-            if j > i, end - start >= dwell, maxDist <= tol * 1.5 {
-                let mid = Double(j - i + 1)
-                var sx = 0.0, sy = 0.0
-                for k in i...j { sx += Double(moves[k].x); sy += Double(moves[k].y) }
-                let x = sx / mid, y = sy / mid
-                let quiet = !loud.contains { abs($0.t - end) <= 1.2 }
-                if quiet, end > lastT + 1.2 || hypot(x - lastX, y - lastY) > 40 {
-                    if end <= tm.trimEnd - 0.2, !tm.isCut(end) {
-                        out.append(Intent(kind: .hover, t: end, tEnd: end, x: x, y: y))
-                        lastT = end; lastX = x; lastY = y
-                    }
-                }
-            }
-            i = max(j + 1, i + 1)
-        }
-        return out
-    }
 }
 
 private extension ZoomSegment {

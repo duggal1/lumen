@@ -98,7 +98,8 @@ private let a1Source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 
         tl.camera.sensitivity = sensitivity
         return Director.derive(tl, input: DirectorInput(events: hovers, source: a1Source), revision: 1).zoom.count
     }
-    #expect(zoomCount(sensitivity: 1) == 1)
+    // Hovering alone must never open a shot, at any sensitivity.
+    #expect(zoomCount(sensitivity: 1) == 0)
     #expect(zoomCount(sensitivity: 0) == 0)
     // Max scale caps every segment.
     var capped = Timeline(duration: 3)

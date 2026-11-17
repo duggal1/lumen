@@ -10,7 +10,6 @@ import LumenProject
     let bank = SFXBank()
     let cues: [(SFXCue.Kind, ClickSound)] = [
         (.click, .mouse), (.click, .subtle), (.click, .fresh),
-        (.whooshIn, .mouse), (.whooshOut, .mouse),
     ]
     for (kind, tone) in cues {
         let (samples, gain) = bank.render(kind, clickTone: tone)

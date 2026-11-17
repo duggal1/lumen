@@ -196,11 +196,12 @@ private func typingInput(caretX: Double, sampleX: Double,
     #expect(abs(Double(wc.x) - Double(cc.x)) < 1, "stale cached plan: warm \(wc.x) vs cold \(cc.x)")
     #expect(abs(Double(wc.y) - Double(cc.y)) < 1, "stale cached plan: warm \(wc.y) vs cold \(cc.y)")
 
-    // The caret crossing out of the narrow field must genuinely change the shot.
+    // The field is the subject, never the caret: moving the caret within it
+    // must leave the frame exactly where it was.
     let nearTL = Director.derive(base, input: near, revision: 1)
     let nc = nearTL.evaluate(at: 3.0).cameraCenter
-    #expect(abs(Double(nc.x) - Double(cc.x)) > 50,
-            "caret left the inner field but the frame did not change (\(nc.x) vs \(cc.x))")
+    #expect(abs(Double(nc.x) - Double(cc.x)) < 1,
+            "caret moved the camera (\(nc.x) vs \(cc.x))")
 }
 
 /// AX anchor freshness decides whether a caret is trusted at all. A change

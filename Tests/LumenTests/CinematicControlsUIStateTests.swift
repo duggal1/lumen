@@ -13,7 +13,6 @@ struct CinematicControlsUIStateTests {
     @Test func offIsTheOnlyDisabledTiltMode() {
         #expect(!Cinematic3D.isEnabled(.off))
         #expect(Cinematic3D.isEnabled(.lean))
-        #expect(Cinematic3D.isEnabled(.float))
         #expect(Cinematic3D.isEnabled(.reveal))
     }
 
@@ -23,14 +22,14 @@ struct CinematicControlsUIStateTests {
     }
 
     @Test func enablingAgainPreservesTheUsersStyle() {
-        for mode: TiltMode in [.lean, .float, .reveal] {
+        for mode: TiltMode in [.lean, .reveal] {
             #expect(Cinematic3D.mode(mode, enabling: true) == mode)
             #expect(Cinematic3D.mode(Cinematic3D.mode(mode, enabling: true), enabling: true) == mode)
         }
     }
 
     @Test func disablingAlwaysReturnsToOff() {
-        for mode: TiltMode in [.off, .lean, .float, .reveal] {
+        for mode: TiltMode in TiltMode.allCases {
             #expect(Cinematic3D.mode(mode, enabling: false) == .off)
             #expect(!Cinematic3D.isEnabled(Cinematic3D.mode(mode, enabling: false)))
         }
@@ -45,12 +44,12 @@ struct CinematicControlsUIStateTests {
         }
     }
 
-    @Test func styleSegmentsCoverExactlyTheThreeNonOffModes() {
-        #expect(Cinematic3D.styles.count == 3)
+    @Test func styleSegmentsCoverExactlyTheNonOffModes() {
+        #expect(Cinematic3D.styles.count == TiltMode.allCases.count - 1)
         let modes = Set(Cinematic3D.styles.map(\.0))
-        #expect(modes == [.lean, .float, .reveal])
+        #expect(modes == Set(TiltMode.allCases.filter { $0 != .off }))
         #expect(!modes.contains(.off))
-        #expect(Set(Cinematic3D.styles.map(\.1)).count == 3)
+        #expect(Set(Cinematic3D.styles.map(\.1)).count == Cinematic3D.styles.count)
     }
 
     @Test func accessibilityLabelsAreUniqueAndSentenceCase() {

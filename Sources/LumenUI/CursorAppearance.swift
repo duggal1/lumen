@@ -45,7 +45,7 @@ struct CursorAppearance: View {
                 if let image = Self.previews[skin] {
                     Image(nsImage: image).interpolation(.high).resizable().frame(width: 30, height: 30)
                 }
-                if selected { CornerBrackets().padding(-3) }
+                if selected { RoundedRectangle(cornerRadius: Radius.field).fill(Tok.accentSoft) }
             }
             .frame(height: 46)
             .overlay(alignment: .bottom) {

@@ -9,9 +9,15 @@ import LumenAudio
     let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 10, backingScale: 1, originX: 0, originY: 0)
     var timeline = Timeline(duration: 10)
     timeline.audio.speedRampsAuto = false
-    let events = [InputEvent(t: 1, kind: .down, x: 800, y: 400), InputEvent(t: 5, kind: .keyDown, keyCode: 0), InputEvent(t: 5.2, kind: .keyDown, keyCode: 1), InputEvent(t: 5.4, kind: .keyDown, keyCode: 2)]
-    let out = Director.derive(timeline, input: DirectorInput(events: events, source: source), revision: 1)
-    #expect(out.zoom.contains { $0.start >= 4.7 && $0.start <= 5 && $0.end > 5.2 })
+    let field = AXFrame(x: 700, y: 350, w: 500, h: 80,
+                        anchor: FocusAnchor(epoch: 1, sampledAt: 5, resolved: true))
+    let events = [InputEvent(t: 1, kind: .down, x: 800, y: 400),
+                  InputEvent(t: 5, kind: .keyDown, keyCode: 0, axFrameIndex: 1),
+                  InputEvent(t: 5.2, kind: .keyDown, keyCode: 1, axFrameIndex: 1),
+                  InputEvent(t: 5.4, kind: .keyDown, keyCode: 2, axFrameIndex: 1)]
+    let out = Director.derive(timeline, input: DirectorInput(events: events, source: source, ax: [field]), revision: 1)
+    #expect(out.zoom.contains { $0.start == 5.0 && $0.end >= 5.4 },
+            "typing shot must start on the first key and end on the last: \(out.zoom.map(\.start))")
 }
 
 @Test func missingAudioSettingsDecodeWithDefaults() throws {

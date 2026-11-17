@@ -383,7 +383,8 @@ public enum Director {
             h.combine(f.caret?.x); h.combine(f.caret?.y)
             h.combine(f.caret?.w); h.combine(f.caret?.h)
             h.combine(f.anchor?.epoch); h.combine(f.anchor?.sampledAt)
-            h.combine(f.anchor?.resolved)
+            h.combine(f.anchor?.resolved); h.combine(f.anchor?.appName)
+            h.combine(f.anchor?.windowID); h.combine(f.label)
             h.combine(f.sampledAt)
         }
         for t in input.typing {
@@ -471,6 +472,11 @@ private func cf(_ v: Float, _ lo: Float, _ hi: Float) -> Float { min(max(v, lo),
 extension Timeline {
     /// Pure function of (self, t). Microseconds. Safe to call from any thread.
     public func evaluate(at t0: Double) -> FrameState {
+        guard t0.isFinite else {
+            return FrameState(cameraCenter: .zero, cameraScale: 1, cameraTilt: .zero,
+                              cursor: CursorSample(position: .zero, velocity: .zero, opacity: 0, press: 1, shape: 0),
+                              clickFX: [], webcamCrop: [0, 0, 1, 1], sourceTime: 0)
+        }
         // Imported clips are composed on the same output clock but carry no
         // recording metadata: no camera move, no cursor, no masks. Returning a
         // synthetic state here keeps one evaluation entry point for preview and

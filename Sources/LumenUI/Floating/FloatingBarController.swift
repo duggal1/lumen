@@ -56,6 +56,20 @@ import LumenCapture
         }
     }
 
+    /// Conforms the panel to the persisted visibility choice. Creating the
+    /// controller is cheap and keeps capture exclusion/countdown working even
+    /// while the bar itself is hidden by default.
+    func applyVisibility() {
+        if FloatingBarVisibility.isHidden() { hide() } else { show() }
+    }
+
+    /// Hides just the bar. No focus change, no window, no teardown: the menu-bar
+    /// toggle can bring the same panel straight back.
+    func hide() {
+        closePanels()
+        bar.orderOut(nil)
+    }
+
     func close() {
         closePanels()
         countdown.hide()

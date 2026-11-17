@@ -14,7 +14,6 @@ public enum CameraTilt {
     /// Lean pitch ceiling (PLAN 10.4.1).
     public static let maxPitch: Float = 6
     /// Float drift ceiling (PLAN 10.4.1 allows up to 2; the product cap is 1.5).
-    public static let maxFloat: Float = 1.5
     /// Reveal entrance yaw; the one documented exception to `maxYaw`.
     public static let revealYaw: Float = 12
     /// Hard safety ceiling in the shader. Reveal's 12 degree entrance fits inside it.
@@ -33,16 +32,13 @@ public enum CameraTilt {
     /// disabling 3D therefore produces a completely flat frame, with no 3D
     /// value surviving anywhere in the render path.
     public static func effective(_ raw: SIMD2<Float>, mode: TiltMode,
-                                 maxYaw: Double, maxPitch: Double, floatDeg: Double) -> SIMD2<Float> {
+                                 maxYaw: Double, maxPitch: Double) -> SIMD2<Float> {
         switch mode {
         case .off:
             return .zero
         case .lean:
             return SIMD2(finite(raw.x, positive(maxYaw, cap: Self.maxYaw)),
                          finite(raw.y, positive(maxPitch, cap: Self.maxPitch)))
-        case .float:
-            let cap = min(positive(floatDeg, cap: maxFloat), maxFloat)
-            return SIMD2(finite(raw.x, cap), finite(raw.y, cap))
         case .reveal:
             return SIMD2(finite(raw.x, revealYaw), finite(raw.y, positive(maxPitch, cap: Self.maxPitch)))
         }

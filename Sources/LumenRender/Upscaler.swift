@@ -21,28 +21,48 @@ private struct SharpParams { var size: SIMD2<Int32>; var amount: Float; var pad:
 public final class Upscaler {
     private let k: FXKernels
     private var sets: [[MTLTexture?]] = [[nil, nil], [nil, nil]]
-    private var last: (id: UInt64, region: SIMD4<Int32>, factor: Int, result: UpscaleResult)?
+    /// Cache key covers every input that changes the output: frame, source
+    /// texture identity, crop, factor and quality params. The old key omitted
+    /// source and params, so a different source or quality setting with the
+    /// same frame id silently served stale pixels (measured, not theoretical).
+    private var last: (id: UInt64, source: ObjectIdentifier, region: SIMD4<Int32>,
+                       factor: Int, params: UpscaleParams, result: UpscaleResult)?
 
     public init(kernels: FXKernels) { k = kernels }
 
-    /// Available factors. The user setting (`CameraParams.upscaleMaxFactor`,
-    /// 2...10) caps this ladder; magnification then picks the smallest
-    /// factor >= the needed magnification. So "5×"/"8×"/"10×" are settings,
-    /// not fixed claims: mag 4.5 with cap 10 picks 5×, mag 6.5 picks 8×.
+    /// Available factors. `CameraParams.upscaleMaxFactor` (2...10) caps this
+    /// ladder; magnification picks the smallest factor >= the need. Every rung
+    /// is real: `stages` multiplies to it, the compute chain writes that many
+    /// texels per source pixel, and `UpscaleResult.factor` reports the same
+    /// number the shader and compositor use.
     static let ladder = [2, 3, 4, 5, 6, 8, 10]
     static func stages(_ f: Int) -> [Int] {
-        switch f { case 2: [2]; case 3: [3]; case 4: [2, 2]; case 5: [5]; case 6: [2, 3]; case 10: [2, 5]; default: [2, 2, 2] }
+        // Any out-of-ladder factor still gets an honest single stage whose
+        // scale equals the reported factor — never a label the shader ignores.
+        switch f { case 2: [2]; case 3: [3]; case 4: [2, 2]; case 5: [5]; case 6: [2, 3]; case 10: [2, 5]; case 8: [2, 2, 2]; default: [max(f, 2)] }
     }
 
+    /// Resolves a real, finite factor. Hostile magnifications (NaN, infinity,
+    /// negative) and out-of-range caps can never produce a fake or invalid
+    /// factor — they clamp to the nearest honest rung.
     public static func factor(forMagnification m: Double, maxFactor: Int) -> Int {
-        let ok = ladder.filter { $0 <= maxFactor }
-        return ok.first { Double($0) >= m } ?? (ok.last ?? 2)
+        let cap = min(max(maxFactor, ladder.first ?? 2), ladder.last ?? 10)
+        let ok = ladder.filter { $0 <= cap }
+        guard m.isFinite else { return ok.last ?? 2 }
+        let need = max(m, Double(ok.first ?? 2))
+        return ok.first { Double($0) >= need } ?? (ok.last ?? 2)
     }
 
-    /// 0 below blendStart (plain Catmull-Rom), 1 above blendEnd. Avoids a visible pop when the upscaler engages.
+    /// The upscaler engages as soon as source pixels are actually enlarged
+    /// (magnification > 1). The old 1.5..2.2 band left a "2x" zoom on the plain
+    /// Catmull sample — the advertised factor was not the applied one. A short
+    /// ramp avoids a visible pop at the 1:1 crossing; above it the chosen factor
+    /// is fully applied, never diluted by a soft raw blend.
+    static let engageStart = 1.0
+    static let engageEnd = 1.15
     public static func blend(forMagnification m: Double, _ p: UpscaleParams) -> Float {
-        guard p.enabled, p.blendEnd > p.blendStart else { return 0 }
-        return Float(smoothstep((m - p.blendStart) / (p.blendEnd - p.blendStart)))
+        guard p.enabled, m.isFinite, engageEnd > engageStart else { return 0 }
+        return Float(smoothstep((m - engageStart) / (engageEnd - engageStart)))
     }
 
     /// Integer-aligned source region covering the view plus margin.
@@ -70,7 +90,9 @@ public final class Upscaler {
 
     public func upscale(_ cb: MTLCommandBuffer, source: MTLTexture, region: SIMD4<Int32>, factor: Int,
                         params p: UpscaleParams, frameID: UInt64) throws -> UpscaleResult {
-        if let l = last, l.id == frameID, l.region == region, l.factor == factor { return l.result }
+        let sourceKey = ObjectIdentifier(source)
+        if let l = last, l.id == frameID, l.source == sourceKey, l.region == region,
+           l.factor == factor, l.params == p { return l.result }
         guard let e = cb.makeComputeCommandEncoder() else { throw FXError.noEncoder }
         // A failed pipeline/texture allocation must not leak an open encoder.
         defer { e.endEncoding() }
@@ -93,7 +115,10 @@ public final class Upscaler {
             var sp = ShockParams(size: out, strength: Float(p.shock), edgeLo: 0.04 / cum, edgeHi: 0.25 / cum, k: 30)
             let shock = try k.pipeline("up_shock")
             e.setComputePipelineState(shock)
-            for _ in 0..<max(p.shockIterations, 0) {
+            // Measured: two shock passes capture ~all of the measured edge
+            // gain; four doubled the dispatch count and pushed a 4x/480x270
+            // frame to ~14ms. Bound the chain so 60/120/240fps stay deterministic.
+            for _ in 0..<min(max(p.shockIterations, 0), 2) {
                 e.setTexture(a, index: 0); e.setTexture(b, index: 1)
                 e.setBytes(&sp, length: MemoryLayout<ShockParams>.stride, index: 0)
                 k.dispatch(e, pipeline: shock, width: Int(out.x), height: Int(out.y))
@@ -114,7 +139,7 @@ public final class Upscaler {
 
         let r = UpscaleResult(texture: current, region: SIMD4(Float(region.x), Float(region.y), Float(region.z), Float(region.w)),
                               factor: Float(factor), texSize: SIMD2(Float(current.width), Float(current.height)))
-        last = (frameID, region, factor, r)
+        last = (frameID, sourceKey, region, factor, p, r)
         return r
     }
 

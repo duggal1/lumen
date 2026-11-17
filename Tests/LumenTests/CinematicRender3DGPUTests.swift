@@ -59,12 +59,11 @@ private enum C3DGPU {
         return SourceFrame(id: 1, pts: 0, pixelBuffer: buffer, texture: texture, cv: cv)
     }
 
-    static func timeline(_ mode: TiltMode, floatDeg: Double = 1.2) -> Timeline {
+    static func timeline(_ mode: TiltMode) -> Timeline {
         var tl = Timeline(duration: 1)
         tl.audio.speedRampsAuto = false
         tl.camera.shutter = 0          // one sub-frame: tilt change is isolated
         tl.camera.tilt = mode
-        tl.camera.floatDeg = floatDeg
         tl.camera.upscaleEnabled = false
         tl.style.background = .solid
         tl.style.colors = [RGBA(0x101010), RGBA(0xDADADA)]
@@ -136,19 +135,6 @@ struct CinematicRender3DGPUTests {
                 "a real lean must visibly change content pixels")
         #expect(C3DGPU.difference(warped, overLimit) == 0,
                 "raw tilt above the limit must be clamped before the shader")
-    }
-
-    @Test func floatClampsDriftInRealRender() throws {
-        let (renderer, frame) = try C3DGPU.setup()
-        let canvas = SIMD2<Int>(256, 256)
-        let tl = C3DGPU.timeline(.float, floatDeg: 1.2)
-        let rawMaybe = C3DGPU.pixels(renderer, tl, tilt: SIMD2(99, 99), canvas: canvas, frame: frame)
-        let cappedMaybe = C3DGPU.pixels(renderer, tl, tilt: SIMD2(1.2, 1.2), canvas: canvas, frame: frame)
-        let flatMaybe = C3DGPU.pixels(renderer, tl, tilt: .zero, canvas: canvas, frame: frame)
-        #expect(rawMaybe != nil && cappedMaybe != nil && flatMaybe != nil)
-        let raw = try #require(rawMaybe), capped = try #require(cappedMaybe), flat = try #require(flatMaybe)
-        #expect(C3DGPU.difference(raw, capped) == 0, "float must cap at floatDeg")
-        #expect(C3DGPU.difference(raw, flat) > 0, "float must actually drift")
     }
 
     @Test func revealEntranceDiffersFromSettledAndIsDeterministic() throws {
