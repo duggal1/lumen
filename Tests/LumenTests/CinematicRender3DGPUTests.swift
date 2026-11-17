@@ -13,12 +13,27 @@ import LumenProject
 // over-limit 3D value is tested at the exact point it would reach export.
 
 private enum C3DGPU {
-    static func stripedFrame(device: MTLDevice, width: Int = 256, height: Int = 256) -> SourceFrame? {
+    /// Metal texture-cache setup is intermittently unavailable under a loaded
+    /// test runner. Retry before declaring the environment broken; never turn a
+    /// setup failure into a vacuous PASS.
+    static func setup(_ attempts: Int = 4) throws -> (Renderer, SourceFrame) {
+        var last: (Renderer, SourceFrame)?
+        for _ in 0..<attempts {
+            if let renderer = try? Renderer() {
+                if let frame = stripedFrame(device: renderer.device) {
+                    last = (renderer, frame); break
+                }
+            }
+        }
+        return try #require(last)
+    }
+
+    static func stripedFrame(device: MTLDevice, width: Int = 1920, height: Int = 1080) -> SourceFrame? {
         let attrs = [kCVPixelBufferMetalCompatibilityKey as String: true,
                      kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()] as CFDictionary
         var pb: CVPixelBuffer?
-        guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, attrs, &pb) == kCVReturnSuccess,
-              let buffer = pb else { return nil }
+        let cr = CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, attrs, &pb)
+        guard cr == kCVReturnSuccess, let buffer = pb else { return nil }
         CVPixelBufferLockBaseAddress(buffer, [])
         if let base = CVPixelBufferGetBaseAddress(buffer) {
             let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
@@ -35,11 +50,12 @@ private enum C3DGPU {
         }
         CVPixelBufferUnlockBaseAddress(buffer, [])
         var cache: CVMetalTextureCache?
-        guard CVMetalTextureCacheCreate(nil, nil, device, nil, &cache) == kCVReturnSuccess,
-              let cache, var cv: CVMetalTexture? = nil,
-              CVMetalTextureCacheCreateTextureFromImage(nil, cache, buffer, nil, .bgra8Unorm,
-                                                         width, height, 0, &cv) == kCVReturnSuccess,
-              let cv, let texture = CVMetalTextureGetTexture(cv) else { return nil }
+        let c1 = CVMetalTextureCacheCreate(nil, nil, device, nil, &cache)
+        guard c1 == kCVReturnSuccess, let cache else { return nil }
+        var cv: CVMetalTexture? = nil
+        let c2 = CVMetalTextureCacheCreateTextureFromImage(nil, cache, buffer, nil, .bgra8Unorm,
+                                                           width, height, 0, &cv)
+        guard c2 == kCVReturnSuccess, let cv, let texture = CVMetalTextureGetTexture(cv) else { return nil }
         return SourceFrame(id: 1, pts: 0, pixelBuffer: buffer, texture: texture, cv: cv)
     }
 
@@ -92,11 +108,11 @@ private enum C3DGPU {
     }
 }
 
+@Suite(.serialized)
 struct CinematicRender3DGPUTests {
 
     @Test func offModeDropsLeakedTiltBeforeExport() throws {
-        let renderer = try #require(try? Renderer())
-        let frame = try #require(C3DGPU.stripedFrame(device: renderer.device))
+        let (renderer, frame) = try C3DGPU.setup()
         let canvas = SIMD2<Int>(256, 256)
         let tl = C3DGPU.timeline(.off)
         let flatMaybe = C3DGPU.pixels(renderer, tl, tilt: .zero, canvas: canvas, frame: frame)
@@ -108,8 +124,7 @@ struct CinematicRender3DGPUTests {
     }
 
     @Test func leanWarpsContentAndClampsRawTilt() throws {
-        let renderer = try #require(try? Renderer())
-        let frame = try #require(C3DGPU.stripedFrame(device: renderer.device))
+        let (renderer, frame) = try C3DGPU.setup()
         let canvas = SIMD2<Int>(256, 256)
         let tl = C3DGPU.timeline(.lean)
         let flatMaybe = C3DGPU.pixels(renderer, tl, tilt: .zero, canvas: canvas, frame: frame)
@@ -124,8 +139,7 @@ struct CinematicRender3DGPUTests {
     }
 
     @Test func floatClampsDriftInRealRender() throws {
-        let renderer = try #require(try? Renderer())
-        let frame = try #require(C3DGPU.stripedFrame(device: renderer.device))
+        let (renderer, frame) = try C3DGPU.setup()
         let canvas = SIMD2<Int>(256, 256)
         let tl = C3DGPU.timeline(.float, floatDeg: 1.2)
         let rawMaybe = C3DGPU.pixels(renderer, tl, tilt: SIMD2(99, 99), canvas: canvas, frame: frame)
@@ -138,8 +152,7 @@ struct CinematicRender3DGPUTests {
     }
 
     @Test func revealEntranceDiffersFromSettledAndIsDeterministic() throws {
-        let renderer = try #require(try? Renderer())
-        let frame = try #require(C3DGPU.stripedFrame(device: renderer.device))
+        let (renderer, frame) = try C3DGPU.setup()
         let canvas = SIMD2<Int>(256, 256)
         let tl = C3DGPU.timeline(.reveal)
         let startMaybe = C3DGPU.pixels(renderer, tl, tilt: SIMD2(12, 0), canvas: canvas, frame: frame)
@@ -161,8 +174,7 @@ struct CinematicRender3DGPUTests {
     }
 
     @Test func offRenderMatchesFlatForAllModesWithZeroTilt() throws {
-        let renderer = try #require(try? Renderer())
-        let frame = try #require(C3DGPU.stripedFrame(device: renderer.device))
+        let (renderer, frame) = try C3DGPU.setup()
         let canvas = SIMD2<Int>(256, 256)
         var total = 0
         for mode in TiltMode.allCases {
