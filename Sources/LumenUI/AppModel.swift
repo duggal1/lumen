@@ -719,6 +719,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             }
         }
         cfg.fps = fps; cfg.mic = mic && perms.mic; cfg.systemAudio = system
+        cfg.rawRetentionDays = RawRetention.normalize(UserDefaults.standard.integer(forKey: "LumenRawRetentionDays"))
+        cfg.deleteRawAfterExport = UserDefaults.standard.bool(forKey: "LumenDeleteRawAfterExport")
         cfg.micDeviceID = micDeviceID.isEmpty ? nil : micDeviceID
         cfg.webcamQuality = webcamQuality.rawValue
         cfg.resolution = captureResolution; cfg.quality = captureQuality; cfg.customMbps = captureMbps

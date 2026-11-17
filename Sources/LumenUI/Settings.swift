@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import LumenControl
+import LumenProject
 
 /// Appearance is a window-level override, applied at launch and when Settings changes.
 @MainActor enum Appearance {
@@ -23,6 +24,8 @@ struct SettingsSurface: View {
     @AppStorage("LumenEmailRecipient") private var emailRecipient = ""
     @AppStorage("LumenEmailOnRecording") private var emailRecording = true
     @AppStorage("LumenEmailOnExport") private var emailExport = true
+    @AppStorage("LumenRawRetentionDays") private var rawRetentionDays = 7
+    @AppStorage("LumenDeleteRawAfterExport") private var deleteRawAfterExport = false
     // AGENT: capability, folder and bundle grants belong to the human-facing settings surface.
     @State private var agentPolicy = Policy()
     @State private var agentAudit = AuditLog()
@@ -114,7 +117,17 @@ struct SettingsSurface: View {
     }
 
     private var privacy: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Raw footage").font(AppType.title).foregroundStyle(Tok.text)
+                .padding(.bottom, 12)
+            Row(label: "Keep raw footage") {
+                LSegmented(sel: Binding(get: { RawRetention.normalize(rawRetentionDays) },
+                                        set: { rawRetentionDays = $0 }),
+                           items: RawRetention.allCases.map { ($0.rawValue, $0.title) },
+                           track: Tok.surface, thumb: Tok.control)
+                    .frame(width: 260)
+            }
+            ToggleRow(label: "Delete raw after export", on: $deleteRawAfterExport)
         }
         .card()
     }

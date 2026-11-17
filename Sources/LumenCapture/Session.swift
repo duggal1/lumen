@@ -192,6 +192,7 @@ public actor RecordingSession {
         let prev = stage
         stage = next
         MainThreadWatchdog.shared.setStage(next.watchdogName)
+        if case .failed = next { bundle?.markFailed() }
         logger.info("recording \(String(describing: prev)) -> \(String(describing: next), privacy: .public)")
         os_log("stage %@ -> %@", log: .default, type: .info, String(describing: prev), String(describing: next))
     }
@@ -258,10 +259,9 @@ public actor RecordingSession {
             if config.webcamDeviceID != nil { webcam = try WebcamRecorder(url: b.webcamURL, deviceID: config.webcamDeviceID, quality: config.webcamQuality) }
             // Device IDs are unique and checked before recording starts; never
             // quietly substitute the system default if a requested device vanished.
-            extraMicrophones = try Array(Set(config.additionalMicDeviceIDs))
-                .sorted().enumerated().map { index, id in
-                    try ExtraMicrophoneRecorder(deviceID: id, file: "mic-extra-\(index + 1).caf", in: b)
-                }
+            extraMicrophones = try config.resolvedAdditionalMicDeviceIDs().enumerated().map { index, id in
+                try ExtraMicrophoneRecorder(deviceID: id, file: "mic-extra-\(index + 1).caf", in: b)
+            }
         } catch {
             transition(to: .failed("Preparing stalled. \(error)"))
             throw error
@@ -358,7 +358,8 @@ public actor RecordingSession {
                                  pauseIntervals: e.pauseIntervals,
                                  lastFramePTS: e.lastPTS,
                                  firstFramePTS: e.firstPTS,
-                                 droppedFrames: e.droppedFrames)
+                                 droppedFrames: e.droppedFrames,
+                                 smartCrop: cfg?.smartCrop.isActive == true ? cfg?.smartCrop : nil)
         try await Task.detached(priority: .utility) {
             try b.writeJournal(j).get()
         }.value
@@ -474,6 +475,8 @@ public actor RecordingSession {
         meta.additionalMicrophones = extraMicrophones.compactMap(\.track)
         var tl = Timeline(duration: info.duration)
         tl.smartCrop = cfg?.smartCrop ?? SmartCropConfig()
+        tl.overlays.privacy.rawRetentionDays = cfg?.rawRetentionDays ?? 7
+        tl.overlays.privacy.deleteRawAfterExport = cfg?.deleteRawAfterExport ?? false
         let pauses = engine.pauseIntervals.compactMap { p -> CutRange? in
             let a = max(p.start - origin, 0), e = min(p.end - origin, info.duration)
             return e - a > 0.05 ? CutRange(start: a, end: e, origin: .manual) : nil

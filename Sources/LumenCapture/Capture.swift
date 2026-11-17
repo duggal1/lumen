@@ -10,6 +10,31 @@ import LumenProject
 
 public enum CaptureError: Error { case noSource, writer(String) }
 
+/// Pure guards for the values that come from user-drawn Area selections and
+/// the display system. A hostile rect must never reach SCStreamConfiguration:
+/// a zero/negative/NaN sourceRect produces a zero-sized writer and a stream
+/// that fails at start with no usable frames.
+public enum CaptureValidation {
+    /// Minimum usable region, in source points. Smaller regions round down to
+    /// almost nothing once multiplied by the backing scale and made even.
+    public static let minimumRegionPoints: Double = 16
+
+    /// Clips `rect` into `bounds` and returns a region that is safe to capture.
+    /// Returns nil for non-finite, zero-area, degenerate or off-screen regions.
+    public static func safeRegion(_ rect: CGRect, in bounds: CGRect) -> CGRect? {
+        guard bounds.width.isFinite, bounds.height.isFinite,
+              bounds.width >= minimumRegionPoints, bounds.height >= minimumRegionPoints,
+              rect.minX.isFinite, rect.minY.isFinite,
+              rect.width.isFinite, rect.height.isFinite,
+              rect.width > 0, rect.height > 0 else { return nil }
+        let clipped = rect.intersection(bounds)
+        guard !clipped.isNull,
+              clipped.width >= minimumRegionPoints,
+              clipped.height >= minimumRegionPoints else { return nil }
+        return clipped
+    }
+}
+
 public struct RecordingConfig: Sendable {
     public enum Source: Sendable { case display(CGDirectDisplayID), window(CGWindowID), region(CGDirectDisplayID, CGRect) }
     public enum Resolution: String, Sendable, CaseIterable {
@@ -59,7 +84,20 @@ public struct RecordingConfig: Sendable {
     /// Intelligent Area crop. When enabled the capture is the full display and
     /// the crop lives in the derived camera track, not in SCStream.sourceRect.
     public var smartCrop = SmartCropConfig()
+    /// Raw-footage retention defaults, set from Settings before a recording.
+    public var rawRetentionDays: Int = 7
+    public var deleteRawAfterExport = false
     public init(source: Source) { self.source = source }
+
+    /// Extra microphones to capture through AVFoundation, de-duplicated and
+    /// with the primary microphone removed. ScreenCaptureKit already owns the
+    /// primary mic; opening a second AVFoundation session on the same device
+    /// fights for the hardware and can drop the primary track entirely.
+    public func resolvedAdditionalMicDeviceIDs() -> [String] {
+        var ids = Set(additionalMicDeviceIDs)
+        if let primary = micDeviceID { ids.remove(primary) }
+        return ids.sorted()
+    }
 }
 
 private struct AudioBox: @unchecked Sendable { let buf: AVAudioPCMBuffer }
@@ -418,9 +456,17 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
             guard let d = content.displays.first(where: { $0.displayID == id }) else { throw CaptureError.noSource }
             filter = SCContentFilter(display: d, excludingWindows: own)
             if let m = CGDisplayCopyDisplayMode(id) { scale = Double(m.pixelWidth) / Double(m.width) }
+            if !scale.isFinite || scale <= 0 { scale = 1 }
             let b = CGDisplayBounds(id)
             var size = b.size; origin = b.origin
-            if case .region(_, let r) = cfg.source {
+            if case .region(_, let rawRect) = cfg.source {
+                // A drawn Area can be stale (display reconfigured) or hostile.
+                // Area rects are display-relative (top-left origin), while
+                // CGDisplayBounds is in global space — clip against a local
+                // bounds rect, then fold the display origin back in for event
+                // coordinate conversion.
+                let localBounds = CGRect(x: 0, y: 0, width: b.width, height: b.height)
+                guard let r = CaptureValidation.safeRegion(rawRect, in: localBounds) else { throw CaptureError.noSource }
                 sc.sourceRect = r; size = r.size; origin = CGPoint(x: b.minX + r.minX, y: b.minY + r.minY)
             }
             points = size

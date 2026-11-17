@@ -34,3 +34,40 @@ public struct QuinticMove: Sendable {
         return (x, v, a)
     }
 }
+
+extension QuinticMove {
+    /// The one temporal envelope a camera move is made of. Both the pan and
+    /// the dolly ride this same normalised quintic, so they accelerate and
+    /// settle together instead of looking like two unrelated animations.
+    /// Quintic smootherstep is monotone (no overshoot), C2, exact at both
+    /// ends, and arrives with zero velocity and zero acceleration — a gentle,
+    /// filmed settle rather than a stop dead on the target.
+    @inline(__always)
+    public static func envelope(_ u: Double) -> Double {
+        let x = min(max(u, 0), 1)
+        return x * x * x * (x * (x * 6 - 15) + 10)
+    }
+
+    /// Quintic Hermite slope bases on [0,1] (the standard h10 / h11).
+    /// Each has zero value, zero acceleration and zero jerk at BOTH ends, and
+    /// unit derivative at exactly one end. Added to `envelope` they carry a
+    /// handoff's incoming/outgoing velocity without moving the endpoints or
+    /// changing the shape at zero velocity.
+    ///
+    /// The zero endpoint acceleration is the whole point: the cubic bases
+    /// reach a hold with h''(1) of 2 and 4, so `fillHold` forced acceleration
+    /// to zero in a single tick — an acceleration step that reads as a jerk
+    /// spike (and fails the bounded-jerk motion-trace invariant). Quintic bases
+    /// arrive with h'' = 0, so the move flows into the still hold with no step.
+    @inline(__always)
+    public static func leadSlope(_ u: Double) -> Double {
+        let x = min(max(u, 0), 1)
+        return x * (1 + x * x * (-6 + x * (8 - 3 * x)))
+    }
+
+    @inline(__always)
+    public static func trailSlope(_ u: Double) -> Double {
+        let x = min(max(u, 0), 1)
+        return x * x * x * (-4 + x * (7 - 3 * x))
+    }
+}

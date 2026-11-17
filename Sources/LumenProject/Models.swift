@@ -544,8 +544,9 @@ public struct TimeMap: Codable, Equatable, Sendable {
     public var outputDuration: Double { out.last ?? 0 }
     public func isCut(_ s: Double) -> Bool { cuts.contains { s >= $0.start && s < $0.end } }
     public func output(atSource s: Double) -> Double {
+        guard s.isFinite else { return 0 }
         let f = (s - trimStart) / Self.ds
-        guard f > 0 else { return 0 }
+        guard f.isFinite, f > 0 else { return 0 }
         let i = Int(f)
         if i >= out.count - 1 { return out.last ?? 0 }
         return out[i] + (out[i + 1] - out[i]) * (f - Double(i))

@@ -85,13 +85,13 @@ struct ExportSettings: Codable, Equatable, Sendable {
         if let data = try? JSONEncoder().encode(self) { UserDefaults.standard.set(data, forKey: Self.key) }
     }
 
+    /// Even, encode-safe dimension. Video encoders reject odd width/height, so
+    /// every derived edge snaps to a whole 2-pixel unit at every aspect.
+    private static func even(_ value: Int) -> Int { max(2, min(8192, value)) & ~1 }
+
     func dimensions(source: SourceInfo, aspect: Double) -> (Int, Int) {
-        if aspect < 1 {
-            let w = 1080
-            let h = (Int((Double(w) / aspect).rounded()) + 1) & ~1
-            return (w, h)
-        }
-        let height: Int = switch resolution {
+        let a = aspect.isFinite && aspect > 0 ? aspect : 16.0 / 9
+        let shortSide: Int = switch resolution {
         case .source: source.height
         case .ultraHD8K: 4320
         case .ultraHD: 2160
@@ -100,9 +100,16 @@ struct ExportSettings: Codable, Equatable, Sendable {
         case .p720: 720
         case .custom: customHeight
         }
-        let h = max(2, min(8192, height)) & ~1
-        let w = resolution == .custom ? max(2, min(8192, customWidth)) & ~1
-            : (max(2, Int((Double(h) * aspect).rounded())) + 1) & ~1
+        // For portrait the chosen resolution is the SHORT side (the width):
+        // 1080p -> 1080x1920, 4K -> 2160x3840. Hardcoding 1080 used to make
+        // every 9:16 export identical regardless of the resolution setting.
+        if a < 1 {
+            let w = Self.even(shortSide)
+            return (w, Self.even(Int((Double(w) / a).rounded())))
+        }
+        let h = Self.even(shortSide)
+        let w = resolution == .custom ? Self.even(customWidth)
+                                      : Self.even(Int((Double(h) * a).rounded()))
         return (w, h)
     }
 

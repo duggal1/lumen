@@ -81,14 +81,17 @@ struct LIconButton: View {
 struct LToggle: View {
     @Binding var on: Bool; let label: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var enabled
     var body: some View {
-        Button { on.toggle() } label: {
+        Button { if enabled { on.toggle() } } label: {
             ZStack(alignment: on ? .trailing : .leading) {
                 Capsule().fill(on ? Tok.accent : Tok.controlPressed)
                 Circle().fill(.white).frame(width: 20, height: 20).padding(2)
             }.frame(width: 40, height: 24).animation(reduceMotion ? nil : Motion.toggle, value: on)
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.4)
         .floatingHandCursor()
         .accessibilityLabel(label)
         .accessibilityValue(on ? "On" : "Off")
@@ -99,10 +102,13 @@ struct LToggle: View {
 struct LSlider: View {
     @Binding var value: Double; let range: ClosedRange<Double>; var step: Double = 0; var width: CGFloat = 150
     @State private var dragging = false
+    @Environment(\.isEnabled) private var enabled
     var body: some View {
-        let frac = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
-        Canvas { c, size in
-            let n = Int(size.width / 4), lit = Int(frac * Double(n))
+        let span = range.upperBound - range.lowerBound
+        let frac = span > 0 ? (value - range.lowerBound) / span : 0
+        let track = Canvas { c, size in
+            let n = max(0, Int(size.width / 4))
+            let lit = n > 0 ? min(n, max(0, Int((frac.isFinite ? frac : 0) * Double(n)))) : 0
             for i in 0..<n {
                 let on = i < lit, h: CGFloat = on ? 8 : 4
                 c.fill(Path(CGRect(x: CGFloat(i) * 4, y: (size.height - h) / 2, width: 2, height: h)),
@@ -111,16 +117,23 @@ struct LSlider: View {
             c.fill(Path(CGRect(x: CGFloat(lit) * 4, y: (size.height - 16) / 2, width: 2, height: 16)), with: .color(Tok.text), style: FillStyle(antialiased: false))
         }
         .frame(width: width, height: 24).contentShape(Rectangle())
-        .pointerStyle(dragging ? .grabActive : .grabIdle)
-        .gesture(DragGesture(minimumDistance: 0)
-            .onChanged { g in
-                dragging = true
-                var v = range.lowerBound + min(max(g.location.x / width, 0), 1) * (range.upperBound - range.lowerBound)
-                if step > 0 { v = (v / step).rounded() * step }
-                if v != value { value = v }
+        .opacity(enabled ? 1 : 0.4)
+        .accessibilityRepresentation { Slider(value: $value, in: range).disabled(!enabled) }
+        return Group {
+            if enabled {
+                track.pointerStyle(dragging ? .grabActive : .grabIdle)
+                    .gesture(DragGesture(minimumDistance: 0)
+                        .onChanged { g in
+                            dragging = true
+                            var v = range.lowerBound + min(max(g.location.x / width, 0), 1) * (range.upperBound - range.lowerBound)
+                            if step > 0 { v = (v / step).rounded() * step }
+                            if v != value { value = v }
+                        }
+                        .onEnded { _ in dragging = false })
+            } else {
+                track.pointerStyle(.default)
             }
-            .onEnded { _ in dragging = false })
-        .accessibilityRepresentation { Slider(value: $value, in: range) }
+        }
     }
 }
 
@@ -130,10 +143,11 @@ struct LSegmented<T: Hashable>: View {
     var thumb: Color = Tok.control
     @Namespace private var ns
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var enabled
     var body: some View {
         HStack(spacing: 0) {
             ForEach(items, id: \.0) { v, title in
-                Button { sel = v } label: {
+                Button { if enabled { sel = v } } label: {
                     Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(sel == v ? Tok.text : Tok.text2)
                         .lineLimit(1).frame(maxWidth: .infinity).frame(height: 24)
                         .background {
@@ -141,12 +155,36 @@ struct LSegmented<T: Hashable>: View {
                                 Capsule().fill(thumb).matchedGeometryEffect(id: "thumb", in: ns)
                             }
                         }
-                }.buttonStyle(.plain).pointerStyle(.link)
+                }.buttonStyle(.plain).pointerStyle(enabled ? .link : .default)
                 .accessibilityLabel(title)
                 .accessibilityAddTraits(sel == v ? .isSelected : [])
             }
-        }.padding(2).background(Capsule().fill(track)).animation(reduceMotion ? nil : Motion.slide, value: sel)
+        }.padding(2).background(Capsule().fill(track))
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.4)
+        .animation(reduceMotion ? nil : Motion.slide, value: sel)
     }
+}
+
+/// The keyboard ring is ours: four 2 pt cell corner brackets, 3 pt outside the
+/// control, in signal orange. Never the system focus box, never after a click.
+struct FocusBrackets: ViewModifier {
+    @Environment(\.isFocused) private var focused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func body(content: Content) -> some View {
+        content.overlay {
+            if focused {
+                CornerBrackets(cell: 2, arm: 3, color: Tok.accent)
+                    .padding(3)
+                    .allowsHitTesting(false)
+                    .animation(reduceMotion ? nil : Motion.hoverIn, value: focused)
+            }
+        }
+    }
+}
+
+extension View {
+    func focusBrackets() -> some View { modifier(FocusBrackets()) }
 }
 
 // MARK: Menus (custom panels, never system glass)

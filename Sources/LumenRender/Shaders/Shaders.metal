@@ -282,10 +282,18 @@ fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]]
     float2 view = u.cropSize / u.scale;
     float2 n = (in.px - u.content.xy) / u.content.zw - 0.5;
     if (abs(u.tilt.x) + abs(u.tilt.y) > 0.001) {
-        float ky = tan(clamp(u.tilt.x, -18.0, 18.0) * 0.01745329252);
-        float kx = tan(clamp(u.tilt.y, -18.0, 18.0) * 0.01745329252);
-        n = clamp(float2(n.x * (1.0 + ky * n.y * 2.0), n.y * (1.0 + kx * n.x * 2.0)),
-                  float2(-0.5), float2(0.5));
+        // One perspective divide, not a shear: yaw/pitch tip the content plane
+        // so the far edge compresses (a camera move), instead of stretching
+        // corners into a hard clamp (a glitch). `zmin` is the depth at the
+        // nearest corner, so z >= zmin everywhere and |n * zmin / z| <= 0.5:
+        // the warp is a contraction and can never sample outside the camera
+        // viewport, the smart crop, or the source texture. The clamp is only a
+        // numerical safety net. Mirror: CameraTilt.homography(_:tiltDeg:).
+        float ax = tan(clamp(u.tilt.x, -18.0, 18.0) * 0.01745329252) / 3.0;
+        float ay = tan(clamp(u.tilt.y, -18.0, 18.0) * 0.01745329252) / 3.0;
+        float zmin = 1.0 - 0.5 * (fabs(ax) + fabs(ay));
+        float z = max(1.0 + ax * n.x + ay * n.y, 1e-4);
+        n = clamp(n * (zmin / z), float2(-0.5), float2(0.5));
     }
     float2 sp = u.cam + n * view;
     float3 rgb = sampleMip(src, sp / u.src, view.x / u.content.z);

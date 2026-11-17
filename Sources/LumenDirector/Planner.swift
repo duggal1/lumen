@@ -232,8 +232,12 @@ enum ZoomPlanner {
         let W = Double(src.width), H = Double(src.height), b = max(src.backingScale, 1)
         guard W > 0, H > 0 else { return ZoomPlan() }
         if p.preset == .fixed {
+            // maxScale is a hard cap even for the fixed camera: the Zoom-amount
+            // slider can exceed Max-zoom, but the exported magnification must
+            // never go past what the user capped it at.
+            let fixedScale = clamp(p.baseScale, 1.0, clamp(p.maxScale, 1.001, 6.0))
             let segment = ZoomSegment(id: stableID(tm.trimStart, tm.trimEnd), start: tm.trimStart, end: tm.trimEnd,
-                                      scale: p.baseScale, focus: .follow, origin: .auto)
+                                      scale: fixedScale, focus: .follow, origin: .auto)
             return ZoomPlan(segments: [segment])
         }
         let sorted = events.sorted { $0.t < $1.t }

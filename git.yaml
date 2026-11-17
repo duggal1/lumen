@@ -1,0 +1,75 @@
+# git.yaml
+# Binding for every task that touches git.
+
+repo:
+  not_initialized: >
+    No git repository, or no remote? Stop and ask the user for the repository
+    URL so you can initialize it. Never create, guess, or improvise a repo or remote.
+
+mode:
+  solo:
+    when: one or two agents are working in this repo, normal work
+    target: commit and push straight to main. No branches.
+  multi:
+    when: >
+      three or more agents are working in this repo. The user says so, or you see
+      other agent/* branches or other agents' commits landing on main during your task.
+    branches: >
+      One branch per agent, named agent/<id>. Create it once, reuse it for every
+      task. Never create extra branches.
+  serious_work:
+    when: large, risky, or hard to undo (migrations, auth, billing, big refactors)
+    rule: Always use a branch and a PR, even when you are the only agent. Never commit it straight to main.
+
+flow:
+  start: Pull before you start work.
+  solo:
+    - git add .
+    - git commit -m "<message>"
+    - git status, then pull
+    - git push origin main
+  multi:
+    - git add .
+    - git commit -m "<message>"
+    - git merge main into your branch
+    - git push origin agent/<id>
+    - open a PR into main and merge it with a merge commit
+  every_task: Commit and push after every task. No batching. No "too small to commit".
+
+conflicts:
+  prevent:
+    - Touch only the files your task needs. No drive-by reformatting.
+    - Pull or merge main before every push, so other agents' commits land cleanly.
+  resolve: >
+    Keep both sides' intent. Never stomp, drop, or overwrite another agent's work.
+    If a conflict can't be resolved without losing someone's work, stop and ask the user.
+  no_rebase: >
+    Never rebase a branch that is already pushed. It needs a force push, which is
+    forbidden. Sync by merging main into your branch.
+
+commit_message:
+  length: 6-12 words
+  style: Tell a teammate what happened. No changelog voice.
+  bad: "Made some changes to improve the login flow and fix bugs"
+  good: "Fix login redirect looping on expired sessions"
+  too_long: If it needs more than 12 words, the commit is too big. Split it.
+
+forbidden:
+  commands: [git restore, git reset, "git push --force", "git push --force-with-lease"]
+  rule: >
+    Each needs the user's explicit permission, every time. No exceptions for
+    "it seemed obviously right".
+  secrets: >
+    Never commit .env files, API keys, tokens, or credentials. If one is about to
+    be swept into a commit, stop and flag it. Do not add it.
+
+allowed: Everything else (diff, log, stash, checkout, pull, branch, merge, PR). The forbidden list is the entire boundary.
+
+summary:
+  - 1-2 agents, normal work: straight to main
+  - 3+ agents, or serious work: one branch per agent, PR, merge to main
+  - Commit and push every task, 6-12 word messages
+  - Pull before starting, merge or pull before pushing
+  - No repo: ask for the URL
+  - reset, restore, force push: forbidden without permission
+  - No secrets in commits

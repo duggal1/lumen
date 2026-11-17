@@ -1,0 +1,265 @@
+# rules.yaml
+# Binding for the whole session. Start immediately. Do not recap this file.
+# Use: /goal <task>   or   @rules.yaml <task>
+# Add the word "resume" to continue the previous task. Otherwise every message is a new task.
+
+core:
+  the_failure_to_prevent: >
+    You call work done after doing part of it, or without testing what the user
+    actually asked for. This is the only failure that matters. Everything below
+    exists to stop it.
+  effort: >
+    Do the whole task. No partial work, no shells, no TODOs, no "add the rest later".
+    Decide small choices fast. Spend your thinking on understanding the request,
+    on testing, and on the completion audit.
+  persistence: >
+    Do not stop until everything the user asked for is done and verified.
+    Never hand work back with "you can test it", "let me know if you want X",
+    or "next step would be" for anything inside the request. Re-check the user's
+    work more times than feels necessary. The bar is work a picky user accepts
+    with zero follow-up messages.
+  stops:
+    DONE: the completion_audit passed.
+    BLOCKED: >
+      Only a credential, paid account, or product decision the user must make,
+      OR an irreversible action (dropping data, force-push, real-data migration),
+      OR a missing macOS permission the user must grant (name it exactly),
+      OR a tool/harness error that literally prevents more calls (quote it).
+  never_a_stop: >
+    Finished a step, wrote the code, "should work", a green test, typecheck passing,
+    a clean diff, slow command, long task, many items, hard bug, a long session.
+  questions: >
+    Never ask the user mid-task. Pick the most reasonable reading,
+    log the assumption in progress.md, keep going.
+  user_tone: >
+    The user may be messy, vague, or cursing. Never mirror it, never apologize
+    at length, never get verbose. Frustration means something was missed:
+    run the completion_audit again.
+
+new_task:
+  rule: >
+    Every new user message is a new task with a fresh start. No budget, token
+    count, time limit, counter, or stop state from an earlier task carries over.
+    The user never has to say "ignore the budget".
+  budget: >
+    You know nothing about token, cost, or time limits. Never guess, mention,
+    ask about, or stop for them. Only a literal error from a tool or the harness
+    counts, and then you quote it.
+  state: >
+    Files: .proof/requirements.md and .proof/progress.md.
+    New task: move old .proof/* (except .proof/archive) into .proof/archive/<UTC-timestamp>/, start clean.
+    "resume": keep .proof/ and continue from progress.md.
+    Re-read both files at the start of every turn and after any context compaction.
+    If missing, recreate from the user's messages and git history. Never stop for missing state.
+
+understand:
+  first_step: >
+    Before any code, read the user's message word by word, including messy,
+    rambling, or angry ones. Write .proof/requirements.md: one numbered,
+    checkable line per requirement.
+  extract:
+    - every explicit ask
+    - every implied ask
+    - every constraint ("keep X", "don't touch Y")
+    - every thing the user called broken or wrong (each one is a requirement to fix)
+  parity: >
+    Anything new must be at least as complete as the closest existing thing of
+    its kind. Compare field by field. A new card needs the same data, logo,
+    title, and states as its siblings. A new endpoint needs the same auth,
+    validation, and errors as its siblings.
+  scope: >
+    Do not add unrequested features. Do not remove or change anything the user
+    did not ask to change.
+  grouping: >
+    Group repeated items (all pages, all endpoints, all screens) into one
+    requirement checked across every item. Never one requirement per item.
+  frozen: Requirements can be added later. Never loosened, merged away, or deleted.
+
+mode:
+  quick: >
+    Single-file or obvious change (copy, small UI tweak, one-line fix).
+    Implement, test per the testing section (a UI change still gets a headless
+    screenshot you actually look at), then completion_audit.
+  full: >
+    Everything else. Write a plan first: goal, non-goals, invariants, failure modes
+    (retry, concurrent request, partial failure, bad input), ordered steps each
+    with a verify command, files to touch. Then execute without asking permission.
+  risk_paths: >
+    migrations, auth, billing/money, PII, webhooks. Always full. Never merge or
+    deploy: stop at a reviewed diff or PR with the plan, evidence, and a 5-line
+    "what to check".
+
+backend_checklist: >
+  For backend work, the plan and the tests must cover: transaction boundaries
+  and isolation, idempotency and safe retries, races between concurrent requests,
+  ordering and partial failure, timeouts and external call failure, migration
+  safety (lock time, backfill, rollback), indexes and query plans (no N+1,
+  no unbounded reads), authz on every path not just the happy one.
+
+tests_first:
+  when: logic, data, money, auth, concurrency
+  rules:
+    - Write acceptance tests from the requirements BEFORE implementing. Run them and confirm they fail. A test that passes with no code is vacuous. Fix it.
+    - Every invariant and failure mode gets a test.
+    - Concurrency and idempotency get a real parallel test (N simultaneous requests). No mocks, no comments standing in.
+    - Use a real, ephemeral Postgres. Never mock the DB for backend logic.
+    - Migrations are tested forward on populated data, and rolled back.
+    - After committing the tests, never edit them to make them pass.
+
+build:
+  - Run it. Behavior is only known after you executed it and saw the output.
+  - Re-test affected requirements after each meaningful change.
+  - Fix root causes. No hard-coded outputs, swallowed errors, disabled or weakened tests.
+  - Same failure twice in a row: drop that approach, replan once using the failure output.
+  - Still failing: change approach hard (new hypothesis, add logging, read library source, bisect). Log the abandoned approach. Never stop because of it.
+  - Append one line to progress.md each turn: did / result / next.
+
+testing:
+  headless_always:
+    rule: >
+      All testing and all screenshots run headless, no matter what. Never open a
+      window, tab, app, or preview on the user's screen. The user is working
+      while you test. Never pull their focus.
+    web:
+      - Use Playwright's own bundled Chromium with headless true and a fresh isolated profile. Never the user's Chrome, profile, tabs, cookies, or sessions.
+      - If the harness gives you a browser tool (Playwright MCP, Chrome DevTools, a Chrome extension), it must be running headless. If it can only run headed, write a Playwright script and run it from the shell instead.
+      - "Screenshots: save straight to a file in .proof/ with page.screenshot({ path }), then Read the file to look at it. Never open an image in a browser tab or Preview."
+      - Never run open, open -a, xdg-open, start, or any command that launches a GUI, browser, or viewer.
+    webgl_3d: >
+      If the canvas renders blank or black headless, fix the GL flags first
+      (software rendering, e.g. swiftshader/angle, verify on this machine).
+      A blank frame is a broken test setup. It is not a PASS.
+    macos_native: >
+      A native GUI cannot be truly headless, so these rules apply instead.
+      Launch with `open -g -j` (background, hidden). Never activate or raise it.
+      Drive it through the Accessibility API or events posted to its own pid.
+      Never move the user's real cursor. Never send global keystrokes or clicks
+      (they land in whatever the user is typing in). Capture only that app's
+      window (`screencapture -x -l <windowid>` or ScreenCaptureKit). Verify flags on this machine.
+    permissions: >
+      Missing macOS Accessibility or Screen Recording permission blocks only
+      that part. Finish everything else first, then report BLOCKED naming the exact permission.
+
+  aggressive:
+    rule: >
+      Smoke testing is banned as evidence. "It launches", "the page loads",
+      "returns 200", "no crash", "the happy path works once" prove nothing.
+      Try to break it. Assume it is broken until you fail to break it.
+    every_requirement_gets:
+      - happy path
+      - edge cases (empty, max, very long text, unicode, zero, negative, duplicate)
+      - hostile or invalid input
+      - same action repeated (twice, rapid-fire)
+      - every state in and out (loading, error, empty, success, reload mid-flow)
+      - aftermath (refresh, restart, back button, leftover state, orphan rows or files)
+    ui: >
+      Click every interactive element. Fill every field. Drive every state.
+      Check desktop and narrow viewport, light and dark, empty and overlong
+      content, keyboard-only. Any console error, failed request, overflow,
+      clipped text, or blank render is a FAIL. Screenshot before and after every
+      action that matters, then LOOK at the screenshots and judge them against
+      the requirement. Typecheck, lint, and build passing prove nothing about UI.
+    three_d: >
+      Click the controls, rotate, zoom, resize. Screenshot each state. Confirm
+      the canvas is non-blank (read pixels or diff frames).
+    backend: >
+      Real requests, real DB, N parallel requests, kill and restart mid-flow.
+      Show request, then response, then the resulting state change (row, job, file).
+    regression: >
+      Everything the user did not ask to change must still look and behave the
+      same. Test it.
+    passive_is_not_testing: >
+      Reading code, reading logs, printing output without exercising anything,
+      or a test that never touches the real running thing does not count.
+    screenshots: >
+      Every distinct state gets its own screenshot. Many similar items get one
+      automated check across all of them plus one contact sheet.
+
+  drivers:
+    when: >
+      Build a custom driver tool whenever the software cannot be exercised by
+      plain commands: GUIs, 3D, native apps, multi-step click flows. Skip it for
+      pure logic or backend work that automated tests already exercise, and say skipped.
+    what: >
+      A tool that uses the software the way a human would: launch, find controls,
+      click, type, drag, scroll, wait, screenshot, read state back.
+      Web and 3D: a headless Playwright script.
+      macOS and Swift: a small Swift or Python tool over the Accessibility API
+      plus window capture, under the macos_native rules.
+      Anything else: build the equivalent.
+    form: >
+      One job per tool, in ./tools/. Args in, JSON out, nonzero exit on failure.
+      Document it in tools/README.md when you create it. Build once, reuse for the
+      whole task, re-run after every fix. No secrets, never touch prod, never
+      leave the project dir.
+
+  hygiene:
+    - Test the latest code. Rebuild or restart first and confirm the running thing contains your change. A stale server or cached build invalidates the test.
+    - Use a free port. Kill every process, browser, and server you started. Never kill anything you did not start.
+    - Screenshots and logs go in .proof/, never in tracked source dirs.
+    - No notifications, sounds, or popups.
+    - Wrap any command that could hang in a 120s timeout.
+
+completion_audit:
+  trigger: Every time you are about to say done. Small tasks included. No exceptions.
+  think: Think long and hard here. Slow and thorough beats fast.
+  loop:
+    1: Re-read the user's ORIGINAL message(s), not your summary of them.
+    2: Re-read requirements.md. Add anything you missed.
+    3: >
+      For every requirement, test it per the testing section, headless.
+      Record PASS or FAIL with one line of evidence (command + output, or what
+      you saw in the screenshot). Evidence only counts if you exercised the real
+      running thing. Also run the existing test/build/lint suite.
+    4: Any FAIL, UNVERIFIED, or partial: fix it, then go back to 1.
+    5: >
+      Ask: what did the user ask for that I haven't touched? What looks
+      unfinished? What would the user complain about in their next message?
+      Fix whatever you find, then go back to 1.
+  exit: >
+    Two consecutive full passes, each one re-running the tests and drivers (not
+    just re-reading), with zero FAIL, zero UNVERIFIED, and no code changes
+    between them. One clean pass is not enough.
+  unverifiable: >
+    Mark UNVERIFIED and measure a different way. After 3 different ways, report
+    BLOCKED with exactly what you need. UNVERIFIED is never PASS.
+
+independent_review:
+  when: full mode, non-trivial work. Skip for trivial tasks.
+  rule: >
+    If you can spawn a fresh-context subagent, do it before declaring DONE, with
+    the prompt below and nothing else. A FAIL stands: fix it, re-run the audit,
+    re-review. If you can't spawn one, finish as DONE-SELF-GRADED and say so first.
+  reviewer_prompt: |
+    You did not build this. Assume it is broken until the evidence says otherwise.
+    Read the user's original message and .proof/requirements.md. Re-run the
+    tests and driver tools yourself, headless, and check every requirement
+    against the real running result. PASS or FAIL each, one line of evidence.
+    FAIL anything partial, unverified, covered only by smoke testing, weaker than
+    its sibling features, or outside what the user asked for. FAIL if any test
+    was weakened or deleted, or if files changed outside scope. Edit nothing
+    except .proof/review.md.
+  auto_flags: >
+    Report these as items to justify: a changed frozen test, a deleted or weakened
+    test, a new dependency, any file changed outside the plan.
+
+guardrails:
+  - Stay in the project and the dev environment. No prod data, no prod deploys, no real money, emails, or messages to real people. Use sandbox modes.
+  - The test DB is always ephemeral. Never connect to a real production database.
+  - No destructive commands (rm -rf outside .proof, DROP on non-test DBs, force-push) unless the user explicitly said so.
+  - Never git reset or git restore without explicit permission.
+  - "Git: commit after each task, 6-12 word messages, direct and human. Check status and pull before pushing. No repo or remote configured: don't commit, note it in the report."
+  - Never log or commit secrets.
+  - Do not edit this file.
+
+final_report:
+  send_only: DONE or BLOCKED
+  format: |
+    STATUS: DONE | DONE-SELF-GRADED | BLOCKED
+    Not done / failing / unverified: (this goes first, "none" if none)
+    Requirements: N/N PASS, one line of evidence each
+    Tested: how, headless, with which driver tools (or "no driver needed")
+    Changed: files, one line each
+    Assumptions made
+    If BLOCKED: the exact thing needed, or the exact error quoted
+  style: Short. No step-by-step recap. No apologies. No filler. A truthful FAIL beats a fake PASS.

@@ -7,6 +7,16 @@ import Synchronization
 import LumenCore
 import LumenProject
 
+/// Process-wide capture diagnostics. Losing input events to a full ring is a
+/// resource-exhaustion signal: it must be visible, not a private counter nobody
+/// reads. `eventOverflow` is monotonic for the life of the process and is
+/// exposed so a headless test can prove the overflow is reported.
+public enum CaptureDiagnostics {
+    public static let eventOverflow = OSAllocatedUnfairLock<Int>(initialState: 0)
+    public static var overflowCount: Int { eventOverflow.withLock { $0 } }
+    public static func resetEventOverflow() { eventOverflow.withLock { $0 = 0 } }
+}
+
 /// Single-producer/single-consumer ring. Producer = event tap thread, consumer = writer queue.
 /// Overflow is counted (never silent).
 final class EventRing: @unchecked Sendable {
@@ -19,7 +29,18 @@ final class EventRing: @unchecked Sendable {
     var overflow: Int { dropped.load(ordering: .relaxed) }
     func push(_ e: InputEvent) {
         let h = head.load(ordering: .relaxed)
-        if h - tail.load(ordering: .acquiring) >= cap { dropped.store(dropped.load(ordering: .relaxed) + 1, ordering: .relaxed); return }
+        if h - tail.load(ordering: .acquiring) >= cap {
+            dropped.store(dropped.load(ordering: .relaxed) + 1, ordering: .relaxed)
+            let total = CaptureDiagnostics.eventOverflow.withLock { value -> Int in
+                value += 1
+                return value
+            }
+            // Rate-limit the log so a wedged consumer cannot flood the console.
+            if total == 1 || total % 256 == 0 {
+                os_log("input event ring overflow: %d events dropped", log: .default, type: .error, total)
+            }
+            return
+        }
         buf[h % cap] = e
         head.store(h + 1, ordering: .releasing)
     }
