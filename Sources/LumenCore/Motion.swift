@@ -71,3 +71,22 @@ extension QuinticMove {
         return x * x * x * (-4 + x * (7 - 3 * x))
     }
 }
+
+/// Hard motion limits shared by the recorded camera. They are expressed in the
+/// curve's own units so the solver can size a runway from the distance it must
+/// travel instead of discovering a too-short quintic by its jerk spike at 480 Hz.
+public enum MotionLimits {
+    /// A filmed move stays under this jerk. It is a limit, not a target: the
+    /// camera budgets runway from it so a pan/dolly never needs a snap to arrive.
+    public static let cameraJerk = 1.0e6
+
+    /// |envelope'''(u)| peaks at 60 (smootherstep); each Hermite slope basis
+    /// peaks at 36 (|h'''(u)| of h10/h11). A rest-to-rest move carrying two
+    /// continuity slopes therefore needs this much more runway than a plain one.
+    @inline(__always)
+    public static func minDuration(delta: Double, continuitySlopes: Int = 0,
+                                   maxJerk: Double = cameraJerk) -> Double {
+        let weight = 60.0 + 36.0 * Double(max(0, continuitySlopes))
+        return pow(max(weight * abs(delta), 1e-12) / max(maxJerk, 1), 1.0 / 3.0)
+    }
+}

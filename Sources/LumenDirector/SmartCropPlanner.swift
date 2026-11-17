@@ -53,6 +53,14 @@ public enum SmartCropPlanner {
             guard field.width > 0, field.height > 0 else { continue }
             out.append(SmartCropIntent(t: burst.t0, tEnd: burst.t1, rect: field))
         }
+
+        // A resolved, newly appearing dialog/sheet is a subject of its own.
+        // Without this the crop keeps the old content ROI and the dialog is
+        // cut off at the frame edge. The whole dialog is revealed.
+        for d in ZoomPlanner.dialogIntents(ax: ax, events: sorted, markers: [], tm: tm, W: W, H: H) {
+            guard let rect = d.frameRect, rect.width > 0, rect.height > 0 else { continue }
+            out.append(SmartCropIntent(t: d.t, tEnd: max(d.tEnd, d.t + 0.4), rect: rect))
+        }
         return out.sorted { $0.t < $1.t }
     }
 

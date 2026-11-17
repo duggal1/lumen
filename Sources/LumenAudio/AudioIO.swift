@@ -171,6 +171,50 @@ public enum AudioIO {
     }
 }
 extension AudioIO {
+    /// DeepFilterNet's Rust CLI reads WAV through `wav_utils`, which only
+    /// accepts 16-bit integer PCM with a correct `data` chunk size. A Float32
+    /// or 24-bit WAV panics with "TooWide"; an AVAudioFile-written WAV declares
+    /// a zero-length data chunk and panics in ndarray. Either failure used to
+    /// send the default voice path silently to the SpectralGate fallback.
+    /// The 16-bit quantisation sits below the model's own noise floor.
+    static func writeMonoPCM16WAV(_ samples: [Float], paddingSamples: Int = 0, to url: URL) throws {
+        let total = samples.count + max(paddingSamples, 0)
+        let rate = UInt32(fs)
+        func le<T: FixedWidthInteger>(_ value: T) -> Data {
+            var v = value.littleEndian
+            return withUnsafeBytes(of: &v) { Data($0) }
+        }
+        var header = Data()
+        header.reserveCapacity(44)
+        header.append(contentsOf: Array("RIFF".utf8))
+        header.append(le(UInt32(36 + total * 2)))
+        header.append(contentsOf: Array("WAVE".utf8))
+        header.append(contentsOf: Array("fmt ".utf8))
+        header.append(le(UInt32(16)))       // fmt chunk size
+        header.append(le(UInt16(1)))        // PCM
+        header.append(le(UInt16(1)))        // mono
+        header.append(le(rate))
+        header.append(le(rate * 2))         // byte rate
+        header.append(le(UInt16(2)))        // block align
+        header.append(le(UInt16(16)))       // bits per sample
+        header.append(contentsOf: Array("data".utf8))
+        header.append(le(UInt32(total * 2)))
+        try header.write(to: url, options: .atomic)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: UInt64(header.count))   // append after the header
+        let chunk = 16_384
+        for offset in stride(from: 0, to: total, by: chunk) {
+            var bytes = Data()
+            bytes.reserveCapacity(min(chunk, total - offset) * 2)
+            for i in offset..<min(offset + chunk, total) {
+                let v = i < samples.count ? Double(samples[i]) : 0
+                bytes.append(le(Int16((max(-1, min(1, v)) * 32_767).rounded())))
+            }
+            try handle.write(contentsOf: bytes)
+        }
+    }
+
     public static func writeMonoWAV(_ samples: [Float], sampleRate: Double = fs, paddingSamples: Int = 0, to url: URL) throws {
         guard sampleRate.isFinite, sampleRate > 0,
               let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,

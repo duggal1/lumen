@@ -1001,6 +1001,13 @@ struct Inspector: View {
         let soundEffectsEnabled = m.timeline.audio.soundEffectsEnabled
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
+                Row(label: "Studio mode") {
+                    LDropdown(sel: m.bind(\.audio.studioMode),
+                              options: StudioMode.allCases.map { ($0, $0.title, "waveform") })
+                        .frame(width: 138)
+                }
+                SliderRow(label: "Voice level", v: m.bind(\.audio.voiceBoostDb), range: 0...6,
+                          fmt: { String(format: "%+.1f dB", $0) })
                 SliderRow(label: "Noise reduction", v: Binding(
                     get: { m.timeline.audio.noiseReductionStrength },
                     set: { value in m.edit(coalesce: true) {

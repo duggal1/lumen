@@ -50,7 +50,7 @@ enum ZoomPlanner {
         var segments: [ZoomSegment] = []
         var follow: [UUID: [FollowPoint]] = [:]
     }
-    enum IntentKind { case click, typing, hover, visual, marker }
+    enum IntentKind { case click, typing, hover, visual, marker, dialog }
     struct Intent {
         var kind: IntentKind
         var t: Double, tEnd: Double            // source seconds
@@ -169,6 +169,90 @@ enum ZoomPlanner {
         return nil
     }
 
+    /// A marker rect that describes a dialog/panel rather than a control. AX
+    /// capture emits these when a sheet, dropdown or modal resolves. Kept in one
+    /// place so the marker pass and the dialog pass cannot disagree.
+    static func isDialogRect(_ r: CGRect, W: Double, H: Double) -> Bool {
+        let rect = CGRect(x: r.minX * W, y: r.minY * H, width: r.width * W, height: r.height * H)
+        let area = (rect.width * rect.height) / (W * H)
+        return area >= 0.08 && rect.width >= 0.15 * W && rect.height >= 0.14 * H &&
+               rect.width <= 0.95 * W && rect.height <= 0.95 * H
+    }
+
+    /// A resolved, newly appearing window/sheet/panel is a subject in its own
+    /// right. `usableAX` deliberately rejects frames larger than 28% of the
+    /// screen so a browser window cannot pull a click off target — that same
+    /// rejection loses the share sheets, New Tab dropdowns and colour panels
+    /// that were being cropped at the frame edge. A dialog is a frame that is
+    /// resolved, dialog-sized, has its own sample time, is NOT the element a
+    /// click/typing targeted, and has no earlier resolved frame at the same
+    /// place (it just appeared). Explicit capture markers are authoritative.
+    static func dialogIntents(ax: [AXFrame], events: [InputEvent], markers: [DirectorMarker],
+                              tm: TimeMap, W: Double, H: Double) -> [Intent] {
+        var out: [Intent] = []
+        for m in markers {
+            guard let r = m.rect, isDialogRect(r, W: W, H: H),
+                  m.start.isFinite, m.start >= tm.trimStart, m.start <= tm.trimEnd else { continue }
+            let rect = CGRect(x: r.minX * W, y: r.minY * H, width: r.width * W, height: r.height * H)
+            out.append(Intent(kind: .dialog, t: m.start, tEnd: max(m.end, m.start + 0.4),
+                              x: rect.midX, y: rect.midY, frameRect: rect))
+        }
+        // Agent 3 publishes a resolved dialog/new-window frame into the click
+        // event's own AX slot, labelled `window|<role>|<subrole>|<title>`.
+        // That label is authoritative even though a click references the frame:
+        // the click opened the dialog, it did not target a control inside it.
+        for (i, f) in ax.enumerated() where f.label?.hasPrefix("window|") == true {
+            guard f.x.isFinite, f.y.isFinite, f.w.isFinite, f.h.isFinite,
+                  f.w > 1, f.h > 1 else { continue }
+            let rect = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
+            let area = (rect.width * rect.height) / (W * H)
+            guard area >= 0.02, rect.width >= 0.08 * W, rect.height >= 0.08 * H,
+                  rect.width <= 0.95 * W, rect.height <= 0.95 * H else { continue }
+            let rt = events.first(where: { $0.axFrameIndex == UInt32(i + 1) })?.t ?? f.sampledAt ?? -1
+            guard rt.isFinite, rt >= tm.trimStart, rt <= tm.trimEnd else { continue }
+            if out.contains(where: { di in
+                abs(di.t - rt) < 0.35 && di.frameRect.map { dr in
+                    abs(dr.midX - rect.midX) < 0.04 * W && abs(dr.midY - rect.midY) < 0.04 * H
+                } ?? false
+            }) { continue }
+            out.append(Intent(kind: .dialog, t: rt, tEnd: rt + 0.6,
+                              x: rect.midX, y: rect.midY, frameRect: rect))
+        }
+        // The elements a click or a keystroke actually targeted are controls or
+        // fields, never a newly opened dialog — even when they are large.
+        let targeted = Set(events.filter { $0.kind == .down || $0.kind == .keyDown }.map(\.axFrameIndex))
+        for (i, f) in ax.enumerated() where f.label?.hasPrefix("window|") != true {
+            guard f.anchor?.resolved == true else { continue }
+            guard f.x.isFinite, f.y.isFinite, f.w.isFinite, f.h.isFinite,
+                  f.w > 1, f.h > 1 else { continue }
+            let rect = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
+            let area = (rect.width * rect.height) / (W * H)
+            guard area >= 0.08, rect.width >= 0.15 * W, rect.height >= 0.14 * H,
+                  rect.width <= 0.85 * W, rect.height <= 0.85 * H else { continue }
+            guard !targeted.contains(UInt32(i + 1)) else { continue }
+            guard let st = f.sampledAt, st.isFinite, st >= tm.trimStart, st <= tm.trimEnd else { continue }
+            let appearedBefore = ax.enumerated().contains { (j, g) in
+                guard j != i, g.anchor?.resolved == true, let gt = g.sampledAt,
+                      gt.isFinite, gt < st - 0.05 else { return false }
+                let gr = CGRect(x: g.x, y: g.y, width: g.w, height: g.h)
+                return abs(gr.midX - rect.midX) < 0.04 * W &&
+                       abs(gr.midY - rect.midY) < 0.04 * H &&
+                       abs(gr.width - rect.width) < 0.15 * rect.width &&
+                       abs(gr.height - rect.height) < 0.15 * rect.height
+            }
+            if appearedBefore { continue }
+            // A marker may already have described this exact panel.
+            if out.contains(where: { di in
+                abs(di.t - st) < 0.35 && di.frameRect.map { dr in
+                    abs(dr.midX - rect.midX) < 0.04 * W && abs(dr.midY - rect.midY) < 0.04 * H
+                } ?? false
+            }) { continue }
+            out.append(Intent(kind: .dialog, t: st, tEnd: st + 0.6,
+                              x: rect.midX, y: rect.midY, frameRect: rect))
+        }
+        return out.sorted { $0.t < $1.t }
+    }
+
     /// Pointer paths are continuous: a cursor crossing the screen is one
     /// glide, not a hold followed by a jump. Catmull-Rom keeps velocity
     /// through every recorded point, so the camera does not stop at each
@@ -249,6 +333,10 @@ enum ZoomPlanner {
         let lo = clamp(min(p.minScale, hi), 1.001, hi)
         let hold = max(p.hold.isFinite ? p.hold : 0.9, 0.3)
         let gap = max(p.zoomOutGap.isFinite ? p.zoomOutGap : 2.6, hold + 0.5)
+        // A camera shot follows one action. Every in-shot intent used to push
+        // `last` out, so a dense burst produced one 8-10 s shot. A hard ceiling
+        // keeps the return tied to the action instead of to the next click.
+        var maxShot = min(2.5, max(1.2, 5 * hold))
 
         // Input intent takes priority over autonomous visual framing.
         var intents: [Intent] = []
@@ -260,8 +348,22 @@ enum ZoomPlanner {
             var rect: CGRect?
             if e.axFrameIndex > 0, Int(e.axFrameIndex) <= ax.count {
                 let f = ax[Int(e.axFrameIndex) - 1]
+                let r = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
                 if usableAX(f, x: x, y: y, width: W, height: H, backing: b) {
-                    rect = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
+                    rect = r
+                } else {
+                    // usableAX rejects frames over 28% of the screen so a
+                    // browser window cannot pull a click off target. That is a
+                    // focus rule, not a reason to throw away honest evidence
+                    // about how large the clicked surface was. Use it for
+                    // scale only; the camera centre stays on the exact click.
+                    let slack = 8 * b
+                    if f.x.isFinite, f.y.isFinite, f.w.isFinite, f.h.isFinite,
+                       f.w >= 8 * b, f.h >= 8 * b, f.w <= 0.95 * W, f.h <= 0.95 * H,
+                       x >= f.x - slack, x <= f.x + f.w + slack,
+                       y >= f.y - slack, y <= f.y + f.h + slack {
+                        rect = r
+                    }
                 }
             }
             // Frame the whole control only when the click is close to its
@@ -301,6 +403,8 @@ enum ZoomPlanner {
         // the thing it was about; a plain marker inherits the nearest recent
         // click as its location. Never invent a location from nothing.
         for m in markers where ok(m.start) {
+            // Panel-sized markers are dialogs, handled as their own subject.
+            if let r = m.rect, isDialogRect(r, W: W, H: H) { continue }
             var x = 0.0, y = 0.0, frame: CGRect?
             if let r = m.rect, r.width >= 0.005, r.height >= 0.005 {
                 x = r.midX * W; y = r.midY * H
@@ -315,9 +419,41 @@ enum ZoomPlanner {
                                   tEnd: max(m.end, m.start + 0.4),
                                   x: x, y: y, frameRect: frame))
         }
-        intents += VisualZoom.intents(activity, events: sorted, input: intents, src: src, tm: tm)
+        intents += dialogIntents(ax: ax, events: sorted, markers: markers, tm: tm, W: W, H: H)
+        // Passive visual intents are lowest priority: the scene loop never lets
+        // a `.visual` or `.hover` intent displace a click/typing/dialog subject.
+        // VisualAutofocus composes VisualZoom internally (with `.move` stripped
+        // so hovering can never create a shot) and adds anticipation + bounded
+        // holds. Do NOT also call VisualZoom.intents here — that duplicates shots.
+        intents += VisualAutofocus.intents(activity, events: sorted, input: intents, src: src, tm: tm)
         intents += hoverIntents(events: sorted, src: src, p: p, tm: tm, existing: intents)
-        intents.sort { $0.t < $1.t }
+        intents.sort { a, b in
+            if a.t != b.t { return a.t < b.t }
+            // Deterministic tie order: the subject that opened a dialog is not
+            // a competing click at the same instant.
+            func rank(_ k: IntentKind) -> Int {
+                switch k {
+                case .dialog: return 0
+                case .typing: return 1
+                case .click, .marker: return 2
+                case .visual: return 3
+                case .hover: return 4
+                }
+            }
+            return rank(a.kind) < rank(b.kind)
+        }
+
+        // A run of rapid intents is one burst and must not weld into an 8 s
+        // shot. Sparse beats are the action itself and may hold longer. The
+        // cadence of explicit subjects decides which regime we are in.
+        let strongTimes = intents.filter {
+            $0.kind == .click || $0.kind == .typing || $0.kind == .marker || $0.kind == .dialog
+        }.map(\.t).sorted()
+        if strongTimes.count > 1 {
+            var minGap = Double.infinity
+            for k in 1..<strongTimes.count { minGap = min(minGap, strongTimes[k] - strongTimes[k - 1]) }
+            if minGap >= 0.7 { maxShot = 6.5 }
+        }
 
         // ---- 2. scenes ----
         func half(_ s: Double) -> SIMD2<Double> { SIMD2(W, H) / (2 * s) }
@@ -341,13 +477,14 @@ enum ZoomPlanner {
         var kinds: [UUID: IntentKind] = [:]
         var centers: [UUID: SIMD2<Double>] = [:]
         var cur: Open?
+        var shotCap = maxShot                     // effective ceiling for the open shot
         var last = 0.0
         var prevScale: Double?
 
         func close(at end: Double) {
             guard let o = cur else { return }
             cur = nil
-            let e = min(max(end, o.start + 0.2), tm.trimEnd)
+            let e = min(max(end, o.start + 0.2), o.start + shotCap, tm.trimEnd)
             guard e - o.start > 0.2, o.scale > 1.001 else { return }
             let id = stableID(o.start, e)
             var path = o.path.filter { $0.t >= o.start - 1e-6 && $0.t <= e + 1e-6 }
@@ -355,9 +492,11 @@ enum ZoomPlanner {
                 path.insert(FollowPoint(t: o.start, p: SIMD2(o.c.x / W, o.c.y / H)), at: 0)
             }
             let focus: Focus
-            if let r = o.frameRect, r.width >= 8, r.height >= 6, r.width <= W * 0.6, r.height <= H * 0.6 {
-                // A marked or well-centred control is the subject itself;
-                // framing its whole rect keeps the action readable.
+            let maxFrac = o.kind == .dialog ? 0.95 : 0.6
+            if let r = o.frameRect, r.width >= 8, r.height >= 6,
+               r.width <= W * maxFrac, r.height <= H * maxFrac {
+                // A marked control, resolved field or whole dialog is the
+                // subject itself; framing its full rect keeps it unclipped.
                 focus = .element(x: r.minX / W, y: r.minY / H, w: r.width / W, h: r.height / H)
             } else if path.count >= 2, pathExtent(path) > 0.008 {
                 focus = .follow
@@ -370,6 +509,18 @@ enum ZoomPlanner {
             shots.append(ZoomSegment(id: id, start: o.start, end: e, scale: o.scale, focus: focus, origin: .auto))
         }
 
+        /// Fit the subject with breathing room, then lower the ceiling for
+        /// subjects that already fill much of the screen. Only a genuinely
+        /// small control reaches the user's maxScale; a panel or dialog gets a
+        /// gentle move that leaves the whole thing inside the frame.
+        func adaptiveScale(_ r: CGRect, marginW: Double = 2.0, marginH: Double = 2.0) -> Double {
+            let rw = max(r.width, 1), rh = max(r.height, 1)
+            let fit = min(W / (rw * marginW), H / (rh * marginH))
+            let span = clamp(max(rw / W, rh / H), 0, 1)
+            let ceiling = clamp(hi * (1 - 0.45 * span), lo, hi)
+            return clamp(min(fit, ceiling), lo, hi)
+        }
+
         func chooseScale(_ i: Intent, prev: Double?) -> Double {
             var s: Double
             switch i.kind {
@@ -380,34 +531,36 @@ enum ZoomPlanner {
                 s = min(clamp(fit, lo, hi), 1.6)
             case .hover:
                 s = clamp(1.2 + 0.5 * clamp(p.sensitivity, 0, 1), lo, min(hi, 1.6))
+            case .dialog:
+                guard let r = i.frameRect ?? i.rect, r.width > 1, r.height > 1 else { return 1 }
+                // Frame the entire dialog, not a slice of it. The margin is
+                // tighter than a control's so a sheet still reads as close.
+                s = adaptiveScale(r, marginW: 1.18, marginH: 1.18)
             case .click, .typing, .marker:
-                if i.kind == .typing, let r = i.frameRect {
-                    // The whole field is the subject and the camera does not
-                    // move during the burst. Fit it, with breathing room, so
-                    // every caret position inside it stays in the viewport.
-                    let fit = min(W / max(r.width * 1.2, 1), H / max(r.height * 1.6, 1))
-                    s = clamp(min(fit, hi), lo, hi)
+                if let r = i.frameRect ?? i.rect, r.width > 1, r.height > 1 {
+                    // The whole field is the subject of a typing shot; the
+                    // camera does not move during it, so every caret position
+                    // inside the field must stay in the viewport.
+                    let typing = i.kind == .typing
+                    s = adaptiveScale(r, marginW: typing ? 2.4 : 2.0,
+                                      marginH: typing ? 2.8 : 2.0)
                 } else {
-                    s = clamp(p.baseScale, 1.0, hi)
-                    if let r = i.rect {
-                        // A small control earns a closer look; a large surface
-                        // only a gentle one. The base scale is the control.
-                        let coverage = (r.width * r.height) / (W * H)
-                        let factor = clamp(pow(0.06 / max(coverage, 1e-4), 0.18), 0.85, 1.45)
-                        s = clamp(p.baseScale * factor, lo, hi)
-                    }
-                    if let r = i.frameRect {
-                        // The marked rect is a ceiling, not a target: a large
-                        // control should earn a gentler move than a small one.
-                        // Taking max() here pushed every resolved click to the
-                        // cap and made target size irrelevant.
-                        let fit = min(W / max(r.width * 1.25, 1), H / max(r.height * 1.25, 1))
-                        s = clamp(min(s, fit), lo, hi)
-                    }
+                    // No resolved rect: keep the configured feel, but do not
+                    // blindly hit the cap when a preset's base asks for more.
+                    s = clamp(min(p.baseScale, hi * 0.92), lo, hi)
+                }
+                if i.frameRect == nil, i.kind == .click || i.kind == .marker {
+                    // The exact click is the subject. A gentler zoom near an
+                    // edge must not be feasibility-clamped away from it.
+                    let needX = W / max(2 * min(i.x, W - i.x), 1)
+                    let needY = H / max(2 * min(i.y, H - i.y), 1)
+                    s = min(hi, max(s, needX, needY))
                 }
             }
             guard s > 1.001 else { return 1 }
-            if let prev, prev > 1.001, abs(log(s / prev)) < log(1.12) { return clamp(prev, lo, hi) }
+            // Only merge genuinely identical subjects. Snapping to the previous
+            // scale across different sizes is what made every shot read "2.0x".
+            if let prev, prev > 1.001, abs(log(s / prev)) < log(1.03) { return clamp(prev, lo, hi) }
             return s
         }
 
@@ -419,36 +572,79 @@ enum ZoomPlanner {
         /// jumps a third of the screen in one tick. When the new subject is too
         /// close to the open shot's minimum length, it is not a separate shot at
         /// all; the camera pans inside the current one.
-        func beginScene(_ it: Intent, _ want: Double, _ anchor: SIMD2<Double>) {
+        func beginScene(_ it: Intent, _ want: Double, _ anchor: SIMD2<Double>, force: Bool = false) {
+            let tail = it.kind == .typing ? 0.1 : 0.0
+            // One self-contained action (a typing burst) is longer than the
+            // cadence cap; hold it through the burst, with an absolute ceiling.
+            let cap = it.kind == .typing
+                ? min(6.5, max(maxShot, it.tEnd - it.t + 0.6))
+                : maxShot
             if var o = cur {
-                let cut = min(last + hold, tm.trimEnd, it.t)
-                if cut >= o.start + 0.2 {
-                    close(at: cut)
+                if force {
+                    // A dialog or a resolved typing field is a different
+                    // subject. It wins over the shot that was open.
+                    if it.t >= o.start + 0.2 {
+                        // Close where the previous action actually ended, not
+                        // at the new subject: the camera returns before it
+                        // re-aims instead of holding a stale target.
+                        close(at: min(last + hold, it.t, o.start + shotCap))
+                    } else {
+                        cur = nil                       // too short to keep
+                    }
                 } else {
-                    o.scale = want
-                    o.c = clampC(anchor, want)
-                    if let r = it.frameRect { o.frameRect = r }
-                    o = withPoint(o, it.t, anchor)
-                    o.kind = it.kind
-                    cur = o
-                    prevScale = want
-                    last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
-                    return
+                    let cut = min(last + hold, o.start + shotCap, tm.trimEnd, it.t)
+                    if cut >= o.start + 0.2 {
+                        close(at: cut)
+                    } else {
+                        o.scale = want
+                        o.c = clampC(anchor, want)
+                        if let r = it.frameRect { o.frameRect = r }
+                        o = withPoint(o, it.t, anchor)
+                        o.kind = it.kind
+                        cur = o
+                        shotCap = max(shotCap, cap)
+                        prevScale = want
+                        last = min(max(it.t, it.tEnd + tail), o.start + shotCap - 0.15)
+                        return
+                    }
                 }
             }
             var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
             fresh = withPoint(fresh, it.t, anchor)
             cur = fresh
+            shotCap = cap
             prevScale = want
-            last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
+            last = min(max(it.t, it.tEnd + tail), fresh.start + cap - 0.15)
         }
 
         for it in intents {
+            // A shot never outlives its action window, even under a dense run
+            // of clicks that would otherwise keep pushing `last` forward.
+            if let o = cur, it.t >= o.start + shotCap - 0.05 {
+                // End no later than the next subject's start: one camera, one
+                // target, no two shots claiming the same instant.
+                close(at: min(o.start + shotCap, it.t, tm.trimEnd))
+            }
             let want = chooseScale(it, prev: prevScale)
             let anchor = SIMD2(it.x, it.y)
-            let strong = it.kind == .click || it.kind == .typing || it.kind == .marker
+            let strong = it.kind == .click || it.kind == .typing || it.kind == .marker || it.kind == .dialog
+            // A resolved typing field or a newly opened dialog is a different
+            // subject: re-aim now, rather than folding it into the open shot.
+            // Only a *resolved* field is a new subject. The synthetic typing
+            // fallback (no field) anchors to the last click and stays one shot.
+            let reaim = (it.kind == .typing && it.frameRect != nil) || it.kind == .dialog
             if want <= 1.001 {
                 if cur != nil { last = max(last, it.tEnd) }
+                continue
+            }
+            if reaim {
+                beginScene(it, want, anchor, force: true)
+                continue
+            }
+            // The click that opened a dialog shares its AX slot and often its
+            // instant. It is not a second subject; keep the dialog framed.
+            if let o = cur, o.kind == .dialog, it.kind != .dialog, it.t <= o.start + 0.8 {
+                last = max(last, it.tEnd)
                 continue
             }
             if cur == nil { beginScene(it, want, anchor); continue }
@@ -466,7 +662,7 @@ enum ZoomPlanner {
             switch it.kind {
             case .hover:
                 // A dwell only steers a scene that hover itself opened. It must
-                // never pull the camera off a click or a typing target.
+                // never pull the camera off a click, typing or dialog target.
                 if o.kind == .hover {
                     var n = o
                     n.c = clampC(anchor, o.scale)
@@ -474,9 +670,11 @@ enum ZoomPlanner {
                     cur = n
                 }
             case .visual:
+                // Passive visual autofocus may steer an open visual scene, but
+                // never displaces an explicit click/typing/dialog subject.
                 if o.kind == .visual || o.kind == .hover || inside(anchor, o.c, o.scale) {
                     var n = o
-                    if o.kind != .click && o.kind != .typing { n.c = clampC(anchor, o.scale) }
+                    if o.kind != .click && o.kind != .typing && o.kind != .dialog { n.c = clampC(anchor, o.scale) }
                     n = withPoint(n, it.t, anchor)
                     cur = n
                 }
@@ -489,12 +687,18 @@ enum ZoomPlanner {
                     beginScene(it, want, anchor)
                     continue
                 }
+            case .dialog:
+                beginScene(it, want, anchor, force: true)
+                continue
             }
-            if let o2 = cur, it.frameRect != nil { var n = o2; n.frameRect = it.frameRect; cur = n }
-            if let o2 = cur { var n = o2; n.kind = it.kind; cur = n }
-            last = max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0))
+            let locked = o.kind == .typing || o.kind == .dialog
+            if let o2 = cur, it.frameRect != nil, !locked { var n = o2; n.frameRect = it.frameRect; cur = n }
+            if let o2 = cur, !locked { var n = o2; n.kind = it.kind; cur = n }
+            last = min(max(last, it.tEnd + (it.kind == .typing ? 0.1 : 0)), o.start + shotCap - 0.15)
         }
-        close(at: min(last + hold, tm.trimEnd))
+        if let o = cur {
+            close(at: min(last + hold, o.start + shotCap, tm.trimEnd))
+        }
 
         // ---- 3. cursor paths ----
         // Hover and visual scenes get the pointer motion inside their viewport;
@@ -505,7 +709,7 @@ enum ZoomPlanner {
         let drags = sorted.filter { $0.kind == .drag && $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
         for i in shots.indices {
             let kind = kinds[shots[i].id] ?? .click
-            if kind == .typing || kind == .marker { continue }
+            if kind == .typing || kind == .marker || kind == .dialog { continue }
             let s = shots[i]
             let c = centers[s.id] ?? SIMD2(s.focusX * W, s.focusY * H)
             var path = followPaths[s.id] ?? []
@@ -545,7 +749,7 @@ enum ZoomPlanner {
         let W = Double(src.width), H = Double(src.height)
         let moves = events.filter { $0.kind == .move && $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
         guard moves.count >= 2 else { return [] }
-        let loud = existing.filter { $0.kind == .click || $0.kind == .typing }
+        let loud = existing.filter { $0.kind == .click || $0.kind == .typing || $0.kind == .dialog }
         let tol = max(8 * src.backingScale, 0.008 * min(W, H))
         let dwell = 0.25 + 0.45 * (1 - clamp(p.sensitivity, 0, 1))
         var out: [Intent] = []

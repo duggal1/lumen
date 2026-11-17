@@ -66,6 +66,50 @@ public struct CaptureMarker: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+/// What a resolved frame is evidence *about*. Dialogs, new windows and typing
+/// fields are distinct beats: the planner holds a dialog longer and frames a
+/// field tightly, but all three must carry their own provenance.
+public enum IntentKind: String, Codable, Sendable, CaseIterable, Equatable {
+    case click, typing, dialog, newWindow, marker
+}
+
+/// A resolved, provenance-carrying intent beat handed to the planner or the
+/// agent marker stream. A `nil` rect on `resolved == false` is evidence of
+/// absence — it must never be expanded into a guessed camera target.
+public struct IntentFrame: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var kind: IntentKind
+    public var startHostSeconds: Double
+    public var endHostSeconds: Double
+    /// Resolved screen rect of the subject, in screen points.
+    public var rect: CGRect?
+    /// Window-level `window|<role>|<subrole>|<title>` or element-level AX label.
+    public var label: String?
+    public var resolved: Bool
+    public var epoch: UInt32
+    public var sampledAt: Double
+    public var windowID: Int?
+    public var appName: String?
+
+    public init(id: String, kind: IntentKind, startHostSeconds: Double, endHostSeconds: Double,
+                rect: CGRect? = nil, label: String? = nil, resolved: Bool = false,
+                epoch: UInt32 = 0, sampledAt: Double = 0, windowID: Int? = nil, appName: String? = nil) {
+        self.id = id; self.kind = kind
+        self.startHostSeconds = startHostSeconds; self.endHostSeconds = endHostSeconds
+        self.rect = rect; self.label = label; self.resolved = resolved
+        self.epoch = epoch; self.sampledAt = sampledAt
+        self.windowID = windowID; self.appName = appName
+    }
+
+    /// The legacy marker stream cannot express provenance; it keeps the rect
+    /// (only when resolved) and the label so downstream consumers can still
+    /// recover the window-level evidence from the marker's label.
+    public var marker: CaptureMarker {
+        CaptureMarker(id: id, label: label, startHostSeconds: startHostSeconds,
+                      endHostSeconds: endHostSeconds, rect: resolved ? rect : nil)
+    }
+}
+
 /// Permission state, reported by `lumen_status`.
 public struct RuntimePermissions: Codable, Sendable, Equatable {
     public var screenRecording = false
@@ -131,5 +175,12 @@ public extension LumenRuntime {
     func injectInput(kind: InputEvent.Kind, screenPoint: CGPoint, button: UInt8,
                      keyCode: UInt16, flags: UInt16, scrollDelta: Float) async throws {
         throw RuntimeFailure("This runtime cannot record virtual input events.")
+    }
+
+    /// Resolved dialog/new-window/typing beats default to the marker stream so
+    /// existing runtimes keep working; a runtime with the intent pipeline can
+    /// override this and keep the full provenance (epoch, resolved, windowID).
+    func recordIntent(_ intent: IntentFrame) async throws {
+        try await addMarker(intent.marker)
     }
 }

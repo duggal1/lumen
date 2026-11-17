@@ -10,9 +10,9 @@ struct ProcessedVoiceCache {
     /// Bump whenever the processing semantics change: every persisted voice
     /// and mix cache below is keyed by it, so an algorithm change can never
     /// be served a result produced by the old one.
-    static let revision = "voice-v15-broadcast-chain"
+    static let revision = "voice-v16-studio-quality"
     /// Full-program mix cache. Keyed by revision + exact settings + time map.
-    static let mixRevision = "mix-v3-broadcast-chain"
+    static let mixRevision = "mix-v4-studio-quality"
 
     private struct Settings: Encodable {
         let noiseStrength: Double
@@ -22,15 +22,17 @@ struct ProcessedVoiceCache {
         let clarity: Bool
         let studio: Double
         let studioMode: StudioMode
+        let voiceBoost: Double
 
         init(_ plan: AudioPlan, hasKeys: Bool) {
             noiseStrength = plan.micClean ? (plan.noiseReductionStrength.isFinite ? clamp(plan.noiseReductionStrength, 0, 1) : 1) : 0
-            engine = noiseStrength > 0 && DeepFilterNet.isAvailable ? "df3-spectral-fallback" : (noiseStrength > 0 ? "spectral" : "off")
+            engine = noiseStrength > 0 && DeepFilterNet.isAvailable ? "df3" : (noiseStrength > 0 ? "spectral" : "off")
             declickDepth = plan.declick && hasKeys ? plan.declickDepthDb : 0
             dereverb = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0
             clarity = plan.voiceClarity
             studio = plan.studio.isFinite ? clamp(plan.studio, 0, 1) : 0
             studioMode = plan.studioMode
+            voiceBoost = plan.voiceBoostDb.isFinite ? clamp(plan.voiceBoostDb, 0, 6) : 2.5
         }
     }
 

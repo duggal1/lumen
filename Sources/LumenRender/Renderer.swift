@@ -766,15 +766,14 @@ public final class Renderer: @unchecked Sendable {
         return true
     }
 
-    /// Adaptive shutter sampling; preview stays sharp below a three-pixel streak.
-    /// Internal (not private) so tests can prove sub-frame accumulation.
-    func sampleCount(_ r: RenderRequest, _ g: Geometry) -> Int {
+    /// Peak camera travel, in canvas pixels, between two evaluated states.
+    /// Shared by the sample-count decision so it measures exactly the states
+    /// `encode` will draw, not a different time window.
+    private func travelPx(_ a: FrameState, _ b: FrameState, _ r: RenderRequest, _ g: Geometry) -> Double {
         let tl = r.timeline
-        guard tl.camera.shutter > 0, tl.derived != nil, r.fps > 0 else { return 1 }
-        let dt = 1 / r.fps, a = tl.evaluate(at: r.t - dt / 2), b = tl.evaluate(at: r.t + dt / 2)
         let k = g.content.z / g.src.x, sc = Double(b.cameraScale)
         let cam = Double(simd_length(b.cameraCenter - a.cameraCenter)) * k * sc
-        let zoom = abs(log(Double(b.cameraScale) / Double(a.cameraScale))) * g.content.z * 0.5
+        let zoom = abs(log(Double(max(b.cameraScale, 0.001)) / Double(max(a.cameraScale, 0.001)))) * g.content.z * 0.5
         let cur = Double(simd_length(b.cursor.position - a.cursor.position)) * k * sc
         // Tilt is a moving camera too: a Lean/Float/Reveal change needs the
         // same 180-degree shutter as pan/zoom/cursor. ~0.4% of frame width per
@@ -784,10 +783,42 @@ public final class Renderer: @unchecked Sendable {
         let tiltB = CameraTilt.effective(b.cameraTilt, mode: tl.camera.tilt, maxYaw: tl.camera.maxYaw,
                                          maxPitch: tl.camera.maxPitch, floatDeg: tl.camera.floatDeg)
         let tiltDelta = max(abs(Double(tiltB.x - tiltA.x)), abs(Double(tiltB.y - tiltA.y)))
-        let tiltPx = tiltDelta * g.content.z * 0.004
-        let blurPx = max(cam, zoom, cur, tiltPx) * tl.camera.shutter
-        if r.quality == .preview, blurPx < 3 {
-            blurK = 1; blurCooldown = 0
+        return max(cam, zoom, cur, tiltDelta * g.content.z * 0.004)
+    }
+
+    /// Adaptive shutter sampling; preview stays sharp below a three-pixel streak.
+    /// Internal (not private) so tests can prove sub-frame accumulation.
+    func sampleCount(_ r: RenderRequest, _ g: Geometry) -> Int {
+        let tl = r.timeline
+        guard tl.camera.shutter > 0, tl.derived != nil, r.fps > 0 else { return 1 }
+        // A live FrameState is sampled and held: `encode` uses the SAME state
+        // for every sub-frame. There is no intra-frame camera motion to blur,
+        // so accumulating sub-frames only wastes GPU time and can dither the
+        // result. This is the Studio preview path — a static surface must
+        // never smear there.
+        if r.live != nil {
+            if r.quality == .preview { blurK = 1; blurCooldown = 0 }
+            return 1
+        }
+        // Evaluate the exact window `encode` renders (sub-frames are spread
+        // over +/- shutter/2 * dt), so the estimate cannot disagree with the
+        // pixels that are actually drawn.
+        let dt = 1 / r.fps, half = 0.5 * tl.camera.shutter * dt
+        let a = tl.evaluate(at: r.t - half), b = tl.evaluate(at: r.t + half)
+        // `half` already spans the shutter duration; do not scale by shutter
+        // again or a fast zoom is over-blurred into a long smear.
+        let blurPx = travelPx(a, b, r, g)
+        guard blurPx.isFinite else {
+            if r.quality == .preview { blurK = 1; blurCooldown = 0 }
+            return 1
+        }
+        // ZERO extra sub-frames for a still (or sub-pixel) camera, in export
+        // as well as preview. A sub-pixel streak is not visible and averaging
+        // identical samples cannot add information — it only risks a
+        // double-image ghost on a static surface.
+        let stillThreshold = r.quality == .preview ? 3.0 : 1.0
+        if blurPx < stillThreshold {
+            if r.quality == .preview { blurK = 1; blurCooldown = 0 }
             return 1
         }
         let n = Int(ceil(blurPx))

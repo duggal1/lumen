@@ -186,6 +186,14 @@ private struct MouseAXState: Sendable {
     var last = -Double.infinity
 }
 
+/// Baseline of surfaces seen at the previous click. A dialog is evidence only
+/// when it is *new* relative to this set; clicking inside an already-open
+/// dialog must not emit a second window frame or bump the focus epoch.
+private struct SurfaceWatch: Sendable {
+    var known: Set<Int> = []
+    var established = false
+}
+
 /// Listen-only CGEventTap on its own high-QoS thread. Coordinates converted to source pixels once, here.
 public final class InputRecorder: @unchecked Sendable {
     private let ring = EventRing(capacity: 1 << 16)
@@ -215,6 +223,10 @@ public final class InputRecorder: @unchecked Sendable {
     private let focusQ = DispatchQueue(label: "lumen.ax.focus", qos: .userInteractive)
     /// Live delivery is off the event-tap thread.
     private let liveQ = DispatchQueue(label: "lumen.input.live", qos: .userInteractive)
+    /// Native dialogs can appear a frame after the click. AX reads are slow and
+    /// can block a CGEventTap long enough for the tap to be disabled, so they
+    /// run here, off the tap thread, stamped with the click's own event time.
+    private let surfaceQ = DispatchQueue(label: "lumen.ax.surfaces", qos: .userInteractive)
     private let windowOriginQ = DispatchQueue(label: "lumen.window.origin", qos: .utility)
     private var axTimer: DispatchSourceTimer?
     private var windowOriginTimer: DispatchSourceTimer?
@@ -236,6 +248,11 @@ public final class InputRecorder: @unchecked Sendable {
     private let debugFocusProbe = OSAllocatedUnfairLock<(@Sendable (UInt32, InputEvent) -> FocusProbe?)?>(initialState: nil)
     private let debugFocusDelay = OSAllocatedUnfairLock(initialState: 0.004)
     private let debugRunning = OSAllocatedUnfairLock(initialState: false)
+    /// Headless replacement for `WindowContent.visibleSurfaces()`. When set,
+    /// click-time dialog detection is synchronous and deterministic; no real
+    /// CGWindowList or AX server is touched.
+    private let debugSurfaceProbe = OSAllocatedUnfairLock<(@Sendable (InputEvent) -> [AXSurface]?)?>(initialState: nil)
+    private let surfaceWatch = OSAllocatedUnfairLock(initialState: SurfaceWatch())
 
     @MainActor public init(url: URL, axURL: URL, origin: CGPoint, scale: Double, clock: RecordingClock,
                            windowID: CGWindowID? = nil) {
@@ -356,6 +373,7 @@ public final class InputRecorder: @unchecked Sendable {
         await Self.drain(writeQ) { [self] in flush(); try? fh?.close() }
         await Self.drain(axQ)
         await Self.drain(focusQ)
+        await Self.drain(surfaceQ)
         await Self.drain(liveQ)
         let cursors = catalog.encodedSnapshot()
         let frames = axFramesSnapshot
@@ -423,7 +441,10 @@ public final class InputRecorder: @unchecked Sendable {
     func debugRecord(_ ev: InputEvent) {
         var e = ev
         if e.kind == .keyDown { e.axFrameIndex = reserveFocus(event: e) }
-        else { liveEventHook.withLock { $0 }?(e) }
+        else if e.kind == .down {
+            // reserveAX performs the one live delivery with its own index.
+            e.axFrameIndex = reserveAX(CGPoint(x: Double(e.x), y: Double(e.y)), event: e)
+        } else { liveEventHook.withLock { $0 }?(e) }
         ring.push(e)
     }
     func debugSetAXTrusted(_ value: Bool) { debugAXTrusted.withLock { $0 = value } }
@@ -432,6 +453,16 @@ public final class InputRecorder: @unchecked Sendable {
     }
     func debugSetFocusDelay(_ value: Double) { debugFocusDelay.withLock { $0 = value } }
     func debugSetRunning(_ value: Bool) { debugRunning.withLock { $0 = value } }
+    /// Installs a deterministic frontmost-surface observation for headless tests.
+    func debugSetSurfaceProbe(_ probe: (@Sendable (InputEvent) -> [AXSurface]?)?) {
+        debugSurfaceProbe.withLock { $0 = probe }
+        surfaceWatch.withLock { $0 = SurfaceWatch() }
+    }
+    /// Seeds the "already open" set so a test can assert that only a genuinely
+    /// new window/sheet emits a frame.
+    func debugSetKnownSurfaceIDs(_ ids: [Int]) {
+        surfaceWatch.withLock { $0 = SurfaceWatch(known: Set(ids), established: true) }
+    }
     func debugDrainEvents() -> [InputEvent] {
         var out: [InputEvent] = []
         ring.drain { out.append($0) }
@@ -445,6 +476,7 @@ public final class InputRecorder: @unchecked Sendable {
         let eventHost = ClockCalibration.alignedHostSeconds(
             eventTimestamp: e.timestamp, clock: clock, receivedAt: HostClock.now())
         var ev = InputEvent(t: eventHost)
+        var liveDelivered = false
         let loc = e.location                                   // Quartz global space: already top-left origin
         let sourceOrigin = origin.withLock { $0 }
         let scale = sourceScale.withLock { $0 }
@@ -456,9 +488,11 @@ public final class InputRecorder: @unchecked Sendable {
         case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged: ev.kind = .drag
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             ev.kind = .down; ev.button = UInt8(truncatingIfNeeded: e.getIntegerValueField(.mouseEventButtonNumber))
-            ev.axFrameIndex = reserveAX(loc)
+            ev.axFrameIndex = reserveAX(loc, event: ev)
+            liveDelivered = true                              // reserveAX owned the single delivery
         case .leftMouseUp, .rightMouseUp, .otherMouseUp:
             ev.kind = .up; ev.button = UInt8(truncatingIfNeeded: e.getIntegerValueField(.mouseEventButtonNumber))
+            observeSurfacesAsync(at: ev.t)   // dialogs that appear just after the click
         case .scrollWheel:
             ev.kind = .scroll
             // Wheel delta was previously discarded entirely; without it no
@@ -473,16 +507,105 @@ public final class InputRecorder: @unchecked Sendable {
         default: return
         }
         if type == .keyDown { ev.axFrameIndex = reserveFocus(event: ev) }
-        if type != .keyDown { liveEventHook.withLock { $0 }?(ev) }
+        if type != .keyDown, !liveDelivered { liveEventHook.withLock { $0 }?(ev) }
         ring.push(ev)
     }
 
-    private func reserveAX(_ p: CGPoint) -> UInt32 {
-        guard axTrustedNow else { return 0 }
+    /// Resolves a click's accessibility evidence. The old implementation
+    /// coalesced every click to one hit-test per 120 ms and never looked at the
+    /// window stack, so a click that *opened* a dialog resolved to nothing (or
+    /// arrived a frame late) and the camera stayed on the background. Now each
+    /// click compares the visible surface set against the last one and publishes
+    /// a resolved frame for any new window/sheet/popover, stamped with the
+    /// click's own time. In production the AX work is off the tap thread; with
+    /// a headless probe it is synchronous and deterministic. Only the
+    /// fine-grained point hit-test below stays throttled.
+    private func reserveAX(_ p: CGPoint, event ev: InputEvent) -> UInt32 {
+        let probeInstalled = debugSurfaceProbe.withLock { $0 } != nil
+        guard axTrustedNow || probeInstalled else { return 0 }
         let index = reserveSlot()
-        // Click hit-tests are useful but not latency-critical: at most one in
-        // flight and no more than one every 120 ms, so a click burst cannot
-        // crowd out the focus query on the AX server.
+
+        if probeInstalled {
+            if let surfaces = debugSurfaceProbe.withLock({ $0 })?(ev) {
+                emitNewSurfaces(surfaces, at: ev.t)
+            }
+        } else if running.withLock({ $0 }) {
+            observeSurfacesAsync(at: ev.t)
+        }
+
+        // The click still reaches the live consumer exactly once, then the
+        // throttled element hit-test enriches this same slot.
+        var live = ev
+        live.axFrameIndex = index
+        liveEventHook.withLock { $0 }?(live)
+        scheduleHitTest(p, index: index)
+        return index
+    }
+
+    /// A native sheet often appears between down and up, not at down. Observe
+    /// the release too: the resulting frame still carries the up event's time,
+    /// within a frame or two of the click that caused it.
+    private func observeSurfacesAsync(at time: Double) {
+        guard debugSurfaceProbe.withLock({ $0 }) == nil, running.withLock({ $0 }) else { return }
+        surfaceQ.async { [self] in
+            guard isRunning else { return }
+            emitNewSurfaces(WindowContent.visibleSurfaces(), at: time)
+        }
+    }
+
+    /// Dialog frames live in their own reservations. The click keeps its own
+    /// slot for the element it actually hit: the planner ignores a "dialog"
+    /// that is also the click's target, so aliasing the two loses the re-aim.
+    private func emitNewSurfaces(_ surfaces: [AXSurface], at time: Double) {
+        for surface in newSurfaces(in: surfaces) {
+            publish(dialogFrame(surface, at: time), at: reserveSlot())
+        }
+    }
+
+    private func newSurfaces(in surfaces: [AXSurface]) -> [AXSurface] {
+        surfaceWatch.withLock { watch -> [AXSurface] in
+            if !watch.established {
+                // First observation only seeds the baseline. A surface that is
+                // already a dialog/sheet at that instant is still new evidence.
+                watch.established = true
+                watch.known = Set(surfaces.filter { $0.kind == .window }.map(\.id))
+                return surfaces.filter { $0.kind != .window }
+            }
+            let fresh = surfaces.filter { !watch.known.contains($0.id) }
+            watch.known = Set(surfaces.map(\.id))
+            return fresh
+        }
+    }
+
+    private func dialogFrame(_ surface: AXSurface, at clickTime: Double) -> AXFrame {
+        let now = clickTime > 0 ? clickTime : HostClock.now()
+        let sourceOrigin = origin.withLock { $0 }
+        let scale = sourceScale.withLock { $0 }
+        var frame = AXFrame(x: (surface.frame.minX - sourceOrigin.x) * scale.x,
+                            y: (surface.frame.minY - sourceOrigin.y) * scale.y,
+                            w: surface.frame.width * scale.x,
+                            h: surface.frame.height * scale.y,
+                            label: surface.axLabel)
+        frame.sampledAt = now
+        let value = epoch(for: surface.token)
+        frame.anchor = FocusAnchor(epoch: value, sampledAt: now, host: nil,
+                                   windowID: surface.id, appName: surface.appName,
+                                   resolved: true)
+        return frame
+    }
+
+    /// Bumps the focus epoch only when the resolved context actually changes —
+    /// a new window/dialog is a context change exactly like a new text field.
+    private func epoch(for context: String) -> UInt32 {
+        focusState.withLock { state -> UInt32 in
+            if let last = state.lastContext, last == context { return state.epoch }
+            state.epoch += 1
+            state.lastContext = context
+            return state.epoch
+        }
+    }
+
+    private func scheduleHitTest(_ p: CGPoint, index: UInt32) {
         let now = HostClock.now()
         let shouldQuery = mouseAX.withLock { state -> Bool in
             guard !state.inFlight, now - state.last >= 0.12 else { return false }
@@ -490,7 +613,7 @@ public final class InputRecorder: @unchecked Sendable {
             state.last = now
             return true
         }
-        guard shouldQuery else { return index }
+        guard shouldQuery else { return }
         axQ.async { [self] in
             defer { mouseAX.withLock { $0.inFlight = false } }
             guard isRunning, let f = queryAX(p) else { return }
@@ -503,7 +626,6 @@ public final class InputRecorder: @unchecked Sendable {
                                        appName: ctx.appName, resolved: true)
             publish(frame, at: index)
         }
-        return index
     }
 
     /// Reserves this key-down's own AX slot. A reservation is never reused for
@@ -551,10 +673,17 @@ public final class InputRecorder: @unchecked Sendable {
         return index
     }
 
+    /// A held sample is usable as this key's immediate target only when it is
+    /// resolved, positive-sized, recent AND still the current focus context.
+    /// A sample from before a dialog or a field change is stale evidence — it
+    /// must never be presented as the new field's caret.
     private func cachedFocusFrame() -> AXFrame? {
         focusState.withLock { state -> AXFrame? in
-            guard let g = state.lastGood, g.frame.w > 0, g.frame.h > 0 else { return nil }
-            return HostClock.now() - g.at <= 0.75 ? g.frame : nil
+            guard let g = state.lastGood, g.frame.w > 0, g.frame.h > 0,
+                  g.frame.anchor?.resolved == true,
+                  g.context == state.lastContext,
+                  HostClock.now() - g.at <= 0.75 else { return nil }
+            return g.frame
         }
     }
 
@@ -573,6 +702,24 @@ public final class InputRecorder: @unchecked Sendable {
             }
         case .event:
             liveEventHook.withLock { $0 }?(flight.event)
+            // AppModel installs both hooks. Without this, address-bar typing
+            // reached the live camera as a bare key and the camera waited for
+            // a second AX round-trip before it knew which field to aim at.
+            // The focus hook is a distinct channel, so this is not a duplicate
+            // event; lastFocusIndex makes the later enrichment for this same
+            // key a no-op. A cached frame is reused only when the field is
+            // still the focused one — a new context gets its own epoch from
+            // the query instead of inheriting the previous field's frame.
+            let cachedContext = focusState.withLock { $0.lastContext }
+            if let cached, let cachedContext, let hook = liveFocusHook.withLock({ $0 }),
+               currentFocusContext(for: flight) == cachedContext {
+                let claimed = focusState.withLock { state -> Bool in
+                    guard flight.index > state.lastFocusIndex else { return false }
+                    state.lastFocusIndex = flight.index
+                    return true
+                }
+                if claimed { hook(flight.event, cached) }
+            }
         case .none:
             break
         }
@@ -586,6 +733,17 @@ public final class InputRecorder: @unchecked Sendable {
     private func probeFocus(_ flight: FocusFlight) -> FocusProbe? {
         if let override = debugFocusProbe.withLock({ $0 }) { return override(flight.index, flight.event) }
         return liveFocusProbe()
+    }
+
+    /// Cheap check that a cached field is still the focused one before its rect
+    /// is published as this key's immediate target. Uses the same probe the
+    /// query would use (headless) or a context-only AX read (production), so a
+    /// focus change cannot inherit the previous field's epoch.
+    private func currentFocusContext(for flight: FocusFlight) -> String? {
+        if debugFocusProbe.withLock({ $0 }) != nil { return probeFocus(flight)?.context }
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.05)
+        return focusedContextKey(system)
     }
 
     private func finishFocusQuery(_ flight: FocusFlight, probe: FocusProbe?) {

@@ -56,7 +56,9 @@ public enum DeepFilterNet {
         // Pinned DF3: 480-sample STFT delay + two 480-sample lookahead frames.
         // Its CLI trims the delay but does not flush or process partial frames.
         let padding = 1440 + (480 - samples.count % 480) % 480
-        try AudioIO.writeMonoWAV(samples, paddingSamples: padding, to: input)
+        // The CLI only reads 16-bit integer PCM. Float32 made it panic
+        // ("TooWide") and silently downgrade the whole voice path.
+        try AudioIO.writeMonoPCM16WAV(samples, paddingSamples: padding, to: input)
 
         let tuned = ["--compensate-delay", "--atten-lim-db", String(Int(atten.rounded())),
                      "--output-dir", output.path, input.path]
@@ -98,20 +100,45 @@ public enum DeepFilterNet {
     }
 }
 
-/// One DeepFilterNet3 pass, with bounded spectral suppression on failure.
-struct TrainedVoiceDenoiser: Denoiser {
-    let strength: Double
+/// Which engine actually cleaned the last buffer. Observable so the default
+/// voice path can be verified to use the model instead of quietly degrading.
+public enum VoiceDenoiseEngine: String, Sendable {
+    case deepFilterNet
+    case spectralGate
+    case off
+}
 
-    init(strength: Double) { self.strength = strength }
+/// One DeepFilterNet3 pass. Spectral suppression is a last-resort fallback only
+/// when the model binary is genuinely missing or fails — never the default.
+public final class TrainedVoiceDenoiser: Denoiser, @unchecked Sendable {
+    public let strength: Double
+    private let lock = NSLock()
+    private var currentEngine: VoiceDenoiseEngine = .off
 
-    func process(_ x: [Float]) -> [Float] {
+    public init(strength: Double) { self.strength = strength }
+
+    public var lastEngine: VoiceDenoiseEngine {
+        lock.lock(); defer { lock.unlock() }
+        return currentEngine
+    }
+
+    private func record(_ engine: VoiceDenoiseEngine) {
+        lock.lock(); currentEngine = engine; lock.unlock()
+    }
+
+    public func process(_ x: [Float]) -> [Float] {
         guard DeepFilterNet.isAvailable else {
+            record(.spectralGate)
             Logger(subsystem: "com.lumen.studio", category: "audio")
                 .error("DeepFilterNet unavailable; using spectral noise reduction")
             return SpectralGate(strength: strength).process(x)
         }
-        do { return try DeepFilterNet.process(x, strength: strength) }
-        catch {
+        do {
+            let cleaned = try DeepFilterNet.process(x, strength: strength)
+            record(.deepFilterNet)
+            return cleaned
+        } catch {
+            record(.spectralGate)
             Logger(subsystem: "com.lumen.studio", category: "audio")
                 .error("DeepFilterNet failed; using spectral noise reduction: \(String(describing: error), privacy: .public)")
             return SpectralGate(strength: strength).process(x)

@@ -349,6 +349,10 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     /// Auto loudness. Off makes `outputGainDb` the only master gain.
     public var normalize = true
     public var outputGainDb = 0.0
+    /// Lifts the user's own voice ~+2.5 dB (about 30% louder) in the final mix
+    /// so it sits in front of system audio and music. Applied after the voice
+    /// chain and before the shared master, so the -1 dBTP ceiling still holds.
+    public var voiceBoostDb: Double = 2.5
     public var targetLUFSOverride: Double?
     public var targetLUFS: Double { targetLUFSOverride ?? micMode.targetLUFS }
     public var studioMode: StudioMode = .standard
@@ -371,7 +375,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     private enum LegacyKeys: String, CodingKey { case studioAmount }
     private enum LegacyLUFSKeys: String, CodingKey { case targetLUFS }
     enum CodingKeys: String, CodingKey {
-        case noiseReductionStrength, voiceClarity, outputGainDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFSOverride, soundEffectsEnabled, clickSounds, whooshes, keySounds, typingPackId, typingLevelDb, clickTone, sfxGainDb, zoomInGainDb, zoomOutGainDb, clickGainDb, sfxSettingsVersion, musicPath
+        case noiseReductionStrength, voiceClarity, outputGainDb, voiceBoostDb, micClean, micMode, studio, micGainDb, systemGainDb, declick, declickDepthDb, targetLUFSOverride, soundEffectsEnabled, clickSounds, whooshes, keySounds, typingPackId, typingLevelDb, clickTone, sfxGainDb, zoomInGainDb, zoomOutGainDb, clickGainDb, sfxSettingsVersion, musicPath
         case dereverb, normalize, studioMode, typingModel
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
@@ -386,6 +390,8 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         outputGainDb = c.opt(.outputGainDb, outputGainDb)
+        let boost = c.opt(.voiceBoostDb, voiceBoostDb)
+        voiceBoostDb = boost.isFinite ? min(max(boost, 0), 6) : 2.5
         micClean = c.opt(.micClean, micClean); micMode = c.opt(.micMode, micMode)
         let reduction = c.opt(.noiseReductionStrength, noiseReductionStrength)
         noiseReductionStrength = reduction.isFinite ? min(max(reduction, 0), 1) : 1

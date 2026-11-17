@@ -223,7 +223,7 @@ enum VoiceStudio {
         let fs = AudioIO.fs
         var voice = plan.micClean ? (denoiser?.process(x) ?? x) : x
         let amount = plan.studio.isFinite ? clamp(plan.studio, 0, 1) : 0
-        guard amount > 0 else { return tone(voice, plan: plan, optimized: false) }
+        guard amount > 0 else { return boosted(tone(voice, plan: plan, optimized: false), plan: plan) }
 
         let optimized = plan.studioMode == .optimized
         let strength = 0.8 + 0.4 * amount
@@ -251,20 +251,33 @@ enum VoiceStudio {
         //    keeps the speech-boundary discontinuity below the click threshold.
         let level = speechLevelDb(voice, vad: vad, fs: fs) ?? speech
         let density = optimized ? 2.6 : 1.6
-        return VoiceCompressor(thresholdDb: level - 2 - 2 * amount,
-                               ratio: 1 + density * amount, kneeDb: 8,
-                               attack: 0.012, release: 0.180,
-                               makeupDb: 0).process(voice, fs: fs)
+        let compressed = VoiceCompressor(thresholdDb: level - 2 - 2 * amount,
+                                         ratio: 1 + density * amount, kneeDb: 8,
+                                         attack: 0.012, release: 0.180,
+                                         makeupDb: 0).process(voice, fs: fs)
+        return boosted(compressed, plan: plan)
+    }
+
+    /// The user's own voice, lifted ~+2.5 dB (≈30%) before the shared master so
+    /// it sits in front of system audio and music. The master limiter still owns
+    /// the -1 dBTP ceiling, so raising this never clips the deliverable.
+    private static func boosted(_ voice: [Float], plan: AudioPlan) -> [Float] {
+        let db = plan.voiceBoostDb.isFinite ? clamp(plan.voiceBoostDb, 0, 6) : 0
+        guard db > 0 else { return voice }
+        let gain = Float(pow(10, db / 20))
+        return voice.map { $0 * gain }
     }
 
     private static func tone(_ voice: [Float], plan: AudioPlan, optimized: Bool) -> [Float] {
         guard plan.voiceClarity else { return voice }
         let fs = AudioIO.fs
+        // Fuller chest, less boxiness, crisper presence and air. The two modes
+        // are deliberately different: Optimized is the podcast/close-mic curve.
         return Cascade.apply(voice, [
-            .lowShelf(110, db: 0.3, fs: fs),
-            .peaking(320, q: 1.05, db: optimized ? -2.0 : -1.5, fs: fs),
-            .peaking(2_900, q: 0.9, db: optimized ? 2.6 : 2.0, fs: fs),
-            .highShelf(9_500, db: optimized ? 1.6 : 1.2, fs: fs)
+            .lowShelf(110, db: optimized ? 0.9 : 0.5, fs: fs),
+            .peaking(300, q: 1.05, db: optimized ? -2.6 : -1.9, fs: fs),
+            .peaking(3_000, q: 0.9, db: optimized ? 3.4 : 2.5, fs: fs),
+            .highShelf(9_500, db: optimized ? 2.0 : 1.5, fs: fs)
         ])
     }
 }

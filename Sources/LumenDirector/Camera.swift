@@ -57,7 +57,6 @@ enum CameraSolver {
         let n = max(Int(outDur * rate) + 1, 2)
         let leadBase = p.leadIn.isFinite ? clamp(p.leadIn, 0, 1.5) : 0.30
         let tout = max(p.tail.isFinite ? p.tail : 0.7, 0.25)
-        let panGap = max(p.panThroughGap.isFinite ? p.panThroughGap : 1.5, 0.3)
         let look = clamp(p.lookahead.isFinite ? p.lookahead : 0.12, 0, 0.5)
         let offset = SIMD2(clamp(p.centerOffsetX, -0.25, 0.25), clamp(p.centerOffsetY, -0.25, 0.25))
         let omegaPan = max(p.omegaPan.isFinite ? p.omegaPan : 4, 1)
@@ -86,9 +85,12 @@ enum CameraSolver {
             let magnitude = 0.22 + 0.16 * (lz / 0.6931471805599453)
             let base = max(leadBase, magnitude) / max(ease, 0.55)
             // 2560 px is a conservative source-width reference (covers 1920 and
-            // 2560 masters). Budget 7e5 px/s³ — below the 1e6 jerk invariant,
-            // with headroom for the follow path's own gentle drift.
-            let jerkFloor = pow(60 * pan * 2560 / 7.0e5, 1.0 / 3.0)
+            // 2560 masters). Size the runway from the shared jerk limit (with
+            // headroom for the two continuity slopes a bridged handoff adds),
+            // so the lens never arrives by snapping into place.
+            let jerkFloor = MotionLimits.minDuration(delta: pan * 2560,
+                                                     continuitySlopes: 0,
+                                                     maxJerk: 7.0e5)
             return clamp(max(base, jerkFloor), 0.20, 1.6)
         }
         func manualRise(_ ease: Double) -> Double { clamp(0.9 / max(ease, 0.3), 0.25, 2.0) }
@@ -302,24 +304,81 @@ enum CameraSolver {
             return (lzT[b] - lzT[a]) * rate / Double(b - a)
         }
 
+        // A complete return to full frame needs the tail plus a beat of stillness
+        // before the next lead-in. Geometry, not a time window, decides whether
+        // two shots are one camera move: the old "panGap + tail" rule fused shots
+        // a second or two apart into one continuous 8-10 s zoom.
+        let returnRoom = tout + 0.12
+        // A gap this large between two planned actions means the camera is meant
+        // to come back to the full frame in between. `minHold` keeps a real,
+        // finite hold even when the next action arrives close behind.
+        let distinctGap = 0.95
+        // A truncated hold still needs a real, finite beat before the exit.
+        // Below this the return would be squeezed into a few ticks and spike.
+        let minHold = 0.25
+        // A chain of genuinely tight shots may bridge, but never for longer
+        // than this: the outgoing hold is then shortened to make room.
+        let bridgedRunLimit = max(5.0, 3 * (p.hold.isFinite ? p.hold : 0.9))
+
         var prevOff = 0.0
         var prevLz = 0.0
-        var prevC = SIMD2(0.5, 0.5)
+        var prevArrival = 0.0
+        /// First arrival of the current bridged run. Nil when the camera is at
+        /// the full frame between shots.
+        var runStart: Double?
         /// The shot whose hold reaches furthest forward. The mandatory final
         /// return to full frame is anchored to this one, not to whichever scene
         /// happened to be written last, so a short trailing shot can never leave
         /// the tail starting inside an earlier, longer shot.
         var tailIdx: Int?
+        var tailHoldEnd = 0.0
         for i in scenes.indices {
             if cancelled() { return nil }
             let s = scenes[i]
-            // A shot is either bridged into the next one or returns to the full
-            // frame before it. If the next lead-in starts inside the current
-            // hold there is no room for that return — writing a backwards exit
-            // would collapse to one sample and cut the camera. Join the new
-            // scene directly instead, from the value already on the track.
-            let bridged = i > 0 && prevLz > 0 &&
-                ((s.arrival - prevOff) <= max(panGap + tout, 1.6) || s.on < prevOff)
+
+            // Hold only as long as this action needs. When the next action
+            // starts a beat later, give the return its room by ending the hold
+            // early — a solver never stretches a shot just because the planner
+            // handed it a long segment.
+            var holdEnd = s.off
+            if i + 1 < scenes.count, scenes[i + 1].event - s.off >= distinctGap {
+                let roomForNext = scenes[i + 1].on - returnRoom - 0.02
+                holdEnd = min(s.off, max(s.arrival + minHold, roomForNext))
+            }
+
+            let room = s.on - prevOff
+            // Measure the run from the arrival that would start it, not only
+            // from an already-open run. Otherwise the first bridge after a
+            // return is always "short" and two long shots fuse into 16 s.
+            let candidateRunStart = runStart ?? prevArrival
+            let runLength = i > 0 && prevLz > 0 ? s.arrival - candidateRunStart : 0
+            let runTooLong = runLength > bridgedRunLimit
+            // A break is possible when part of the previous hold can be given
+            // back while leaving a finite, bounded-jerk return runway.
+            // A forced return needs a runway long enough for the pan it must
+            // cover: a 1000 px move squeezed into 0.25 s spikes jerk well past
+            // the bound. The jerk floor is a limit, so a break simply is not
+            // taken when there is no room for a filmed return.
+            let pk = min(max(Int((prevArrival * rate).rounded()), 0), n - 1)
+            let panPx = hypot(Double(cxT[pk]) - 0.5, Double(cyT[pk]) - 0.5) * max(src.x, src.y)
+            let returnRunway = max(0.25,
+                                   MotionLimits.minDuration(delta: panPx,
+                                                            continuitySlopes: 1,
+                                                            maxJerk: 7.0e5))
+            let forcedEnd = max(prevArrival + returnRunway,
+                                min(prevOff, s.on - returnRoom))
+            var previousFollows = false
+            if i > 0, case .follow = scenes[i - 1].segment.focus { previousFollows = true }
+            // A follow shot is one continuous gesture with a live centre. A
+            // forced return out of it would join a moving hold at zero
+            // acceleration — an acceleration step and a jerk spike. Keep such
+            // shots bridged; the run cap applies to static subjects.
+            let canBreak = i > 0 && prevLz > 0 && !previousFollows &&
+                           forcedEnd < prevOff - 0.02 &&
+                           max(s.on, forcedEnd) < s.arrival - 0.05
+            let bridged = i > 0 && prevLz > 0 && room < returnRoom &&
+                          (!runTooLong || !canBreak)
+
             let transStart: Double
             if i == 0 {
                 transStart = s.on
@@ -327,11 +386,36 @@ enum CameraSolver {
                 // The new lead-in may begin before the previous hold ends. The
                 // quintic overwrites the tail of the hold, which is exactly the
                 // "start early, settle on the action" behaviour.
+                if runStart == nil { runStart = prevArrival }
                 transStart = max(min(prevOff, s.on), 0)
             } else {
-                let v = holdVelocity(i - 1, Int(clamp((prevOff * rate).rounded(), 0, Double(n - 1))))
-                fill(prevOff, min(prevOff + tout, s.on), prevLz, 0, prevC, SIMD2(0.5, 0.5), v, .zero)
-                transStart = s.on
+                // Full return to 1x before the next lead-in. The normal exit
+                // starts where the hold ended; only an overlong run is broken
+                // by pulling the return back into the hold. Joining the value
+                // already on the track preserves velocity at both ends, so
+                // there is no per-tick cut, no stop-start, no jerk impulse.
+                let returnEnd: Double
+                if canBreak {
+                    let returnStart = max(prevArrival, forcedEnd - tout)
+                    let rk = min(max(Int((returnStart * rate).rounded()), 0), n - 1)
+                    fill(returnStart, forcedEnd, lzT[rk], 0, SIMD2(cxT[rk], cyT[rk]),
+                         SIMD2(0.5, 0.5), trackVelocity(rk), .zero, trackZVelocity(rk), 0)
+                    returnEnd = forcedEnd
+                    transStart = max(s.on, forcedEnd)
+                } else {
+                    returnEnd = min(prevOff + tout, s.on)
+                    let rk = min(max(Int((prevOff * rate).rounded()), 0), n - 1)
+                    fill(prevOff, returnEnd, lzT[rk], 0, SIMD2(cxT[rk], cyT[rk]),
+                         SIMD2(0.5, 0.5), trackVelocity(rk), .zero, trackZVelocity(rk), 0)
+                    transStart = s.on
+                }
+                // Ticks between the end of the return and this lead-in are
+                // full frame. Clear any hold that still occupies them so the
+                // next move starts from a genuinely still, centred camera.
+                let ke = min(max(Int((returnEnd * rate).rounded()), 0), n - 1)
+                let kt = min(max(Int((transStart * rate).rounded()), 0), n - 1)
+                if kt > ke { for k in (ke + 1)...kt { lzT[k] = 0; cxT[k] = 0.5; cyT[k] = 0.5 } }
+                runStart = nil
             }
             let fromK = Int(clamp((transStart * rate).rounded(), 0, Double(n - 1)))
             let toK = Int(clamp((s.arrival * rate).rounded(), 0, Double(n - 1)))
@@ -346,11 +430,11 @@ enum CameraSolver {
             let toV = holdVelocity(i, toK)
             fill(transStart, s.arrival, fromLz, s.lz, fromC, toC, fromV, toV,
                  bridged ? trackZVelocity(fromK) : 0, 0)
-            fillHold(i, s.arrival, s.off)
-            if tailIdx == nil || s.off > scenes[tailIdx!].off { tailIdx = i }
-            prevOff = s.off
+            fillHold(i, s.arrival, holdEnd)
+            if tailIdx == nil || holdEnd > tailHoldEnd { tailIdx = i; tailHoldEnd = holdEnd }
+            prevOff = holdEnd
             prevLz = s.lz
-            prevC = holdCenter(i, min(max(Int((s.off * rate).rounded()), 0), n - 1))
+            prevArrival = s.arrival
         }
         // The last return to full frame is mandatory, not opportunistic. The
         // planner clamps the final hold to the end of the composition, so
@@ -363,7 +447,7 @@ enum CameraSolver {
         // overwrites only the trailing part of the hold, like a bridge does.
         if let last = tailIdx, scenes[last].lz > 0 {
             let finalTick = Double(n - 1) / rate
-            let tailStart = min(prevOff, max(scenes[last].event, finalTick - tout))
+            let tailStart = min(tailHoldEnd, max(scenes[last].event, finalTick - tout))
             let tailEnd = min(tailStart + tout, finalTick)
             let k = min(max(Int((tailStart * rate).rounded()), 0), n - 1)
             fill(tailStart, tailEnd, lzT[k], 0, SIMD2(cxT[k], cyT[k]), SIMD2(0.5, 0.5),
