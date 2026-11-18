@@ -12,7 +12,7 @@ public struct UpscaleResult {
 
 private struct DirectedParams { var srcOrigin: SIMD2<Int32>; var srcSize: SIMD2<Int32>; var outSize: SIMD2<Int32>; var scale: Float; var sharp: Float }
 private struct ShockParams { var size: SIMD2<Int32>; var strength: Float; var edgeLo: Float; var edgeHi: Float; var k: Float }
-private struct SharpParams { var size: SIMD2<Int32>; var amount: Float; var pad: Float = 0 }
+private struct SharpParams { var size: SIMD2<Int32>; var amount: Float }
 
 /// Training-free UI upscaler. Upscales only the visible source region, on a source-aligned lattice, by a quantized factor
 /// {2,3,4,6,8}, as a chain of edge-directed stages (each followed by shock iterations) and a final limited sharpen.
@@ -67,24 +67,37 @@ public final class Upscaler {
 
     /// Integer-aligned source region covering the view plus margin.
     public static func region(center c: SIMD2<Double>, view: SIMD2<Double>, source: SIMD2<Double>, margin: Double = 8) -> SIMD4<Int32> {
+        // A degenerate or non-finite source must never yield a negative region:
+        // the compute dispatch would write out of bounds.
+        // 1e9 is well inside Int32.max and far beyond any real capture.
+        let sx = min(max(source.x.isFinite ? source.x : 1, 1), 1e9)
+        let sy = min(max(source.y.isFinite ? source.y : 1, 1), 1e9)
+        let c0 = SIMD2<Double>(min(max(c.x.isFinite ? c.x : sx / 2, 0), sx),
+                               min(max(c.y.isFinite ? c.y : sy / 2, 0), sy))
         let h = view / 2 + margin
-        let x0 = max((c.x - h.x).rounded(.down), 0), y0 = max((c.y - h.y).rounded(.down), 0)
-        let x1 = min((c.x + h.x).rounded(.up), source.x), y1 = min((c.y + h.y).rounded(.up), source.y)
-        let w = min(max(x1 - x0, 8), source.x - x0), hh = min(max(y1 - y0, 8), source.y - y0)
+        let x0 = min(max((c0.x - h.x).rounded(.down), 0), sx - 1)
+        let y0 = min(max((c0.y - h.y).rounded(.down), 0), sy - 1)
+        let x1 = min(max((c0.x + h.x).rounded(.up), x0 + 1), sx)
+        let y1 = min(max((c0.y + h.y).rounded(.up), y0 + 1), sy)
+        let w = min(max(x1 - x0, 1), sx - x0), hh = min(max(y1 - y0, 1), sy - y0)
         return SIMD4(Int32(x0), Int32(y0), Int32(w), Int32(hh))
     }
 
-    /// SMOOTHNESS: snap the crop to a coarse grid. The cache key then survives
-    /// a slow camera move, so the upscale is not rebuilt (and its buffers not
-    /// reallocated) on every frame of a zoom. The grid only grows the crop, so
-    /// the sampled content stays correct.
+    /// SMOOTHNESS: snap the crop to a coarse grid so the cache survives a slow
+    /// camera move. The grid only grows the crop, so sampled content stays correct.
     public static func quantize(_ region: SIMD4<Int32>, source: SIMD2<Double>, grid: Int32 = 32) -> SIMD4<Int32> {
         let g = max(grid, 1)
+        func i32(_ v: Double, _ fallback: Int32) -> Int32 {
+            guard v.isFinite else { return fallback }
+            return Int32(min(max(v, -1e9), 1e9))
+        }
+        let sx = i32(source.x, region.x + region.z)
+        let sy = i32(source.y, region.y + region.w)
         let x0 = (region.x / g) * g, y0 = (region.y / g) * g
-        let x1 = min(Int32((Double(region.x + region.z) / Double(g)).rounded(.up)) * g, Int32(source.x))
-        let y1 = min(Int32((Double(region.y + region.w) / Double(g)).rounded(.up)) * g, Int32(source.y))
-        let w = max(min(x1 - x0, Int32(source.x) - x0), 8)
-        let h = max(min(y1 - y0, Int32(source.y) - y0), 8)
+        let x1 = min(Int32((Double(region.x + region.z) / Double(g)).rounded(.up)) * g, sx)
+        let y1 = min(Int32((Double(region.y + region.w) / Double(g)).rounded(.up)) * g, sy)
+        let w = max(min(x1 - x0, sx - x0), 1)
+        let h = max(min(y1 - y0, sy - y0), 1)
         return SIMD4(max(x0, 0), max(y0, 0), w, h)
     }
 

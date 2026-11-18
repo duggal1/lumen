@@ -155,6 +155,33 @@ private func derived(_ tl: Timeline, duration: Double) -> Timeline {
     #expect(noiseFloorDb(noisy) - noiseFloorDb(out) > 8)
 }
 
+/// The production mixer creates its own denoiser; prove the model actually runs
+/// there and that no fallback was taken. Diagnostics are process-wide evidence,
+/// not an injected test double.
+@Test func defaultProductionMixRunsTheModelAndCutsTheNoiseFloor() throws {
+    let speech = try speechFixture()
+    let noisy = addWhiteNoise(speech, seed: 91, level: 0.03)
+    let n = noisy.count
+    var tl = Timeline(duration: Double(n) / AudioIO.fs)
+    tl.audio.micClean = true
+    tl.audio.studio = 0
+    tl.audio.dereverb = 0
+    tl.audio.declick = false
+    tl.audio.voiceClarity = false
+    tl.audio.normalize = false
+    tl.audio.voiceBoostDb = 0
+    tl = derived(tl, duration: Double(n) / AudioIO.fs)
+    VoiceProcessingDiagnostics.reset()
+    let mixer = AudioMixer(mic: noisy, micOffset: 0, system: nil, systemOffset: 0)
+    let mixed = try #require(mixer.mix(tl))
+    #expect(VoiceProcessingDiagnostics.modelRuns >= 1,
+            "default AudioMixer path must run DeepFilterNet, not the spectral gate")
+    #expect(VoiceProcessingDiagnostics.fallbackCount == 0,
+            "a hidden fallback occurred in the default voice path")
+    let reduction = noiseFloorDb(noisy) - noiseFloorDb(mixed.l)
+    #expect(reduction > 8, "default mix cut the noise floor only \(reduction) dB")
+}
+
 // MARK: - 2. Voice is 20-30% louder, measured in LUFS, with a safe ceiling
 
 @Test func voiceBoostLiftsOwnVoiceTwoToThreeDbInLufs() throws {

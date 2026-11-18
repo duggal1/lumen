@@ -29,7 +29,9 @@ public struct ZoomTransform: Sendable {
         self.source = source
         self.canvas = size
         self.videoRect = SIMD4(originX.rounded(), originY.rounded(), width.rounded(), height.rounded())
-        self.scale = max(scale, 1)
+        // Swift's max(NaN, 1) is NaN (unlike C fmax). A non-finite zoom would
+        // leak into every viewport and overlay as undefined coordinates.
+        self.scale = scale.isFinite ? max(scale, 1) : 1
         self.cameraCenter = Self.clamp(cameraCenter ?? source / 2, source: source, scale: self.scale)
     }
 

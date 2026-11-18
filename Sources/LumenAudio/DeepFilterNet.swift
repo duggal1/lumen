@@ -1,6 +1,7 @@
 import Foundation
 import Darwin
 import os
+import Synchronization
 
 public enum DeepFilterNetError: Error {
     case unavailable, timedOut, failed(Int32), invalidOutput
@@ -108,6 +109,19 @@ public enum VoiceDenoiseEngine: String, Sendable {
     case off
 }
 
+/// Process-wide evidence of which engine actually cleaned voice. `lastEngine`
+/// lives on one denoiser instance that production never reads, so without this
+/// a silent degradation to the spectral gate left no signal outside a log line.
+public enum VoiceProcessingDiagnostics {
+    private struct Counters { var model = 0, fallback = 0 }
+    private static let state = OSAllocatedUnfairLock(initialState: Counters())
+    public static var modelRuns: Int { state.withLock { $0.model } }
+    public static var fallbackCount: Int { state.withLock { $0.fallback } }
+    public static func reset() { state.withLock { $0 = Counters() } }
+    static func recordModel() { state.withLock { $0.model += 1 } }
+    static func recordFallback() { state.withLock { $0.fallback += 1 } }
+}
+
 /// One DeepFilterNet3 pass. Spectral suppression is a last-resort fallback only
 /// when the model binary is genuinely missing or fails — never the default.
 public final class TrainedVoiceDenoiser: Denoiser, @unchecked Sendable {
@@ -129,6 +143,7 @@ public final class TrainedVoiceDenoiser: Denoiser, @unchecked Sendable {
     public func process(_ x: [Float]) -> [Float] {
         guard DeepFilterNet.isAvailable else {
             record(.spectralGate)
+            VoiceProcessingDiagnostics.recordFallback()
             Logger(subsystem: "com.lumen.studio", category: "audio")
                 .error("DeepFilterNet unavailable; using spectral noise reduction")
             return SpectralGate(strength: strength).process(x)
@@ -136,9 +151,11 @@ public final class TrainedVoiceDenoiser: Denoiser, @unchecked Sendable {
         do {
             let cleaned = try DeepFilterNet.process(x, strength: strength)
             record(.deepFilterNet)
+            VoiceProcessingDiagnostics.recordModel()
             return cleaned
         } catch {
             record(.spectralGate)
+            VoiceProcessingDiagnostics.recordFallback()
             Logger(subsystem: "com.lumen.studio", category: "audio")
                 .error("DeepFilterNet failed; using spectral noise reduction: \(String(describing: error), privacy: .public)")
             return SpectralGate(strength: strength).process(x)

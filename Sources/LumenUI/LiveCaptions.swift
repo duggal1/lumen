@@ -61,8 +61,7 @@ struct TranscriptTab: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            // Transcription gets one Apple-blur card: native material, never a
-            // flat black fill, so the transcript reads like a system surface.
+            // Chrome is flat: a surface step, never glass, a stroke or a bar.
             VStack(spacing: 0) {
                 Row(label: "Model") {
                     Text(size.title).font(AppType.body).foregroundStyle(Tok.text)
@@ -72,7 +71,8 @@ struct TranscriptTab: View {
                         if ModelStore.isInstalled(size) {
                             Text("Installed").font(AppType.caption).foregroundStyle(Tok.text2)
                         } else if let p = downloadProgress {
-                            ProgressView(value: p).tint(Tok.accent).frame(width: 120)
+                            Text("\(Int((p * 100).rounded()))%")
+                                .font(AppType.caption.monospacedDigit()).foregroundStyle(Tok.text2)
                         } else {
                             LButton(title: "Download", icon: "arrow.down.circle") { download() }
                         }
@@ -81,7 +81,7 @@ struct TranscriptTab: View {
                 }
             }
             .padding(20)
-            .glassSurface()
+            .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
             .environment(\.layoutDirection, .leftToRight)
             VStack(alignment: .leading, spacing: 12) {
                 Text(size.detail).font(AppType.caption).foregroundStyle(Tok.text2)
@@ -106,7 +106,7 @@ struct TranscriptTab: View {
                 if model.transcript != nil { TranscriptList(model: model) }
             }
             .padding(20)
-            .glassSurface()
+            .background(RoundedRectangle(cornerRadius: Radius.card).fill(Tok.surface))
             .environment(\.layoutDirection, .leftToRight)
         }
         .environment(\.layoutDirection, .leftToRight)

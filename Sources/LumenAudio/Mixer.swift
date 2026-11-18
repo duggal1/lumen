@@ -687,14 +687,10 @@ public final class AudioMixer: @unchecked Sendable {
                 prevKeyT = cue.t
             } else {
                 let (b, gain) = bank.render(cue.kind, clickTone: a.clickTone)
+                // SFXBank renders zero samples for stale whoosh cues, so no
+                // whoosh can reach the mix and no whoosh-specific gain is left.
                 let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + gain) / 20))
-                let volumeMultiplier: Float
-                switch cue.kind {
-                case .whooshIn, .whooshOut: volumeMultiplier = 0.4
-                case .click: volumeMultiplier = 1.0
-                default: volumeMultiplier = 1.0
-                }
-                buf = b.map { $0 * amp * volumeMultiplier }
+                buf = b.map { $0 * amp }
             }
             let s0 = Int(cue.t * fs)
             for (k, v) in buf.enumerated() where s0 + k >= 0 && s0 + k < n {

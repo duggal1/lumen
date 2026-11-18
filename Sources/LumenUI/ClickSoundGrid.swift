@@ -53,13 +53,14 @@ struct ClickSoundGrid: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: Radius.field).fill(isSelected ? Tok.control : Tok.well))
-            .overlay {
-                if isPlaying { RoundedRectangle(cornerRadius: Radius.field).stroke(Tok.accent, lineWidth: 1) }
-            }
+            // Selection and playback are one luminance step, never a stroke or
+            // a bracket (DESIGN.md §2.1, §3.1.7).
+            .background(RoundedRectangle(cornerRadius: Radius.field).fill(
+                isPlaying ? Tok.accentSoft : (isSelected ? Tok.control : Tok.well)))
         }
         .buttonStyle(.plain)
-        .pointerStyle(.link)
+        .clickable()
+        .focusRing()
         .accessibilityLabel("\(Self.title(sound)) click sound")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }

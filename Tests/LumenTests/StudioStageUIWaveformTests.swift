@@ -85,4 +85,17 @@ import Foundation
         let b = WaveformPlaybackState(peaks: tone(), duration: 10, playhead: 4.25, isPlaying: true)
         #expect(a.snapshot(columns: 60) == b.snapshot(columns: 60))
     }
+
+    @Test func audioTapeHasALiveDisplayScheduleAndAWhiteHead() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let src = try String(contentsOf: root.appendingPathComponent(
+            "Sources/LumenUI/TimelineStrip+Lanes.swift"), encoding: .utf8)
+        // A plain Canvas only redraws when SwiftUI observes a change; that is
+        // the dead static band. The display schedule makes it advance at 60 Hz.
+        #expect(src.contains("TimelineView(.animation(paused: !playing))"))
+        #expect(src.contains("model.clock.time(at: HostClock.now())"))
+        #expect(src.contains("c.fillCells(head, Tok.text)"))
+        #expect(src.contains(".id(playing)"))
+    }
 }

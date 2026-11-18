@@ -34,7 +34,7 @@ private enum Honesty {
                                                           width: w, height: h, mipmapped: false)
         d.usage = [.shaderRead]; d.storageMode = .shared
         let dst = try #require(device.makeTexture(descriptor: d))
-        guard let blit = cb.makeBlitCommandEncoder() else { return [] }
+        let blit = try #require(cb.makeBlitCommandEncoder(), "No blit encoder: readback cannot be verified")
         blit.copy(from: texture,
                   sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
                   sourceSize: MTLSize(width: w, height: h, depth: 1),
@@ -51,13 +51,14 @@ private enum Honesty {
 /// The reported factor is the applied factor for EVERY ladder rung and cap.
 /// This is what makes "2x"/"10x" real instead of a label.
 @Test func upscalerReportedFactorIsActuallyApplied() throws {
-    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let device = try #require(MTLCreateSystemDefaultDevice(), "No Metal device: GPU upscaler test cannot run")
+    let queue = try #require(device.makeCommandQueue(), "No Metal command queue")
     let kernels = try FXKernels(device: device)
     let up = Upscaler(kernels: kernels)
     let s = 32
     let src = try Honesty.texture(device, s, s)
     for (i, f) in Upscaler.ladder.enumerated() {
-        guard let cb = queue.makeCommandBuffer() else { return }
+        let cb = try #require(queue.makeCommandBuffer(), "No command buffer")
         let r = try up.upscale(cb, source: src, region: SIMD4(0, 0, Int32(s), Int32(s)),
                                factor: f, params: UpscaleParams(), frameID: UInt64(1000 + i))
         cb.commit(); cb.waitUntilCompleted()
@@ -91,7 +92,8 @@ private enum Honesty {
 /// A different source texture with an identical (frame, region, factor) key
 /// must never be served pixels from the previous source.
 @Test func upscalerCacheDoesNotAliasSource() throws {
-    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let device = try #require(MTLCreateSystemDefaultDevice(), "No Metal device: GPU upscaler test cannot run")
+    let queue = try #require(device.makeCommandQueue(), "No Metal command queue")
     let kernels = try FXKernels(device: device)
     let up = Upscaler(kernels: kernels)
     let s = 48
@@ -110,7 +112,8 @@ private enum Honesty {
 
 /// Changing quality params under the same frame key must rebuild, not reuse.
 @Test func upscalerCacheDoesNotAliasParams() throws {
-    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let device = try #require(MTLCreateSystemDefaultDevice(), "No Metal device: GPU upscaler test cannot run")
+    let queue = try #require(device.makeCommandQueue(), "No Metal command queue")
     let kernels = try FXKernels(device: device)
     let up = Upscaler(kernels: kernels)
     let s = 48
@@ -147,9 +150,28 @@ private enum Honesty {
     }
 }
 
+/// A hostile source/crop must resolve to a finite, positive region. A negative
+/// region would dispatch a compute grid with a negative size and trap.
+@Test func upscalerRegionAndQuantizeNeverGoDegenerate() {
+    let hostile = [Double.nan, .infinity, -.infinity, 0, -1, 1e300]
+    for w in hostile {
+        for h in hostile {
+            for c in [SIMD2<Double>(.nan, .infinity), .zero, SIMD2(1e300, -1e300), SIMD2(40, 30)] {
+                let r = Upscaler.region(center: c, view: SIMD2(20, 10), source: SIMD2(w, h))
+                #expect(r.x >= 0 && r.y >= 0 && r.z >= 1 && r.w >= 1,
+                        "degenerate region \(r) for source \(w)x\(h)")
+                let q = Upscaler.quantize(r, source: SIMD2(w, h))
+                #expect(q.x >= 0 && q.y >= 0 && q.z >= 1 && q.w >= 1,
+                        "degenerate quantized region \(q) for source \(w)x\(h)")
+            }
+        }
+    }
+}
+
 /// Same inputs produce byte-identical GPU output (deterministic export frames).
 @Test func upscalerIsDeterministic() throws {
-    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let device = try #require(MTLCreateSystemDefaultDevice(), "No Metal device: GPU upscaler test cannot run")
+    let queue = try #require(device.makeCommandQueue(), "No Metal command queue")
     let kernels = try FXKernels(device: device)
     let src = try Honesty.texture(device, 64, 48)
     func run(_ id: UInt64) throws -> [UInt8] {
@@ -166,7 +188,8 @@ private enum Honesty {
 /// Bounded, frame-rate-aware cost. Per-frame work is fixed; measure the
 /// realistic 480x270 view at 4x (60fps export) and the worst rung 10x.
 @Test func upscalerStaysInsideFrameBudgets() throws {
-    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let device = try #require(MTLCreateSystemDefaultDevice(), "No Metal device: GPU upscaler test cannot run")
+    let queue = try #require(device.makeCommandQueue(), "No Metal command queue")
     let kernels = try FXKernels(device: device)
     let src = try Honesty.texture(device, 1920, 1080, stripe: false)
     func avg(_ f: Int, _ region: SIMD4<Int32>) throws -> Double {

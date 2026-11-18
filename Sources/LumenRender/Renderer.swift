@@ -57,15 +57,23 @@ public struct Geometry: Sendable {
         radii = SIMD4(r.tl, r.tr, r.br, r.bl) * ui
     }
     /// Source px -> canvas px for a given camera.
-    public func toCanvas(_ p: SIMD2<Double>, cam: SIMD2<Double>, scale: Double, crop: CGRect? = nil) -> SIMD2<Double> {
+    public func toCanvas(_ p: SIMD2<Double>, cam: SIMD2<Double>, scale: Double,
+                         crop: CGRect? = nil, tilt: SIMD2<Float> = .zero) -> SIMD2<Double> {
         let bounds = crop ?? CGRect(x: 0, y: 0, width: src.x, height: src.y)
         let relCam = SIMD2<Double>(cam.x - bounds.minX, cam.y - bounds.minY)
         let cropSrc = SIMD2<Double>(bounds.width, bounds.height)
-        let center = ZoomTransform.clamp(relCam, source: cropSrc, scale: scale)
-        let view: SIMD2<Double> = cropSrc / max(scale, 1)
+        let s = scale.isFinite ? max(scale, 1) : 1
+        let center = ZoomTransform.clamp(relCam, source: cropSrc, scale: s)
+        let view: SIMD2<Double> = cropSrc / s
         let origin = SIMD2<Double>(bounds.minX, bounds.minY) + center - view / 2
-        let n = (p - origin) / view
-        return SIMD2(content.x + n.x * content.z, content.y + n.y * content.w)
+        let srcN = SIMD2<Float>(Float((p.x - origin.x) / view.x - 0.5),
+                               Float((p.y - origin.y) / view.y - 0.5))
+        // contentFS warps the canvas quad with the homography, so a source
+        // point is drawn where the INVERSE warp puts it. Applying the same
+        // inverse here keeps click rings and the cursor on their source pixels.
+        let n = CameraTilt.inverseHomography(srcN, tiltDeg: tilt)
+        return SIMD2(content.x + (Double(n.x) + 0.5) * content.z,
+                     content.y + (Double(n.y) + 0.5) * content.w)
     }
 }
 
@@ -77,7 +85,7 @@ private struct BackdropU { var content: SIMD4<Float>; var canvas: SIMD2<Float>; 
 private struct ContentU {
     var content: SIMD4<Float>; var src: SIMD2<Float>; var cam: SIMD2<Float>
     var cropSize: SIMD2<Float>
-    var scale: Float; var radius: Float; var border: Float; var p: Float
+    var scale: Float; var radius: Float; var border: Float
     var tilt: SIMD2<Float>; var radii: SIMD4<Float>
     var upRegion: SIMD4<Float>; var upTexSize: SIMD2<Float>; var upFactor: Float; var upBlend: Float
 }
@@ -92,7 +100,7 @@ private struct WebU {
     var canvasColor: SIMD4<Float>
 }
 private struct AccU { var weight: Float }
-private struct ResU { var levels: Float; var seed: UInt32; var blur: Float; var alpha: Float }
+private struct ResU { var levels: Float; var seed: UInt32; var alpha: Float }
 private struct TextSpriteU {
     var opacity: Float; var blur: Float; var pad0: Float; var pad1: Float
     init(opacity: Float, blur: Float = 0) { self.opacity = opacity; self.blur = blur; pad0 = 0; pad1 = 0 }
@@ -222,6 +230,9 @@ public final class Renderer: @unchecked Sendable {
     private let perSample = OSAllocatedUnfairLock<Double>(initialState: 0)
     /// Preview-only hysteresis state for `sampleCount` (export stays pure).
     private var blurK = 1, blurCooldown = 0
+    /// Reused sub-frame scratch, one per in-flight slot. No per-frame array
+    /// allocation after warm-up, and no buffer shared between simultaneous frames.
+    private var stateBuffers: [[FrameState]] = [[], [], []]
     private var slot = 0
     private var work: [MTLTexture] = [], accum: [MTLTexture] = []
     /// One blurred copy per in-flight slot, allocated only when a caption card
@@ -578,6 +589,9 @@ public final class Renderer: @unchecked Sendable {
         let cs = r.canvas
         guard output.width == cs.x, output.height == cs.y, cs.x > 0, cs.y > 0 else { return false }
         let tl = r.timeline
+        // A non-finite request time must never reach timeline evaluation or a
+        // shader uniform. Holding the frame at t=0 is the honest fallback.
+        let t = r.t.isFinite ? r.t : 0
         ensureTargets(cs)
         if wait { sem.wait() } else if sem.wait(timeout: .now()) != .success { return false }
         let s = slot; slot = (slot + 1) % 3
@@ -589,11 +603,11 @@ public final class Renderer: @unchecked Sendable {
         let K = sampleCount(r, g)
         let dt = 1 / max(r.fps, 1)
         let tiltMode = tl.camera.tilt
-        var states: [FrameState] = []
-        states.reserveCapacity(K)
+        stateBuffers[s].removeAll(keepingCapacity: true)
+        stateBuffers[s].reserveCapacity(K)
         for i in 0..<K {
             let off = ((Double(i) + 0.5) / Double(K) - 0.5) * tl.camera.shutter * dt
-            var st = r.live ?? tl.evaluate(at: r.t + off)
+            var st = r.live ?? tl.evaluate(at: t + off)
             if r.live == nil, tl.derived == nil { st.cameraCenter = SIMD2<Float>(Float(g.src.x / 2), Float(g.src.y / 2)) }
             // 3D is content and mode-controlled. Gate EVERY sub-frame here so a
             // leaked or stale tilt can never reach contentFS or the export.
@@ -602,12 +616,13 @@ public final class Renderer: @unchecked Sendable {
             st.cameraTilt = CameraTilt.effective(st.cameraTilt, mode: tiltMode,
                                                 maxYaw: tl.camera.maxYaw,
                                                 maxPitch: tl.camera.maxPitch,)
-            states.append(st)
+            stateBuffers[s].append(st)
         }
+        let states = stateBuffers[s]
         // SMOOTHNESS: the mip chain is only read when the source is minified.
         // A zoomed-in frame samples level 0 only, so the whole-frame copy and
         // the mip chain can be skipped and the source texture used directly.
-        let sMin = states.map { max(Double($0.cameraScale), 1) }.min() ?? 1
+        let sMin = states.map { $0.cameraScale.isFinite ? max(Double($0.cameraScale), 1) : 1 }.min() ?? 1
         let fullLevels = Int(floor(log2(Double(max(r.screen.texture.width, r.screen.texture.height))))) + 1
         let minifAtRest = g.src.x / g.content.z
         let levelsNeeded = minifAtRest <= 1 ? 1 : min(Int(ceil(log2(minifAtRest))) + 1, fullLevels)
@@ -654,7 +669,7 @@ public final class Renderer: @unchecked Sendable {
         // this same struct, so the render thread never blocks on disk or AppKit.
         let a = assets.withLock { $0 }
         let animatedBackground = tl.style.background == .dither || tl.style.background == .canvas
-        let backgroundTime = animatedBackground ? (r.quality == .export ? r.t : r.uiTime) * (tl.style.background == .canvas ? tl.style.canvasSpeed : 1) : 0
+        let backgroundTime = animatedBackground ? (r.quality == .export ? t : (r.uiTime.isFinite ? r.uiTime : 0)) * (tl.style.background == .canvas ? tl.style.canvasSpeed : 1) : 0
         let dither = tl.style.background == .dither
         let pointer = dither && r.quality == .preview ? r.pointer : .zero
         let key = BackdropKey(style: tl.style, size: cs,
@@ -749,8 +764,7 @@ public final class Renderer: @unchecked Sendable {
         if let e = cb.makeRenderCommandEncoder(descriptor: pd) {
             e.setRenderPipelineState(pr); quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
             frag(e, ResU(levels: fmt == .bgr10a2Unorm ? 1023 : 255,
-                         seed: UInt32(truncatingIfNeeded: r.t.isFinite ? Int(r.t * 1000) : 0),
-                         blur: 0,
+                         seed: UInt32(truncatingIfNeeded: Int(min(max(t * 1000, 0), 1e9))),
                          alpha: r.transparent || r.cursorOnly ? 0 : 1))
             e.setFragmentTexture(K > 1 ? accum[s] : work[s], index: 0); e.setFragmentTexture(bd, index: 1)
             e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); e.endEncoding()
@@ -770,9 +784,11 @@ public final class Renderer: @unchecked Sendable {
     /// `encode` will draw, not a different time window.
     private func travelPx(_ a: FrameState, _ b: FrameState, _ r: RenderRequest, _ g: Geometry) -> Double {
         let tl = r.timeline
-        let k = g.content.z / g.src.x, sc = Double(b.cameraScale)
+        let k = g.content.z / g.src.x, sc = b.cameraScale.isFinite ? max(Double(b.cameraScale), 1) : 1
         let cam = Double(simd_length(b.cameraCenter - a.cameraCenter)) * k * sc
-        let zoom = abs(log(Double(max(b.cameraScale, 0.001)) / Double(max(a.cameraScale, 0.001)))) * g.content.z * 0.5
+        let zb = b.cameraScale.isFinite ? max(Double(b.cameraScale), 0.001) : 1
+        let za = a.cameraScale.isFinite ? max(Double(a.cameraScale), 0.001) : 1
+        let zoom = abs(log(zb / za)) * g.content.z * 0.5
         let cur = Double(simd_length(b.cursor.position - a.cursor.position)) * k * sc
         // Tilt is a moving camera too: a Lean/Float/Reveal change needs the
         // same 180-degree shutter as pan/zoom/cursor. ~0.4% of frame width per
@@ -790,6 +806,7 @@ public final class Renderer: @unchecked Sendable {
     func sampleCount(_ r: RenderRequest, _ g: Geometry) -> Int {
         let tl = r.timeline
         guard tl.camera.shutter > 0, tl.derived != nil, r.fps > 0 else { return 1 }
+        let t = r.t.isFinite ? r.t : 0
         // A live FrameState is sampled and held: `encode` uses the SAME state
         // for every sub-frame. There is no intra-frame camera motion to blur,
         // so accumulating sub-frames only wastes GPU time and can dither the
@@ -803,7 +820,7 @@ public final class Renderer: @unchecked Sendable {
         // over +/- shutter/2 * dt), so the estimate cannot disagree with the
         // pixels that are actually drawn.
         let dt = 1 / r.fps, half = 0.5 * tl.camera.shutter * dt
-        let a = tl.evaluate(at: r.t - half), b = tl.evaluate(at: r.t + half)
+        let a = tl.evaluate(at: t - half), b = tl.evaluate(at: t + half)
         // `half` already spans the shutter duration; do not scale by shutter
         // again or a fast zoom is over-blurred into a long smear.
         let blurPx = travelPx(a, b, r, g)
@@ -851,7 +868,7 @@ public final class Renderer: @unchecked Sendable {
         let tilt = CameraTilt.effective(st.cameraTilt, mode: tiltMode,
                                         maxYaw: tl.camera.maxYaw,
                                         maxPitch: tl.camera.maxPitch,)
-        let sc = max(Double(st.cameraScale), 1)
+        let sc = st.cameraScale.isFinite ? max(Double(st.cameraScale), 1) : 1
         // Reveal's 0.92 entrance scale shrinks the framed video inside the
         // canvas and grows it back to full size. It is a content-rect scale,
         // NOT a source zoom-out: the sample view stays at `sc`, so the smart
@@ -908,7 +925,7 @@ public final class Renderer: @unchecked Sendable {
             enc.setRenderPipelineState(pContent); quad(enc, contentRect, canvasF)
             frag(enc, ContentU(content: contentRect, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam),
                              cropSize: cropSize, scale: Float(sc),
-                             radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0, p: 0,
+                             radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0,
                              tilt: tilt, radii: SIMD4<Float>(g.radii),
                              upRegion: upscaled?.0.region ?? .zero, upTexSize: upscaled?.0.texSize ?? .one,
                              upFactor: upscaled?.0.factor ?? 1, upBlend: upscaled?.1 ?? 0))
@@ -922,9 +939,9 @@ public final class Renderer: @unchecked Sendable {
         if drawingContent, !st.emphasis.highlights.isEmpty {
             enc.setRenderPipelineState(pHighlight)
             for mark in st.emphasis.highlights where mark.opacity > 0.001 {
-                let start = g.toCanvas(SIMD2(Double(mark.rect.x), Double(mark.rect.y)), cam: cam, scale: sc, crop: cropBounds)
+                let start = g.toCanvas(SIMD2(Double(mark.rect.x), Double(mark.rect.y)), cam: cam, scale: sc, crop: cropBounds, tilt: tilt)
                 let end = g.toCanvas(SIMD2(Double(mark.rect.x + mark.rect.z),
-                                            Double(mark.rect.y + mark.rect.w)), cam: cam, scale: sc, crop: cropBounds)
+                                            Double(mark.rect.y + mark.rect.w)), cam: cam, scale: sc, crop: cropBounds, tilt: tilt)
                 let bounds = SIMD4<Float>(Float(min(start.x, end.x)), Float(min(start.y, end.y)),
                                            Float(abs(end.x - start.x)), Float(abs(end.y - start.y)))
                 let mode: Int32 = switch mark.style {
@@ -977,7 +994,7 @@ public final class Renderer: @unchecked Sendable {
             // full strength, at 1 it would leave a hard edge. Both are skipped
             // so the wave always starts and ends on nothing.
             let live = st.clickFX.filter { $0.progress > 0 && $0.progress < 1 }
-            let centers = live.map { g.toCanvas(SIMD2(Double($0.position.x), Double($0.position.y)), cam: cam, scale: sc, crop: cropBounds) }
+            let centers = live.map { g.toCanvas(SIMD2(Double($0.position.x), Double($0.position.y)), cam: cam, scale: sc, crop: cropBounds, tilt: tilt) }
             var ringSource: MTLTexture?
             // SMOOTHNESS: copy only the union of the ring quads (plus the wave's
             // displacement), not the whole canvas, once per frame.
@@ -1037,7 +1054,7 @@ public final class Renderer: @unchecked Sendable {
         let cs = st.cursor
         if cs.opacity > 0.01, let atlas, let ent = atlas.entry(cs.shape) {
             let S = 32 * r.backingScale * tl.cursor.size * pxPerSrc * pow(sc, 1 - tl.cursor.effectiveCompensation) * Double(cs.press)
-            let c = g.toCanvas(SIMD2<Double>(Double(cs.position.x), Double(cs.position.y)), cam: cam, scale: sc, crop: cropBounds)
+            let c = g.toCanvas(SIMD2<Double>(Double(cs.position.x), Double(cs.position.y)), cam: cam, scale: sc, crop: cropBounds, tilt: tilt)
             enc.setRenderPipelineState(pCursor)
             quad(enc, SIMD4<Float>(Float(c.x - ent.hot.x * S), Float(c.y - ent.hot.y * S), Float(S), Float(S)), canvasF)
             frag(enc, CursorU(content: content, radius: Float(g.radius), opacity: cs.opacity, layer: UInt32(ent.layer), p: 0))

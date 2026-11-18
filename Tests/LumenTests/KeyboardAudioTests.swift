@@ -199,3 +199,62 @@ private func derive(_ events: [InputEvent], zoom: [ZoomSegment] = [],
     #expect(pack.author == "Mechvibes")
     #expect(pack.attribution?.localizedCaseInsensitiveContains("mechvibes") == true)
 }
+
+// MARK: 5. Brutal acceptance tests (Q4) — measurable, not by ear
+
+/// Every recorded sample in the bundled pack must be reachable through a macOS
+/// virtual keycode. An unrecognised W3C name means a real mechvibes recording
+/// is silently unreachable and that key falls back to another key's sound.
+@Test func KeyboardAudioeveryRecordedPackSampleIsReachableByKeycode() throws {
+    let dir = try #require(TypingPackLoader.dir(for: kPackID))
+    let data = try Data(contentsOf: dir.appendingPathComponent("config.json"))
+    let pack = try JSONDecoder().decode(KeyPack.self, from: data)
+    let buffers = TypingPackLoader.buffers(in: dir)
+    let reachable = Set(buffers.keys)
+    #expect(buffers.count >= 104, "only \(buffers.count) of 104 recorded samples decoded")
+    for name in pack.definitions.keys {
+        let mac = TypingPackLoader.mechvibesToMac[name]
+        #expect(mac != nil, "pack sample '\(name)' has no macOS keycode mapping (unreachable recording)")
+        if let mac { #expect(reachable.contains(mac), "pack sample '\(name)' (key \(mac)) produced no buffer") }
+    }
+}
+
+/// The acoustic attack of each key sample must land at the scheduled keyDown
+/// instant. Leading silence in the source recording shifts every keystroke late.
+/// Measured as the first sample at >= 5% of that slice's peak; must be sample 0.
+@Test func KeyboardAudiokeySampleOnsetIsAlignedToKeyDown() throws {
+    let dir = try #require(TypingPackLoader.dir(for: kPackID))
+    let buffers = TypingPackLoader.buffers(in: dir)
+    #expect(buffers.count >= 104)
+    var worstMs = 0.0, worstCode = -1, lagging = 0
+    for (code, buf) in buffers {
+        guard let ch = buf.floatChannelData else { continue }
+        let n = Int(buf.frameLength), fs = buf.format.sampleRate
+        let pcm = Array(UnsafeBufferPointer(start: ch[0], count: n))
+        let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
+        guard peak > 1e-4, fs > 0 else { continue }
+        let threshold = peak * 0.05
+        let onset = pcm.firstIndex { abs($0) >= threshold } ?? n
+        let ms = Double(onset) / fs * 1000
+        if ms > worstMs { worstMs = ms; worstCode = code }
+        if ms > 2 { lagging += 1 }
+    }
+    #expect(worstMs <= 2.0, "worst key onset lag \(worstMs) ms at keyCode \(worstCode); \(lagging) samples lag")
+}
+
+/// A 1000-key storm at 1 ms spacing is a hostile but legal input. The master
+/// must hold the -1 dBTP ceiling without suppressing normal typing.
+@Test func KeyboardAudiothousandKeyStormDoesNotClip() throws {
+    let keys: [UInt16] = [0, 55, 56, 58, 59, 49, 36, 51, 123, 126]
+    let events = (0..<1000).map { i in
+        InputEvent(t: 0.2 + Double(i) * 0.001, kind: .keyDown, keyCode: keys[i % keys.count])
+    }
+    let t = derive(events)
+    let mic = [Float](repeating: 0, count: 6 * 48_000)
+    let mixer = AudioMixer(mic: mic, micOffset: 0, system: nil, systemOffset: 0)
+    let mixed = try #require(mixer.mix(t))
+    #expect(mixed.lufs.isFinite)
+    #expect(mixed.truePeakDb <= -1 + 0.01, "1000-key storm true peak \(mixed.truePeakDb) dBTP clips")
+    #expect(mixed.l.allSatisfy { $0.isFinite && abs($0) <= 1 })
+    #expect(mixed.r.allSatisfy { $0.isFinite && abs($0) <= 1 })
+}

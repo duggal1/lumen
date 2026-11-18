@@ -85,6 +85,23 @@ public enum CameraTilt {
         return SIMD2(min(max(s.x, -0.5), 0.5), min(max(s.y, -0.5), 0.5))
     }
 
+    /// Inverse of `homography`: source-normalized -> canvas-normalized.
+    /// Overlays live in source space; mapping them through this before the
+    /// canvas transform keeps them locked to the pixels they annotate when the
+    /// camera is tilted. Round-trips exactly for any in-range tilt.
+    public static func inverseHomography(_ s: SIMD2<Float>, tiltDeg: SIMD2<Float>) -> SIMD2<Float> {
+        let q = SIMD2<Float>(finite(s.x, 0.5), finite(s.y, 0.5))
+        guard !isFlat(tiltDeg) else { return q }
+        let yaw = Double(finite(tiltDeg.x, shaderCeiling)) * Double(deg)
+        let pitch = Double(finite(tiltDeg.y, shaderCeiling)) * Double(deg)
+        let ax = Float(tan(yaw) / Double(perspectiveDistance))
+        let ay = Float(tan(pitch) / Double(perspectiveDistance))
+        let zmin = 1 - 0.5 * (abs(ax) + abs(ay))
+        let denom = max(zmin - ax * q.x - ay * q.y, 1e-4)
+        let n = q / denom
+        return SIMD2(min(max(n.x, -0.5), 0.5), min(max(n.y, -0.5), 0.5))
+    }
+
     /// Source-pixel sample point for one output pixel, including the
     /// intelligent Area crop. The returned point is always inside both the
     /// crop rect and the source texture, for any tilt and any camera center.

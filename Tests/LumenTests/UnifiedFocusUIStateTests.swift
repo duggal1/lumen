@@ -178,4 +178,28 @@ struct UnifiedFocusUIStateTests {
             #expect(!src.contains(banned), "\(banned) is a removed page")
         }
     }
+
+    // MARK: Q5 — flat tile selection, no strokes or brackets
+
+    @Test func contentTilesNeverWearStrokesOrBrackets() throws {
+        for file in ["CanvasPresetGrid.swift", "DitherPaletteGrid.swift",
+                     "ClickSoundGrid.swift", "UnifiedFocusPage.swift"] {
+            let src = try source("Sources/LumenUI/\(file)")
+            for banned in [".stroke(", ".strokeBorder(", "CornerBrackets", "ColorPicker"] {
+                #expect(!src.contains(banned), "\(banned) must not mark a tile in \(file)")
+            }
+        }
+        let helper = try source("Sources/LumenUI/TileSelection.swift")
+        #expect(helper.contains("Tok.accentSoft"))
+        #expect(helper.contains("Tok.accentText"))
+        #expect(!helper.contains(".stroke("), "selection is a fill, never an outline")
+    }
+
+    @Test func focusPageUsesOnlyTokensForFontsAndPointer() throws {
+        let page = try source("Sources/LumenUI/UnifiedFocusPage.swift")
+        #expect(!page.contains(".font(.system("), "no raw font sizes in features")
+        #expect(!page.contains(".pointerStyle("), "pointer style belongs in clickable()")
+        let components = try source("Sources/LumenUI/Components.swift")
+        #expect(components.contains("func clickable"))
+    }
 }

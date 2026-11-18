@@ -75,6 +75,29 @@ import LumenDirector
         #expect(global.minX + (safe?.minX ?? 0) == -1820)
     }
 
+    /// A hostile Area rect can carry finite but astronomical coordinates whose
+    /// min/max arithmetic overflows to infinity inside CGRect.intersection.
+    /// Whatever survives validation must still be a finite, on-screen region.
+    @Test func regionValidationSurvivesExtremeFiniteCoordinates() {
+        let bounds = CGRect(x: -100, y: -200, width: 1920, height: 1080)
+        let hostile = [
+            CGRect(x: CGFloat.greatestFiniteMagnitude, y: 0, width: CGFloat.greatestFiniteMagnitude, height: 100),
+            CGRect(x: -1e300, y: -1e300, width: 1e300, height: 1e300),
+            CGRect(x: 100, y: 100, width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+            CGRect(x: -100, y: -200, width: CGFloat.greatestFiniteMagnitude, height: 1080),
+            CGRect(x: 0, y: 0, width: 16, height: CGFloat.nan)
+        ]
+        for rect in hostile {
+            guard let safe = CaptureValidation.safeRegion(rect, in: bounds) else { continue }
+            #expect(safe.origin.x.isFinite && safe.origin.y.isFinite)
+            #expect(safe.width.isFinite && safe.height.isFinite)
+            #expect(safe.width >= CaptureValidation.minimumRegionPoints)
+            #expect(safe.height >= CaptureValidation.minimumRegionPoints)
+            #expect(safe.minX >= bounds.minX && safe.minY >= bounds.minY)
+            #expect(safe.maxX <= bounds.maxX && safe.maxY <= bounds.maxY)
+        }
+    }
+
     // MARK: - Resource-light capture: bounded queues, visible overflow
 
     /// The event ring is single-producer/single-consumer and fixed capacity.

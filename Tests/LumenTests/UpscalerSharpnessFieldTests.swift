@@ -123,7 +123,7 @@ private func readback(_ device: MTLDevice, _ cb: MTLCommandBuffer,
                                                       width: w, height: h, mipmapped: false)
     d.usage = [.shaderRead]; d.storageMode = .shared
     let dst = try #require(device.makeTexture(descriptor: d))
-    guard let blit = cb.makeBlitCommandEncoder() else { return [] }
+    let blit = try #require(cb.makeBlitCommandEncoder(), "No blit encoder: readback cannot be verified")
     blit.copy(from: texture,
               sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
               sourceSize: MTLSize(width: w, height: h, depth: 1),
@@ -136,17 +136,19 @@ private func readback(_ device: MTLDevice, _ cb: MTLCommandBuffer,
     return bytes
 }
 
-/// The measurable contract: at both a modest 2x and a hostile 10x, the real
-/// upscaler must be markedly sharper than plain sampling of the same field.
+/// The measurable contract: EVERY advertised rung must be markedly sharper
+/// than plain sampling of the same text/UI field. Testing only 2x and 10x let
+/// the intermediate labels 3/4/5/6/8 ship unverified.
 @Test func upscalerBeatsPlainSamplingOnTextUIField() throws {
-    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let device = try #require(MTLCreateSystemDefaultDevice(), "No Metal device: sharpness field test cannot run")
+    let queue = try #require(device.makeCommandQueue(), "No Metal command queue")
     let kernels = try FXKernels(device: device)
     let up = Upscaler(kernels: kernels)
     let srcPx = Field.pixels()
     let src = try Field.texture(device, srcPx)
 
-    for (n, f) in [2, 10].enumerated() {
-        guard let cb = queue.makeCommandBuffer() else { return }
+    for (n, f) in Upscaler.ladder.enumerated() {
+        let cb = try #require(queue.makeCommandBuffer(), "No command buffer")
         let result = try up.upscale(cb, source: src, region: SIMD4(0, 0, Int32(Field.w), Int32(Field.h)),
                                     factor: f, params: UpscaleParams(), frameID: UInt64(7000 + n))
         let ow = Field.w * f, oh = Field.h * f

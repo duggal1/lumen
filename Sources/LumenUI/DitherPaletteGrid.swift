@@ -24,18 +24,18 @@ struct DitherPaletteGrid: View {
                                        saturation: model.timeline.style.ditherSaturation)
                             .aspectRatio(1.6, contentMode: .fit)
                             .clipShape(RoundedRectangle(cornerRadius: Radius.field))
-                            .overlay(RoundedRectangle(cornerRadius: Radius.field)
-                                .stroke(selected ? Tok.accent : .clear, lineWidth: 2))
+                            .tileSelection(selected)
                         Text(palette.0)
                             .font(AppType.caption)
-                            .foregroundStyle(selected ? Tok.text : Tok.text2)
+                            .foregroundStyle(TileSelection.ink(selected))
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .pointerStyle(.link)
+                .clickable()
+                .focusRing()
                 .accessibilityLabel(palette.0)
                 .accessibilityValue(selected ? "Selected" : "")
             }

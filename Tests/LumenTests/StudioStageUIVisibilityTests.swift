@@ -80,4 +80,27 @@ import Foundation
         #expect(app.floatingBarHidden)
         #expect(FloatingBarVisibility.isHidden())
     }
+
+    @Test func oneStatusItemThatNeverStealsFocus() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        func source(_ relative: String) throws -> String {
+            try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+        }
+        func code(_ text: String) -> String {
+            text.split(separator: "\n")
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                .joined(separator: "\n")
+        }
+        let toggle = code(try source("Sources/LumenUI/Floating/MenuBarToggle.swift"))
+        #expect(toggle.contains("statusItem(withLength:"), "one status item exists")
+        for banned in ["NSApp.activate", "makeKeyAndOrderFront", "NSMenu("] {
+            #expect(!toggle.contains(banned), "\(banned) steals focus or adds a second menu")
+        }
+        // No other file in the UI or app target creates a second status item.
+        for file in ["Sources/LumenUI/AppModel.swift", "Sources/LumenApp/LumenApp.swift"] {
+            #expect(!code(try source(file)).contains("statusItem(withLength:"),
+                    "\(file) must not create a second menu-bar icon")
+        }
+    }
 }

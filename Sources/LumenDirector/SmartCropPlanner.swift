@@ -42,7 +42,13 @@ public enum BrowserChrome {
 
     static func isBrowserName(_ s: String?) -> Bool {
         let l = label(s)
-        return !l.isEmpty && browserNames.contains { l.contains($0) }
+        guard !l.isEmpty else { return false }
+        // Whole tokens only. A substring test made "arc" match the "arc" inside
+        // "search", so every address/search field labelled a browser and its
+        // chrome got cropped in an unrelated app. `window|…|Google Chrome`
+        // tokenizes to …/google/chrome, which still matches "chrome".
+        let tokens = l.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        return tokens.contains { browserNames.contains($0) }
     }
 
     static func isAddressBar(_ f: AXFrame) -> Bool {

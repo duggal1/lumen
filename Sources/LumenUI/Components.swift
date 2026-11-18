@@ -208,6 +208,12 @@ extension View {
     func focusRing() -> some View {
         self.focusable().focusEffectDisabled().modifier(FocusRing())
     }
+
+    /// Hand cursor for every clickable control. Pointer style lives here, never
+    /// at a feature call site (DESIGN.md §13).
+    func clickable(_ enabled: Bool = true) -> some View {
+        self.pointerStyle(enabled ? .link : .default)
+    }
 }
 
 // MARK: Menus (custom panels, never system glass)

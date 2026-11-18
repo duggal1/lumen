@@ -84,10 +84,20 @@ enum CAM {
     }
 
     /// Dead knobs are removed, not left wired to nothing: changing them cannot
-    /// change a single byte of the bake.
+    /// change a single byte of the bake. This mutates every knob the recorded
+    /// camera does not consume (tilt dynamics, live-only feel, upscaler, old
+    /// planner policy) while keeping the knobs that do shape a fixed-shot bake
+    /// identical. A single leak fails this.
     @Test func floatAndSeedKnobsCannotChangeTheBake() {
-        var a = CAM.params(.off);        var b = CAM.params(.off);        let zoom = [CAM.auto(2), CAM.auto(4.5, 1.2, scale: 1.6, x: 0.7, y: 0.3)]
-        #expect(CAM.solve(zoom, duration: 8, p: a) == CAM.solve(zoom, duration: 8, p: b))
+        let zoom = [CAM.auto(2), CAM.auto(4.5, 1.2, scale: 1.6, x: 0.7, y: 0.3)]
+        let a = CAM.params(.off)
+        var b = CAM.params(.off)
+        b.omegaTilt = 60; b.maxYaw = 40; b.maxPitch = 40
+        b.omegaZoom = 99; b.sensitivity = 1; b.shutter = 1
+        b.maxSamples = 2; b.upscaleEnabled = false; b.upscaleMaxFactor = 2
+        b.minScale = 3; b.baseScale = 3; b.zoomOutGap = 9; b.panThroughGap = 9
+        #expect(CAM.solve(zoom, duration: 8, p: a) == CAM.solve(zoom, duration: 8, p: b),
+                "a retired knob leaked into the recorded camera bake")
     }
 
     /// No zoom, no events: the camera must be numerically frozen for its whole
@@ -259,6 +269,51 @@ enum CAM {
         let last = tr.lz.count - 1
         #expect(abs(Double(tr.lz[last])) < 1e-5)
         #expect(abs(Double(tr.nx[last]) - 0.5) < 1e-5)
+    }
+
+    /// Every hostile tilt knob is guarded with `isFinite`, but `maxScale` is
+    /// fed straight into `log(...)`. An infinite or NaN cap (from a corrupt
+    /// project or a hostile plan) must still yield a finite, bounded bake.
+    @Test func infiniteMaxScaleNeverLeaksNonFinitePose() {
+        for cap in [Double.infinity, 1e300, Double.nan] {
+            var p = CAM.params(.off)
+            p.maxScale = cap
+            let zoom = [ZoomSegment(start: 1, end: 3, scale: .infinity,
+                                    focus: .fixed(x: 0.4, y: 0.6), origin: .auto),
+                        CAM.auto(4, 1)]
+            let tr = CAM.solve(zoom, duration: 7, p: p)
+            #expect(tr.lz.count > 1, "cap \(cap): empty track")
+            for k in tr.lz.indices {
+                #expect(Double(tr.lz[k]).isFinite && Double(tr.nx[k]).isFinite && Double(tr.ny[k]).isFinite,
+                        "cap \(cap): non-finite pose at \(k) (z=\(tr.lz[k]))")
+                #expect(tr.vz[k].isFinite && tr.az[k].isFinite, "cap \(cap): non-finite derivative at \(k)")
+            }
+        }
+    }
+
+    /// `centerOffset` is a single static framing bias. For a follow shot that
+    /// carries a recorded path it is applied once in `pathCenters` and (wrongly)
+    /// a second time in `holdCenter`; global-cursor follow applies it only once.
+    /// At 2x the one-application shift is -offset * exp(-log2) = -offset/2.
+    @Test func followPathCenterOffsetIsAppliedExactlyOnce() {
+        let seg = ZoomSegment(start: 1, end: 3, scale: 2, focus: .follow, origin: .auto)
+        let path: [(t: Double, c: SIMD2<Double>)] = [
+            (t: 0, c: SIMD2(0.5, 0.5)), (t: 1, c: SIMD2(0.5, 0.5)),
+            (t: 2, c: SIMD2(0.5, 0.5)), (t: 3, c: SIMD2(0.5, 0.5)),
+        ]
+        func holdX(_ offset: Double) -> Double {
+            var p = CAM.params(.off)
+            p.centerOffsetX = offset
+            let tm = TimeMap(sourceDuration: 5)
+            let cursor = CursorTrack(count: Int(5 * gridRate) + 1)
+            let tr = CameraSolver.solve(zoom: [seg], tm: tm, cursor: cursor, p: p,
+                                        src: CAM.source, outDur: 5, loop: nil,
+                                        follow: [seg.id: path], cancelled: { false })!
+            return Double(tr.nx[CAM.idx(2.0, tr)])
+        }
+        let zero = holdX(0), shifted = holdX(0.2)
+        #expect(abs((shifted - zero) - (-0.1)) < 2e-3,
+                "centerOffset applied \(abs(shifted - zero) / 0.1)x; expected once (-0.1), got shift \(shifted - zero)")
     }
 
     @Test func degenerateDurationsScalesAndCentresStayBounded() {

@@ -23,8 +23,7 @@ public final class ContentPass {
 
     /// Runs the upscaler if magnification is high enough. Encodes its own compute work into `cb` (call before `encode`).
     public func prepareUpscale(_ up: Upscaler, _ cb: MTLCommandBuffer, layout L: ContentLayout, camCenter c: SIMD2<Float>, zoom: Float,
-                               source: MTLTexture, sourceID: UInt64, params p: UpscaleParams,
-                               extraMargin: Double = 0) throws -> (UpscaleResult, Float)? {
+                               source: MTLTexture, sourceID: UInt64, params p: UpscaleParams) throws -> (UpscaleResult, Float)? {
         let m = Double(zoom * L.baseMagnification)
         let blend = Upscaler.blend(forMagnification: m, p)
         guard blend > 0 else { return nil }
@@ -33,7 +32,7 @@ public final class ContentPass {
         // texture is reused while the camera drifts.
         let region = Upscaler.quantize(
             Upscaler.region(center: SIMD2(Double(c.x), Double(c.y)), view: view,
-                            source: SIMD2(Double(L.srcSize.x), Double(L.srcSize.y)), margin: 12 + extraMargin),
+                            source: SIMD2(Double(L.srcSize.x), Double(L.srcSize.y)), margin: 12),
             source: SIMD2(Double(L.srcSize.x), Double(L.srcSize.y)))
         let f = Upscaler.factor(forMagnification: m, maxFactor: p.maxFactor)
         return (try up.upscale(cb, source: source, region: region, factor: f, params: p, frameID: sourceID), blend)

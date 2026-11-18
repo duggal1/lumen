@@ -38,8 +38,8 @@ enum SpeedRamps {
 
 /// Chooses framing and source-time scenes; the solver owns camera motion.
 ///
-/// The planner is attention-first. Every input (click, typing burst, hover
-/// dwell, visual change) is an intent with a position, a rect and a time. The
+/// The planner is attention-first. Every input (click, typing burst, visual
+/// change) is an intent with a position, a rect and a time. The
 /// intents are grouped into scenes. Pointer-led scenes carry a follow path so
 /// the camera can glide with the pointer; a typing burst is framed whole on
 /// its resolved field and deliberately carries no follow path.
@@ -50,7 +50,7 @@ enum ZoomPlanner {
         var segments: [ZoomSegment] = []
         var follow: [UUID: [FollowPoint]] = [:]
     }
-    enum IntentKind { case click, typing, hover, visual, marker, dialog }
+    enum IntentKind { case click, typing, visual, marker, dialog }
     struct Intent {
         var kind: IntentKind
         var t: Double, tEnd: Double            // source seconds
@@ -94,28 +94,6 @@ enum ZoomPlanner {
             y >= frame.y - slack && y <= frame.y + frame.h + slack &&
             frame.x + frame.w > 0 && frame.y + frame.h > 0 &&
             frame.x < width && frame.y < height
-    }
-
-    /// The smallest resolved AX element that contains `p`. A browser window is
-    /// a single AX element larger than the text field inside it; picking the
-    /// biggest element aims the camera at the window and loses the caret.
-    static func smallestField(containing p: SIMD2<Double>, in frames: [AXFrame],
-                              slack: Double, width: Double, height: Double,
-                              backing: Double) -> AXFrame? {
-        var best: AXFrame?
-        var bestArea = Double.greatestFiniteMagnitude
-        for f in frames {
-            guard f.x.isFinite, f.y.isFinite, f.w.isFinite, f.h.isFinite,
-                  f.w >= 4 * backing, f.h >= 6 * backing,
-                  f.w <= 1.05 * width, f.h <= 1.05 * height,
-                  f.x + f.w > 0, f.y + f.h > 0, f.x < width, f.y < height else { continue }
-            if let a = f.anchor, !a.resolved { continue }
-            guard p.x >= f.x - slack, p.x <= f.x + f.w + slack,
-                  p.y >= f.y - slack, p.y <= f.y + f.h + slack else { continue }
-            let area = f.w * f.h
-            if area < bestArea { bestArea = area; best = f }
-        }
-        return best
     }
 
     /// Typing framing lives in `TypingFocus`. One resolved field, one shot,
@@ -363,15 +341,11 @@ enum ZoomPlanner {
         }
         intents += dialogIntents(ax: ax, events: sorted, markers: markers, tm: tm, W: W, H: H)
         // Passive visual intents are lowest priority: the scene loop never lets
-        // a `.visual` or `.hover` intent displace a click/typing/dialog subject.
+        // a `.visual` intent displace a click/typing/dialog subject.
         // VisualAutofocus composes VisualZoom internally (with `.move` stripped
         // so hovering can never create a shot) and adds anticipation + bounded
         // holds. Do NOT also call VisualZoom.intents here — that duplicates shots.
         intents += VisualAutofocus.intents(activity, events: sorted, input: intents, src: src, tm: tm)
-        // Hover never opens a shot. It may only steer a scene that is already
-        // open, and only when that scene was itself opened by a hover/visual
-        // intent — never a click, typing or dialog subject.
-        intents.removeAll { $0.kind == .hover }
         intents.sort { a, b in
             if a.t != b.t { return a.t < b.t }
             // Deterministic tie order: the subject that opened a dialog is not
@@ -382,7 +356,6 @@ enum ZoomPlanner {
                 case .typing: return 1
                 case .click, .marker: return 2
                 case .visual: return 3
-                case .hover: return 4
                 }
             }
             return rank(a.kind) < rank(b.kind)
@@ -474,8 +447,6 @@ enum ZoomPlanner {
                 let fit = min(W / max(r.width * 1.35, 1), H / max(r.height * 1.35, 1))
                 guard fit >= max(lo, 1.2) else { return 1 }
                 s = min(clamp(fit, lo, hi), 1.6)
-            case .hover:
-                s = clamp(1.2 + 0.5 * clamp(p.sensitivity, 0, 1), lo, min(hi, 1.6))
             case .dialog:
                 guard let r = i.frameRect ?? i.rect, r.width > 1, r.height > 1 else { return 1 }
                 // Frame the entire dialog, not a slice of it. The margin is
@@ -606,19 +577,10 @@ enum ZoomPlanner {
                 continue
             }
             switch it.kind {
-            case .hover:
-                // A dwell only steers a scene that hover itself opened. It must
-                // never pull the camera off a click, typing or dialog target.
-                if o.kind == .hover {
-                    var n = o
-                    n.c = clampC(anchor, o.scale)
-                    n = withPoint(n, it.t, anchor)
-                    cur = n
-                }
             case .visual:
                 // Passive visual autofocus may steer an open visual scene, but
                 // never displaces an explicit click/typing/dialog subject.
-                if o.kind == .visual || o.kind == .hover || inside(anchor, o.c, o.scale) {
+                if o.kind == .visual || inside(anchor, o.c, o.scale) {
                     var n = o
                     if o.kind != .click && o.kind != .typing && o.kind != .dialog { n.c = clampC(anchor, o.scale) }
                     n = withPoint(n, it.t, anchor)
@@ -647,7 +609,7 @@ enum ZoomPlanner {
         }
 
         // ---- 3. cursor paths ----
-        // Hover and visual scenes get the pointer motion inside their viewport;
+        // Visual scenes get the pointer motion inside their viewport;
         // a click scene gets drag motion only (the click itself is the target,
         // and a later hover must not steal it). Typing and marker scenes keep
         // their steady subject — a field rect or a marker rect — and cursor

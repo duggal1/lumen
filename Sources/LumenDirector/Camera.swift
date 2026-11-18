@@ -85,9 +85,13 @@ enum CameraSolver {
             let magnitude = 0.22 + 0.16 * (lz / 0.6931471805599453)
             let base = max(leadBase, magnitude) / max(ease, 0.55)
             // 2560 px is a conservative source-width reference (covers 1920 and
-            // 2560 masters). Size the runway from the shared jerk limit (with
-            // headroom for the two continuity slopes a bridged handoff adds),
-            // so the lens never arrives by snapping into place.
+            // 2560 masters). Size the runway from the shared jerk limit so the
+            // lens never arrives by snapping into place. Do NOT pass the two
+            // continuity slopes here: doing so lengthens the lead-in enough that
+            // `on` moves earlier than a return runway allows, and chained shots
+            // then fail to reach the full frame between them (measured: 1.0036x
+            // instead of 1.0x). The headroom for a bridge's slopes comes from
+            // cameraJerk (1e6) sitting above filmJerk (7e5), not from this arg.
             let jerkFloor = MotionLimits.minDuration(delta: pan * 2560,
                                                      continuitySlopes: 0,
                                                      maxJerk: MotionLimits.filmJerk)
@@ -188,8 +192,14 @@ enum CameraSolver {
                     let from = s.path[j], to = s.path[j + 1], gap = to.t - from.t
                     if gap <= 0.30 { c = from.c + (to.c - from.c) * clamp((t - from.t) / max(gap, 1e-6), 0, 1) }
                 }
-                xs.append(c.x + lean - offset.x * exp(-s.lz))
-                ys.append(c.y - offset.y * exp(-s.lz))
+                // `centerOffset` is applied exactly once, in `holdCenter`, so
+                // it is a single static framing bias. Applying it here too
+                // doubled the shift on recorded-path follow shots (the global
+                // cursor path applies it only once), drifting the subject left
+                // or up beyond the requested bias. `lean` is a separate,
+                // deliberate follow-path offset and stays.
+                xs.append(c.x + lean)
+                ys.append(c.y)
             }
             xs = zeroPhaseSmooth(centredPlay(xs, halfZone: 0.04 / scale), omega: omegaPan, dt: dt)
             ys = zeroPhaseSmooth(centredPlay(ys, halfZone: 0.06 / scale), omega: omegaPan, dt: dt)

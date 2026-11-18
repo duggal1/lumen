@@ -24,14 +24,14 @@ import LumenProject
 }
 
 @Test func upscalerProducesMeasuredResolution() throws {
-    guard let device = MTLCreateSystemDefaultDevice() else { return }
+    let device = try #require(MTLCreateSystemDefaultDevice(), "No Metal device: resolution test cannot run")
     let kernels = try FXKernels(device: device)
     let up = Upscaler(kernels: kernels)
     let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 256, height: 256, mipmapped: false)
     desc.usage = [.shaderRead, .shaderWrite]
     desc.storageMode = .shared
     let source = try #require(device.makeTexture(descriptor: desc))
-    guard let cb = device.makeCommandQueue()?.makeCommandBuffer() else { return }
+    let cb = try #require(device.makeCommandQueue()?.makeCommandBuffer(), "No command buffer")
     let result = try up.upscale(cb, source: source, region: SIMD4(0, 0, 256, 256),
                                 factor: 6, params: UpscaleParams(), frameID: 42)
     cb.commit()
@@ -67,7 +67,8 @@ import LumenProject
     // Real-time proof: upscale the actual zoom workload — a 480x270 view
     // region (1920x1080 source at 4x magnification) at 4x — after warmup,
     // and require average GPU time inside a 60fps budget.
-    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let device = try #require(MTLCreateSystemDefaultDevice(), "No Metal device: budget test cannot run")
+    let queue = try #require(device.makeCommandQueue(), "No Metal command queue")
     let kernels = try FXKernels(device: device)
     let up = Upscaler(kernels: kernels)
     let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1920, height: 1080, mipmapped: false)
@@ -76,7 +77,7 @@ import LumenProject
     let source = try #require(device.makeTexture(descriptor: desc))
     var times: [Double] = []
     for i in 0..<20 {
-        guard let cb = queue.makeCommandBuffer() else { return }
+        let cb = try #require(queue.makeCommandBuffer(), "No command buffer")
         let start = Date()
         _ = try up.upscale(cb, source: source, region: SIMD4(0, 0, 480, 270),
                            factor: 4, params: UpscaleParams(), frameID: UInt64(100 + i))

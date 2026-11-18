@@ -39,6 +39,11 @@ enum TypingFocus {
         for e in keys.sorted(by: { $0.t < $1.t }) {
             guard e.axFrameIndex > 0, Int(e.axFrameIndex) <= ax.count else { continue }
             let f = ax[Int(e.axFrameIndex) - 1]
+            // The window itself is not a text field. AX capture records it as a
+            // resolved `window|…` frame, and a keystroke can carry its index.
+            // Framing it would put the entire screen under the camera. Reject it
+            // by label and by size — never invent a field from a window.
+            if f.label?.hasPrefix("window|") == true { continue }
             // An unresolved sample, or one too old to describe this keystroke,
             // is not evidence about the field being typed into.
             if let a = f.anchor {
@@ -46,7 +51,7 @@ enum TypingFocus {
                 if a.sampledAt > 0, e.t - a.sampledAt > 2.0 { continue }
             }
             guard f.x.isFinite, f.y.isFinite, f.w.isFinite, f.h.isFinite,
-                  f.w >= 4 * b, f.h >= 6 * b, f.w <= 1.05 * W, f.h <= 1.05 * H,
+                  f.w >= 4 * b, f.h >= 6 * b, f.w <= 0.95 * W, f.h <= 0.95 * H,
                   f.x + f.w > 0, f.y + f.h > 0, f.x < W, f.y < H else { continue }
             let field = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
             // If a caret is present it must belong to this field. Its position

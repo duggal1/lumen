@@ -22,20 +22,19 @@ struct CanvasPresetGrid: View {
                 } label: {
                     VStack(spacing: 6) {
                         CanvasPresetPreview(preset: preset)
-                            .padding(2)
-                            .overlay(RoundedRectangle(cornerRadius: Radius.field)
-                                .strokeBorder(selected ? Tok.accent : .clear, lineWidth: 2))
-                        .aspectRatio(1.6, contentMode: .fit)
+                            .tileSelection(selected)
+                            .aspectRatio(1.6, contentMode: .fit)
                         Text(preset.name)
                             .font(AppType.caption)
-                            .foregroundStyle(selected ? Tok.text : Tok.text2)
+                            .foregroundStyle(TileSelection.ink(selected))
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .pointerStyle(.link)
+                .clickable()
+                .focusRing()
                 .accessibilityLabel(preset.name)
                 .accessibilityValue(selected ? "Selected" : "")
                 .accessibilityHint("Select this canvas background")

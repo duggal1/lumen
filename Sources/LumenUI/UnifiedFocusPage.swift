@@ -305,7 +305,7 @@ struct UnifiedFocusPage: View {
                     if let image = Self.previews[style.pack] {
                         Image(nsImage: image).resizable().frame(width: 28, height: 28)
                     } else {
-                        Image(systemName: "cursorarrow").font(.system(size: 14)).foregroundStyle(Tok.text)
+                        Image(systemName: "cursorarrow").font(AppType.glyph).foregroundStyle(Tok.text)
                     }
                 }
                 .frame(height: 44)
@@ -317,7 +317,7 @@ struct UnifiedFocusPage: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
-        .pointerStyle(.link)
+        .clickable()
         .focusRing()
         .accessibilityLabel(style.accessibilityLabel)
         .accessibilityAddTraits(selected ? .isSelected : [])

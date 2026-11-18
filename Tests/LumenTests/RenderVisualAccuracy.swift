@@ -291,8 +291,61 @@ private enum RV {
         #expect(RV.diff(a.pixels, b.pixels) == 0, "same request must render identical pixels")
     }
 
-    /// Evidence driver: 60 fps synthetic timeline (full -> zoom in -> dialog
-    /// reveal -> zoom out), PNG frames + MP4 + read-back report, headless.
+    /// With the shutter off, the same absolute time must produce the same
+    /// pixels on every export grid, and repeated calls must not accumulate
+    /// state. This is the determinism half of the 60/120/240 contract.
+    @Test func renderIsDeterministicAcrossFrameRates() throws {
+        let (r, src) = try RV.setup()
+        let tl = RV.timeline(shutter: 0, fps: 60, autoZoom: true,
+                             events: [InputEvent(t: 0.32, kind: .down, x: 240, y: 120)])
+        let reference = try RV.render(r, tl, src, t: 0.45, fps: 60)
+        for fps in [120.0, 240.0] {
+            let out = try RV.render(r, tl, src, t: 0.45, fps: fps)
+            #expect(RV.diff(reference.pixels, out.pixels) == 0,
+                    "same time rendered differently at \(Int(fps))fps")
+        }
+        for _ in 0..<5 {
+            let again = try RV.render(r, tl, src, t: 0.45, fps: 60)
+            #expect(RV.diff(reference.pixels, again.pixels) == 0,
+                    "repeated renders accumulated state")
+        }
+    }
+
+    /// A non-finite request time or live camera must never reach a shader
+    /// uniform. Swift's max(NaN, 1) is NaN (unlike C fmax), so an unguarded
+    /// zoom scale turns the sample view into NaN and the frame undefined.
+    /// The oracle is the finite fallback the renderer must snap to: t=0,
+    /// the crop centre, and 1x for a hostile scale.
+    @Test func hostileTimeAndCameraNeverProduceUndefinedPixels() throws {
+        let (r, src) = try RV.setup()
+        let tl = RV.staticTimeline(shutter: 0, fps: 60)
+        let good = try RV.render(r, tl, src, t: 0)
+        for bad in [Double.nan, .infinity, -.infinity] {
+            let out = try RV.render(r, tl, src, t: bad)
+            #expect(RV.diff(good.pixels, out.pixels) == 0,
+                    "t=\(bad) changed pixels of a static frame")
+        }
+        // A non-finite centre is clamped to the crop centre; scale stays 2x.
+        let centre = SIMD2<Float>(Float(RV.w) / 2, Float(RV.h) / 2)
+        let centreRef = try RV.render(r, tl, src, t: 0,
+                                      live: RV.liveState(crop: nil, center: centre, scale: 2))
+        for bad in [SIMD2<Float>(.nan, 135), SIMD2<Float>(.infinity, 135), SIMD2<Float>(240, -.infinity)] {
+            let out = try RV.render(r, tl, src, t: 0,
+                                    live: RV.liveState(crop: nil, center: bad, scale: 2))
+            #expect(RV.diff(centreRef.pixels, out.pixels) == 0,
+                    "centre \(bad) did not snap to the crop centre")
+        }
+        // A non-finite scale falls back to 1x, the nearest finite legal zoom.
+        let scaleRef = try RV.render(r, tl, src, t: 0,
+                                     live: RV.liveState(crop: nil, center: centre, scale: 1))
+        for bad in [Float.nan, .infinity, -.infinity] {
+            let out = try RV.render(r, tl, src, t: 0,
+                                    live: RV.liveState(crop: nil, center: centre, scale: bad))
+            #expect(RV.diff(scaleRef.pixels, out.pixels) == 0,
+                    "scale \(bad) did not fall back to the finite 1x pose")
+        }
+    }
+
     @Test func visualSequenceVerifier() async throws {
         let (r, src) = try RV.setup()
         let dir = try RV.visualDir()

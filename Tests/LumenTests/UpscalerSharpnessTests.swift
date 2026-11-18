@@ -52,7 +52,7 @@ private func readback(_ device: MTLDevice, _ cb: MTLCommandBuffer,
     d.usage = [.shaderRead]
     d.storageMode = .shared
     let dst = try #require(device.makeTexture(descriptor: d))
-    guard let blit = cb.makeBlitCommandEncoder() else { return [] }
+    let blit = try #require(cb.makeBlitCommandEncoder(), "No blit encoder: readback cannot be verified")
     blit.copy(from: texture,
               sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
               sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1),
@@ -75,12 +75,13 @@ private func luma(_ bytes: [UInt8], _ stride: Int, _ x: Int, _ y: Int) -> Double
 /// A one-pixel stroke must not melt into a grey smear at 10x. Guards peak
 /// contrast, the width of the bright core, the transition width and ringing.
 @Test func upscalerKeepsSinglePixelStrokesCrispAtTenX() throws {
-    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let device = try #require(MTLCreateSystemDefaultDevice(), "No Metal device: stroke sharpness test cannot run")
+    let queue = try #require(device.makeCommandQueue(), "No Metal command queue")
     let kernels = try FXKernels(device: device)
     let up = Upscaler(kernels: kernels)
     let s = 64, factor = 10
     let source = try sourceTexture(device, width: s, height: s, pattern: .singleStroke)
-    guard let cb = queue.makeCommandBuffer() else { return }
+    let cb = try #require(queue.makeCommandBuffer(), "No command buffer")
     let result = try up.upscale(cb, source: source, region: SIMD4(0, 0, Int32(s), Int32(s)),
                                 factor: factor, params: UpscaleParams(), frameID: 9001)
     let bytes = try readback(device, cb, result.texture)
@@ -114,12 +115,13 @@ private func luma(_ bytes: [UInt8], _ stride: Int, _ x: Int, _ y: Int) -> Double
 /// Text stems alternate every source pixel. A high-quality kernel keeps that
 /// Nyquist-rate modulation instead of blurring it to flat grey.
 @Test func upscalerKeepsTextStemContrastAtTenX() throws {
-    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let device = try #require(MTLCreateSystemDefaultDevice(), "No Metal device: stroke sharpness test cannot run")
+    let queue = try #require(device.makeCommandQueue(), "No Metal command queue")
     let kernels = try FXKernels(device: device)
     let up = Upscaler(kernels: kernels)
     let s = 64, factor = 10
     let source = try sourceTexture(device, width: s, height: s, pattern: .textStripes)
-    guard let cb = queue.makeCommandBuffer() else { return }
+    let cb = try #require(queue.makeCommandBuffer(), "No command buffer")
     let result = try up.upscale(cb, source: source, region: SIMD4(0, 0, Int32(s), Int32(s)),
                                 factor: factor, params: UpscaleParams(), frameID: 9002)
     let bytes = try readback(device, cb, result.texture)

@@ -94,6 +94,33 @@ public enum TypingPackLoader {
     /// never to a random or filesystem-order-dependent choice.
     public static let defaultPackID = "mechvibes-default"
 
+    /// Mechvibes' recorded key-down windows include 1–20 ms of pre-strike room
+    /// noise before the acoustic attack. Scheduling that slice at keyDown plays
+    /// the strike late. Trim to the first sample at ≥5% of the slice peak so the
+    /// transient lands on the event, not after it. Mono packs only (the mixer
+    /// reads channel 0); anything unusual is left untouched.
+    private static func trimmedToAttack(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
+        guard buffer.format.channelCount == 1,
+              let channels = buffer.floatChannelData else { return buffer }
+        let source = channels[0]
+        let frames = Int(buffer.frameLength)
+        guard frames > 64 else { return buffer }
+        let pcm = UnsafeBufferPointer(start: source, count: frames)
+        let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
+        guard peak > 1e-4 else { return buffer }
+        let threshold = peak * 0.05
+        var onset = 0
+        while onset < frames, abs(pcm[onset]) < threshold { onset += 1 }
+        // Never gut a slice: if the attack isn't in the first half, the
+        // recording is unusual and the untrimmed sample is the safer choice.
+        guard onset > 0, onset < frames / 2 else { return buffer }
+        let kept = AVAudioFrameCount(frames - onset)
+        guard let out = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: kept) else { return buffer }
+        out.floatChannelData?[0].update(from: source + onset, count: frames - onset)
+        out.frameLength = kept
+        return out
+    }
+
     /// Resolve a requested pack id deterministically. If it is not present on disk the
     /// one bundled default is returned; repeated calls with the same input are identical.
     public static func resolvedPackID(for requested: String) -> String {
@@ -115,7 +142,7 @@ public enum TypingPackLoader {
         var out: [Int: AVAudioPCMBuffer] = [:]
         for (keyName, value) in pack.definitions {
             guard let def = value, let slice = def.downSlice, let mac = mechvibesToMac[keyName] else { continue }
-            if let buf = try? sliceBuffer(f, startMs: slice.start, durMs: slice.duration) { out[mac] = buf }
+            if let buf = try? sliceBuffer(f, startMs: slice.start, durMs: slice.duration) { out[mac] = trimmedToAttack(buf) }
         }
         // Fn (mac 63) has no W3C code upstream. Give it a real recorded modifier sound
         // rather than silence or an arbitrary fallback sample.
@@ -139,7 +166,7 @@ public enum TypingPackLoader {
                 guard let f = try? AVAudioFile(forReading: url),
                       let buf = try? AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: AVAudioFrameCount(f.length)),
                       (try? f.read(into: buf, frameCount: AVAudioFrameCount(f.length))) != nil else { continue }
-                out[uiohookToMac[code] ?? code] = buf
+                out[uiohookToMac[code] ?? code] = trimmedToAttack(buf)
             }
         } else {
             guard let sound = pack.sound else { return [:] }
@@ -147,7 +174,7 @@ public enum TypingPackLoader {
             guard let f = try? AVAudioFile(forReading: url) else { return [:] }
             for (codeStr, def) in pack.defines {
                 guard let code = Int(codeStr), case .slice(let s, let d) = def else { continue }
-                if let buf = try? sliceBuffer(f, startMs: s, durMs: d) { out[uiohookToMac[code] ?? code] = buf }
+                if let buf = try? sliceBuffer(f, startMs: s, durMs: d) { out[uiohookToMac[code] ?? code] = trimmedToAttack(buf) }
             }
         }
         return out
@@ -199,8 +226,13 @@ public enum TypingPackLoader {
         // Modifiers — each has its own recorded sample in the bundled pack.
         54: "MetaRight", 55: "MetaLeft", 56: "ShiftLeft", 57: "CapsLock", 58: "AltLeft",
         59: "ControlLeft", 60: "ShiftRight", 61: "AltRight", 62: "ControlRight",
-        // Navigation
-        115: "Home", 116: "PageUp", 117: "Delete", 119: "End", 121: "PageDown",
+        // Navigation. 114 is the macOS Help/Insert key; 110–113 are the
+        // reserved extended codes PC keyboards report as ContextMenu,
+        // PrintScreen, ScrollLock and Pause. Without these, six recorded
+        // pack samples — including F4 — can never be selected by any key.
+        110: "ContextMenu", 111: "PrintScreen", 112: "ScrollLock", 113: "Pause",
+        114: "Insert",
+        115: "Home", 116: "PageUp", 117: "Delete", 118: "F4", 119: "End", 121: "PageDown",
         123: "ArrowLeft", 124: "ArrowRight", 125: "ArrowDown", 126: "ArrowUp",
         // Function row
         96: "F5", 97: "F6", 98: "F7", 99: "F3", 100: "F8", 101: "F9", 102: "F10",

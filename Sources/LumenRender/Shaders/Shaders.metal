@@ -252,7 +252,7 @@ static float3 sampleMip(texture2d<float> t, float2 uv, float minif) {
 // sell depth without ever sampling outside the source: the warp is clamped so
 // the visible rectangle can never exceed the original frame.
 struct ContentU {
-    float4 content; float2 src; float2 cam; float2 cropSize; float scale; float radius; float border; float p;
+    float4 content; float2 src; float2 cam; float2 cropSize; float scale; float radius; float border;
     float2 tilt; float4 radii;
     // SMOOTHNESS: the upscaler now feeds this pass directly (texture 1) instead
     // of a separate full-canvas compute pass. `upBlend` 0 keeps plain Catmull.
@@ -531,7 +531,7 @@ fragment float4 accumFS(VO in [[stage_in]], constant AccU &u [[buffer(0)]], text
 // ---- Resolve: scene over cached backdrop, triangular dither, convert to output format
 static uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
 static float rnd(uint2 p, uint seed) { return float(pcg(p.x + pcg(p.y + pcg(seed)))) * (1.0 / 4294967295.0); }
-struct ResU { float levels; uint seed; float blur; float alpha; };
+struct ResU { float levels; uint seed; float alpha; };
 fragment float4 resolveFS(VO in [[stage_in]], constant ResU &u [[buffer(0)]],
                           texture2d<float, access::read> scene [[texture(0)]],
                           texture2d<float> back [[texture(1)]]) {
@@ -543,7 +543,7 @@ fragment float4 resolveFS(VO in [[stage_in]], constant ResU &u [[buffer(0)]],
     if (u.alpha < 0.5) return s;
     // Only the backdrop has mipmaps. Text, cursor, and webcam are drawn into
     // the sharp scene layer, sampled without any blur.
-    float3 background = back.sample(linMip, uv, level(u.blur)).rgb;
+    float3 background = back.sample(linMip, uv, level(0.0)).rgb;
     float3 c = s.rgb + background * (1.0 - s.a);
     float n = rnd(g, u.seed) + rnd(g, u.seed + 1u) - 1.0;
     return float4(clamp(c + n / u.levels, 0.0, 1.0), 1.0);

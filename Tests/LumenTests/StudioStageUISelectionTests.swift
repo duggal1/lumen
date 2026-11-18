@@ -31,4 +31,17 @@ import Foundation
         let expected = StudioSelectionStyle.usesCornerBrackets(for: .musicTile) ? id : nil
         #expect(TimelineStrip.dragSelectionID(id, isMusic: true) == expected)
     }
+
+    @Test func laneRendererOnlyBracketsZoomRegions() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let src = try String(contentsOf: root.appendingPathComponent(
+            "Sources/LumenUI/TimelineStrip+Lanes.swift"), encoding: .utf8)
+        #expect(src.contains("if r.selected && r.brackets"),
+                "a selected tile must not draw brackets")
+        #expect(src.contains("brackets: StudioSelectionStyle.usesCornerBrackets(for: .zoomRegion)"),
+                "the resolver must govern the lane renderer")
+        // The clip and music lanes must pass no brackets flag (default false).
+        #expect(!src.contains("brackets: true"))
+    }
 }

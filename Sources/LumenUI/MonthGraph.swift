@@ -168,7 +168,7 @@ struct MonthGraph: View {
     private var legend: some View {
         HStack(spacing: 4) {
             ForEach(0..<5, id: \.self) { i in
-                Circle().fill(ramp(i)).frame(width: 4, height: 4)
+                Rectangle().fill(ramp(i)).frame(width: 4, height: 4)
             }
         }
         .accessibilityHidden(true)
@@ -181,15 +181,14 @@ struct MonthGraph: View {
             for c in b.cells {
                 let cx = m.originX[bi] + CGFloat(c.col) * m.pitch + m.pitch / 2
                 let cy = m.height / 2
-                // Minimal dot: fixed 4pt even-snapped circle, sharp and light.
+                // Square cells on the lattice: no rounded pixels, no hover
+                // outline. Hover promotes the cell to the white head instead.
                 let d: CGFloat = 4
                 let rect = CGRect(x: snap(cx - d / 2), y: snap(cy - d / 2), width: d, height: d)
-                let dot = Path(ellipseIn: rect)
+                let cell = Path(rect)
                 let isHover = hovered.map { calendar.isDate($0, inSameDayAs: c.day.date) } ?? false
-                ctx.fill(dot, with: .color(ramp(max(0, min(c.day.level, 4)))))
-                if isHover {
-                    ctx.stroke(dot, with: .color(Tok.text2), lineWidth: 1)
-                }
+                let ink = isHover ? Tok.text : ramp(max(0, min(c.day.level, 4)))
+                ctx.fill(cell, with: .color(ink), style: FillStyle(antialiased: false))
             }
         }
     }

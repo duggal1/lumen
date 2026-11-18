@@ -146,7 +146,7 @@ kernel void up_shock(texture2d<float, access::read> src [[texture(0)]],
     dst.write(float4(mix(c[1][1], target, w), 1.0), gid);
 }
 
-struct SharpParams { int2 size; float amount; float pad; };
+struct SharpParams { int2 size; float amount; };
 
 /// Contrast-adaptive sharpen, backed off in high-contrast areas and clamped to the local 3x3 range (no halos).
 kernel void up_sharpen(texture2d<float, access::read> src [[texture(0)]],

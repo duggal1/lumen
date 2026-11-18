@@ -16,6 +16,9 @@ extension TimelineStrip {
         var label: String?
         var hole: Range<Int>
         var selected: Bool
+        /// Only a canvas crop or a zoom region may wear corner brackets. A
+        /// selected tile is shown by the luminance step alone.
+        var brackets: Bool
     }
 
     func drawBase(_ c: GraphicsContext, _ size: CGSize, _ lat: TimelineStrip.Lattice, dust: Bool, holes: [Range<Int>] = []) {
@@ -35,7 +38,8 @@ extension TimelineStrip {
     }
 
     func layoutRun(_ lat: TimelineStrip.Lattice, c0: Int, c1: Int, bodyH: CGFloat, capH: CGFloat, capCols: Int,
-                   body: Color, cap: Color, labels: [String], truncate: Bool, selected: Bool) -> Run? {
+                   body: Color, cap: Color, labels: [String], truncate: Bool, selected: Bool,
+                   brackets: Bool = false) -> Run? {
         // Keep only the part of the run that touches the visible strip. A clip
         // that continues past an edge draws flat to that edge; its label is
         // placed at the visible start.
@@ -56,7 +60,7 @@ extension TimelineStrip {
             hole = (vis0 + caps)..<(vis0 + caps + n + 2)
         }
         return Run(c0: vis0, c1: end, bodyH: bodyH, capH: capH, caps: caps, body: body, cap: cap,
-                   label: label, hole: hole, selected: selected)
+                   label: label, hole: hole, selected: selected, brackets: brackets)
     }
 
     func drawRun(_ c: GraphicsContext, _ lat: TimelineStrip.Lattice, _ r: Run) {
@@ -77,7 +81,7 @@ extension TimelineStrip {
             c.draw(Text(l).font(TimelineStrip.Face.label).foregroundStyle(Tok.text),
                    at: CGPoint(x: x, y: TimelineStrip.Lanes.mid), anchor: .leading)
         }
-        if r.selected {
+        if r.selected && r.brackets {
             let left = lat.x(col: r.c0), right = lat.x(col: r.c1 - 1) + TimelineStrip.Lattice.cell
             c.drawBrackets(around: CGRect(x: left, y: yb, width: right - left, height: r.bodyH), color: Tok.accent)
         }
@@ -209,7 +213,8 @@ extension TimelineStrip {
                 if let run = layoutRun(lat, c0: vp.colFloor(zs), c1: vp.colCeil(ze),
                                        bodyH: h.body, capH: h.cap, capCols: raised ? 2 : 1,
                                        body: StripInk.zoom, cap: raised ? StripInk.zoomDeep : StripInk.zoom,
-                                       labels: labels, truncate: false, selected: sel) {
+                                       labels: labels, truncate: false, selected: sel,
+                                       brackets: StudioSelectionStyle.usesCornerBrackets(for: .zoomRegion)) {
                     runs.append(run)
                 }
             }
@@ -336,43 +341,57 @@ extension TimelineStrip {
 
     @ViewBuilder func audioLane(_ vp: Viewport) -> some View {
         let tm = model.timeline.timeMap
-        Canvas { c, size in
-            let lat = vp.lattice
-            let wave = model.session.waveform
-            drawBase(c, size, lat, dust: false)
-            if wave.isEmpty { drawEmpty(c, "No audio. Speech will appear here."); return }
-            let ph = model.playhead
-            var played = Path(), tips = Path(), idle = Path(), ramp = Path(), quiet = Path()
-            for col in 0..<lat.cols {
-                let t0 = vp.time(atCol: col), t1 = vp.time(atCol: col + 1)
-                let peak = TimelineGeometry.columnPeak(wave: wave, srcStart: tm.source(atOutput: t0), srcEnd: tm.source(atOutput: t1))
-                let level = TimelineGeometry.level(peak: peak)
-                let x = lat.x(col: col)
-                if level == 0 {
-                    quiet.addRect(CGRect(x: x, y: 19, width: TimelineStrip.Lattice.cell, height: 2))
-                    continue
+        let playing = model.isPlaying
+        let frozen = model.playhead
+        // The tape must advance with sound, not only when SwiftUI observes a
+        // property change. A display schedule while playing makes the played
+        // front and the white head move every frame; a paused tape rests.
+        TimelineView(.animation(paused: !playing)) { _ in
+            Canvas { c, size in
+                let lat = vp.lattice
+                let wave = model.session.waveform
+                drawBase(c, size, lat, dust: false)
+                if wave.isEmpty { drawEmpty(c, "No audio. Speech will appear here."); return }
+                let ph = playing ? model.clock.time(at: HostClock.now()) : frozen
+                var played = Path(), tips = Path(), idle = Path(), ramp = Path(), quiet = Path(), head = Path()
+                for col in 0..<lat.cols {
+                    let t0 = vp.time(atCol: col), t1 = vp.time(atCol: col + 1)
+                    let peak = TimelineGeometry.columnPeak(wave: wave, srcStart: tm.source(atOutput: t0), srcEnd: tm.source(atOutput: t1))
+                    let level = TimelineGeometry.level(peak: peak)
+                    let x = lat.x(col: col)
+                    if t0 <= ph && t1 > ph {
+                        head.addRect(CGRect(x: x, y: 8, width: TimelineStrip.Lattice.cell, height: 16))
+                    }
+                    if level == 0 {
+                        quiet.addRect(CGRect(x: x, y: 19, width: TimelineStrip.Lattice.cell, height: 2))
+                        continue
+                    }
+                    let inRamp = tm.ramps.contains { s in
+                        let a = tm.output(atSource: s.start), b = tm.output(atSource: s.end)
+                        return t0 >= a && t0 <= b
+                    }
+                    let isPlayed = t0 < ph
+                    for k in 0..<level {
+                        let up = CGRect(x: x, y: 16 - 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
+                        let dn = CGRect(x: x, y: 21 + 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
+                        let isTip = k == level - 1
+                        if inRamp { ramp.addRect(up); ramp.addRect(dn) }
+                        else if isPlayed && isTip { tips.addRect(up); tips.addRect(dn) }
+                        else if isPlayed { played.addRect(up); played.addRect(dn) }
+                        else { idle.addRect(up); idle.addRect(dn) }
+                    }
                 }
-                let inRamp = tm.ramps.contains { s in
-                    let a = tm.output(atSource: s.start), b = tm.output(atSource: s.end)
-                    return t0 >= a && t0 <= b
-                }
-                let isPlayed = t0 < ph
-                for k in 0..<level {
-                    let up = CGRect(x: x, y: 16 - 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
-                    let dn = CGRect(x: x, y: 21 + 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
-                    let isTip = k == level - 1
-                    if inRamp { ramp.addRect(up); ramp.addRect(dn) }
-                    else if isPlayed && isTip { tips.addRect(up); tips.addRect(dn) }
-                    else if isPlayed { played.addRect(up); played.addRect(dn) }
-                    else { idle.addRect(up); idle.addRect(dn) }
-                }
+                c.fillCells(quiet, Tok.controlPressed)
+                c.fillCells(ramp, Tok.controlPressed)
+                c.fillCells(idle, StripInk.cell)
+                c.fillCells(played, StripInk.hot)
+                c.fillCells(tips, StripInk.hotDeep)
+                c.fillCells(head, Tok.text)
             }
-            c.fillCells(quiet, Tok.controlPressed)
-            c.fillCells(ramp, Tok.controlPressed)
-            c.fillCells(idle, StripInk.cell)
-            c.fillCells(played, StripInk.hot)
-            c.fillCells(tips, StripInk.hotDeep)
         }
+        // Restart the schedule on play/pause; a paused schedule that is merely
+        // unpaused can keep its last frame on macOS (same fix as PlayheadLine).
+        .id(playing)
         .frame(height: TimelineStrip.Lanes.lane)
         .accessibilityHidden(true)
     }

@@ -111,6 +111,57 @@ struct CinematicRender3DControlTests {
     }
 }
 
+struct CinematicRender3DOverlayTests {
+
+    /// The inverse warp must exactly undo the content warp. Otherwise a click
+    /// ring or cursor drawn at a source point drifts away from the pixels it
+    /// annotates as soon as Lean/Reveal is enabled.
+    @Test func inverseHomographyRoundTripsExactly() {
+        for yaw: Double in [-12, -8, 0, 8, 12] {
+            for pitch: Double in [-6, 0, 6] {
+                let tilt = SIMD2<Float>(Float(yaw), Float(pitch))
+                for i in 0...8 {
+                    for j in 0...8 {
+                        let n = SIMD2<Float>(Float(i) / 8 - 0.5, Float(j) / 8 - 0.5)
+                        let s = CameraTilt.homography(n, tiltDeg: tilt)
+                        let back = CameraTilt.inverseHomography(s, tiltDeg: tilt)
+                        #expect(abs(back.x - n.x) < 1e-4 && abs(back.y - n.y) < 1e-4,
+                                "round trip \(n) -> \(s) -> \(back) at \(tilt)")
+                    }
+                }
+            }
+        }
+        for bad: Float in [.nan, .infinity, -.infinity, 1e9] {
+            let v = CameraTilt.inverseHomography(SIMD2(bad, bad), tiltDeg: SIMD2(bad, bad))
+            #expect(v.x.isFinite && v.y.isFinite)
+            #expect(abs(v.x) <= 0.5 && abs(v.y) <= 0.5)
+        }
+    }
+
+    /// Overlays map through the intelligent crop, follow the tilt warp, and
+    /// are byte-identical to the untilted case when the mode is `.off`.
+    @Test func overlaysFollowCropAndTilt() {
+        var style = Style()
+        style.padding = 0
+        let g = Geometry(canvas: SIMD2(480, 270), src: SIMD2(480, 270), style: style)
+        let crop = CGRect(x: 100, y: 50, width: 200, height: 120)
+        let centre = SIMD2<Double>(200, 110)
+        let flat = g.toCanvas(centre, cam: centre, scale: 2, crop: crop)
+        #expect(abs(flat.x - (g.content.x + g.content.z / 2)) < 1e-6,
+                "camera centre must land in the content centre")
+        #expect(abs(flat.y - (g.content.y + g.content.w / 2)) < 1e-6)
+        let off = g.toCanvas(SIMD2(220, 110), cam: centre, scale: 2, crop: crop)
+        #expect(off.x > flat.x, "a point right of centre must map right of centre")
+        let tilted = g.toCanvas(SIMD2(220, 110), cam: centre, scale: 2, crop: crop,
+                                tilt: SIMD2(8, 6))
+        #expect(tilted != off, "tilt must move the overlay with the warped content")
+        #expect(tilted.x.isFinite && tilted.y.isFinite)
+        let offMode = CameraTilt.effective(SIMD2(99, 99), mode: .off, maxYaw: 8, maxPitch: 6)
+        #expect(g.toCanvas(SIMD2(220, 110), cam: centre, scale: 2, crop: crop, tilt: offMode) == off,
+                "off must be exactly flat, including overlays")
+    }
+}
+
 struct CinematicRender3DGeometryTests {
 
     @Test func homographyNeverLeavesUnitSquare() {

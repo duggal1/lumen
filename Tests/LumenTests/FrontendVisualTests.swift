@@ -467,3 +467,14 @@ private func diff(_ a: CVPixelBuffer, _ b: CVPixelBuffer, _ body: (Int, Int, Int
     }
     #expect(secretRuns <= cells + 1, "secret mosaic is not made of crisp cells: \(secretRuns) runs over \(cells) cells")
 }
+
+@Test func monthGraphUsesSquareCellsWithoutStrokes() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let src = try String(contentsOf: root.appendingPathComponent(
+        "Sources/LumenUI/MonthGraph.swift"), encoding: .utf8)
+    #expect(!src.contains("ctx.stroke("), "no outline on a pixel graph")
+    #expect(!src.contains("ellipseIn"), "pixels are square cells, never circles")
+    #expect(!src.contains("Circle()"), "legend swatches are square cells")
+    #expect(src.contains("FillStyle(antialiased: false)"))
+}

@@ -110,6 +110,8 @@ enum AppType {
     static let metric = Font.system(size: 28, weight: .medium).monospacedDigit()
     static let mono = Font.system(size: 12, design: .monospaced)
     static let mono13 = Font.system(size: 13, design: .monospaced)
+    /// Bare SF Symbols at the 14 pt row size (DESIGN.md §5).
+    static let glyph = Font.system(size: 14, weight: .regular)
     static let page = Font.system(size: 28, design: .serif).italic()
     static let onboarding = Font.system(size: 40, design: .serif).italic()
 }
