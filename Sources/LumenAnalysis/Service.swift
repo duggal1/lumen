@@ -207,16 +207,20 @@ public struct AnalysisRequest: Sendable {
 public struct AnalysisResult: Sendable {
     public var face: [FaceSample]
     public var activity: [ActivityPoint]
+    /// 48x27 energy grids at 10 Hz for every screen (desktop) recording.
+    public var activityGrids: ActivityCache?
     public var ocr: [OCRDetection]
     public var transcript: Transcript?
     public var personMask: PersonMaskInfo?
     public var typing: [TypingTrace]
     public var errors: [String: String]
     public var diagnostics: AnalysisDiagnostics
-    public init(face: [FaceSample] = [], activity: [ActivityPoint] = [], ocr: [OCRDetection] = [], transcript: Transcript? = nil,
+    public init(face: [FaceSample] = [], activity: [ActivityPoint] = [], activityGrids: ActivityCache? = nil,
+                ocr: [OCRDetection] = [], transcript: Transcript? = nil,
                 personMask: PersonMaskInfo? = nil, typing: [TypingTrace] = [], errors: [String: String] = [:],
                 diagnostics: AnalysisDiagnostics = AnalysisDiagnostics()) {
-        self.face = face; self.activity = activity; self.ocr = ocr; self.transcript = transcript
+        self.face = face; self.activity = activity; self.activityGrids = activityGrids
+        self.ocr = ocr; self.transcript = transcript
         self.personMask = personMask; self.typing = typing; self.errors = errors; self.diagnostics = diagnostics
     }
 }
@@ -228,6 +232,7 @@ private actor AnalysisCollector {
     private(set) var face: [FaceSample] = []
     private(set) var faceError: String?
     private(set) var activity: [ActivityPoint] = []
+    private(set) var activityGrids: ActivityCache?
     private(set) var activityError: String?
     private(set) var transcript: Transcript?
     private(set) var transcriptError: String?
@@ -242,7 +247,9 @@ private actor AnalysisCollector {
         if ocr.isEmpty { ocr = value }
     }
     func setFace(_ value: [FaceSample], error: String?) { face = value; faceError = error }
-    func setActivity(_ value: [ActivityPoint], error: String?) { activity = value; activityError = error }
+    func setActivity(_ value: [ActivityPoint], grids: ActivityCache?, error: String?) {
+        activity = value; activityGrids = grids; activityError = error
+    }
     func setTranscript(_ value: Transcript?, error: String?) { transcript = value; transcriptError = error }
     func setPersonMask(_ value: PersonMaskInfo?, error: String?) { personMask = value; personMaskError = error }
     func setTyping(_ value: [TypingTrace], error: String?) { typing = value; typingError = error }
@@ -294,13 +301,14 @@ public actor AnalysisService {
                 await collector.setFace(samples, error: error)
             })
         }
-        if request.includeActivity {
-            jobs.append(AnalysisJob(name: "activity", priority: 1) {
-                let (points, error) = await self.activity(request)
-                await collector.setActivity(points, error: error)
-                if error == nil { onActivity(AnalysisResult(activity: points)) }
-            })
-        }
+        // Activity runs for ALL desktop recordings: `screen` is always a screen
+        // capture, and the grid pass is the input to activity-driven auto-zoom.
+        // `includeActivity` is kept for API compatibility and no longer gates it.
+        jobs.append(AnalysisJob(name: "activity", priority: 1) {
+            let (points, grids, error) = await self.activity(request)
+            await collector.setActivity(points, grids: grids, error: error)
+            if error == nil { onActivity(AnalysisResult(activity: points, activityGrids: grids)) }
+        })
         if request.includeSpeech, request.mic != nil {
             jobs.append(AnalysisJob(name: "transcript", priority: 1) {
                 let (words, error) = await self.transcript(request)
@@ -337,6 +345,7 @@ public actor AnalysisService {
         put("typing", await collector.typingError)
         if Task.isCancelled { errors["cancelled"] = "analysis cancelled" }
         return AnalysisResult(face: await collector.face, activity: await collector.activity,
+                              activityGrids: await collector.activityGrids,
                               ocr: await collector.ocr, transcript: await collector.transcript,
                               personMask: await collector.personMask, typing: await collector.typing,
                               errors: errors,
@@ -389,13 +398,15 @@ public actor AnalysisService {
         return (samples ?? [], error)
     }
 
-    private func activity(_ r: AnalysisRequest) async -> ([ActivityPoint], String?) {
-        guard r.includeActivity else { return ([], nil) }
-        let (points, error) = await cached(url: r.screen, directory: analysisDirectory(r), analyzer: "activity", version: 2,
-                                           parameters: ActivityParameters(offset: 0, fps: 10)) {
-            try await ActivityAnalyzer.analyze(url: r.screen, fps: 10)
+    private func activity(_ r: AnalysisRequest) async -> ([ActivityPoint], ActivityCache?, String?) {
+        let analyzer: ActivityAnalyzer
+        do { analyzer = try ActivityAnalyzer() }
+        catch { return ([], nil, error.localizedDescription) }
+        let (cache, error) = await ActivityFetch.cached(url: r.screen, directory: analysisDirectory(r), hz: 10) {
+            try await analyzer.analyze(screen: r.screen, hz: 10)
         }
-        return (points ?? [], error)
+        guard let cache else { return ([], nil, error) }
+        return (ActivityPointBridge.points(from: cache), cache, nil)
     }
 
     private func ocr(_ r: AnalysisRequest, firstFrameOnly: Bool = false) async -> ([OCRDetection], String?) {
@@ -510,7 +521,6 @@ public actor AnalysisService {
 }
 
 private struct FaceParameters: Codable, Sendable { var offset: Double; var fps: Double }
-private struct ActivityParameters: Codable, Sendable { var offset: Double; var fps: Double }
 private struct OCRParameters: Codable { var salt: UInt64; var patterns: [String]; var entropyThreshold: Double; var fps: Double }
 private struct SpeechParameters: Codable { var locale: String; var vocabulary: [String]; var offset: Double }
 private struct PersonMaskParameters: Codable { var offset: Double; var fps: Double; var maxDimension: Int }

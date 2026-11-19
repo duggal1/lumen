@@ -1,110 +1,97 @@
 import Foundation
-import AVFoundation
-import CoreVideo
-import os
+import CoreGraphics
 import LumenProject
 
-public enum ActivityAnalyzer {
-    public static func analyze(url: URL, offset: Double = 0, fps: Double = 10) async throws -> [ActivityPoint] {
-        let asset = AVURLAsset(url: url)
-        guard let track = try await asset.loadTracks(withMediaType: .video).first else { return [] }
-        let job = ActivityJob(asset: asset, track: track, offset: offset, fps: fps)
-        return try await withTaskCancellationHandler {
-            try await Task.detached(priority: .utility) { try job.run() }.value
-        } onCancel: { job.cancel() }
+/// One 10 Hz energy sample from the Metal grid pass: `48 * 27` bytes, row-major.
+/// Owned by Analysis, consumed by the Director; pure value, safe to share.
+public struct ActivityGridPayload: Codable, Sendable, Equatable {
+    public var t: Double
+    public var cells: [UInt8]
+
+    public init(t: Double, cells: [UInt8]) {
+        self.t = t; self.cells = cells
     }
 }
 
-private final class ActivityJob: @unchecked Sendable {
-    private let asset: AVAsset
-    private let track: AVAssetTrack
-    private let offset: Double
-    private let fps: Double
-    private let readerLock = OSAllocatedUnfairLock<ReaderHandle?>(uncheckedState: nil)
-    private let cancelled = OSAllocatedUnfairLock(initialState: false)
+/// Cached output of the activity analyzer for one screen recording. Source
+/// seconds and source pixels. Stored through `AnalysisCache` (JSON, keyed by
+/// media fingerprint + analyzer + version + canonical parameters).
+public struct ActivityCache: Codable, Sendable, Equatable {
+    public var grids: [ActivityGridPayload]
+    public var width: Int
+    public var height: Int
 
-    init(asset: AVAsset, track: AVAssetTrack, offset: Double, fps: Double) {
-        self.asset = asset; self.track = track; self.offset = offset; self.fps = fps
+    public init(grids: [ActivityGridPayload] = [], width: Int = 0, height: Int = 0) {
+        self.grids = grids; self.width = width; self.height = height
+    }
+}
+
+public extension ActivityCache {
+    /// Reads a cached payload using the existing `AnalysisCache` key scheme.
+    static func load(key: String, directory: URL) -> ActivityCache? {
+        AnalysisCache.load(ActivityCache.self, key: key, directory: directory)
     }
 
-    func cancel() {
-        cancelled.withLock { $0 = true }
-        readerLock.withLock { $0?.reader.cancelReading() }
+    /// Writes a cached payload using the existing `AnalysisCache` key scheme.
+    func save(key: String, directory: URL) throws {
+        try AnalysisCache.save(self, key: key, directory: directory)
+    }
+}
+
+/// Loads-or-computes a cached activity payload using the existing `AnalysisCache`
+/// key scheme. Owns no state; safe to call from one analysis task at a time.
+public enum ActivityFetch {
+    private struct Parameters: Codable, Sendable {
+        var offset: Double
+        var fps: Double
     }
 
-    func run() throws -> [ActivityPoint] {
-        let reader = try AVAssetReader(asset: asset)
-        let handle = ReaderHandle(reader)
-        readerLock.withLock { $0 = handle }
-        if cancelled.withLock({ $0 }) { reader.cancelReading(); throw CancellationError() }
-        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-        ])
-        output.alwaysCopiesSampleData = false
-        guard reader.canAdd(output) else { throw AnalysisError.readerConfiguration }
-        reader.add(output)
-        guard reader.startReading() else { throw reader.error ?? AnalysisError.readerStart }
-        var next = 0.0
+    public static func cached(url: URL, directory: URL, hz: Double = 10,
+                              produce: @Sendable () async throws -> ActivityCache) async -> (ActivityCache?, String?) {
+        do {
+            let key = try await AnalysisCache.key(media: url, analyzer: ActivityAnalyzer.analyzerID,
+                                                  version: ActivityAnalyzer.analyzerVersion,
+                                                  parameters: Parameters(offset: 0, fps: hz))
+            if let cached = ActivityCache.load(key: key, directory: directory) { return (cached, nil) }
+            let value = try await produce()
+            try value.save(key: key, directory: directory)
+            return (value, nil)
+        } catch is CancellationError {
+            return (nil, "Cancelled")
+        } catch {
+            return (nil, error.localizedDescription)
+        }
+    }
+}
+
+/// Bridges the grid payload to the legacy `ActivityPoint` stream still read by
+/// the speed-ramp planner. Pure and deterministic; no wall clock or randomness.
+public enum ActivityPointBridge {
+    /// Derives coarse changed-region points from consecutive energy grids.
+    public static func points(from cache: ActivityCache) -> [ActivityPoint] {
+        let gw = 48, gh = 27
+        guard cache.width > 0, cache.height > 0 else { return [] }
+        var out: [ActivityPoint] = []
         var previous: [UInt8]?
-        var settling: (base: [UInt8], until: Double)?
-        var results: [ActivityPoint] = []
-        while let sample = output.copyNextSampleBuffer() {
-            if cancelled.withLock({ $0 }) { reader.cancelReading(); throw CancellationError() }
-            let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-            guard time + 0.0001 >= next, let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
-            next = time + 1 / max(fps, 1)
-            let current = try lumaGrid(buffer, columns: 80, rows: 50)
-            var change = previous.flatMap { changedRegion($0, current, width: 80, height: 50) }
-            if change != nil, let previous { settling = (previous, time + 0.4) }
-            else if let settled = settling, time <= settled.until {
-                change = changedRegion(settled.base, current, width: 80, height: 50)
-            } else { settling = nil }
-            if let change {
-                let scale = SIMD2(Double(CVPixelBufferGetWidth(buffer)) / 80,
-                                  Double(CVPixelBufferGetHeight(buffer)) / 50)
-                let rect = CGRect(x: change.rect.minX * scale.x, y: change.rect.minY * scale.y,
-                                  width: change.rect.width * scale.x, height: change.rect.height * scale.y)
-                results.append(ActivityPoint(t: time + offset, x: change.center.x * scale.x,
-                                             y: change.center.y * scale.y, region: rect, coverage: change.coverage))
+        for g in cache.grids where g.cells.count == gw * gh {
+            defer { previous = g.cells }
+            guard let prev = previous else { continue }
+            var minX = gw, minY = gh, maxX = -1, maxY = -1, count = 0
+            for i in 0..<(gw * gh) where Int(g.cells[i]) - Int(prev[i]) >= 20 {
+                let x = i % gw, y = i / gw
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+                count += 1
             }
-            previous = current
+            guard count >= 3 else { continue }
+            let sx = Double(cache.width) / Double(gw)
+            let sy = Double(cache.height) / Double(gh)
+            let rect = CGRect(x: Double(minX) * sx, y: Double(minY) * sy,
+                              width: Double(maxX - minX + 1) * sx,
+                              height: Double(maxY - minY + 1) * sy)
+            out.append(ActivityPoint(t: g.t, x: rect.midX, y: rect.midY,
+                                     region: rect, coverage: Double(count) / Double(gw * gh)))
         }
-        if reader.status == .failed { throw reader.error ?? AnalysisError.readerFailed }
-        return results
-    }
-
-    private func lumaGrid(_ buffer: CVPixelBuffer, columns: Int, rows: Int) throws -> [UInt8] {
-        guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { throw AnalysisError.pixelBuffer }
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { throw AnalysisError.pixelBuffer }
-        let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
-        let stride = CVPixelBufferGetBytesPerRow(buffer)
-        var grid = [UInt8](repeating: 0, count: columns * rows)
-        for gy in 0..<rows {
-            let y = min((gy * height) / rows, height - 1)
-            for gx in 0..<columns {
-                let x = min((gx * width) / columns, width - 1), i = y * stride + x * 4
-                let b = Int(base[i]), g = Int(base[i + 1]), r = Int(base[i + 2])
-                grid[gy * columns + gx] = UInt8((29 * b + 150 * g + 77 * r) >> 8)
-            }
-        }
-        return grid
-    }
-
-    private func changedRegion(_ old: [UInt8], _ new: [UInt8], width: Int, height: Int) -> (center: SIMD2<Double>, rect: CGRect, coverage: Double)? {
-        var weight = 0.0, sumX = 0.0, sumY = 0.0, count = 0
-        var minX = width, minY = height, maxX = 0, maxY = 0
-        for i in old.indices {
-            let delta = abs(Int(new[i]) - Int(old[i]))
-            guard delta >= 24 else { continue }
-            let w = Double(delta - 23), x = Double(i % width), y = Double(i / width)
-            minX = min(minX, i % width); maxX = max(maxX, i % width)
-            minY = min(minY, i / width); maxY = max(maxY, i / width)
-            weight += w; sumX += x * w; sumY += y * w; count += 1
-        }
-        guard count >= max(width * height / 1000, 3), weight > 0 else { return nil }
-        return (SIMD2(sumX / weight + 0.5, sumY / weight + 0.5),
-                CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1),
-                Double(count) / Double(width * height))
+        return out
     }
 }
