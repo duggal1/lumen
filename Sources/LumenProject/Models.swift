@@ -604,7 +604,7 @@ public struct SmartCropConfig: Codable, Equatable, Sendable {
 }
 
 public struct Timeline: Sendable, Codable, Equatable {
-    public var schemaVersion = 4
+    public var schemaVersion = 5
     public var timeMap: TimeMap
     /// Logical split points in the recording, source seconds. No output effect.
     public var seams: [SplitSeam] = []
@@ -624,16 +624,20 @@ public struct Timeline: Sendable, Codable, Equatable {
     /// Imported video appended after the recording, in OUTPUT seconds.
     public var clips: [TimelineClip] = []
     public var smartCrop = SmartCropConfig()
+    /// Browser-content crop tuning (F1). Old projects decode to defaults.
+    public var cropSettings = CropSettings()
+    /// Activity-driven auto-zoom tuning (F2). Old projects decode to defaults.
+    public var activity = ActivitySettings()
     public var derived: DerivedTracks?
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, timeMap, zoom, suppressedAuto, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips, seams, smartCrop
+        case schemaVersion, timeMap, zoom, suppressedAuto, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips, seams, smartCrop, cropSettings, activity
     }
     public init(duration: Double) { timeMap = TimeMap(sourceDuration: duration) }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         timeMap = try c.decode(TimeMap.self, forKey: .timeMap)
         let version = c.opt(.schemaVersion, 1)
-        schemaVersion = 4
+        schemaVersion = 5
         seams = c.opt(.seams, seams)
         zoom = c.opt(.zoom, zoom)
         suppressedAuto = c.opt(.suppressedAuto, suppressedAuto)
@@ -647,6 +651,9 @@ public struct Timeline: Sendable, Codable, Equatable {
         captions = c.opt(.captions, captions)
         clips = c.opt(.clips, clips)
         smartCrop = c.opt(.smartCrop, smartCrop)
+        // v4 -> v5: crop and activity settings did not exist; defaults apply.
+        cropSettings = c.opt(.cropSettings, cropSettings)
+        activity = c.opt(.activity, activity)
     }
 
     /// Total length of the deliverable: the edited recording plus any imported clips.

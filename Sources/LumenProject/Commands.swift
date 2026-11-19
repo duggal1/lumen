@@ -60,6 +60,12 @@ public enum Command: Codable, Sendable {
     case setCutEdge(id: UUID, isStart: Bool, toOutput: Double), deleteRecordingSegment(atOutput: Double)
     case trimClipEdge(id: UUID, isStart: Bool, toOutput: Double), reorderClip(id: UUID, toIndex: Int)
     case applyAutoTidy([CutRange]), clearAutoTidy
+    /// Browser-content crop tuning and overrides (F1).
+    case setCropSettings(CropSettingsPatch)
+    case addCropOverride(clip: UUID, override: CropOverride)
+    case deleteCropOverride(UUID)
+    /// Activity-driven auto-zoom tuning (F2).
+    case setActivitySettings(ActivitySettingsPatch)
 }
 
 /// Pure: (state, command, context) -> new state + effects. The only place user intent mutates the timeline.
@@ -126,6 +132,26 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         return fx
     case .setCursor(let s): t.cursor = s; return [.cursor, .camera, .audio]
     case .setCamera(let s): t.camera = s; return [.zoom, .camera, .audio]
+    case .setCropSettings(let p):
+        let ds = [p.insetPx, p.minWebWidthPx, p.minWebHeightPx, p.uncropLead, p.uncropDuration,
+                  p.recropDuration, p.appSwitchDuration, p.holdAfterTyping, p.holdAfterUIClick,
+                  p.minDwell, p.trackSigma].compactMap { $0 }
+        guard ds.allSatisfy(\.isFinite) else { throw CommandError.invalid("non-finite crop settings") }
+        t.cropSettings = p.apply(to: t.cropSettings)
+        return [.zoom, .camera, .layout, .webcam, .captions]
+    case .addCropOverride(_, let o):
+        t.cropSettings.overrides.append(o)
+        return [.zoom, .camera, .layout, .webcam, .captions]
+    case .deleteCropOverride(let id):
+        t.cropSettings.overrides.removeAll { $0.id == id }
+        return [.zoom, .camera, .layout, .webcam, .captions]
+    case .setActivitySettings(let p):
+        let doubles = [p.maxAreaFraction, p.padFraction, p.maxScale, p.minTrigger, p.settleHold,
+                       p.minHold, p.maxActiveSeconds, p.lead, p.hoverRadiusCells,
+                       p.suppressAfterKey, p.scrollWindow].compactMap { $0 }
+        guard doubles.allSatisfy(\.isFinite) else { throw CommandError.invalid("non-finite activity settings") }
+        t.activity = p.applying(to: t.activity)
+        return [.zoom, .camera, .timeMap]
     case .setAudio(let s): t.audio = s; return [.timeMap, .audio, .zoom, .camera]
     case .setWebcam(let w): t.webcam = w; return [.webcam, .layout]
     case .setCaptions(let p): t.captions = p; return [.captions]

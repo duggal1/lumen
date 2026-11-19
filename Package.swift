@@ -23,7 +23,7 @@ let package = Package(
         lib("LumenCore"),
         lib("LumenProject", ["LumenCore"]),
         lib("LumenDirector", ["LumenCore", "LumenProject"]),
-        lib("LumenAnalysis", ["LumenCore", "LumenProject", "LumenSpeech"]),
+        lib("LumenAnalysis", ["LumenCore", "LumenProject", "LumenSpeech"], resources: [.process("Shaders")]),
         lib("LumenCapture", ["LumenCore", "LumenProject", "LumenDirector"]),
         lib("LumenRender", ["LumenCore", "LumenProject", "LumenDirector"], resources: [.process("Shaders")]),
         lib("LumenAudio", ["LumenCore", "LumenProject", "LumenDirector"], resources: [.copy("Resources/DeepFilterNet")]),

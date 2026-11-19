@@ -3,7 +3,8 @@ import LumenCore
 import LumenProject
 
 enum SpeedRamps {
-    static func plan(events: [InputEvent], vad: [ClosedRange<Double>], tm: TimeMap, audio: AudioPlan, backing: Double, activity: [ActivityPoint] = []) -> [SpeedRamp] {
+    static func plan(events: [InputEvent], vad: [ClosedRange<Double>], tm: TimeMap, audio: AudioPlan, backing: Double,
+                     activity: [ActivityPoint] = [], busy: [ClosedRange<Double>] = []) -> [SpeedRamp] {
         let minIdle = max(audio.speedRampMinIdle, 1.0)
         var act: [Double] = [tm.trimStart]
         var lx = -1e6, ly = -1e6
@@ -16,6 +17,10 @@ enum SpeedRamps {
         }
         for point in activity where point.t.isFinite { act.append(point.t) }
         for c in tm.cuts { act.append(c.start); act.append(c.end) }       // a ramp never spans a cut
+        // F2: visibly changing content is never sped through as "idle".
+        for span in busy {
+            act.append(span.lowerBound); act.append(span.upperBound)
+        }
         act.append(tm.trimEnd)
         act = act.filter { $0 >= tm.trimStart && $0 <= tm.trimEnd }.sorted()
         var out: [SpeedRamp] = []
@@ -24,6 +29,7 @@ enum SpeedRamps {
             let a = act[i], b = act[i + 1]
             guard b - a >= minIdle, !tm.isCut((a + b) / 2) else { continue }
             if vad.contains(where: { $0.upperBound > a && $0.lowerBound < b }) { continue }
+            if busy.contains(where: { $0.upperBound > a && $0.lowerBound < b }) { continue }
             let speed = min(audio.speedRampMaxSpeed, (b - a) / 0.8)
             if speed >= 1.5 {
                 let start = a + 0.25, end = b - 0.25
@@ -242,7 +248,7 @@ enum ZoomPlanner {
 
     static func plan(events: [InputEvent], ax: [AXFrame], typing: [TypingTrace], activity: [ActivityPoint],
                      src: SourceInfo, p: CameraParams, tm: TimeMap, avoid: [ClosedRange<Double>],
-                     markers: [DirectorMarker] = []) -> ZoomPlan {
+                     markers: [DirectorMarker] = [], activityShots: [VisualShot] = []) -> ZoomPlan {
         let W = Double(src.width), H = Double(src.height), b = max(src.backingScale, 1)
         guard W > 0, H > 0 else { return ZoomPlan() }
         if p.preset == .fixed {
@@ -342,10 +348,9 @@ enum ZoomPlanner {
         intents += dialogIntents(ax: ax, events: sorted, markers: markers, tm: tm, W: W, H: H)
         // Passive visual intents are lowest priority: the scene loop never lets
         // a `.visual` intent displace a click/typing/dialog subject.
-        // VisualAutofocus composes VisualZoom internally (with `.move` stripped
-        // so hovering can never create a shot) and adds anticipation + bounded
-        // holds. Do NOT also call VisualZoom.intents here — that duplicates shots.
-        intents += VisualAutofocus.intents(activity, events: sorted, input: intents, src: src, tm: tm)
+        // F2: activity grids replace the old detector; click/typing still outrank
+        // these `.visual` shots. Do NOT also call VisualZoom.intents here.
+        intents += VisualAutofocus.intents(shots: activityShots, input: intents, src: src, tm: tm)
         intents.sort { a, b in
             if a.t != b.t { return a.t < b.t }
             // Deterministic tie order: the subject that opened a dialog is not
