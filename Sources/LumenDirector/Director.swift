@@ -275,8 +275,13 @@ public enum Director {
         }
         if cancelled() { return nil }
         let size = SIMD2(Double(src.width), Double(src.height))
+        // F1: the solver works in crop-normalised channels against the SAME dense
+        // crop the renderer samples, at each target's own time and tick.
         guard let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size,
                                            outDur: tm.outputDuration, loop: t.cursor.loop,
+                                           crop: DenseCropTrack(hz: viewportPlan.track.hz,
+                                                                rects: viewportPlan.track.rects),
+                                           aspect: t.style.aspectRatio,
                                            follow: followPaths,
                                            cancelled: cancelled) else { return nil }
         let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad,
@@ -522,7 +527,12 @@ extension Timeline {
                               cursor: CursorSample(position: .zero, velocity: .zero, opacity: 0, press: 1, shape: 0),
                               clickFX: [], webcamCrop: [0, 0, 1, 1], sourceTime: time,
                               layout: .full, layoutKind: .screenOnly, webcamCorner: nil, webcamOpacity: 0,
-                              caption: nil, emphasis: EmphasisFrame())
+                              caption: nil,
+                              // Manual text blocks live on the OUTPUT clock and
+                              // must survive an imported clip. Only recording
+                              // metadata (camera, cursor, masks) is synthetic.
+                              emphasis: Emphasis.evaluate(overlays: overlays, autoMasks: [],
+                                                          sourceTime: t0, cursor: .zero, sourceSize: d))
         }
         guard let d = derived else {
             return FrameState(cameraCenter: .zero, cameraScale: 1, cameraTilt: .zero,
@@ -536,16 +546,22 @@ extension Timeline {
         let viewportCrop = d.viewportCrop.rect(at: sourceTime)
         let camN = SIMD2<Double>(Double(qhm(c.nx, c.vx, c.ax, cameraFrame, rate: c.rate)),
                                  Double(qhm(c.ny, c.vy, c.ay, cameraFrame, rate: c.rate)))
-        // F1: camera channels are crop-normalised. Map them back to source px so
-        // the renderer, which subtracts the crop origin, sees the right point.
+        let logZ = qhm(c.lz, c.vz, c.az, cameraFrame, rate: c.rate)
+        // F1: reconstruct the visible source rect from crop-normalised channels.
+        // CropSpace.visible applies the same per-crop clamp the solver baked, so
+        // the camera cannot drift outside a crop that is moving under it. Scale
+        // stays relative to the crop's base view: the renderer derives view size
+        // as baseView / scale, which matches visible in BOTH dimensions even
+        // when the crop and frame aspects differ.
+        let visible = CropSpace.visible(crop: viewportCrop, aspect: style.aspectRatio,
+                                        u: camN.x, v: camN.y, logZ: Double(logZ))
         let cam: SIMD2<Float>
-        if viewportCrop.isValid {
-            cam = SIMD2<Float>(Float(viewportCrop.x + camN.x * viewportCrop.w),
-                               Float(viewportCrop.y + camN.y * viewportCrop.h))
+        if viewportCrop.isValid, visible.isValid {
+            cam = SIMD2(Float(visible.cx), Float(visible.cy))
         } else {
-            cam = SIMD2<Float>(Float(camN.x * d.sourceSize.x), Float(camN.y * d.sourceSize.y))
+            cam = SIMD2(Float(camN.x * d.sourceSize.x), Float(camN.y * d.sourceSize.y))
         }
-        let scale = exp(qhm(c.lz, c.vz, c.az, cameraFrame, rate: c.rate))
+        let scale = Float(exp(logZ))
         let tilt = SIMD2<Float>(cr(c.yaw, cameraFrame), cr(c.pitch, cameraFrame))
         let pos = SIMD2<Float>(cr(u.x, f), cr(u.y, f))
         let vel = SIMD2<Float>(cr(u.x, f + 1) - cr(u.x, f - 1), cr(u.y, f + 1) - cr(u.y, f - 1)) * Float(gridRate / 2)

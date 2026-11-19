@@ -347,7 +347,7 @@ public actor Engine {
             "time_basis": .object([
                 "zoom": .string("source"), "cuts": .string("source"), "ramps": .string("source"),
                 "clips": .string("output"), "duration": .string("output"),
-                "note": .string("Pass basis: \"output\" to zoom_add, cut_range or speed_ramp_set to use output seconds."),
+                "note": .string("Pass basis: \"output\" to set_zoom, cut_span or set_speed to use output seconds."),
             ]),
             "zoom": .array(timeline.zoom.map { z in
                 .object(["id": .string(z.id.uuidString),
@@ -668,7 +668,10 @@ public actor Engine {
 
     /// Starts an export as a job. Uses the existing exporter, unchanged.
     public func startExport(projectID: String, presetName: String, outputPath: String,
-                            includeAudio: Bool, exportStems: Bool, overwrite: Bool = false) async throws -> String {
+                            includeAudio: Bool, exportStems: Bool, overwrite: Bool = false,
+                            client: String? = nil) async throws -> String {
+        // The client identity is recorded by the job manager for approvals and audit.
+        _ = client
         // AGENT: capture and export compete for the same GPU and must not run together.
         guard !RecordingGate.isRecordingActive else {
             throw ToolError(code: "RECORDING_ACTIVE", hint: "Stop recording before exporting.")

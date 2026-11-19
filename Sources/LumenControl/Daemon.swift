@@ -50,6 +50,9 @@ public func registerAllTools(in registry: ToolRegistry) {
     registry.registerRecordTools()
     registry.registerProjectTools()
     registry.registerMediaTools()
+    // The typed video-edit catalog is canonical; the older overlapping verbs
+    // are retired so `tools/list` exposes exactly one verb per operation.
+    registry.registerVideoEditTools()
     registry.registerActuateTools()
     // AGENT: one tool composes the existing record, edit, privacy, QA and export operations.
     registry.registerDemoTools()

@@ -517,12 +517,6 @@ public extension ToolRegistry {
                 return .object(["project_id": .string(ref.identifier), "path": .string(ref.url.path)])
             })
 
-        register(ToolDefinition<TimelineGetInput>(name: "timeline_get",
-            description: "Reads the editable timeline of a project: zooms, cuts, ramps, style, cursor, audio, captions and privacy, plus the current revision.",
-            capability: .read, required: ["project_id"]) { input, ctx in
-                try await ctx.engine.timelineValue(projectID: input.projectID)
-            })
-
         register(ToolDefinition<ProjectCloseInput>(name: "project_close",
             description: "Closes an open project session and releases its decoded media resources.",
             capability: .read, required: ["project_id"], mutating: true) { input, ctx in
@@ -580,23 +574,6 @@ public extension ToolRegistry {
                 return .object(result)
             })
 
-        register(ToolDefinition<ZoomAddInput>(name: "zoom_add",
-            description: "Adds a manual zoom. start and end are source seconds unless basis is \"output\". Manual zooms survive an auto replan.",
-            capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
-                let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
-                                                      describe: "manual zoom") { timeline in
-                    // AGENT: zoom times are stored in source seconds; honour the caller's basis.
-                    let start = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.start, basis: input.basis))
-                    let end = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.end, basis: input.basis))
-                    // AGENT: reject invalid ranges and route zoom edits through the editor reducer.
-                    guard end > start, input.scale.isFinite, (1.1...4).contains(input.scale) else { throw ToolError.invalidArguments("Need start < end and zoom scale 1.1…4.") }
-                    try applyCommand(.addZoom(ZoomSegment(start: start, end: end, scale: input.scale,
-                                                          focus: try self.focus(from: input.focusMode, x: input.focusX, y: input.focusY),
-                                                          origin: .manual)), to: &timeline)
-                }
-                return .object(result)
-            })
-
         register(ToolDefinition<ZoomRemoveInput>(name: "zoom_remove",
             description: "Removes a zoom by its id.",
             capability: .edit, required: ["project_id", "id"], mutating: true, destructive: true) { input, ctx in
@@ -619,35 +596,6 @@ public extension ToolRegistry {
             description: "Re-runs the automatic zoom planner over the recorded input. Manual zooms are kept.",
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.replanZoom(projectID: input.projectID)
-                return .object(result)
-            })
-
-        register(ToolDefinition<CutRangeInput>(name: "cut_range",
-            description: "Cuts a span out of the recording. start and end are in source seconds unless basis is \"output\".",
-            capability: .edit, required: ["project_id", "start", "end"], mutating: true, destructive: true) { input, ctx in
-                let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
-                                                      describe: "cut") { timeline in
-                    let start = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.start, basis: input.basis))
-                    let end = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.end, basis: input.basis))
-                    // AGENT: the editor's output-range cut handles clips and overlaps consistently.
-                    let a = timeline.timeMap.output(atSource: start), b = timeline.timeMap.output(atSource: end)
-                    guard b > a else { throw ToolError.invalidArguments("Cut end must be after start in the edited timeline.") }
-                    try applyCommand(.cutOutputRange(start: a, end: b), to: &timeline)
-                }
-                return .object(result)
-            })
-
-        register(ToolDefinition<SpeedRampInput>(name: "speed_ramp_set",
-            description: "Sets a speed ramp. start and end are source seconds unless basis is \"output\". 2.0 plays twice as fast.",
-            capability: .edit, required: ["project_id", "start", "end"], mutating: true) { input, ctx in
-                let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
-                                                      describe: "speed ramp") { timeline in
-                    let start = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.start, basis: input.basis))
-                    let end = try timeline.sourceSeconds(try TimeRef.legacy(seconds: input.end, basis: input.basis))
-                    // AGENT: zero or negative ramp speed breaks time-map construction.
-                    guard end > start, input.speed.isFinite, (0.25...16).contains(input.speed) else { throw ToolError.invalidArguments("Need start < end and speed 0.25…16.") }
-                    try applyCommand(.addSpeedRamp(start: start, end: end, speed: input.speed), to: &timeline)
-                }
                 return .object(result)
             })
 

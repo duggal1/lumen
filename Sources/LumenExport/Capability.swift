@@ -66,7 +66,11 @@ public struct ExportPreset: Codable, Hashable, Sendable, Identifiable {
     /// Same preset with other codec/height/fps; the name follows the parameters.
     func adjusted(codec: VideoCodec, height: Int, fps: Int) -> ExportPreset {
         var q = self
-        q.codec = codec; q.height = height; q.fps = fps
+        q.codec = codec
+        // A custom width encodes the old height's aspect. Keeping it while the
+        // height changes produces a stretched export, so recompute from aspect.
+        if height != q.height { q.customWidth = nil }
+        q.height = height; q.fps = fps
         q.alpha = q.alpha && codec.supportsAlpha
         q.name = Self.makeName(height: height, fps: fps, codec: codec)
         return q
@@ -163,6 +167,10 @@ public final class ExportCapabilityMatrix: @unchecked Sendable {
                     if c != p.codec { changes.append(c.title) }
                     if h != p.height { changes.append("\(h)p") }
                     if fps != p.fps { changes.append("\(fps) fps") }
+                    // A custom width encodes the old height's aspect; when a
+                    // downgrade recomputes it, say so rather than silently
+                    // changing the delivery canvas.
+                    if p.customWidth != nil, q.customWidth == nil { changes.append("canvas aspect") }
                     return (q, "\(p.name) isn't supported on this Mac. Using \(changes.joined(separator: ", ")).")
                 }
             }

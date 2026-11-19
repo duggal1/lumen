@@ -28,7 +28,26 @@ public enum TranscriptEdits {
     /// Lowercased and stripped of surrounding punctuation/whitespace, so
     /// `"Um,"`, `"UM"` and `" um "` all normalize to the same filler.
     public static func normalized(_ text: String) -> String {
-        text.lowercased().trimmingCharacters(in: .punctuationCharacters.union(.whitespacesAndNewlines))
+        // Canonical composition first, so "u" + combining diaeresis and "ü"
+        // are one term in every locale. Internal hyphens/dashes are word
+        // separators in ASR ("you-know" == "you know"), not punctuation to
+        // keep; outer punctuation is stripped after that.
+        let composed = text.precomposedStringWithCanonicalMapping.lowercased()
+        let separated = composed.replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "\u{2013}", with: " ")
+            .replacingOccurrences(of: "\u{2014}", with: " ")
+        let trimmed = separated.trimmingCharacters(in: .punctuationCharacters.union(.whitespacesAndNewlines))
+        return trimmed.split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
+    /// Word indices the UI masks as fillers. This is the single definition
+    /// shared with `cleanupCuts`, so the caption mask and the picture cut can
+    /// never disagree. Confidence is not a factor: a low-confidence "um" is
+    /// still a filler the viewer does not want to read or watch.
+    public static func fillerIndices(in transcript: Transcript) -> [Int] {
+        let terms = terms(forLocale: transcript.locale)
+        return transcript.words.indices.filter { terms.contains(normalized(transcript.words[$0].text)) }
     }
 
     /// The cut that removes one word, padded on both sides by `padding`.
@@ -57,10 +76,14 @@ public enum TranscriptEdits {
                                     padding: Double = defaultPadding) -> CutRange? {
         guard range.lowerBound >= 0, range.upperBound <= words.count, !range.isEmpty else { return nil }
         let slice = words[range]
-        guard let first = slice.first, let last = slice.last,
-              first.start.isFinite, last.end.isFinite else { return nil }
-        let a = max(first.start - max(padding, 0), 0)
-        let b = last.end + max(padding, 0)
+        // Overlapping windows can re-emit a word with a SHORTER end or place
+        // bursts out of order. first/last would then shrink the cut and leave
+        // part of the sentence in the picture; use the full extent instead.
+        let starts = slice.map(\.start), ends = slice.map(\.end)
+        guard let lo = starts.min(), let hi = ends.max(),
+              starts.allSatisfy(\.isFinite), ends.allSatisfy(\.isFinite) else { return nil }
+        let a = max(lo - max(padding, 0), 0)
+        let b = hi + max(padding, 0)
         guard b > a else { return nil }
         return CutRange(start: a, end: b, origin: .transcript)
     }
@@ -71,11 +94,9 @@ public enum TranscriptEdits {
     public static func cleanupCuts(transcript: Transcript, events: [InputEvent] = [],
                                    maxPause: Double = 0.6, keepPause: Double = 0.25,
                                    padding: Double = defaultPadding) -> [CutRange] {
-        let terms = terms(forLocale: transcript.locale)
         var cuts: [CutRange] = []
-        for word in transcript.words where word.confidence >= 0.4 {
-            guard terms.contains(normalized(word.text)) else { continue }
-            if let cut = span(for: word, padding: padding) { cuts.append(cut) }
+        for i in fillerIndices(in: transcript) {
+            if let cut = span(for: transcript.words[i], padding: padding) { cuts.append(cut) }
         }
         guard maxPause >= 0, keepPause >= 0 else { return merge(cuts) }
         let ordered = transcript.words.sorted { $0.start < $1.start }

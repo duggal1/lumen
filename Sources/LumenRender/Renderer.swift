@@ -239,6 +239,14 @@ public final class Renderer: @unchecked Sendable {
     /// is actually on screen. The caption pass may not sample the render
     /// target it is writing, so the scene is copied before the card is drawn.
     private var captionSrc: [MTLTexture?] = [nil, nil, nil]
+    /// Crossfade: the previous frame's finished scene and the blended mix.
+    /// `encode` is serial on the render queue, so one pair suffices; encoding
+    /// order guarantees the next frame reads what this one published.
+    private var fadePrev: MTLTexture?
+    private var fadeMix: MTLTexture?
+    private var fadeSize = SIMD2<Int>(0, 0)
+    private var fadeValid = false
+    private var fadeTime = 0.0
     /// Quarter-resolution ping-pong pair for the card's separable Gaussian.
     private var blurA: [MTLTexture?] = [nil, nil, nil]
     private var blurB: [MTLTexture?] = [nil, nil, nil]
@@ -526,6 +534,7 @@ public final class Renderer: @unchecked Sendable {
         work = w; accum = a; backdrop = b
         backdropKey = nil
         captionSrc = [nil, nil, nil]; blurA = [nil, nil, nil]; blurB = [nil, nil, nil]
+        fadePrev = nil; fadeMix = nil; fadeValid = false; fadeSize = s
         maskedSources = [nil, nil, nil]; maskKey = [nil, nil, nil]
         size = s
     }
@@ -755,6 +764,47 @@ public final class Renderer: @unchecked Sendable {
             }
         }
 
+        // 2b. clip-join crossfade. Blend the held outgoing scene with this
+        // frame's incoming scene BEFORE the backdrop resolve, so both sides are
+        // composited once and the dissolve is a real two-sided mix, not a fade
+        // to black. `effectiveCrossfade` is the project-wide usable window.
+        let currentScene = K > 1 ? accum[s] : work[s]
+        var sceneForResolve = currentScene
+        if tl.effectiveCrossfade > 0, !r.transparent, !r.cursorOnly,
+           let (prev, mix) = crossfadeTargets(cs) {
+            let sequential = fadeValid && t > fadeTime && t - fadeTime <= 1.5 / max(r.fps, 1)
+            if sequential, let w = crossfadeWeight(tl, t), w < 1 {
+                let rp = MTLRenderPassDescriptor()
+                rp.colorAttachments[0].texture = mix
+                rp.colorAttachments[0].loadAction = .clear
+                rp.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+                rp.colorAttachments[0].storeAction = .store
+                if let e = cb.makeRenderCommandEncoder(descriptor: rp) {
+                    e.setRenderPipelineState(pAccum); quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
+                    frag(e, AccU(weight: 1 - w)); e.setFragmentTexture(prev, index: 0)
+                    e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    frag(e, AccU(weight: w)); e.setFragmentTexture(currentScene, index: 0)
+                    e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    e.endEncoding()
+                    sceneForResolve = mix
+                }
+            }
+            // Publish this frame's scene as the outgoing side for the next one.
+            let hp = MTLRenderPassDescriptor()
+            hp.colorAttachments[0].texture = prev
+            hp.colorAttachments[0].loadAction = .clear
+            hp.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+            hp.colorAttachments[0].storeAction = .store
+            if let e = cb.makeRenderCommandEncoder(descriptor: hp) {
+                e.setRenderPipelineState(pTextSprite); quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
+                frag(e, TextSpriteU(opacity: 1)); e.setFragmentTexture(currentScene, index: 0)
+                e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                e.endEncoding()
+                fadeValid = true
+            }
+            fadeTime = t
+        }
+
         // 3. resolve
         let fmt = output.pixelFormat
         if pResolve[fmt] == nil { pResolve[fmt] = try? Self.pipe(device, lib, "resolveFS", fmt, 0) }
@@ -766,7 +816,7 @@ public final class Renderer: @unchecked Sendable {
             frag(e, ResU(levels: fmt == .bgr10a2Unorm ? 1023 : 255,
                          seed: UInt32(truncatingIfNeeded: Int(min(max(t * 1000, 0), 1e9))),
                          alpha: r.transparent || r.cursorOnly ? 0 : 1))
-            e.setFragmentTexture(K > 1 ? accum[s] : work[s], index: 0); e.setFragmentTexture(bd, index: 1)
+            e.setFragmentTexture(sceneForResolve, index: 0); e.setFragmentTexture(bd, index: 1)
             e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); e.endEncoding()
         }
         let sem = self.sem, keep = Keep(o: (r.screen, r.webcam)), cost = perSample, samples = Double(K)
@@ -879,23 +929,34 @@ public final class Renderer: @unchecked Sendable {
             let w = content.z * Float(reveal), h = content.w * Float(reveal)
             contentRect = SIMD4(content.x + (content.z - w) / 2, content.y + (content.w - h) / 2, w, h)
         }
-        // Browser-content crop. `st.crop` is the crop at this frame's SOURCE
-        // time; a legacy zero rect falls back to the old Area crop, then to the
-        // full source. Pass 2 (contentFS) samples exactly `CropSpace.visible`.
-        // Browser-content crop: the live AXWebArea evidence lives on the
-        // screen track, so the legacy Area crop rect is the crop when present.
-        let cropSrc: PxRect = (st.cropRect.width > 1 && st.cropRect.height > 1
-            ? PxRect(x: Double(st.cropRect.minX), y: Double(st.cropRect.minY),
-                     w: Double(st.cropRect.width), h: Double(st.cropRect.height))
-            : PxRect(x: 0, y: 0, w: g.src.x, h: g.src.y))
+        // Browser-content crop: the dense AXWebArea track is authoritative; a
+        // legacy Area crop is the fallback, then the full source. The Director
+        // already reconstructed the visible rect with CropSpace.visible, so the
+        // camera centre is feasible for THIS crop — no second clamp on derived
+        // frames. A Studio-supplied live state may carry an arbitrary focus and
+        // is clamped here as the single remaining safety net.
+        let cropSrc: PxRect = st.crop.isValid
+            ? st.crop
+            : (st.cropRect.width > 1 && st.cropRect.height > 1
+                ? PxRect(x: Double(st.cropRect.minX), y: Double(st.cropRect.minY),
+                         w: Double(st.cropRect.width), h: Double(st.cropRect.height))
+                : PxRect(x: 0, y: 0, w: g.src.x, h: g.src.y))
         let cropBounds = CGRect(x: cropSrc.x, y: cropSrc.y, width: cropSrc.w, height: cropSrc.h)
-        let camRel = ZoomTransform.clamp(
-            SIMD2(Double(st.cameraCenter.x) - cropSrc.x, Double(st.cameraCenter.y) - cropSrc.y),
-            source: SIMD2(cropSrc.w, cropSrc.h), scale: sc)
-        let cam = SIMD2<Double>(camRel.x + cropSrc.x, camRel.y + cropSrc.y)
-        // No CropSpace: with a source-sized crop the visible rect is the crop.
-        let visible = cropSrc
-        let cropSize = SIMD2<Float>(Float(max(visible.w * sc, 1)), Float(max(visible.h * sc, 1)))
+        let cam: SIMD2<Double>
+        if r.live != nil {
+            let rel = ZoomTransform.clamp(
+                SIMD2(Double(st.cameraCenter.x) - cropSrc.x, Double(st.cameraCenter.y) - cropSrc.y),
+                source: SIMD2(cropSrc.w, cropSrc.h), scale: sc)
+            cam = SIMD2(rel.x + cropSrc.x, rel.y + cropSrc.y)
+        } else {
+            cam = SIMD2(Double(st.cameraCenter.x), Double(st.cameraCenter.y))
+        }
+        // contentFS maps view = cropSize / scale. The Director reports scale
+        // relative to the crop's base view, so cropSize is that base view: the
+        // visible source rect is baseView / scale == CropSpace.visible, in both
+        // dimensions even when the crop and frame aspects differ.
+        let baseView = CropSpace.baseView(crop: cropSrc, aspect: tl.style.aspectRatio)
+        let cropSize = SIMD2<Float>(Float(max(baseView.w, 1)), Float(max(baseView.h, 1)))
         let pxPerSrc = g.content.z / g.src.x
         let drawingContent = !r.cursorOnly
         // Real-time upscaler. SMOOTHNESS: the upscale chain still runs as compute
@@ -1312,6 +1373,39 @@ public final class Renderer: @unchecked Sendable {
         d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
         captionSrc[index] = device.makeTexture(descriptor: d)
         return captionSrc[index]
+    }
+
+    /// Lazily allocate the two full-canvas scratch targets a clip-join crossfade
+    /// needs: the held outgoing scene and the premultiplied blend of both sides.
+    private func crossfadeTargets(_ canvas: SIMD2<Int>) -> (MTLTexture, MTLTexture)? {
+        if fadeSize != canvas || fadePrev == nil || fadeMix == nil {
+            func make() -> MTLTexture? {
+                let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float,
+                                                                  width: canvas.x, height: canvas.y,
+                                                                  mipmapped: false)
+                d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
+                return device.makeTexture(descriptor: d)
+            }
+            fadePrev = make(); fadeMix = make(); fadeValid = false; fadeSize = canvas
+        }
+        guard let prev = fadePrev, let mix = fadeMix else { return nil }
+        return (prev, mix)
+    }
+
+    /// Incoming-clip weight inside a join's effective crossfade window. A join
+    /// is an output-adjacent pair of clips; `nil` means no dissolve this frame.
+    private func crossfadeWeight(_ tl: Timeline, _ t: Double) -> Float? {
+        let xf = tl.effectiveCrossfade
+        guard xf > 0, tl.clips.count > 1 else { return nil }
+        let sorted = tl.clips.sorted { $0.start < $1.start }
+        var weight: Float?
+        for i in 1..<sorted.count where abs(sorted[i].start - sorted[i - 1].end) < 0.001 {
+            let join = sorted[i].start
+            if t >= join - 1e-6, t <= join + xf {
+                weight = Float(min(max((t - join) / xf, 0), 1))
+            }
+        }
+        return weight
     }
 
     private func quad(_ e: MTLRenderCommandEncoder, _ rect: SIMD4<Float>, _ canvas: SIMD2<Float>) {

@@ -188,7 +188,7 @@ public struct ExportStartInput: ToolInput {
     public var output: String = ""
     public var includeAudio: Bool = true
     public var exportStems: Bool = false
-    // AGENT: export_start can keep one MCP request open when the client needs inline completion.
+    // AGENT: export_final can keep one MCP request open when the client needs inline completion.
     public var wait: Bool = false
     // AGENT: choosing overwrite is explicit; otherwise an existing export is preserved.
     public var overwrite: Bool = false
@@ -259,41 +259,6 @@ public extension ToolRegistry {
                                 "default": .string("1080p30-h264")])
             })
 
-        register(ToolDefinition<AudioImportInput>(name: "audio_import",
-            description: "Adds an MP3, WAV or M4A to a project: music, voice-over or a sound effect. Anchor it to a marker or to an output time.",
-            capability: .edit, required: ["project_id", "path"], mutating: true) { input, ctx in
-                // AGENT: audio paths are confined and must be audio files.
-                let url = try ctx.paths.path(input.path, ext: PathGuard.audioExt)
-                guard FileManager.default.fileExists(atPath: url.path) else {
-                    throw ToolError.failed("No file at \(url.path).")
-                }
-                let role = input.role
-                guard ["music", "voiceover", "sfx"].contains(role) else {
-                    throw ToolError.invalidArguments("role must be music, voiceover, or sfx.")
-                }
-                let placement = try await self.resolvePlacement(projectID: input.projectID, ctx: ctx,
-                                                          atMarker: input.atMarker, atOutput: input.atOutput,
-                                                          offsetMs: input.offsetMs)
-                if ctx.dryRun {
-                    return .object(["dry_run": .bool(true), "path": .string(url.path),
-                                    "role": .string(role), "placement": .number(placement)])
-                }
-                let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
-                                                      describe: "import \(role)") { timeline in
-                    var audio = timeline.audio
-                    if role == "music" {
-                        audio.musicPath = url.path
-                        if let gainDb = input.gainDb { audio.musicGainDb = try Self.validated(gainDb, name: "gain_db", range: -60 ... 12) }
-                    } else {
-                        let laneRole: AudioLane.Role = role == "sfx" ? .sfx : .voiceover
-                        let gain = try Self.validated(input.gainDb ?? 0, name: "gain_db", range: -60 ... 12)
-                        audio.lanes.append(AudioLane(role: laneRole, path: url.path, placement: placement, gainDb: gain))
-                    }
-                    try applyCommand(.setAudio(audio), to: &timeline)
-                }
-                return .object(result)
-            })
-
         register(ToolDefinition<AudioMixSetInput>(name: "audio_mix_set",
             description: "Sets the mix: target loudness, music gain, microphone gain, output gain and how deep music ducks under speech.",
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
@@ -336,84 +301,14 @@ public extension ToolRegistry {
                 return .object(payload)
             })
 
-        register(ToolDefinition<PreviewFrameInput>(name: "preview_frame",
-            description: "Renders one frame as an image. JPEG is the default; set png for lossless output.",
-            capability: .read, required: ["project_id"]) { input, ctx in
-                let (image, name) = try await ctx.engine.previewFrame(projectID: input.projectID,
-                                                                    time: input.time,
-                                                                    maxWidth: input.maxWidth, png: input.png)
-                var output: [String: JSONValue] = ["image_base64": .string(image.base64EncodedString()),
-                                                   "mime_type": .string(input.png ? "image/png" : "image/jpeg"),
-                                                   "name": .string(name),
-                                                   "time": .number(input.time)]
-                // AGENT: frame metadata tells the agent what it received without embedding pixels in JSON.
-                if let size = Self.pixelSize(image) {
-                    output["width"] = .int(size.width)
-                    output["height"] = .int(size.height)
-                }
-                return .object(output)
-            })
-
-        register(ToolDefinition<PreviewSheetInput>(name: "preview_sheet",
-            description: "Renders frames across the project as a JPEG contact sheet; set png for lossless output.",
-            capability: .read, required: ["project_id"]) { input, ctx in
-                let sheet = try await ctx.engine.previewSheet(projectID: input.projectID, frames: input.frames,
-                                                              duration: input.duration, maxWidth: input.maxWidth, png: input.png)
-                // AGENT: the protocol layer needs the MIME type to return the sheet as an image block.
-                var output: [String: JSONValue] = ["image_base64": .string(sheet.base64EncodedString()),
-                                                   "mime_type": .string(input.png ? "image/png" : "image/jpeg"),
-                                                   "frames": .int(input.frames)]
-                if let size = Self.pixelSize(sheet) {
-                    output["width"] = .int(size.width)
-                    output["height"] = .int(size.height)
-                }
-                return .object(output)
-            })
-
         register(ToolDefinition<QAReportInput>(name: "qa_report",
             description: "Checks the project and returns pass/fail per check: zoom arrival and centring, unmasked sensitive text, loudness, silence, dropped frames. Loop on this before exporting.",
             capability: .read, required: ["project_id"]) { input, ctx in
                 try await ctx.engine.qaReport(projectID: input.projectID)
             })
 
-        register(ToolDefinition<ExportStartInput>(name: "export_start",
-            description: "Exports the project to a file. Returns a job id; poll with job_status. Refuses to export while a privacy scan is unresolved.",
-            capability: .export, required: ["project_id"], mutating: true) { input, ctx in
-                let output = input.output.isEmpty
-                    ? (ctx.engine.knownProjects().first { $0.identifier == input.projectID }?.url
-                        .deletingLastPathComponent().appendingPathComponent(input.projectID + ".mp4").path ?? "")
-                    : input.output
-                guard !output.isEmpty else { throw ToolError.invalidArguments("Give an output path.") }
-                // AGENT: the file does not exist yet, so confine its parent instead of the path.
-                var resolved = try ctx.paths.writablePath(output, ext: PathGuard.videoExt)
-                if !input.overwrite {
-                    let folder = resolved.deletingLastPathComponent()
-                    let stem = resolved.deletingPathExtension().lastPathComponent
-                    let ext = resolved.pathExtension
-                    var suffix = 2
-                    while FileManager.default.fileExists(atPath: resolved.path) {
-                        let name = ext.isEmpty ? "\(stem)-\(suffix)" : "\(stem)-\(suffix).\(ext)"
-                        resolved = try ctx.paths.writablePath(folder.appendingPathComponent(name).path,
-                                                              ext: PathGuard.videoExt)
-                        suffix += 1
-                    }
-                }
-                let job = try await ctx.engine.startExport(projectID: input.projectID, presetName: input.preset,
-                                                          outputPath: resolved.path,
-                                                          includeAudio: input.includeAudio,
-                                                          exportStems: input.exportStems,
-                                                          overwrite: input.overwrite)
-                if input.wait {
-                    let completed = try await ctx.waitForJob(job)
-                    guard case .object(var result) = completed.jsonValue else { return completed.jsonValue }
-                    result["output"] = .string(resolved.path)
-                    return .object(result)
-                }
-                return .object(["job_id": .string(job), "output": .string(resolved.path)])
-            })
-
         register(ToolDefinition<JobStatusInput>(name: "job_status",
-            description: "Reports the progress and result of a job started by export_start, privacy_scan or captions_generate.",
+            description: "Reports the progress and result of a job started by export_final, privacy_scan or captions_generate.",
             capability: .read, required: ["job_id"]) { input, ctx in
                 guard (0...25_000).contains(input.waitMs) else {
                     throw ToolError.invalidArguments("wait_ms must be between 0 and 25000.")

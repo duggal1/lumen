@@ -18,7 +18,7 @@ public enum VoiceError: Error, Sendable {
     public var message: String {
         switch self {
         case .noKey:
-            return "No voice-over provider key is stored. Store one in the Keychain (service: com.lumen.studio, account: elevenlabs) or import an audio file with audio_import."
+            return "No voice-over provider key is stored. Store one in the Keychain (service: com.lumen.studio, account: elevenlabs) or import an audio file with add_music."
         case .failed(let m):
             return "The voice provider failed: \(m)"
         }

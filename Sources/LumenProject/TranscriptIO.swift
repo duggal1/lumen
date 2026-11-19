@@ -7,6 +7,15 @@ public struct TranscriptFile: Codable, Sendable {
     public var complete: Bool
     public var transcript: Transcript
     public init(engine: String, complete: Bool, transcript: Transcript) { self.engine = engine; self.complete = complete; self.transcript = transcript }
+    private enum CodingKeys: String, CodingKey { case version, engine, complete, transcript }
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        // Projects written before the version field was added must still load.
+        version = c.opt(.version, 1)
+        engine = c.opt(.engine, "")
+        complete = c.opt(.complete, false)
+        transcript = try c.decode(Transcript.self, forKey: .transcript)
+    }
 }
 
 extension ProjectBundle {

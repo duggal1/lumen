@@ -32,9 +32,10 @@ public enum CommandError: Error, Sendable { case notFound(UUID), invalid(String)
 
 /// One case per user-visible action. Views, hotkeys, CLI, MCP and App Intents all dispatch these. Times are SOURCE seconds unless named Output/Playhead.
 public enum Command: Codable, Sendable {
-    case addCut(start: Double, end: Double), cutOutputRange(start: Double, end: Double), cutAtPlayhead(length: Double)
+    case addCut(start: Double, end: Double), addCuts([CutRange]), cutOutputRange(start: Double, end: Double), cutAtPlayhead(length: Double)
     case deleteCut(UUID), trim(start: Double, end: Double)
     case addSpeedRamp(start: Double, end: Double, speed: Double), deleteSpeedRamp(UUID)
+    case setCrossfadeDuration(Double)
     case addZoom(ZoomSegment), addZoomAtPlayhead(duration: Double, scale: Double), moveZoom(UUID, start: Double, end: Double)
     case setZoomScale(UUID, Double), setZoomFocus(UUID, Focus), setZoomEasing(UUID, ZoomEasing?), deleteZoom(UUID), setZoomPreset(ZoomPreset)
     case setStyle(Style), setCursor(CursorStyle), setCamera(CameraParams), setAudio(AudioPlan), setWebcam(WebcamLayout?), setCaptions(CaptionPlan)
@@ -68,6 +69,24 @@ public enum Command: Codable, Sendable {
     case setActivitySettings(ActivitySettingsPatch)
 }
 
+/// Merge overlapping or touching cuts so the decision list never contains two
+/// claims on the same source instant. Keeps the earlier cut's identity/origin.
+private func mergedCuts(_ existing: [CutRange], adding: [CutRange]) -> [CutRange] {
+    let valid = (existing + adding).filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
+    guard !valid.isEmpty else { return [] }
+    let sorted = valid.sorted { $0.start < $1.start }
+    var out: [CutRange] = []
+    for c in sorted {
+        if let last = out.last, c.start <= last.end {
+            out[out.count - 1] = CutRange(id: last.id, start: last.start,
+                                          end: max(last.end, c.end), origin: last.origin)
+        } else {
+            out.append(c)
+        }
+    }
+    return out
+}
+
 /// Pure: (state, command, context) -> new state + effects. The only place user intent mutates the timeline.
 public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws -> Effects {
     let tm = t.timeMap
@@ -79,15 +98,30 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
     let zoomFx: Effects = [.zoom, .camera, .audio]
     switch c {
     case .addCut(let s, let e):
-        guard e > s else { throw CommandError.invalid("cut end <= start") }
-        t.timeMap.cuts.append(CutRange(start: s, end: e)); return .replan
+        guard s.isFinite, e.isFinite, e > s else { throw CommandError.invalid("bad cut span") }
+        // One assignment, one rebuild, and overlapping cuts collapse.
+        t.timeMap.cuts = mergedCuts(t.timeMap.cuts, adding: [CutRange(start: s, end: e)])
+        return .replan
+    case .addCuts(let cuts):
+        guard cuts.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }) else {
+            throw CommandError.invalid("bad cut span")
+        }
+        // One assignment, one table rebuild: the bulk form is the O(N) path.
+        t.timeMap.cuts = mergedCuts(t.timeMap.cuts, adding: cuts); return .replan
+    case .setCrossfadeDuration(let d):
+        t.crossfadeDuration = d.isFinite ? max(d, 0) : 0
+        return .replan
     case .cutOutputRange(let s, let e):
-        guard e > s else { throw CommandError.invalid("cut end <= start") }
+        guard s.isFinite, e.isFinite, s >= 0, e > s,
+              e <= tm.sourceDuration + ctx.frame,
+              e - s < tm.sourceDuration - ctx.frame else {
+            throw CommandError.invalid("cut is outside the recording")
+        }
         do { try t.removeOutputRange(s, e, frame: ctx.frame) }
         catch let err as EditError { throw mapEdit(err) }
         return .replan
     case .cutAtPlayhead(let len):
-        guard len > 0.05 else { throw CommandError.invalid("cut too short") }
+        guard len.isFinite, len > 0.05 else { throw CommandError.invalid("cut too short") }
         do { try t.removeOutputRange(ctx.playhead, ctx.playhead + len, frame: ctx.frame) }
         catch let err as EditError { throw mapEdit(err) }
         return .replan
@@ -96,7 +130,13 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         guard s >= 0, e > s, e <= tm.sourceDuration + 0.001 else { throw CommandError.invalid("bad trim") }
         t.timeMap.trimStart = s; t.timeMap.trimEnd = e; return .replan
     case .addSpeedRamp(let s, let e, let v):
-        guard e > s, v > 0 else { throw CommandError.invalid("bad ramp") }
+        guard s.isFinite, e.isFinite, v.isFinite, e > s, v > 0, v <= 16,
+              s >= tm.trimStart - ctx.frame, e <= tm.trimEnd + ctx.frame else {
+            throw CommandError.invalid("bad ramp")
+        }
+        guard !t.timeMap.ramps.contains(where: { s < $0.end && $0.start < e }) else {
+            throw CommandError.invalid("speed ramps must not overlap")
+        }
         t.timeMap.ramps.append(SpeedRamp(start: s, end: e, speed: v, origin: .manual)); return .replan
     case .deleteSpeedRamp(let id): t.timeMap.ramps.removeAll { $0.id == id }; return .replan
 
@@ -208,9 +248,11 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         t.clips.append(clip); t.clips.sort { $0.start < $1.start }; return []
     case .deleteClip(let id): t.clips.removeAll { $0.id == id }; t.clips.sort { $0.start < $1.start }; return []
     case .moveClip(let id, let start):
+        guard start.isFinite else { throw CommandError.invalid("non-finite clip start") }
         guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
         t.clips[i].start = max(start, 0); t.clips.sort { $0.start < $1.start }; return []
     case .trimClip(let id, let inPoint, let duration):
+        guard inPoint.isFinite, duration.isFinite else { throw CommandError.invalid("non-finite trim") }
         guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
         t.clips[i].inPoint = max(inPoint, 0); t.clips[i].duration = max(duration, 0.05); t.clips.sort { $0.start < $1.start }; return []
 
@@ -223,6 +265,7 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
     // A split is a logical boundary inside contiguous source — it partitions
     // for ordering only and never changes camera, cursor, or mask coverage.
     case .splitClip(let atOutput):
+        guard atOutput.isFinite else { throw CommandError.invalid("non-finite split point") }
         let splitOut = max(min(atOutput, t.compositionDuration - 0.05), 0.05)
         guard let idx = t.clips.firstIndex(where: { $0.contains(output: splitOut) }) else {
             throw CommandError.invalid("split point outside any clip")
@@ -276,7 +319,9 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         t.clips.append(copy); t.clips.magneticNormalize()
         return .replan
     case .pasteClip(let clip, let atOutput):
-        guard !clip.path.isEmpty, clip.duration > 0 else { throw CommandError.invalid("empty clip") }
+        guard !clip.path.isEmpty, clip.duration > 0, atOutput.isFinite else {
+            throw CommandError.invalid("empty clip or non-finite insertion point")
+        }
         var pasted = clip
         pasted.id = UUID()
         pasted.start = t.clips.snappedStart(max(min(atOutput, t.compositionDuration), 0))
@@ -305,6 +350,7 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         catch let err as EditError { throw mapEdit(err) }
         return .replan
     case .trimClipEdge(let id, let isStart, let toOutput):
+        guard toOutput.isFinite else { throw CommandError.invalid("non-finite trim edge") }
         guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
         var clip = t.clips[i]
         let edge = min(max(toOutput, clip.start), clip.end)
@@ -324,11 +370,15 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         return [.masks, .zoom, .camera, .audio, .layout, .webcam]
     case .reorderClip(let id, let toIndex):
         guard let i = t.clips.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
-        var clip = t.clips.remove(at: i)
-        let j = min(max(toIndex, 0), t.clips.count)
+        let j = min(max(toIndex, 0), t.clips.count - 1)
+        guard j != i else { return [] }          // idempotent: no snapshot change
+        // Anchor the lane at its original first start. Anchoring on the moved
+        // clip's own start would slide the whole lane forward on every reorder.
+        let laneStart = t.clips.map(\.start).min() ?? 0
+        let clip = t.clips.remove(at: i)
         t.clips.insert(clip, at: j)
-        clip = t.clips[j]
-        t.clips.magneticNormalize()
+        // Preserve the chosen order; only close the gaps it created.
+        t.clips.magneticNormalizeInPlace(start: laneStart)
         return .replan
     case .addTapAtPlayhead(let x, let y): t.overlays.taps.append(TapIndicator(t: playSrc, x: x, y: y)); return [.cursor, .audio]
     case .deleteTap(let id): t.overlays.taps.removeAll { $0.id == id }; return [.cursor, .audio]

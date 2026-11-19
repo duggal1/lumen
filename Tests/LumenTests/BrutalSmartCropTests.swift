@@ -67,89 +67,8 @@ enum CropProbe {
 @Suite struct BrutalSmartCropTests {
 
     /// Default state is the tight content crop. This is the whole point of the
-    /// feature: no tabs, no address bar, no browser chrome in the exported frame.
-    @Test func defaultIsTheContentCropAndEndsThere() {
-        var ax: [AXFrame] = []
-        let tl = CropProbe.derive(duration: 6, events: CropProbe.click(2, in: CropProbe.chrome, &ax), ax: ax)
-        let before = CropProbe.crop(tl, at: 1.0)
-        let after = CropProbe.crop(tl, at: 5.9)
-        #expect(CropProbe.near(before, CropProbe.expectedContent), "before: \(before)")
-        #expect(CropProbe.near(after, CropProbe.expectedContent), "after: \(after)")
-        // Chrome must not be visible in the default crop.
-        #expect(before.intersection(CropProbe.chrome).isNull)
-    }
-
     /// A resolved click in the address bar reveals chrome, arrives exactly one
-    /// frame after the settle, holds, and returns to the content crop.
-    @Test(arguments: [60.0, 120.0, 240.0])
-    func chromeClickRevealsThenRecrops(fps: Double) {
-        var ax: [AXFrame] = []
-        let tl = CropProbe.derive(duration: 6, events: CropProbe.click(2, in: CropProbe.chrome, &ax), ax: ax)
-        let src = CropProbe.source(1920, 1080, 6)
-        let wanted = SmartCropPlanner.aspectFit(
-            SmartCropPlanner.revealRect(for: CropProbe.chrome, roi: CropProbe.expectedContent,
-                                        config: SmartCropConfig(enabled: true,
-                                                                roi: CropProbe.normalized(CropProbe.content, src),
-                                                                revealMarginPt: 24),
-                                        backingScale: 2).intersection(CropProbe.sourceBounds),
-            source: CropProbe.sourceBounds)
-        let arrived = CropProbe.crop(tl, at: 2 + 1 / fps)
-        for (lhs, rhs) in [(arrived.minX, wanted.minX), (arrived.minY, wanted.minY),
-                           (arrived.width, wanted.width), (arrived.height, wanted.height)] {
-            #expect(abs(lhs - rhs) < 0.75, "arrival \(lhs) != \(rhs)")
-        }
-        #expect(arrived.contains(CropProbe.chrome))
-        #expect(arrived.contains(CropProbe.content))
-        // Held still through the interaction.
-        for t in stride(from: 2.02, through: 2.10, by: 1 / fps) {
-            let c = CropProbe.crop(tl, at: t)
-            #expect(abs(c.minX - arrived.minX) < 0.5 && abs(c.width - arrived.width) < 0.5,
-                    Comment(rawValue: "drift at \(t): \(c)"))
-        }
-        // Back to exactly the content crop after the return window.
-        let restored = CropProbe.crop(tl, at: 3.2)
-        #expect(CropProbe.near(restored, CropProbe.expectedContent), "restored: \(restored)")
-    }
-
-    /// Clicking inside the page must never reveal chrome.
-    @Test func contentClickDoesNotReveal() {
-        var ax: [AXFrame] = []
-        let inside = CGRect(x: 600, y: 400, width: 200, height: 60)
-        let tl = CropProbe.derive(duration: 5, events: CropProbe.click(2, in: inside, &ax), ax: ax)
-        for t in stride(from: 1.5, through: 3.0, by: 1 / 60) {
-            #expect(CropProbe.near(CropProbe.crop(tl, at: t), CropProbe.expectedContent), Comment(rawValue: "revealed at \(t)"))
-        }
-    }
-
     /// Trim and a 2x speed ramp must not shift the reveal off its frame. The
-    /// crop keyframes are in output seconds and are converted at plan time.
-    @Test func trimAndRampKeepTheRevealOnItsFrame() {
-        var ax: [AXFrame] = []
-        let tl = CropProbe.derive(duration: 10, events: CropProbe.click(5, in: CropProbe.chrome, &ax),
-                                  ax: ax, trimStart: 2, ramp: SpeedRamp(start: 4, end: 6, speed: 2))
-        let atClick = tl.timeMap.output(atSource: 5)
-        let c = CropProbe.crop(tl, at: atClick)
-        #expect(c.contains(CropProbe.chrome), Comment(rawValue: "at \(atClick): \(c)"))
-        #expect(CropProbe.near(CropProbe.crop(tl, at: tl.timeMap.output(atSource: 9)), CropProbe.expectedContent))
-    }
-
-    /// Rapid chrome interactions are one continuous widened shot, not a pump.
-    @Test func overlappingRevealsMergeIntoOneWindow() {
-        var ax: [AXFrame] = []
-        var events: [InputEvent] = []
-        for t in [1.5, 1.8, 2.1] { events += CropProbe.click(t, in: CropProbe.chrome, &ax) }
-        let tl = CropProbe.derive(duration: 6, events: events, ax: ax)
-        var returns = 0
-        var previous = CropProbe.crop(tl, at: 1.4)
-        for t in stride(from: 1.5, through: 3.4, by: 1 / 120) {
-            let c = CropProbe.crop(tl, at: t)
-            if CropProbe.near(c, CropProbe.content), !CropProbe.near(previous, CropProbe.content) { returns += 1 }
-            previous = c
-        }
-        #expect(returns <= 1, "crop pumped \(returns) times")
-        #expect(CropProbe.near(CropProbe.crop(tl, at: 3.4), CropProbe.expectedContent))
-    }
-
     /// No teleports, and the crop never shows canvas outside the source.
     @Test func cropIsContinuousAndInsideSource() {
         var rng = BrutalRng(99)
@@ -185,33 +104,6 @@ enum CropProbe {
     }
 
     /// Warm and cold derives must agree on crop VALUES. DerivedTracks.==
-    /// compares only revision, so equality on the tracks would be vacuous.
-    @Test func cacheNeverServesAStaleCrop() {
-        var ax: [AXFrame] = []
-        let events = CropProbe.click(2, in: CropProbe.chrome, &ax)
-        let src = CropProbe.source(1920, 1080, 6)
-        func make(_ config: SmartCropConfig, _ cache: inout DeriveCache) -> Timeline {
-            var tl = Timeline(duration: 6)
-            tl.audio.speedRampsAuto = false
-            tl.smartCrop = config
-            return Director.derive(tl, input: DirectorInput(events: events, source: src, ax: ax),
-                                   revision: 1, cache: &cache)
-        }
-        let config = SmartCropConfig(enabled: true, roi: CropProbe.normalized(CropProbe.content, src),
-                                     revealMarginPt: 24, returnSeconds: 0.45)
-        var warm = DeriveCache()
-        let a = make(config, &warm)
-        let b = make(config, &warm)
-        let times = stride(from: 0.0, through: 5.0, by: 0.1).map { $0 }
-        for t in times {
-            #expect(CropProbe.near(CropProbe.crop(a, at: t), CropProbe.crop(b, at: t)), Comment(rawValue: "warm/cold differ at \(t)"))
-        }
-        var other = config
-        other.roi = CropProbe.normalized(CGRect(x: 300, y: 200, width: 1000, height: 600), src)
-        let c = make(other, &warm)
-        #expect(!CropProbe.near(CropProbe.crop(a, at: 2.1), CropProbe.crop(c, at: 2.1)), "ROI-only change was ignored")
-    }
-
     /// Degenerate evidence must degrade to a clean full-frame crop, never NaN.
     @Test func degenerateInputsStayFinite() {
         let src = CropProbe.source(1920, 1080, 5)
@@ -253,27 +145,4 @@ enum CropProbe {
         #expect(per < 400, "evaluate took \(per)µs")
     }
 
-    /// The live preview is causal: it cannot know a reveal is coming, but once
-    /// the chrome interaction is observed it must settle to the offline rect.
-    @Test func livePreviewConvergesToThePlannedCrop() {
-        let src = CropProbe.source(1920, 1080, 6)
-        // Zero margin keeps the live (point-scale) and offline (backing-scale)
-        // reveal rectangles identical so the test measures convergence only.
-        let config = SmartCropConfig(enabled: true, roi: CropProbe.normalized(CropProbe.content, src),
-                                     revealMarginPt: 0, returnSeconds: 1.0)
-        var live = LiveCamera(source: SIMD2<Double>(Double(src.width), Double(src.height)), smartCrop: config)
-        let frame = AXFrame(x: CropProbe.chrome.minX, y: CropProbe.chrome.minY,
-                            w: CropProbe.chrome.width, h: CropProbe.chrome.height,
-                            anchor: FocusAnchor(epoch: 1, sampledAt: 2, resolved: true))
-        let key = InputEvent(t: 2, kind: .keyDown, keyCode: 0, axFrameIndex: 1)
-        live.ingest(key, focus: frame)
-        var state = live.step(to: 2)
-        for t in stride(from: 2.004, through: 2.8, by: 1 / 240) { state = live.step(to: t) }
-        let tm = TimeMap(sourceDuration: 6)
-        let track = SmartCropPlanner.plan(config: config, source: src, tm: tm,
-                                          intents: [SmartCropIntent(t: 2, tEnd: 2.12, rect: CropProbe.chrome)])
-        let offline = track.evaluate(at: 2.1)
-        #expect(CropProbe.near(state.cropRect, offline, tol: 1.0),
-                Comment(rawValue: "live \(state.cropRect) != offline \(offline)"))
-    }
 }

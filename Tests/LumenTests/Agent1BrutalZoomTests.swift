@@ -9,7 +9,8 @@ import LumenProject
 //
 // Every assertion here drives the real derive + Timeline.evaluate path (the
 // exact call preview and export use). No windows, no screenshots, no mocks.
-// These are NEW adversarial scenarios, not a repeat of the existing suites.
+// Browser evidence is now supplied as synthetic viewport observations rather
+// than AX chrome labels; the geometric expectations are unchanged.
 
 enum A1 {
     static let W = 1920.0, H = 1080.0
@@ -25,7 +26,29 @@ enum A1 {
                    backingScale: scale, originX: 0, originY: 0)
     }
 
-    /// A browser window whose labels name one of the supported browsers.
+    /// A 10 Hz browser observation stream. `ui` intervals mark chrome focus;
+    /// a UI click is derived from a pointer-down inside `window` but outside
+    /// `web`, exactly as `CropInputs.make` does in production.
+    static func samples(_ dur: Double = 10, ui: [(Double, Double)] = [],
+                        web: CGRect? = nil, webValid: Bool = true,
+                        front: Bool = true) -> [ViewportSample] {
+        let page = web ?? Self.page
+        let count = Int((dur * 10).rounded(.down))
+        return (0...count).map { i in
+            let t = Double(i) / 10
+            let chromeFocus = ui.contains { t >= $0.0 - 1e-9 && t <= $0.1 + 1e-9 }
+            var flags: ViewportRecord.Flags = []
+            if front { flags.insert(.browserFront) }
+            if chromeFocus { flags.insert(.uiFocus) }
+            if webValid { flags.insert(.webValid) }
+            return ViewportSample(ViewportRecord(
+                t: t, flags: flags,
+                window: PxRect(x: 0, y: 0, w: W, h: H),
+                web: PxRect(x: page.minX, y: page.minY, w: page.width, h: page.height)))
+        }
+    }
+
+    /// AX frames are still the evidence for typing and dialog subjects.
     static func browserAX(_ app: String, addressAt: Double = 2) -> [AXFrame] {
         let win = AXFrame(x: 0, y: 0, w: W, h: H,
                           label: "window|AXWindow|AXStandardWindow|\(app)",
@@ -33,7 +56,6 @@ enum A1 {
         let tabFrame = AXFrame(x: tab.minX, y: tab.minY, w: tab.width, h: tab.height,
                                label: "New Tab",
                                anchor: FocusAnchor(epoch: 1, sampledAt: 0, appName: app, resolved: true))
-        // Safari uses "Search or enter website name"; Chrome uses the other label.
         let addressLabel = app.lowercased().contains("safari")
             ? "Search or enter website name" : "Address and search bar"
         var addr = AXFrame(x: address.minX, y: address.minY, w: address.width, h: address.height,
@@ -47,21 +69,26 @@ enum A1 {
     static func derive(_ duration: Double, events: [InputEvent] = [], ax: [AXFrame] = [],
                        typing: [TypingTrace] = [], activity: [ActivityPoint] = [],
                        markers: [DirectorMarker] = [], maxScale: Double = 2.0,
-                       smartCrop: SmartCropConfig? = nil,
+                       viewport: [ViewportSample]? = nil, ui: [(Double, Double)] = [],
                        tm: TimeMap? = nil, preset: ZoomPreset? = nil) -> Timeline {
         var tl = Timeline(duration: duration)
         tl.audio.speedRampsAuto = false
         tl.camera.autoZoom = true
         tl.camera.maxScale = maxScale
+        tl.cropSettings.insetPx = 0
         if let preset { tl.camera.preset = preset }
         if let tm { tl.timeMap = tm }
-        if let smartCrop { tl.smartCrop = smartCrop }
+        let observations = viewport ?? Self.samples(duration, ui: ui)
         let input = DirectorInput(events: events.sorted { $0.t < $1.t }, source: source(duration),
-                                  ax: ax, activity: activity, typing: typing, markers: markers)
+                                  ax: ax, activity: activity, viewportSamples: observations,
+                                  typing: typing, markers: markers)
         return Director.derive(tl, input: input, revision: 1)
     }
 
-    static func crop(_ tl: Timeline, _ t: Double) -> CGRect { tl.evaluate(at: t).cropRect }
+    static func crop(_ tl: Timeline, _ t: Double) -> CGRect {
+        let p = tl.evaluate(at: t).crop
+        return CGRect(x: p.x, y: p.y, width: p.w, height: p.h)
+    }
     static func scale(_ tl: Timeline, _ t: Double) -> Double { Double(tl.evaluate(at: t).cameraScale) }
     static func near(_ a: CGRect, _ b: CGRect, tol: Double = 2.0) -> Bool {
         abs(a.minX - b.minX) <= tol && abs(a.minY - b.minY) <= tol &&
@@ -78,17 +105,14 @@ enum A1 {
     }
 }
 
-// MARK: - 1. Browser chrome excluded by default (Chrome AND Safari)
+// MARK: - 1. Browser chrome excluded by default
 
 @Suite struct Agent1BrowserChromeTests {
+    /// Crop is now app-agnostic: the AXWebArea observation is the evidence, so
+    /// the parameterized app names label the same page-geometry expectation.
     @Test(arguments: ["Google Chrome", "Safari", "Arc", "Firefox"])
     func browserDefaultCropExcludesChrome(_ app: String) {
-        let ax = A1.browserAX(app)
-        guard let detected = BrowserChrome.detect(ax: ax, source: A1.source()) else {
-            Issue.record("\(app): browser chrome was not detected"); return
-        }
-        #expect(A1.near(detected, A1.page), "\(app): detected \(detected)")
-        let tl = A1.derive(8, ax: ax)
+        let tl = A1.derive(8, viewport: A1.samples(8))
         let c = A1.crop(tl, 0.5)
         #expect(A1.near(c, A1.page), "\(app): default crop \(c)")
         #expect(!A1.shows(c, A1.tab), "\(app): tab strip visible")
@@ -99,22 +123,14 @@ enum A1 {
 
     /// Hostile/partial browser evidence must never invent a crop that eats the page.
     @Test func browserEvidenceNeverEatsThePage() {
-        var ax = A1.browserAX("Safari")
-        // A bogus "tab" frame claiming to cover the whole page must be rejected by
-        // the topLimit guard; the default crop must remain the real page.
-        ax.append(AXFrame(x: 0, y: 0, w: A1.W, h: A1.H, label: "tab",
-                          anchor: FocusAnchor(epoch: 9, sampledAt: 1, appName: "Safari", resolved: true)))
-        // Rejecting the detection entirely (no crop) is the safe outcome; a
-        // detection that survives must still be exactly the real page rect.
-        // Either way the derived crop must be correct — never a page-eating crop.
-        let tl = A1.derive(8, ax: ax)
-        if let detected = BrowserChrome.detect(ax: ax, source: A1.source()) {
-            #expect(A1.near(detected, A1.page), "page eaten: \(detected)")
-            #expect(A1.near(A1.crop(tl, 0.5), A1.page), "derived crop does not match detection")
-        } else {
-            #expect(tl.derived?.crop.keys.isEmpty == true, "bad evidence produced a crop track")
-            #expect(A1.crop(tl, 0.5) == .zero, "bad evidence produced a non-empty crop")
-        }
+        // Invalid web evidence (no AXWebArea, or a zero-size web area) leaves
+        // the source uncroped — the safe outcome for garbage observations.
+        let noWeb = A1.samples(8, webValid: false)
+        let tl = A1.derive(8, viewport: noWeb)
+        #expect(A1.near(A1.crop(tl, 0.5), A1.bounds), "bad evidence produced a non-full crop")
+        let zeroWeb = A1.samples(8, web: .zero)
+        let tl2 = A1.derive(8, viewport: zeroWeb)
+        #expect(A1.near(A1.crop(tl2, 0.5), A1.bounds), "zero web area produced a crop")
     }
 }
 
@@ -126,8 +142,8 @@ enum A1 {
     @Test func addressBarTypingRevealsOnFirstKeyAndRecrops() {
         let ax = A1.browserAX("Google Chrome", addressAt: 2)
         let keys = (0..<12).map { InputEvent(t: 2.0 + Double($0) * 0.11, kind: .keyDown,
-                                            keyCode: UInt16($0 % 40), axFrameIndex: 3) }
-        let tl = A1.derive(9, events: keys, ax: ax)
+                                             keyCode: UInt16($0 % 40), axFrameIndex: 3) }
+        let tl = A1.derive(9, events: keys, ax: ax, ui: [(2.0, 3.4)])
         #expect(A1.near(A1.crop(tl, 1.0), A1.page), "before \(A1.crop(tl, 1.0))")
         #expect(A1.shows(A1.crop(tl, 2.02), A1.address), "not revealed on first key")
         #expect(A1.shows(A1.crop(tl, 2.4), A1.dropdown), "autocomplete not revealed")
@@ -153,10 +169,10 @@ enum A1 {
         let iA = field(fA, 1.5), iB = field(fB, 4.0)
         var events: [InputEvent] = []
         for k in 0..<8 { events.append(InputEvent(t: 1.5 + Double(k) * 0.12, kind: .keyDown,
-                                                 keyCode: UInt16(k), axFrameIndex: iA)) }
+                                                  keyCode: UInt16(k), axFrameIndex: iA)) }
         for k in 0..<8 { events.append(InputEvent(t: 4.0 + Double(k) * 0.12, kind: .keyDown,
-                                                 keyCode: UInt16(k), axFrameIndex: iB)) }
-        let tl = A1.derive(10, events: events, ax: ax)
+                                                  keyCode: UInt16(k), axFrameIndex: iB)) }
+        let tl = A1.derive(10, events: events, ax: ax, viewport: [])
         let shots = tl.zoom.sorted { $0.start < $1.start }
         #expect(shots.count == 2, "expected 2 field shots, got \(shots.count)")
         guard shots.count == 2 else { return }
@@ -167,7 +183,6 @@ enum A1 {
             let framed = CGRect(x: x * A1.W, y: y * A1.H, width: w * A1.W, height: h * A1.H)
             #expect(A1.near(framed, r, tol: 3), "framed \(framed) != \(r)")
         }
-        // Camera must be full and centred at the very end.
         let last = tl.derived!.camera.lz.count - 1
         #expect(abs(Double(tl.derived!.camera.lz[last])) < 1e-4, "ends zoomed")
     }
@@ -180,8 +195,8 @@ enum A1 {
         f.caret = AXFrame.Rect(x: r.minX + 8, y: r.minY + 6, w: 2, h: 22)
         var events: [InputEvent] = []
         for k in 0..<10 { events.append(InputEvent(t: 1.0 + Double(k) * 0.1, kind: .keyDown,
-                                                  keyCode: UInt16(k), axFrameIndex: 1)) }
-        let tl = A1.derive(8, events: events, ax: [f])
+                                                   keyCode: UInt16(k), axFrameIndex: 1)) }
+        let tl = A1.derive(8, events: events, ax: [f], viewport: [])
         let cam = tl.derived!.camera
         let a = min(cam.lz.count - 1, Int(2.2 * cam.rate)), b = min(cam.lz.count - 1, Int(2.6 * cam.rate))
         guard b > a else { Issue.record("no hold window"); return }
@@ -197,7 +212,6 @@ enum A1 {
 
 @Suite struct Agent1RapidTabTests {
     @Test func rapidTabSwitchingRevealsOnceAndStaysContinuous() {
-        let ax = A1.browserAX("Google Chrome")
         var events: [InputEvent] = []
         var t = 1.5
         for i in 0..<12 {
@@ -205,9 +219,8 @@ enum A1 {
                                      y: 18, button: 0, axFrameIndex: 2))
             t += 0.13
         }
+        let ax = A1.browserAX("Google Chrome")
         let tl = A1.derive(9, events: events, ax: ax)
-        // Reveal happens promptly and there is exactly one continuous chrome
-        // window followed by a single re-crop — no pumping between tabs.
         #expect(A1.shows(A1.crop(tl, 1.7), A1.tab), "tab not revealed during rapid switching")
         var returns = 0
         var prev = A1.crop(tl, 1.4)
@@ -223,12 +236,11 @@ enum A1 {
         }
         #expect(returns <= 1, "crop pumped \(returns) times")
         #expect(A1.near(A1.crop(tl, 8.0), A1.page), "did not re-crop at the end")
-        // Zoom shots must remain bounded — a rapid run never welds into a long shot.
         #expect(tl.zoom.allSatisfy { $0.end - $0.start <= 4.0 }, "shot > 4s: \(tl.zoom)")
     }
 }
 
-// MARK: - 4. Hostile / NaN AX frames + 1x1 source + cap = 1.0
+// MARK: - 4. Hostile frames + 1x1 source + cap = 1.0
 
 @Suite struct Agent1DegenerateTests {
     @Test func hostileAXFramesNeverCorruptCameraOrCrop() {
@@ -248,7 +260,18 @@ enum A1 {
         ]
         events.append(contentsOf: (0..<8).map { InputEvent(t: 4 + Double($0) * 0.1,
             kind: .keyDown, keyCode: UInt16($0), axFrameIndex: 1) })
-        let tl = A1.derive(9, events: events, ax: ax)
+
+        // Hostile viewport evidence: an invalid web area is flagged webValid=false
+        // and a non-finite window is rejected by PxRect.isValid in the planner.
+        var bad = A1.samples(9)
+        bad[3] = ViewportSample(ViewportRecord(t: 0.3, flags: [.browserFront],
+                                window: PxRect(x: .nan, y: .nan, w: .nan, h: .nan),
+                                web: PxRect(x: .nan, y: .nan, w: .nan, h: .nan)))
+        bad[4].window = PxRect(x: .infinity, y: -.infinity, w: 1e300, h: 1e300)
+        bad[5] = ViewportSample(ViewportRecord(t: 0.5, flags: [.browserFront],
+                                window: PxRect(x: -5000, y: -5000, w: -20, h: -20),
+                                web: PxRect(x: -5000, y: -5000, w: -20, h: -20)))
+        let tl = A1.derive(9, events: events, ax: ax, viewport: bad)
         let cam = tl.derived!.camera
         for k in cam.lz.indices {
             let z = Double(cam.lz[k]), x = Double(cam.nx[k]), y = Double(cam.ny[k])
@@ -269,21 +292,22 @@ enum A1 {
                              backingScale: 1, originX: 0, originY: 0)
         var tl = Timeline(duration: 4)
         tl.audio.speedRampsAuto = false
-        tl.smartCrop = SmartCropConfig(enabled: true, roi: CGRect(x: 0, y: 0, width: 1, height: 1))
         let ev = [InputEvent(t: 1, kind: .down, x: 0.5, y: 0.5, button: 0, axFrameIndex: 1)]
         let ax = [AXFrame(x: 0, y: 0, w: 1, h: 1, anchor: FocusAnchor(epoch: 1, sampledAt: 1, resolved: true))]
         tl = Director.derive(tl, input: DirectorInput(events: ev, source: src, ax: ax), revision: 1)
         for t in stride(from: 0.0, through: 3.9, by: 0.1) {
             let f = tl.evaluate(at: t)
             #expect(f.cameraScale.isFinite && f.cameraScale >= 1, "bad scale at \(t)")
-            #expect(f.cropRect.width.isFinite && f.cropRect.height.isFinite, "bad crop at \(t)")
+            #expect(f.crop.x.isFinite && f.crop.y.isFinite &&
+                    f.crop.w.isFinite && f.crop.h.isFinite, "bad crop at \(t)")
+            #expect(f.cropRect.width.isFinite && f.cropRect.height.isFinite, "bad legacy crop at \(t)")
         }
     }
 
     @Test(arguments: [ZoomPreset.balanced, .fixed])
     func maxScaleCapOfOneProducesNoZoom(_ preset: ZoomPreset) {
         let ev = [InputEvent(t: 2, kind: .down, x: 700, y: 400, button: 0)]
-        let tl = A1.derive(8, events: ev, maxScale: 1.0, preset: preset)
+        let tl = A1.derive(8, events: ev, maxScale: 1.0, viewport: [], preset: preset)
         let cam = tl.derived!.camera
         for k in cam.lz.indices {
             let z = Double(cam.lz[k])
@@ -297,20 +321,13 @@ enum A1 {
 
 @Suite struct Agent1TimeMapTests {
     @Test func trimCutAndRampKeepRevealOnItsFrame() {
-        var ax: [AXFrame] = []
         let chrome = CGRect(x: 520, y: 24, width: 700, height: 34)
-        ax.append(AXFrame(x: chrome.minX, y: chrome.minY, w: chrome.width, h: chrome.height,
-                          anchor: FocusAnchor(epoch: 1, sampledAt: 5, resolved: true)))
         let events = [InputEvent(t: 5, kind: .down, x: Float(chrome.midX), y: Float(chrome.midY),
                                  button: 0, axFrameIndex: 1)]
         var tm = TimeMap(sourceDuration: 12, trimStart: 2, trimEnd: 12,
                          ramps: [SpeedRamp(start: 6, end: 8, speed: 2)],
                          cuts: [CutRange(start: 9, end: 10)])
-        let cfg = SmartCropConfig(enabled: true,
-                                  roi: CGRect(x: A1.page.minX / A1.W, y: A1.page.minY / A1.H,
-                                              width: A1.page.width / A1.W, height: A1.page.height / A1.H),
-                                  revealMarginPt: 0, returnSeconds: 0.6)
-        let tl = A1.derive(12, events: events, ax: ax, smartCrop: cfg, tm: tm)
+        let tl = A1.derive(12, events: events, viewport: A1.samples(12), tm: tm)
         let outAtClick = tl.timeMap.output(atSource: 5)
         #expect(A1.shows(A1.crop(tl, outAtClick), chrome),
                 Comment(rawValue: "reveal off frame: out=\(outAtClick), crop=\(A1.crop(tl, outAtClick))"))
@@ -378,11 +395,6 @@ enum A1Mixed {
 }
 
 @Suite struct Agent1FiveHundredSeedTests {
-    struct Cfg: Sendable {
-        var seed: UInt64
-        var rng: BrutalRng
-    }
-
     /// 500 deterministic mixed sessions. Every one must: stay finite and capped,
     /// never show canvas outside the source, never teleport, end on the full
     /// frame, and keep long shots tied to a resolved field subject. A sampled
@@ -392,12 +404,13 @@ enum A1Mixed {
         for seed in UInt64(1)...500 {
             let s = A1Mixed.make(seed: seed)
             let dur = s.dur, events = s.events, ax = s.ax, activity = s.activity, markers = s.markers
-            let tl = A1.derive(dur, events: events, ax: ax, activity: activity, markers: markers)
+            let observations = A1.samples(dur)
+            let tl = A1.derive(dur, events: events, ax: ax, activity: activity,
+                               markers: markers, viewport: observations)
             guard let cam = tl.derived?.camera else {
                 failures.append("seed \(seed): no camera"); continue
             }
             let n = cam.lz.count
-            // Cap, finite, feasible, full-frame tail.
             for k in cam.lz.indices {
                 let z = Double(cam.lz[k]), x = Double(cam.nx[k]), y = Double(cam.ny[k])
                 if !z.isFinite || !x.isFinite || !y.isFinite {
@@ -412,18 +425,12 @@ enum A1Mixed {
                 }
             }
             if abs(Double(cam.lz[n - 1])) > 1e-4 { failures.append("seed \(seed): ends zoomed") }
-            // No teleports (480 Hz) and no shot longer than 4 s.
             for k in 1..<n {
                 if abs(Double(cam.nx[k]) - Double(cam.nx[k - 1])) > 0.02 ||
                    abs(Double(cam.ny[k]) - Double(cam.ny[k - 1])) > 0.02 {
                     failures.append("seed \(seed): teleport at \(k)"); break
                 }
             }
-            // A shot may hold longer than 4 s only while framing one resolved
-            // field (TypingFocus merges short-pause bursts into one shot and the
-            // Planner caps a typing hold at 6.5 s). A long shot with no resolved
-            // element subject is a weld of distinct pointer actions — the bug
-            // this suite exists to catch.
             for sh in tl.zoom where sh.end - sh.start > 4.0 {
                 if sh.end - sh.start > 6.7 {
                     failures.append(String(format: "seed %llu: shot %.2f-%.2f exceeds 6.5s cap",
@@ -434,7 +441,6 @@ enum A1Mixed {
                                            seed, sh.start, sh.end)); break
                 }
             }
-            // Crop finite / inside source at 60 Hz.
             for k in 0..<Int((dur - 0.1) * 60) {
                 let c = A1.crop(tl, Double(k) / 60)
                 if !A1.insideSource(c) {
@@ -444,9 +450,9 @@ enum A1Mixed {
                     failures.append("seed \(seed): non-finite crop at \(k)"); break
                 }
             }
-            // Sampled warm/cold determinism: the solve must be a pure function.
             if seed % 5 == 0 {
-                let again = A1.derive(dur, events: events, ax: ax, activity: activity, markers: markers)
+                let again = A1.derive(dur, events: events, ax: ax, activity: activity,
+                                      markers: markers, viewport: observations)
                 if tl.derived?.camera != again.derived?.camera {
                     failures.append("seed \(seed): camera not byte-identical on replay")
                 }
@@ -455,7 +461,6 @@ enum A1Mixed {
         }
         #expect(failures.isEmpty, Comment(rawValue: failures.joined(separator: "\n")))
     }
-
 }
 
 // MARK: - 7. Hover-only and long-session regressions
@@ -469,7 +474,7 @@ enum A1Mixed {
                                      x: Float(400 + (i * 37) % 1100), y: Float(200 + (i * 53) % 700),
                                      scrollDelta: i % 5 == 0 ? 3 : 0))
         }
-        let tl = A1.derive(9, events: events)
+        let tl = A1.derive(9, events: events, viewport: [])
         #expect(tl.zoom.isEmpty, "hover/scroll created \(tl.zoom.count) shots")
         let cam = tl.derived!.camera
         for k in cam.lz.indices {
@@ -487,14 +492,12 @@ enum A1Mixed {
                                      button: 0))
             t += 0.35; i += 1
         }
-        let tl = A1.derive(60, events: events)
+        let tl = A1.derive(60, events: events, viewport: [])
         for s in tl.zoom {
             #expect(s.end - s.start <= 4.0, Comment(rawValue: "shot \(s.start)-\(s.end) exceeds 4s"))
         }
         let cam = tl.derived!.camera
         #expect(abs(Double(cam.lz[cam.lz.count - 1])) < 1e-4, "60s session did not end full frame")
-        // The mandatory return lands on the final camera tick; the last 0.1 s may
-        // legitimately still be a fraction above 1x while the tail completes.
         let finalTick = Double(cam.lz.count - 1) / cam.rate
         #expect(A1.scale(tl, finalTick) <= 1.001, "not full frame at final tick \(finalTick)")
     }

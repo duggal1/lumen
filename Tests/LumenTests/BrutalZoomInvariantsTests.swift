@@ -166,10 +166,25 @@ enum BrutalCheck {
             if Foundation.exp(z) > maxScale * 1.001 {
                 bad.append("\(label): scale \(Foundation.exp(z)) exceeds cap \(maxScale) at \(i)"); break
             }
-            // The frame never shows empty canvas.
-            let half = 0.5 / Foundation.exp(max(z, 0))
-            if x < half - tol || x > 1 - half + tol || y < half - tol || y > 1 - half + tol {
-                bad.append("\(label): centre (\(x), \(y)) outside feasible box \(half) at \(i)")
+            // The frame never shows empty canvas. F1: solver channels are
+            // crop-normalised, so the feasible box is the crop's base view at
+            // this tick, not the old source-normalised 0.5/scale box.
+            let sz = tl.derived?.sourceSize ?? SIMD2(1920, 1080)
+            let tOut = Double(i) / 480.0
+            var box = PxRect(x: 0, y: 0, w: sz.x, h: sz.y)
+            if let dense = tl.derived?.viewportCrop, !dense.rects.isEmpty {
+                let r = dense.rect(at: tl.timeMap.source(atOutput: tOut))
+                if r.isValid, r.w >= 1, r.h >= 1 { box = r }
+            }
+            let a = tl.style.aspectRatio
+            let base = box.aspect > a
+                ? PxRect(x: box.x, y: box.y + (box.h - box.h * a) / 2, w: box.h * a, h: box.h)
+                : PxRect(x: box.x + (box.w - box.w / a) / 2, y: box.y, w: box.w, h: box.w / a)
+            let scale = Foundation.exp(max(z, 0))
+            let hw = (base.w / scale) / (2 * box.w)
+            let hh = (base.h / scale) / (2 * box.h)
+            if x < hw - tol || x > 1 - hw + tol || y < hh - tol || y > 1 - hh + tol {
+                bad.append("\(label): centre (\(x), \(y)) outside feasible box (\(hw), \(hh)) at \(i)")
                 break
             }
         }

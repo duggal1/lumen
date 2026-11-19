@@ -124,9 +124,9 @@ private func srcInfo(duration: Double = 12) -> SourceInfo {
 
 @Test func moonshineTranscribesRealSpeechEndToEnd() async throws {
     // Real recorded speech fixture (TTS: "Hello world from Lumen. The recorder is ready.")
-    // Skipped on machines without the model; the CLI transcribe path is the
-    // documented manual harness (lumen-cli transcribe <project> --size medium).
-    guard ModelStore.isInstalled(.medium) else { return }
+    // The medium model is installed on this machine (verified in ModelStore.installRoot).
+    // A missing model is a broken environment, not a reason to pass silently.
+    try #require(ModelStore.isInstalled(.medium), "Moonshine medium model is missing")
     guard let url = Bundle.module.url(forResource: "speech", withExtension: "wav", subdirectory: "Fixtures") else {
         Issue.record("speech.wav fixture missing"); return
     }

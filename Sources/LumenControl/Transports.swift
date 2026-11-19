@@ -87,10 +87,15 @@ public final class UnixSocketServer: @unchecked Sendable {
     private var running = false
     /// AGENT: held for the process lifetime so a second daemon cannot steal the socket.
     private var lockFD: Int32 = -1
+    /// Optional per-connection idle deadline. Production leaves this unset so a
+    /// long tool call can hold its reply open; callers that want short-lived
+    /// clients (and the idle-release test) can set it.
+    private let idleTimeout: TimeInterval?
 
-    public init(socketPath: URL, server: MCPServer) {
+    public init(socketPath: URL, server: MCPServer, idleTimeout: TimeInterval? = nil) {
         self.path = socketPath
         self.server = server
+        self.idleTimeout = idleTimeout
     }
 
     public func start() throws {
@@ -187,11 +192,22 @@ public final class UnixSocketServer: @unchecked Sendable {
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 64 * 1024)
         while running {
+            if let idle = idleTimeout {
+                var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let ready = withUnsafeMutablePointer(to: &pfd) {
+                    poll($0, 1, Int32(max(1, idle * 1000)))
+                }
+                if ready == 0 { break }                    // idle client: release it
+                if ready < 0 { if errno == EINTR { continue }; break }
+            }
             let n = chunk.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
             guard n > 0 else { break }
             buffer.append(chunk, count: n)
-            // AGENT: cap the per-connection buffer so one client cannot exhaust memory.
-            guard buffer.count < 16 << 20 else { break }
+            // AGENT: cap the per-connection buffer so one client cannot exhaust
+            // memory. 1 MiB is well above a legitimate request (the largest
+            // protocol corpus case is ~200 KB) and makes an oversized line close
+            // the connection instead of waiting for more bytes forever.
+            guard buffer.count < 1 << 20 else { break }
             while let index = buffer.firstIndex(of: 0x0A) {
                 let lineData = buffer[buffer.startIndex..<index]
                 buffer.removeSubrange(buffer.startIndex...index)

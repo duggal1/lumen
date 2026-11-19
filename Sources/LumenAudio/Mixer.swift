@@ -453,6 +453,21 @@ public final class AudioMixer: @unchecked Sendable {
         return (L, R)
     }
 
+    /// Resolve every unmuted music lane into a value-level bed and its decoded
+    /// stereo track. A bed whose file cannot be decoded is skipped, never
+    /// replaced by silence or a fabricated loop.
+    private func musicBeds(_ tl: Timeline) -> ([MusicBed], [UUID: MusicBed.PCM]) {
+        var beds: [MusicBed] = []
+        var tracks: [UUID: MusicBed.PCM] = [:]
+        for lane in tl.audio.lanes where lane.role == .music && !lane.mute {
+            guard let path = lane.path, let track = importTrack(path) else { continue }
+            let bed = MusicBed(lane: lane)
+            beds.append(bed)
+            tracks[bed.id] = MusicBed.PCM(left: track.l, right: track.r)
+        }
+        return (beds, tracks)
+    }
+
     // MARK: Mix
 
     /// Separate WAV stems in the same OUTPUT timeline as the encoded movie.
@@ -505,6 +520,13 @@ public final class AudioMixer: @unchecked Sendable {
                 right[start + i] = track.r[i] * gain * edge
             }
             result.append(AudioStem(name: "voiceover-\(voiceIndex)", left: left, right: right))
+        }
+        let (beds, bedTracks) = musicBeds(tl)
+        if !beds.isEmpty {
+            for musicStem in MusicBed.stems(beds, tracks: bedTracks, duck: tl.derived?.duck,
+                                             outputSamples: n, fs: fs) {
+                result.append(AudioStem(name: musicStem.name, left: musicStem.left, right: musicStem.right))
+            }
         }
         return result.map { stem in
             var left = stem.left, right = stem.right
@@ -589,7 +611,7 @@ public final class AudioMixer: @unchecked Sendable {
             for i in 0..<n { L[i] += l[i] * gain; R[i] += r[i] * gain }
             hasProgram = true
         }
-        for lane in a.lanes where !lane.mute && (lane.role == .voiceover || lane.role == .music) {
+        for lane in a.lanes where !lane.mute && lane.role == .voiceover {
             guard let path = lane.path, let track = importTrack(path) else { continue }
             let offset = Int(max(0, lane.placement) * fs)
             guard offset < n else { continue }
@@ -610,6 +632,13 @@ public final class AudioMixer: @unchecked Sendable {
                 L[offset + i] += track.l[sourceOffset + i] * g
                 R[offset + i] += track.r[sourceOffset + i] * g
             }
+            hasProgram = true
+        }
+        let (beds, bedTracks) = musicBeds(tl)
+        if !beds.isEmpty {
+            let rendered = MusicBed.render(beds: beds, tracks: bedTracks, duck: d.duck,
+                                            outputSamples: n, fs: fs)
+            for i in 0..<n { L[i] += rendered.left[i]; R[i] += rendered.right[i] }
             hasProgram = true
         }
         if let mc = loadMusic(a.musicPath), let mt = mc.track {

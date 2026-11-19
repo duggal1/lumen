@@ -11,12 +11,13 @@ import LumenProject
 /// policy without a GPU while the real harness supplies live samples.
 public struct FrameBudget: Sendable, Equatable {
     public var fps: Double
-    /// A frame may take this much longer than the vsync interval before it counts as dropped.
+    /// Tolerance over the vsync interval before a frame counts as dropped.
+    /// 5% absorbs clock quantisation without hiding a real budget violation.
     public var latencyAllowance: Double
     /// Fraction of frames allowed to miss the deadline (startup/warm-up slack).
     public var allowedOverBudgetFraction: Double
 
-    public init(fps: Double = 60, latencyAllowance: Double = 1.25, allowedOverBudgetFraction: Double = 0.02) {
+    public init(fps: Double = 60, latencyAllowance: Double = 1.05, allowedOverBudgetFraction: Double = 0.02) {
         self.fps = max(fps, 1)
         self.latencyAllowance = max(latencyAllowance, 1)
         self.allowedOverBudgetFraction = min(max(allowedOverBudgetFraction, 0), 1)

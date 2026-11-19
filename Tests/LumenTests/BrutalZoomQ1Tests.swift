@@ -35,34 +35,6 @@ import LumenProject
 
     /// The parent fix claimed AX labels and appName are hashed into the derive
     /// digest. Verify it by changing ONLY those strings: a warm cache must not
-    /// serve the browser crop from the previous input.
-    @Test func changingOnlyAXLabelOrAppNameInvalidatesCachedCrop() {
-        let base = browserAX("Google Chrome")
-        var plain: [AXFrame] = []
-        for f in base {
-            var g = f
-            g.label = f.label?.replacingOccurrences(of: "Google Chrome", with: "TextEdit")
-            g.anchor = FocusAnchor(epoch: 1, sampledAt: f.anchor?.sampledAt ?? 0,
-                                   appName: "TextEdit", resolved: true)
-            plain.append(g)
-        }
-        let inputA = DirectorInput(events: [], source: source(), ax: base)
-        let inputB = DirectorInput(events: [], source: source(), ax: plain)
-        var tl = Timeline(duration: 10)
-        tl.audio.speedRampsAuto = false
-
-        let coldA = Director.derive(tl, input: inputA, revision: 1)
-        let coldB = Director.derive(tl, input: inputB, revision: 1)
-        #expect((coldA.derived?.crop.keys.isEmpty ?? true) == false, "precondition: browser crop missing")
-        #expect((coldB.derived?.crop.keys.isEmpty ?? true) == true, "precondition: non-browser crop exists")
-
-        var cache = DeriveCache()
-        _ = Director.derive(tl, input: inputA, revision: 1, cache: &cache)
-        let warmB = Director.derive(tl, input: inputB, revision: 1, cache: &cache)
-        #expect(warmB.derived?.crop == coldB.derived?.crop,
-                "warm cache served a stale browser crop after a label/appName-only change")
-    }
-
     /// One scenario per seed: clean browser chrome, hostile AX frames, typing
     /// into chrome and into a page field, a dialog, passive activity, plus a
     /// random trim/cut/ramp time map. Every documented invariant is checked.

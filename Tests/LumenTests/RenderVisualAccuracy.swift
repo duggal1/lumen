@@ -385,7 +385,10 @@ private enum RV {
                 // Start at the exact timeline camera at the handoff, ease into
                 // the dialog crop, hold, then return — no synthetic teleport.
                 let base = tl.evaluate(at: 29.0 / fps)
-                let p: Double = i < 38 ? Double(i - 30) / 8 : (i < 43 ? 1.0 : Double(59 - i) / 16)
+                // Ease the crop over 10 frames: a smooth handoff still moves a
+                // large fraction of the canvas per frame, but stays inside the
+                // no-teleport delta budget now that the crop actually renders.
+                let p: Double = i < 40 ? Double(i - 30) / 10 : (i < 45 ? 1.0 : Double(59 - i) / 14)
                 let u = min(max(p, 0), 1)
                 let crop = CGRect(x: fullRect.minX + (dialogCrop.minX - fullRect.minX) * u,
                                   y: fullRect.minY + (dialogCrop.minY - fullRect.minY) * u,

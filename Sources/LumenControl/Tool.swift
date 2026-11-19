@@ -29,7 +29,7 @@ public struct ToolOutput: Sendable {
 
     /// Migrates existing renderer results into MCP image blocks before serialization.
     static func extractingPreview(from value: JSONValue, tool: String) -> ToolOutput {
-        guard tool == "preview_frame" || tool == "preview_sheet" || tool == "screen_look",
+        guard tool == "render_preview" || tool == "screen_look",
               case .object(var fields) = value,
               case .string(let encoded)? = fields.removeValue(forKey: "image_base64"),
               case .string(let mime)? = fields.removeValue(forKey: "mime_type"),
@@ -253,7 +253,7 @@ public struct ToolError: Error, Sendable {
     }
     public static func revisionConflict(expected: Int, actual: Int) -> ToolError {
         ToolError(code: "REVISION_CONFLICT",
-                  hint: "The project changed since revision \(expected) (now \(actual)). Read timeline_get again and re-apply the edit.")
+                  hint: "The project changed since revision \(expected) (now \(actual)). Read get_edit again and re-apply the edit.")
     }
     public static func notRecording() -> ToolError {
         ToolError(code: "NOT_RECORDING", hint: "No recording is running. Call record_start first.")

@@ -33,20 +33,26 @@ enum CameraSolver {
     }
 
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams,
-                      src: SIMD2<Double>, outDur: Double, loop: Double?) -> CameraTrack {
+                      src: SIMD2<Double>, outDur: Double, loop: Double?,
+                      crop: DenseCropTrack = DenseCropTrack(), aspect: Double? = nil) -> CameraTrack {
         solve(zoom: zoom, tm: tm, cursor: cursor, p: p, src: src, outDur: outDur, loop: loop,
-              follow: [:], cancelled: { false }) ?? CameraTrack(count: 2, rate: cameraRate)
+              crop: crop, aspect: aspect, follow: [:], cancelled: { false }) ?? CameraTrack(count: 2, rate: cameraRate)
     }
 
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams,
-                      src: SIMD2<Double>, outDur: Double, loop: Double?, cancelled: () -> Bool) -> CameraTrack? {
+                      src: SIMD2<Double>, outDur: Double, loop: Double?,
+                      crop: DenseCropTrack = DenseCropTrack(), aspect: Double? = nil,
+                      cancelled: () -> Bool) -> CameraTrack? {
         solve(zoom: zoom, tm: tm, cursor: cursor, p: p, src: src, outDur: outDur, loop: loop,
-              follow: [:], cancelled: cancelled)
+              crop: crop, aspect: aspect, follow: [:], cancelled: cancelled)
     }
 
     /// Follow paths use output seconds and source-normalised caret coordinates.
+    /// Each target is normalised into `crop` at ITS OWN time, and every tick's
+    /// centre is clamped to that tick's crop (the CropSpace.visible contract).
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams,
                       src: SIMD2<Double>, outDur: Double, loop: Double?,
+                      crop: DenseCropTrack = DenseCropTrack(), aspect: Double? = nil,
                       follow: [UUID: [(t: Double, c: SIMD2<Double>)]],
                       cancelled: () -> Bool) -> CameraTrack? {
         _ = loop
@@ -55,6 +61,24 @@ enum CameraSolver {
             return CameraTrack(count: 2, rate: rate)
         }
         let n = max(Int(outDur * rate) + 1, 2)
+        // F1: the feasible box is crop(t) at each tick's OWN output time, never
+        // the full source rect. An empty track falls back to the source rect,
+        // so solvers without a browser crop are bit-for-bit unchanged.
+        let fullSource = PxRect(x: 0, y: 0, w: src.x, h: src.y)
+        var cropAtTick = [PxRect](repeating: fullSource, count: n)
+        if !crop.rects.isEmpty {
+            let cropHz = crop.hz.isFinite && crop.hz > 0 ? crop.hz : rate
+            let dense = DenseCropTrack(hz: cropHz, rects: crop.rects)
+            for k in 0..<n {
+                let r = dense.rect(at: tm.source(atOutput: Double(k) / rate))
+                if r.isValid, r.w >= 1, r.h >= 1 { cropAtTick[k] = r }
+            }
+        }
+        func tickIndex(_ t: Double) -> Int { min(max(Int((t * rate).rounded()), 0), n - 1) }
+        func normalise(_ px: Double, _ py: Double, at t: Double) -> SIMD2<Double> {
+            let n = CropSpace.normalise(px, py, crop: cropAtTick[tickIndex(t)])
+            return SIMD2(n.u, n.v)
+        }
         let leadBase = p.leadIn.isFinite ? clamp(p.leadIn, 0, 1.5) : 0.30
         let tout = max(p.tail.isFinite ? p.tail : 0.7, 0.25)
         let look = clamp(p.lookahead.isFinite ? p.lookahead : 0.12, 0, 0.5)
@@ -119,13 +143,20 @@ enum CameraSolver {
             let path = (follow[z.id] ?? [])
                 .filter { $0.t.isFinite && $0.c.x.isFinite && $0.c.y.isFinite }
                 .sorted { $0.t < $1.t }
+            // The event time is independent of the lead-in, so every target can
+            // be normalised into the crop that is actually on screen WHEN IT
+            // HAPPENS — never at shot start or at "now".
+            let event: Double = z.origin == .auto
+                ? a : min(a + manualRise(ease), max(b - 0.05, a + 0.05))
             let center: SIMD2<Double>
             switch z.focus {
-            case .fixed(let x, let y): center = SIMD2(x, y)
-            case .element(let x, let y, let w, let h): center = SIMD2(x + w / 2, y + h / 2)
-            case .follow: center = path.first.map { $0.c } ?? SIMD2(0.5, 0.5)
+            case .fixed(let x, let y): center = normalise(x * src.x, y * src.y, at: event)
+            case .element(let x, let y, let w, let h):
+                center = normalise((x + w / 2) * src.x, (y + h / 2) * src.y, at: event)
+            case .follow:
+                center = path.first.map { normalise($0.c.x * src.x, $0.c.y * src.y, at: $0.t) }
+                    ?? SIMD2(0.5, 0.5)
             }
-            let on: Double, event: Double
             // Anticipation budget. The lead-in must cover BOTH the move and the
             // still settle before the action; subtracting settle from a fixed
             // lead would shorten the quintic's runway and spike its jerk.
@@ -134,13 +165,7 @@ enum CameraSolver {
             let settle = z.origin == .auto
                 ? min(clamp(0.11 / max(ease, 0.6), 0.06, 0.18), 0.35 * lead)
                 : 0
-            if z.origin == .auto {
-                event = a
-                on = max(a - lead - settle, 0)
-            } else {
-                on = a
-                event = min(a + manualRise(ease), max(b - 0.05, a + 0.05))
-            }
+            let on: Double = z.origin == .auto ? max(a - lead - settle, 0) : a
             // The lead-in is the anticipation; the settle is the breath at the
             // end of it. Land a little *before* the action so the frame is
             // already composed and perfectly still when the click/typing lands.
@@ -156,19 +181,31 @@ enum CameraSolver {
             return false
         }
         var followX = [Double](repeating: 0.5, count: n), followY = followX
-        if needsCursor, cursor.x.count > 0 {
+        if needsCursor, min(cursor.x.count, cursor.y.count) > 0 {
             let halfZone = clamp(p.deadZone.isFinite ? p.deadZone : 0.28, 0.05, 0.45) / 2
             let followOmega = 1 / max(clamp(p.followDelay.isFinite ? p.followDelay : 0.12, 0, 0.5), 0.045)
             let cx = min(cursor.x.count, cursor.y.count)
-            let rawX = (0..<n).map { i in Double(cursor.x[min(Int(Double(i) * gridRate / rate), cx - 1)]) / src.x }
-            let rawY = (0..<n).map { i in Double(cursor.y[min(Int(Double(i) * gridRate / rate), cx - 1)]) / src.y }
+            let rawX = (0..<n).map { i -> Double in
+                let j = min(Int(Double(i) * gridRate / rate), cx - 1), box = cropAtTick[i]
+                return (Double(cursor.x[j]) - box.x) / box.w
+            }
+            let rawY = (0..<n).map { i -> Double in
+                let j = min(Int(Double(i) * gridRate / rate), cx - 1), box = cropAtTick[i]
+                return (Double(cursor.y[j]) - box.y) / box.h
+            }
             followX = zeroPhaseSmooth(centredPlay(rawX, halfZone: halfZone), omega: followOmega, dt: dt)
             followY = zeroPhaseSmooth(centredPlay(rawY, halfZone: halfZone), omega: followOmega, dt: dt)
         }
 
-        func clampCenter(_ c: SIMD2<Double>, _ lz: Double) -> SIMD2<Double> {
-            let h = 0.5 / exp(max(lz, 0))
-            return SIMD2(clamp(c.x, h, 1 - h), clamp(c.y, h, 1 - h))
+        /// Crop-normalised twin of CropSpace.visible's centre clamp: the visible
+        /// viewport (base view / scale) must fit inside crop(t) at tick `k`.
+        func clampCenter(_ c: SIMD2<Double>, _ lz: Double, _ k: Int) -> SIMD2<Double> {
+            let box = cropAtTick[k]
+            let base = CropSpace.baseView(crop: box, aspect: aspect)
+            let z = exp(max(lz, 0))
+            let hw = base.w / z / (2 * box.w), hh = base.h / z / (2 * box.h)
+            return SIMD2(clamp(c.x, min(hw, 0.5), max(1 - hw, 0.5)),
+                         clamp(c.y, min(hh, 0.5), max(1 - hh, 0.5)))
         }
 
         // Continuous follow track for one scene. The path is sampled with
@@ -192,18 +229,21 @@ enum CameraSolver {
                     let from = s.path[j], to = s.path[j + 1], gap = to.t - from.t
                     if gap <= 0.30 { c = from.c + (to.c - from.c) * clamp((t - from.t) / max(gap, 1e-6), 0, 1) }
                 }
-                // `centerOffset` is applied exactly once, in `holdCenter`, so
-                // it is a single static framing bias. Applying it here too
-                // doubled the shift on recorded-path follow shots (the global
-                // cursor path applies it only once), drifting the subject left
-                // or up beyond the requested bias. `lean` is a separate,
-                // deliberate follow-path offset and stays.
-                xs.append(c.x + lean)
-                ys.append(c.y)
+                // The recorded caret is source-normalised; re-aim it into the
+                // crop that is actually on screen at this tick. `centerOffset`
+                // is applied once in `holdCenter`; `lean` stays a follow bias.
+                let box = cropAtTick[k]
+                xs.append((c.x * src.x - box.x) / box.w + lean)
+                ys.append((c.y * src.y - box.y) / box.h)
             }
             xs = zeroPhaseSmooth(centredPlay(xs, halfZone: 0.04 / scale), omega: omegaPan, dt: dt)
             ys = zeroPhaseSmooth(centredPlay(ys, halfZone: 0.06 / scale), omega: omegaPan, dt: dt)
-            return (a, zip(xs, ys).map { clampCenter(SIMD2($0, $1), s.lz) })
+            var centres: [SIMD2<Double>] = []
+            centres.reserveCapacity(xs.count)
+            for (i, pair) in zip(xs, ys).enumerated() {
+                centres.append(clampCenter(SIMD2(pair.0, pair.1), s.lz, a + i))
+            }
+            return (a, centres)
         }
 
         var tracks: [(start: Int, centers: [SIMD2<Double>])?] = []
@@ -227,7 +267,7 @@ enum CameraSolver {
             return s.center
         }
         func holdCenter(_ i: Int, _ k: Int) -> SIMD2<Double> {
-            clampCenter(rawCenter(i, k) - offset * exp(-scenes[i].lz), scenes[i].lz)
+            clampCenter(rawCenter(i, k) - offset * exp(-scenes[i].lz), scenes[i].lz, k)
         }
         /// Velocity of the hold at tick `k`. A transition must join the hold
         /// at this velocity; otherwise the camera stops dead on the action and
@@ -370,7 +410,8 @@ enum CameraSolver {
             // the bound. The jerk floor is a limit, so a break simply is not
             // taken when there is no room for a filmed return.
             let pk = min(max(Int((prevArrival * rate).rounded()), 0), n - 1)
-            let panPx = hypot(Double(cxT[pk]) - 0.5, Double(cyT[pk]) - 0.5) * max(src.x, src.y)
+            let pkBox = cropAtTick[pk]
+            let panPx = hypot(Double(cxT[pk]) - 0.5, Double(cyT[pk]) - 0.5) * max(pkBox.w, pkBox.h)
             let returnRunway = max(0.25,
                                    MotionLimits.minDuration(delta: panPx,
                                                             continuitySlopes: 1,
@@ -464,14 +505,15 @@ enum CameraSolver {
                  holdVelocity(last, k), .zero)
         }
 
-        // Clamp the centre to the feasible range at the final scale. A centre
-        // outside it would show empty canvas at the edge of the recording.
+        // Clamp the centre to the feasible box of crop(k) at EVERY tick, at the
+        // final scale. This is the solver-side twin of CropSpace.visible, so a
+        // moving crop can never make a settled camera drift outside the frame.
         var X = [Double](repeating: 0.5, count: n), Y = X, Z = [Double](repeating: 0, count: n)
         for k in 0..<n {
-            let z = clamp(lzT[k], 0, maxLz), h = 0.5 / exp(z)
+            let z = clamp(lzT[k], 0, maxLz)
             Z[k] = z
-            X[k] = clamp(cxT[k], h, 1 - h)
-            Y[k] = clamp(cyT[k], h, 1 - h)
+            let c = clampCenter(SIMD2(cxT[k], cyT[k]), z, k)
+            X[k] = c.x; Y[k] = c.y
         }
         func derivatives(_ a: [Double]) -> (v: [Double], acc: [Double]) {
             var v = [Double](repeating: 0, count: a.count), acc = v
@@ -488,13 +530,9 @@ enum CameraSolver {
             track.vx[i] = Float(dX.v[i]); track.vy[i] = Float(dY.v[i]); track.vz[i] = Float(dZ.v[i])
             track.ax[i] = Float(dX.acc[i]); track.ay[i] = Float(dY.acc[i]); track.az[i] = Float(dZ.acc[i])
         }
-        // Tilt is deterministic and shot-driven: `.lean` follows the camera's
-        // own pan velocity, `.reveal` is a one-shot entrance, `.off` is flat.
-        // The old Float oscillator (causeless left/right/top wander) is gone.
-        // What remains is deterministic and shot-driven: `.lean` follows the
-        // camera's own pan velocity, `.reveal` is a one-shot entrance, and
-        // `.off` is the hard off switch. Nothing moves without a move that asks
-        // for it, and nothing oscillates while the shot holds.
+        // Tilt is deterministic and shot-driven: `.lean` follows pan velocity,
+        // `.reveal` is a one-shot entrance, `.off` is flat. The old causeless
+        // oscillator is gone; nothing moves without a move that asks for it.
         let tiltOmega = clamp(p.omegaTilt.isFinite ? p.omegaTilt : 5, 0.5, 60)
         let tiltYaw = p.maxYaw.isFinite ? max(p.maxYaw, 0) : 8
         let tiltPitch = p.maxPitch.isFinite ? max(p.maxPitch, 0) : 6

@@ -513,6 +513,10 @@ public struct TimeMap: Codable, Equatable, Sendable {
     public var cuts: [CutRange] { didSet { rebuild() } }
     private var out: [Double] = []
     private static let ds = 1.0 / 240
+    /// Instrumentation only: how many times the lookup table was rebuilt.
+    /// Deliberately outside CodingKeys and `==` so it never changes a saved
+    /// project or an undo snapshot; bulk edits use it to prove they rebuild once.
+    public private(set) var rebuildCount: Int = 0
     enum CodingKeys: String, CodingKey { case sourceDuration, trimStart, trimEnd, ramps, cuts }
 
     public init(sourceDuration: Double = 0, trimStart: Double = 0, trimEnd: Double? = nil, ramps: [SpeedRamp] = [], cuts: [CutRange] = []) {
@@ -531,6 +535,7 @@ public struct TimeMap: Codable, Equatable, Sendable {
         a.sourceDuration == b.sourceDuration && a.trimStart == b.trimStart && a.trimEnd == b.trimEnd && a.ramps == b.ramps && a.cuts == b.cuts
     }
     private mutating func rebuild() {
+        rebuildCount += 1
         let n = Int((max(trimEnd - trimStart, 0) / Self.ds).rounded(.up))
         var o = [Double](repeating: 0, count: n + 1)
         let rs = ramps.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
@@ -565,8 +570,17 @@ public struct TimeMap: Codable, Equatable, Sendable {
         if t < 0 { return trimStart }
         if t >= out[out.count - 1] { return trimStart + Double(out.count - 1) * Self.ds }
         var lo = 0, hi = out.count - 1
-        while hi - lo > 1 { let mid = (lo + hi) / 2; if out[mid] <= t { lo = mid } else { hi = mid } }
-        let f = (t - out[lo]) / (out[lo + 1] - out[lo])
+        // A cut makes many consecutive table entries identical. Accumulated
+        // float error can put that plateau a hair ABOVE an exact seam time
+        // (e.g. 0.2500000000000003 for a cut at 0.25), which would select the
+        // last frame before the cut instead of the first one after it. The
+        // epsilon is a millionth of a source tick, far below any frame.
+        let eps = Self.ds * 1e-6
+        while hi - lo > 1 { let mid = (lo + hi) / 2; if out[mid] <= t + eps { lo = mid } else { hi = mid } }
+        let span = out[lo + 1] - out[lo]
+        // The epsilon above can put t a hair below out[lo]; clamp instead of
+        // extrapolating a negative fraction past the seam.
+        let f = span > 0 ? min(max((t - out[lo]) / span, 0), 1) : 0
         return trimStart + (Double(lo) + f) * Self.ds
     }
     public func speed(atOutput t: Double) -> Double { (source(atOutput: t + 0.01) - source(atOutput: t)) / 0.01 }
@@ -623,6 +637,16 @@ public struct Timeline: Sendable, Codable, Equatable {
     public var captions = CaptionPlan()
     /// Imported video appended after the recording, in OUTPUT seconds.
     public var clips: [TimelineClip] = []
+    /// Requested crossfade at magnetic-lane clip joins, in OUTPUT seconds.
+    /// A project-wide scalar: a request, not a promise (see `effectiveCrossfade`).
+    public var crossfadeDuration: Double = 0
+    /// The usable crossfade: never longer than half the shortest clip, so a
+    /// join can always be covered from both sides.
+    public var effectiveCrossfade: Double {
+        guard crossfadeDuration.isFinite, crossfadeDuration > 0 else { return 0 }
+        let shortest = clips.map(\.duration).min() ?? Double.infinity
+        return min(crossfadeDuration, max(shortest / 2, 0))
+    }
     public var smartCrop = SmartCropConfig()
     /// Browser-content crop tuning (F1). Old projects decode to defaults.
     public var cropSettings = CropSettings()
@@ -630,7 +654,7 @@ public struct Timeline: Sendable, Codable, Equatable {
     public var activity = ActivitySettings()
     public var derived: DerivedTracks?
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, timeMap, zoom, suppressedAuto, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips, seams, smartCrop, cropSettings, activity
+        case schemaVersion, timeMap, zoom, suppressedAuto, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips, crossfadeDuration, seams, smartCrop, cropSettings, activity
     }
     public init(duration: Double) { timeMap = TimeMap(sourceDuration: duration) }
     public init(from d: Decoder) throws {
@@ -650,6 +674,7 @@ public struct Timeline: Sendable, Codable, Equatable {
         overlays = c.opt(.overlays, overlays); layouts = c.opt(.layouts, layouts); layoutSettings = c.opt(.layoutSettings, layoutSettings)
         captions = c.opt(.captions, captions)
         clips = c.opt(.clips, clips)
+        crossfadeDuration = c.opt(.crossfadeDuration, 0)
         smartCrop = c.opt(.smartCrop, smartCrop)
         // v4 -> v5: crop and activity settings did not exist; defaults apply.
         cropSettings = c.opt(.cropSettings, cropSettings)

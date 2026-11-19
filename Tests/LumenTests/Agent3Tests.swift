@@ -280,7 +280,7 @@ private final class SpyEmailTransport: EmailTransport, @unchecked Sendable {
 }
 
 @Test func renderBenchmarkRunsRealMetalFrames() throws {
-    guard MTLCreateSystemDefaultDevice() != nil else { return }
+    try #require(MTLCreateSystemDefaultDevice() != nil, "no Metal device on this machine")
     let result = try RenderBenchmark.run(frames: 4, width: 320, height: 180, fps: 60)
     #expect(result.frames == 4)
     #expect(result.report.frames == 4)

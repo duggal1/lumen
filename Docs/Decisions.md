@@ -59,3 +59,33 @@
 - SmartCropPlanner's browser-chrome detector was removed; WindowContent and FrameCropper were retained because they still serve window capture, not browser chrome.
 - FrameState gained `crop: PxRect` alongside the legacy `cropRect`; the renderer prefers it and falls back to the legacy rect.
 - The old offline ActivityPoint detector and the old browser-chrome crop planner were replaced by the supplied superior implementations as instructed.
+
+## Prompt 3 — camera/crop contract + render-path repair
+- The 480 Hz camera channels are now crop-normalised (u,v in the crop, logZ relative to `CropSpace.baseView` with the frame aspect). Empty crop tracks fall back to source-normalised space, so existing solver callers/tests are unchanged.
+- The feasible-centre clamp is evaluated per dense tick against `crop(t)` at that tick's OWN output time, mirroring `CropSpace.visible`; `CropSpace.baseView` supplies the aspect-trimmed viewport so zoom stays correct for non-16:9 exports.
+- Every target is normalised with `CropSpace.normalise` at its own time: click/typing/element intents at the segment's event time, follow waypoints at their sample time, the global caret at each tick, and the mandatory tail returns to crop-centre (u,v)=(0.5,0.5).
+- `FrameState.evaluate` reconstructs the visible rect with `CropSpace.visible`; `cameraScale` stays relative to the crop base view and the renderer derives the view as `baseView / scale` so width and height agree.
+- The renderer no longer applies the derived-frame camera clamp (the solver owns feasibility). A single clamp remains ONLY for Studio-supplied `live` states, which may carry arbitrary focus.
+- Crossfade: `Timeline.effectiveCrossfade` is consumed in `Renderer.encode` by blending the held outgoing scene with the incoming scene (premultiplied, via `pAccum`) before the backdrop resolve. A join is an output-adjacent clip pair; the cache is sequential-frame validated so scrubbing/seeks cannot dissolve against a stale frame. Transparent/cursor-only deliveries skip it.
+- Smoothness: `contentFS` maps `view = cropSize / scale`; passing `cropSize = crop * scale` made the visible region independent of zoom and produced the 22.15M ghost step when the synthetic live crop moved. `cropSize` is now the crop base view, so the visible region tracks `CropSpace.visible` and camera steps are bounded.
+
+## Build environment
+- After a server restart the macOS Metal toolchain cryptex mount changed (…2C1QSU → …XMpyMH); SwiftPM cached the old path and metal compilation failed with "unable to spawn process …/ metal". Fix: `swift package clean` then rebuild. No source change required.
+
+## Deleted legacy tests (F1/F2 port)
+// Deleted animationLoopIsRejectedEvenWhenEachPulseLooksStable: F2 has no animation-loop classifier; repeated pulses now chain into one shot with in-shot waypoints.
+// Deleted heldTimeIsShortAndScalesWithSubjectSize: hold duration is now a fixed `minHold`; subject-size-scaled reading time was removed with the old Beat detector.
+// Deleted trimAndCutsSuppressBeats: the F2 adapter only clamps to trim bounds; cut-aware beat rejection was removed from `VisualAutofocus.intents`.
+// Deleted BrutalSmartCropTests.livePreviewConvergesToThePlannedCrop: compared LiveCamera against SmartCropPlanner.plan/SmartCropIntent, the keyframed Area-crop offline planner intentionally replaced by the 480 Hz ViewportCrop track (F1); live crop convergence is now covered by TypingFocusBrowserCropTests.
+// Deleted CoreZoomValidationSmartCropTests.mergedRevealsKeepSourceAspect: asserted the removed offline keyframed Area-crop track's merged keyframes; aspect is now enforced by CropSpace.fit/baseView in the 480 Hz viewport crop.
+// Deleted CoreZoomValidationSmartCropTests.everyKeyframeCarriesSourceAspect: keyframed SmartCropTrack was intentionally replaced by DenseCropTrack; no keyframe array remains to assert on.
+// Deleted CoreZoomValidationSmartCropTests.outputTimeConversionSurvivesTrimAndRamp: offline SmartCropPlanner.plan/SmartCropIntent removed; viewport crop is derived at source time and mapped by the existing TimeMap, covered by TypingFocusBrowserCropTests.
+// Deleted BrutalSmartCropTests.defaultIsTheContentCropAndEndsThere: asserted the removed offline keyframed Area-crop track's default content ROI; default browser crop is now produced from ViewportSamples by CropPlanner and covered in TypingFocusBrowserCropTests.
+// Deleted BrutalSmartCropTests.contentClickDoesNotReveal: keyframed SmartCropTrack reveal behaviour intentionally removed with the offline planner.
+// Deleted BrutalSmartCropTests.trimAndRampKeepTheRevealOnItsFrame: offline SmartCropPlanner.plan/SmartCropIntent removed; viewport crop is source-time anchored and TimeMap-mapped.
+// Deleted BrutalSmartCropTests.overlappingRevealsMergeIntoOneWindow: offline keyframe merge removed; CropPlanner merges uncrop spans in CropSettings.
+// Deleted BrutalSmartCropTests.cacheNeverServesAStaleCrop: cached legacy CropTrack no longer exists; the derive cache now keys viewportCrop by CropSettings + viewport digest.
+// Deleted BrutalZoomQ1Tests.changingOnlyAXLabelOrAppNameInvalidatesCachedCrop: cached keyframed Area-crop track removed; the derive cache now keys viewportCrop by CropSettings + viewport-sample digest, not AX labels.
+// Deleted RenderVisualAccuracy.dialogCropContainsSubjectAndNeverSamplesOutside: asserted offline SmartCropPlanner keyframes; dialog framing is now covered by the planner's dialog-priority intents.
+// Deleted AutoZoomRegressionTests.autonomousVisualZoomWorksWithMouseEventsButNoClick: fed the removed ActivityPoint detector directly; equivalent no-click visual-shot coverage is in the ported VisualAutofocusTests (resultAppearingCreatesOneHeldBeat, hoverOnlyHighlightNeverTriggers).
+// Deleted BrutalSmartCropTests.chromeClickRevealsThenRecrops: asserted offline SmartCropPlanner.revealRect keyframes for the old Area-crop planner; browser chrome reveal/recrop is now covered by the ported TypingFocusBrowserCropTests viewport-sample suites.

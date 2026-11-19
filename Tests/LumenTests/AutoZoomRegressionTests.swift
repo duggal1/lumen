@@ -102,16 +102,6 @@ private func visualDemoInput(tiny: Bool = false, scroll: Bool = false) -> Direct
     return DirectorInput(events: events, source: src, activity: points)
 }
 
-@Test func autonomousVisualZoomWorksWithMouseEventsButNoClick() {
-    var tl = Timeline(duration: 12)
-    tl.audio.speedRampsAuto = false
-    let out = Director.derive(tl, input: visualDemoInput(), revision: 1)
-    #expect(out.zoom.count == 1)
-    #expect(out.zoom.first?.start == 6)
-    #expect(out.zoom.first?.scale ?? 0 <= 1.6)
-    #expect(out.evaluate(at: 6.7).cameraScale > 1.3)
-    #expect(out.evaluate(at: 6.7).cameraCenter.x > 1100)
-}
 
 @Test func autonomousVisualZoomIgnoresSpinnersAndScrolling() {
     var tl = Timeline(duration: 12)

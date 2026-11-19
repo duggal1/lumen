@@ -42,7 +42,11 @@ public struct TimelineClip: Codable, Identifiable, Equatable, Sendable {
     public init(id: UUID = UUID(), path: String, name: String = "", inPoint: Double = 0,
                 duration: Double, start: Double, width: Int = 1920, height: Int = 1080) {
         self.id = id; self.path = path; self.name = name
-        self.inPoint = max(inPoint, 0); self.duration = max(duration, 0.01); self.start = max(start, 0)
+        // NaN survives `max`, so reject non-finite geometry explicitly. One
+        // bad imported clip must never poison the timeline's time map.
+        self.inPoint = inPoint.isFinite ? max(inPoint, 0) : 0
+        self.duration = duration.isFinite ? max(duration, 0.01) : 0.01
+        self.start = start.isFinite ? max(start, 0) : 0
         self.width = max(width, 2); self.height = max(height, 2)
     }
     public var end: Double { start + duration }
@@ -72,6 +76,18 @@ extension Array where Element == TimelineClip {
         sort { $0.start < $1.start }
         guard !isEmpty else { return }
         var cursor = self[0].start
+        for i in indices {
+            self[i].start = cursor
+            cursor += self[i].duration
+        }
+    }
+
+    /// Close gaps without re-sorting. Reordering is an explicit user decision
+    /// about array order; sorting by the stale `start` values would silently
+    /// undo it.
+    mutating func magneticNormalizeInPlace(start laneStart: Double? = nil) {
+        guard !isEmpty else { return }
+        var cursor = laneStart ?? self[0].start
         for i in indices {
             self[i].start = cursor
             cursor += self[i].duration

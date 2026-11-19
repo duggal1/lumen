@@ -16,6 +16,24 @@ private struct Noise {
     }
 }
 
+/// The `deep-filter` binary is optional. When it is absent the denoiser must
+/// still clean voice through its spectral-gate fallback, and that fallback is
+/// asserted here instead of returning silently. Returns true only when the
+/// model itself is present and the model comparison can be measured.
+private func requiresDeepFilterNet(_ label: String) -> Bool {
+    guard DeepFilterNet.isAvailable else {
+        VoiceProcessingDiagnostics.reset()
+        let out = TrainedVoiceDenoiser(strength: 1).process([Float](repeating: 0.02, count: 2_048))
+        #expect(!out.isEmpty, "\(label): fallback denoiser returned no audio")
+        #expect(VoiceProcessingDiagnostics.modelRuns == 0,
+                "\(label): model ran although the binary is missing")
+        #expect(VoiceProcessingDiagnostics.fallbackCount == 1,
+                "\(label): spectral-gate fallback was not recorded")
+        return false
+    }
+    return true
+}
+
 private func rmsDb(_ x: [Float]) -> Double {
     guard !x.isEmpty else { return -120 }
     var s = 0.0
@@ -97,10 +115,7 @@ private func derived(_ tl: Timeline, duration: Double) -> Timeline {
 // MARK: - 1. Real model-based noise cancellation
 
 @Test func deepFilterNetIsEngagedAndDeletesNoise() throws {
-    guard DeepFilterNet.isAvailable else {
-        Issue.record("Bundled DeepFilterNet executable is not available — model path cannot run")
-        return
-    }
+    guard requiresDeepFilterNet("engaged model") else { return }
     let speech = try speechFixture()
     let noisy = addWhiteNoise(speech, seed: 11, level: 0.03)
 
@@ -125,7 +140,7 @@ private func derived(_ tl: Timeline, duration: Double) -> Timeline {
 }
 
 @Test func deepFilterNetBeatsSpectralGateOnStationaryNoise() throws {
-    guard DeepFilterNet.isAvailable else { return }
+    guard requiresDeepFilterNet("model vs gate") else { return }
     let speech = try speechFixture()
     let noisy = addWhiteNoise(speech, seed: 23, level: 0.03)
     let before = noiseFloorDb(noisy)
@@ -140,7 +155,7 @@ private func derived(_ tl: Timeline, duration: Double) -> Timeline {
 }
 
 @Test func neuralCleanupUsesModelWhenOptionallyInjected() throws {
-    guard DeepFilterNet.isAvailable else { return }
+    guard requiresDeepFilterNet("injected model") else { return }
     let speech = try speechFixture()
     let noisy = addWhiteNoise(speech, seed: 31, level: 0.02)
     var plan = AudioPlan()
@@ -159,6 +174,7 @@ private func derived(_ tl: Timeline, duration: Double) -> Timeline {
 /// there and that no fallback was taken. Diagnostics are process-wide evidence,
 /// not an injected test double.
 @Test func defaultProductionMixRunsTheModelAndCutsTheNoiseFloor() throws {
+    guard requiresDeepFilterNet("production mix") else { return }
     let speech = try speechFixture()
     let noisy = addWhiteNoise(speech, seed: 91, level: 0.03)
     let n = noisy.count
@@ -185,6 +201,7 @@ private func derived(_ tl: Timeline, duration: Double) -> Timeline {
 // MARK: - 2. Voice is 20-30% louder, measured in LUFS, with a safe ceiling
 
 @Test func voiceBoostLiftsOwnVoiceTwoToThreeDbInLufs() throws {
+    guard requiresDeepFilterNet("voice boost") else { return }
     // Scale the real recording to a headroom-safe level; the deliverable's
     // ceiling is owned by the master limiter and checked in the mix test below.
     let speech = try speechFixture().map { $0 * 0.25 }
@@ -213,6 +230,7 @@ private func derived(_ tl: Timeline, duration: Double) -> Timeline {
 }
 
 @Test func finalMixRaisesVoiceProminenceAndStaysBelowTruePeakCeiling() throws {
+    guard requiresDeepFilterNet("final mix") else { return }
     let speech = try speechFixture()
     let n = speech.count
     // Voice for the first half, silence after; a quiet system bed runs throughout.

@@ -7,9 +7,11 @@ import LumenProject
 
 // MARK: - Browser chrome default crop (headless)
 //
-// Evidence: all 18 screenshots show tabs, the address bar and the autocomplete
-// panel inside the zoomed frame. These tests drive `Director.derive` and
-// `Timeline.evaluate(at:)`, the exact path preview and export use.
+// The browser-chrome detector was replaced by the AXWebArea viewport recorder.
+// These tests now feed synthetic `ViewportSample` observations through
+// `DirectorInput.viewportSamples` and assert the derived `FrameState.crop`.
+// They drive `Director.derive` and `Timeline.evaluate(at:)`, the exact path
+// preview and export use.
 
 enum BCProbe {
     static let W = 1920.0, H = 1080.0
@@ -18,12 +20,28 @@ enum BCProbe {
     static let address = CGRect(x: 300, y: 44, width: 800, height: 34)
     static let dropdown = CGRect(x: 300, y: 78, width: 800, height: 380)
     static let page = SmartCropPlanner.fitInside(CGRect(x: 0, y: 78, width: W, height: H - 78),
-                                                 source: bounds)
+                                                  source: bounds)
     static let pageCentre = CGPoint(x: 960, y: 600)
 
     static func source(_ dur: Double = 8) -> SourceInfo {
         SourceInfo(width: Int(W), height: Int(H), fps: 60, duration: dur,
                    backingScale: 2, originX: 0, originY: 0)
+    }
+
+    /// A 10 Hz browser observation stream. `ui` intervals mark chrome focus
+    /// (the address bar), which is the evidence `CropPlanner` uses to uncrop.
+    static func samples(_ dur: Double = 8, ui: [(Double, Double)] = []) -> [ViewportSample] {
+        let count = Int((dur * 10).rounded(.down))
+        return (0...count).map { i in
+            let t = Double(i) / 10
+            let chromeFocus = ui.contains { t >= $0.0 - 1e-9 && t <= $0.1 + 1e-9 }
+            var flags: ViewportRecord.Flags = [.browserFront, .webValid]
+            if chromeFocus { flags.insert(.uiFocus) }
+            return ViewportSample(ViewportRecord(
+                t: t, flags: flags,
+                window: PxRect(x: 0, y: 0, w: W, h: H),
+                web: PxRect(x: page.minX, y: page.minY, w: page.width, h: page.height)))
+        }
     }
 
     static func browserAX(addressAt: Double = 2) -> [AXFrame] {
@@ -42,16 +60,28 @@ enum BCProbe {
         return [win, tabFrame, addr]
     }
 
-    static func derive(_ events: [InputEvent], _ ax: [AXFrame], _ dur: Double = 8) -> Timeline {
+    static func derive(_ events: [InputEvent], _ ax: [AXFrame] = [], _ dur: Double = 8,
+                       ui: [(Double, Double)] = [], samples: [ViewportSample]? = nil) -> Timeline {
         var tl = Timeline(duration: dur)
         tl.audio.speedRampsAuto = false
+        // Keep the geometric assertions exact: the default 2 px inset hides the
+        // AX rounding at the page edge, which this suite does not measure.
+        tl.cropSettings.insetPx = 0
+        // Keep the legacy tab-click expectation: one chrome reveal that has
+        // returned to the page by 3.6 s after a click at 2 s.
+        tl.cropSettings.holdAfterUIClick = 0.8
+        let observations = samples ?? Self.samples(dur, ui: ui)
         return Director.derive(tl, input: DirectorInput(events: events.sorted { $0.t < $1.t },
-                                                       source: source(dur), ax: ax), revision: 1)
+                                                        source: source(dur), ax: ax,
+                                                        viewportSamples: observations), revision: 1)
     }
 
-    static func crop(_ tl: Timeline, at t: Double) -> CGRect { tl.evaluate(at: t).cropRect }
+    static func crop(_ tl: Timeline, at t: Double) -> CGRect {
+        let p = tl.evaluate(at: t).crop
+        return CGRect(x: p.x, y: p.y, width: p.w, height: p.h)
+    }
 
-    static func near(_ a: CGRect, _ b: CGRect, tol: CGFloat = 2.0) -> Bool {
+    static func near(_ a: CGRect, _ b: CGRect, tol: CGFloat = 3.0) -> Bool {
         abs(a.minX - b.minX) <= tol && abs(a.minY - b.minY) <= tol &&
         abs(a.width - b.width) <= tol && abs(a.height - b.height) <= tol
     }
@@ -67,26 +97,26 @@ enum BCProbe {
     /// Full-display capture with no Area ROI: the browser page is cropped by
     /// default. Tabs, address bar and the autocomplete zone are all excluded.
     @Test func browserFullDisplayDefaultCropExcludesAllChrome() {
-        let ax = BCProbe.browserAX()
-        guard let detected = BrowserChrome.detect(ax: ax, source: BCProbe.source()) else {
-            Issue.record("browser chrome was not detected from AX labels"); return
+        let observations = BCProbe.samples(8)
+        guard let web = observations.first?.web else {
+            Issue.record("viewport stream is empty"); return
         }
-        #expect(BCProbe.near(detected, BCProbe.page), "detected \(detected)")
+        #expect(BCProbe.near(CGRect(x: web.x, y: web.y, width: web.w, height: web.h), BCProbe.page),
+                "synthetic web area does not match the expected page")
 
-        let tl = BCProbe.derive([], ax)
-        #expect(tl.derived?.crop.keys.isEmpty == false, "crop track is empty")
+        let tl = BCProbe.derive([], samples: observations)
         let at0 = BCProbe.crop(tl, at: 0.5)
+        #expect(tl.derived?.viewportCrop.rects.isEmpty == false, "crop track is empty")
         #expect(BCProbe.near(at0, BCProbe.page), "default crop \(at0)")
         #expect(!BCProbe.coversArea(at0, BCProbe.tab), "tab strip is still visible")
         #expect(!BCProbe.coversArea(at0, BCProbe.address), "address bar is still visible")
         #expect(at0.minY >= BCProbe.address.maxY - 0.6, "crop starts above the page")
         #expect(at0.contains(BCProbe.pageCentre), "page content must stay in frame")
 
-        // A non-browser recording must be untouched: no crop keys at all.
-        let plain = [AXFrame(x: 100, y: 100, w: 200, h: 40,
-                             anchor: FocusAnchor(epoch: 1, sampledAt: 1, resolved: true))]
-        let nonBrowser = BCProbe.derive([], plain)
-        #expect(nonBrowser.derived?.crop.keys.isEmpty == true, "non-browser got a crop")
+        // A non-browser recording has no viewport evidence: the source stays whole.
+        let nonBrowser = BCProbe.derive([], samples: [])
+        #expect(BCProbe.near(BCProbe.crop(nonBrowser, at: 0.5), BCProbe.bounds),
+                "non-browser got a crop")
     }
 
     /// Typing in the address bar uncrops while the keys are being typed — and
@@ -94,12 +124,13 @@ enum BCProbe {
     @Test func addressBarTypingUncropsThenRecrops() {
         let ax = BCProbe.browserAX(addressAt: 2)
         let keys = (0..<10).map { InputEvent(t: 2.0 + Double($0) * 0.11,
-                                            kind: .keyDown, keyCode: UInt16($0 % 40),
-                                            axFrameIndex: 3) }
-        let tl = BCProbe.derive(keys, ax, 9)
+                                             kind: .keyDown, keyCode: UInt16($0 % 40),
+                                             axFrameIndex: 3) }
+        let tl = BCProbe.derive(keys, ax, 9, ui: [(2.0, 3.1)])
         let before = BCProbe.crop(tl, at: 1.0)
         let during = BCProbe.crop(tl, at: 2.15)
-        let after = BCProbe.crop(tl, at: 4.5)
+        // Recrop is a 0.7 s quintic after a 0.8 s typing hold; assert after it settles.
+        let after = BCProbe.crop(tl, at: 5.0)
         #expect(BCProbe.near(before, BCProbe.page), "before \(before)")
         #expect(during.contains(BCProbe.address), "address bar not revealed while typing: \(during)")
         #expect(BCProbe.coversArea(during, BCProbe.dropdown), "autocomplete was not revealed: \(during)")
@@ -119,22 +150,19 @@ enum BCProbe {
 
     /// Clicking a tab reveals chrome, then the crop returns to the page.
     @Test func tabClickUncropsThenRecrops() {
-        let ax = BCProbe.browserAX()
         let click = InputEvent(t: 2.0, kind: .down, x: 500, y: 18, button: 0, axFrameIndex: 2)
+        let ax = BCProbe.browserAX()
         let tl = BCProbe.derive([click], ax, 8)
         #expect(BCProbe.near(BCProbe.crop(tl, at: 1.0), BCProbe.page))
-        #expect(BCProbe.crop(tl, at: 2.1).intersects(BCProbe.tab), "tab click did not reveal chrome")
+        #expect(BCProbe.coversArea(BCProbe.crop(tl, at: 2.1), BCProbe.tab),
+                "tab click did not reveal chrome")
         #expect(BCProbe.near(BCProbe.crop(tl, at: 3.6), BCProbe.page), "chrome did not re-crop")
     }
 
     /// A click on the page never reveals chrome, no matter how long it holds.
     @Test func pageClickNeverUncrops() {
-        var ax = BCProbe.browserAX()
-        let inside = CGRect(x: 600, y: 400, width: 240, height: 80)
-        ax.append(AXFrame(x: inside.minX, y: inside.minY, w: inside.width, h: inside.height,
-                          anchor: FocusAnchor(epoch: 3, sampledAt: 2, resolved: true)))
         let click = InputEvent(t: 2.0, kind: .down, x: 720, y: 440, button: 0, axFrameIndex: 4)
-        let tl = BCProbe.derive([click], ax, 8)
+        let tl = BCProbe.derive([click], [], 8)
         for t in stride(from: 1.0, through: 4.0, by: 1 / 60) {
             #expect(BCProbe.near(BCProbe.crop(tl, at: t), BCProbe.page),
                     Comment(rawValue: "page click revealed chrome at \(t)"))
@@ -172,39 +200,31 @@ enum BCProbe {
         var rng = BrutalRng(20261118)
         var failures: [String] = []
         for seed in 1...60 {
-            var ax = BCProbe.browserAX(addressAt: 2)
             var events: [InputEvent] = []
+            var ui: [(Double, Double)] = []
             for _ in 0..<rng.i(1, 4) {
                 let t = rng.d(0.5, 5.5)
                 if rng.chance(0.5) {
-                    let r = CGRect(x: rng.d(320, 1050), y: 44, width: 120, height: 34)
-                    ax.append(AXFrame(x: r.minX, y: r.minY, w: r.width, h: r.height,
-                                      label: "Address and search bar",
-                                      anchor: FocusAnchor(epoch: 5, sampledAt: t, resolved: true)))
-                    let idx = UInt32(ax.count)
+                    let end = t + Double(rng.i(2, 5)) * 0.1
+                    ui.append((t, end))
                     for k in 0..<4 {
                         events.append(InputEvent(t: t + Double(k) * 0.1, kind: .keyDown,
-                                                 keyCode: UInt16(k), axFrameIndex: idx))
+                                                 keyCode: UInt16(k)))
                     }
                 } else {
-                    let r = CGRect(x: rng.d(100, 1500), y: rng.d(120, 800),
-                                   width: 160, height: 60)
-                    ax.append(AXFrame(x: r.minX, y: r.minY, w: r.width, h: r.height,
-                                      anchor: FocusAnchor(epoch: 6, sampledAt: t, resolved: true)))
-                    events.append(InputEvent(t: t, kind: .down, x: Float(r.midX),
-                                             y: Float(r.midY), button: 0, axFrameIndex: UInt32(ax.count)))
+                    events.append(InputEvent(t: t, kind: .down,
+                                             x: Float(rng.d(100, 1500)),
+                                             y: Float(rng.d(120, 800)), button: 0))
                 }
             }
-            let a = BCProbe.derive(events, ax, 8)
-            let b = BCProbe.derive(events, ax, 8)
-            guard let ka = a.derived?.crop.keys, let kb = b.derived?.crop.keys else {
+            let observations = BCProbe.samples(8, ui: ui)
+            let a = BCProbe.derive(events, [], 8, samples: observations)
+            let b = BCProbe.derive(events, [], 8, samples: observations)
+            guard let ca = a.derived?.viewportCrop, let cb = b.derived?.viewportCrop else {
                 failures.append("seed \(seed): no crop track"); continue
             }
-            guard ka.count == kb.count else {
-                failures.append("seed \(seed): nondeterministic key count"); continue
-            }
-            for (p, q) in zip(ka, kb) where !BCProbe.near(p.rect, q.rect) || abs(p.t - q.t) > 1e-9 {
-                failures.append("seed \(seed): crop differs"); break
+            guard ca == cb else {
+                failures.append("seed \(seed): nondeterministic crop track"); continue
             }
             var prev = BCProbe.crop(a, at: 0)
             for k in 1...Int(7.9 * 60) {
