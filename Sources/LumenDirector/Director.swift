@@ -26,6 +26,10 @@ public struct DirectorInput: Sendable {
     public var face: [FaceSample]
     public var webcamAspect: Float
     public var activity: [ActivityPoint]
+    /// 10 Hz 48x27 energy grids from the activity analyzer (F2).
+    public var activityGrids: [ActivityGrid]
+    /// Browser viewport observations from the AXWebArea recorder (F1).
+    public var viewportSamples: [ViewportSample]
     public var transcript: Transcript?
     public var ocr: [OCRDetection]
     public var personMask: PersonMaskInfo?
@@ -33,10 +37,13 @@ public struct DirectorInput: Sendable {
     public var markers: [DirectorMarker]
     public init(events: [InputEvent], source: SourceInfo, vad: [ClosedRange<Double>] = [], ax: [AXFrame] = [],
                 face: [FaceSample] = [], webcamAspect: Float = 16.0 / 9, activity: [ActivityPoint] = [],
+                activityGrids: [ActivityGrid] = [], viewportSamples: [ViewportSample] = [],
                 transcript: Transcript? = nil, ocr: [OCRDetection] = [], personMask: PersonMaskInfo? = nil,
                 typing: [TypingTrace] = [], markers: [DirectorMarker] = []) {
         self.events = events; self.source = source; self.vad = vad; self.ax = ax; self.face = face
-        self.webcamAspect = webcamAspect; self.activity = activity; self.transcript = transcript; self.ocr = ocr; self.personMask = personMask; self.typing = typing
+        self.webcamAspect = webcamAspect; self.activity = activity; self.activityGrids = activityGrids
+        self.viewportSamples = viewportSamples
+        self.transcript = transcript; self.ocr = ocr; self.personMask = personMask; self.typing = typing
         self.markers = markers
     }
 }
@@ -58,6 +65,8 @@ public struct DeriveCache: Sendable {
     /// style-only edit (padding, colours) must not re-run it.
     struct PlanKey: Equatable {
         var camera: CameraParams
+        var activity: ActivitySettings
+        var crop: CropSettings
         var signature: [Double]
         var digest: UInt64
         var manual: [ZoomSegment]
@@ -80,6 +89,7 @@ public struct DeriveCache: Sendable {
     /// Same idea for the speed-ramp planner.
     struct RampKey: Equatable {
         var audio: AudioPlan
+        var activity: ActivitySettings
         var signature: [Double]
         var vad: [ClosedRange<Double>]
         var digest: UInt64
@@ -181,6 +191,17 @@ public enum Director {
         var followPaths: [UUID: [(t: Double, c: SIMD2<Double>)]] = [:]
         if cancelled() { return nil }
         let digest = inputDigest(input)
+        // F2: one pure activity pass feeds both the zoom planner and the speed-ramp planner.
+        let activityResult = ActivityShotBuilder.build(grids: input.activityGrids,
+                                                       source: (Double(src.width), Double(src.height)),
+                                                       inputs: ActivityInputs.make(events: input.events),
+                                                       settings: t.activity)
+        // F1: one pure browser-crop pass produces a dense 480 Hz source-pixel track.
+        let viewportPlan = CropPlanner.plan(samples: input.viewportSamples,
+                                            inputs: CropInputs.make(events: input.events, samples: input.viewportSamples),
+                                            duration: src.duration,
+                                            source: PxRect(x: 0, y: 0, w: Double(src.width), h: Double(src.height)),
+                                            settings: t.cropSettings)
         var tm = t.timeMap
         if tm.sourceDuration != src.duration && tm.trimEnd <= 0 {
             tm = TimeMap(sourceDuration: src.duration, trimStart: 0, trimEnd: src.duration, ramps: tm.ramps, cuts: tm.cuts)
@@ -188,13 +209,15 @@ public enum Director {
         // time map first: camera runs in output time
         if t.audio.speedRampsAuto {
             let manualRamps = tm.ramps.filter { $0.origin == .manual }
-            let rkey = DeriveCache.RampKey(audio: t.audio, signature: tm.sourceSignature, vad: input.vad,
-                                           digest: digest, backing: src.backingScale)
+            let rkey = DeriveCache.RampKey(audio: t.audio, activity: t.activity, signature: tm.sourceSignature,
+                                           vad: input.vad, digest: digest, backing: src.backingScale)
             let planned: [SpeedRamp]
             if cache.rampKey == rkey, let cached = cache.ramps {
                 planned = cached
             } else {
-                planned = SpeedRamps.plan(events: input.events, vad: input.vad, tm: tm, audio: t.audio, backing: src.backingScale, activity: input.activity)
+                planned = SpeedRamps.plan(events: input.events, vad: input.vad, tm: tm, audio: t.audio,
+                                          backing: src.backingScale, activity: input.activity,
+                                          busy: activityResult.mergedBusy)
                 cache.rampKey = rkey; cache.ramps = planned
             }
             // AGENT: automatic ramps removed by the user must stay removed after every derive.
@@ -206,14 +229,16 @@ public enum Director {
         if t.camera.autoZoom {
             let manual = t.zoom.filter { $0.origin == .manual }
             let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
-            let pkey = DeriveCache.PlanKey(camera: t.camera, signature: tm.sourceSignature, digest: digest,
-                                           manual: manual, source: SIMD3(Double(src.width), Double(src.height), src.backingScale))
+            let pkey = DeriveCache.PlanKey(camera: t.camera, activity: t.activity, crop: t.cropSettings,
+                                           signature: tm.sourceSignature, digest: digest, manual: manual,
+                                           source: SIMD3(Double(src.width), Double(src.height), src.backingScale))
             let planned: ZoomPlanner.ZoomPlan
             if cache.planKey == pkey, let cached = cache.plan {
                 planned = cached
             } else {
                 planned = ZoomPlanner.plan(events: input.events, ax: input.ax, typing: input.typing, activity: input.activity, src: src, p: t.camera,
-                                           tm: tm, avoid: avoid, markers: input.markers)
+                                           tm: tm, avoid: avoid, markers: input.markers,
+                                           activityShots: activityResult.shots)
                 cache.planKey = pkey; cache.plan = planned
             }
             // AGENT: applying suppression here covers normal derives as well as explicit replans.
@@ -243,9 +268,9 @@ public enum Director {
         if cache.cropKey == cropKey, let cached = cache.crop {
             crop = cached
         } else {
-            let intents = SmartCropPlanner.intents(events: input.events, ax: input.ax, typing: input.typing,
-                                                   source: src, tm: tm)
-            crop = SmartCropPlanner.plan(config: t.smartCrop, source: src, tm: tm, intents: intents)
+            // The offline browser-chrome planner was removed; the live
+            // AXWebArea path in ViewportRecorder covers it. No crop keyframes.
+            crop = CropTrack()
             cache.cropKey = cropKey; cache.crop = crop
         }
         if cancelled() { return nil }
@@ -321,7 +346,8 @@ public enum Director {
         t.derived = DerivedTracks(revision: revision, sourceSize: size, outputDuration: tm.outputDuration, cursor: cursor, camera: cam,
                                   clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm, camera: cam, layout: t.webcam),
                                   webcamAspect: input.webcamAspect, layout: layout, placement: placement,
-                                  captions: captions, autoMasks: autoMasks, personMask: input.personMask, crop: crop)
+                                   captions: captions, autoMasks: autoMasks, personMask: input.personMask, crop: crop,
+                                   viewportCrop: DenseCropTrack(hz: viewportPlan.track.hz, rects: viewportPlan.track.rects))
         if ProcessInfo.processInfo.environment["LUMEN_ZOOM_DEBUG"] == "1" {
             let cam = t.derived?.camera
             for event in input.events where event.kind == .down && event.button == 0 {
@@ -406,6 +432,13 @@ public enum Director {
             h.combine(a.region?.minX); h.combine(a.region?.minY)
             h.combine(a.region?.width); h.combine(a.region?.height)
         }
+        // F2/F1: grids and viewport samples arrive once when analysis completes.
+        h.combine(input.activityGrids.count)
+        h.combine(input.activityGrids.first?.t)
+        h.combine(input.activityGrids.last?.t)
+        h.combine(input.viewportSamples.count)
+        h.combine(input.viewportSamples.first?.t)
+        h.combine(input.viewportSamples.last?.t)
         for m in input.markers {
             h.combine(m.start); h.combine(m.end)
             h.combine(m.rect?.minX); h.combine(m.rect?.minY)
@@ -429,6 +462,8 @@ public struct FrameState: Sendable {
     public var cameraTilt: SIMD2<Float> = .zero       // (yaw, pitch) degrees; renderer homography consumes this in Part 5
     /// Source-pixel crop for intelligent Area capture. `.zero` means no crop.
     public var cropRect: CGRect = .zero
+    /// F1: dense browser-content crop at this frame's SOURCE time. Invalid rect means no crop.
+    public var crop: PxRect = PxRect(x: 0, y: 0, w: 0, h: 0)
     public var cursor: CursorSample
     public var clickFX: [ClickRing]
     public var webcamCrop: SIMD4<Float>       // uv x, y, w, h
@@ -441,11 +476,11 @@ public struct FrameState: Sendable {
     public var emphasis: EmphasisFrame
 
     public init(cameraCenter: SIMD2<Float>, cameraScale: Float, cameraTilt: SIMD2<Float> = .zero,
-                cropRect: CGRect = .zero,
+                cropRect: CGRect = .zero, crop: PxRect = PxRect(x: 0, y: 0, w: 0, h: 0),
                 cursor: CursorSample, clickFX: [ClickRing], webcamCrop: SIMD4<Float>, sourceTime: Double,
                 layout: ResolvedLayout = .full, layoutKind: LayoutKind = .screenOnly, webcamCorner: WebcamLayout.Corner? = nil,
                 webcamOpacity: Float = 1, caption: CaptionChunk? = nil, emphasis: EmphasisFrame = EmphasisFrame()) {
-        self.cameraCenter = cameraCenter; self.cameraScale = cameraScale; self.cameraTilt = cameraTilt; self.cropRect = cropRect; self.cursor = cursor
+        self.cameraCenter = cameraCenter; self.cameraScale = cameraScale; self.cameraTilt = cameraTilt; self.cropRect = cropRect; self.crop = crop; self.cursor = cursor
         self.clickFX = clickFX; self.webcamCrop = webcamCrop; self.sourceTime = sourceTime; self.layout = layout
         self.layoutKind = layoutKind; self.webcamCorner = webcamCorner; self.webcamOpacity = webcamOpacity
         self.caption = caption; self.emphasis = emphasis
@@ -497,8 +532,19 @@ extension Timeline {
         let t = clamp(t0, 0, d.outputDuration), f = t * gridRate
         let c = d.camera, u = d.cursor
         let cameraFrame = t * c.rate
-        let cam = SIMD2<Float>(qhm(c.nx, c.vx, c.ax, cameraFrame, rate: c.rate) * Float(d.sourceSize.x),
-                               qhm(c.ny, c.vy, c.ay, cameraFrame, rate: c.rate) * Float(d.sourceSize.y))
+        let sourceTime = timeMap.source(atOutput: t)
+        let viewportCrop = d.viewportCrop.rect(at: sourceTime)
+        let camN = SIMD2<Double>(Double(qhm(c.nx, c.vx, c.ax, cameraFrame, rate: c.rate)),
+                                 Double(qhm(c.ny, c.vy, c.ay, cameraFrame, rate: c.rate)))
+        // F1: camera channels are crop-normalised. Map them back to source px so
+        // the renderer, which subtracts the crop origin, sees the right point.
+        let cam: SIMD2<Float>
+        if viewportCrop.isValid {
+            cam = SIMD2<Float>(Float(viewportCrop.x + camN.x * viewportCrop.w),
+                               Float(viewportCrop.y + camN.y * viewportCrop.h))
+        } else {
+            cam = SIMD2<Float>(Float(camN.x * d.sourceSize.x), Float(camN.y * d.sourceSize.y))
+        }
         let scale = exp(qhm(c.lz, c.vz, c.az, cameraFrame, rate: c.rate))
         let tilt = SIMD2<Float>(cr(c.yaw, cameraFrame), cr(c.pitch, cameraFrame))
         let pos = SIMD2<Float>(cr(u.x, f), cr(u.y, f))
@@ -536,7 +582,6 @@ extension Timeline {
         }
         let cw = min(ch / ar, 1)
         let crop = SIMD4<Float>(cf(cx - cw / 2, 0, 1 - cw), cf(cy - ch / 2, 0, 1 - ch), cw, ch)
-        let sourceTime = timeMap.source(atOutput: t)
         let emphasis = Emphasis.evaluate(overlays: overlays, autoMasks: d.autoMasks, sourceTime: sourceTime,
                                          cursor: pos, sourceSize: d.sourceSize)
         // SMOOTHNESS: captions are sorted by start — binary search instead of a
@@ -555,6 +600,7 @@ extension Timeline {
         // `crop` above is the webcam UV rect; this is the source-pixel screen crop.
         let screenCrop = smartRect.width > 1 && smartRect.height > 1 ? smartRect : .zero
         return FrameState(cameraCenter: cam, cameraScale: scale, cameraTilt: tilt, cropRect: screenCrop,
+                           crop: viewportCrop,
                           cursor: cs, clickFX: rings, webcamCrop: crop,
                           sourceTime: sourceTime, layout: d.layout.sample(at: t), layoutKind: layoutKind,
                           webcamCorner: d.placement.corner(at: t), webcamOpacity: d.placement.visibility(at: t),

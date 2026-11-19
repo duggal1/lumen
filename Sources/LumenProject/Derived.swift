@@ -146,6 +146,23 @@ public struct CropTrack: Sendable, Equatable {
     }
 }
 
+/// Dense 480 Hz viewport crop in SOURCE pixels, sampled by `FrameState`.
+/// Pure value type; owned by the derived timeline and safe to share across tasks.
+public struct DenseCropTrack: Sendable, Equatable {
+    public var hz: Double
+    public var rects: [SIMD4<Float>]
+    public init(hz: Double = 480, rects: [SIMD4<Float>] = []) {
+        self.hz = hz; self.rects = rects
+    }
+    public func rect(at t: Double) -> PxRect {
+        guard !rects.isEmpty else { return PxRect(x: 0, y: 0, w: 0, h: 0) }
+        let f = min(max(t * hz, 0), Double(rects.count - 1))
+        let i = Int(f), j = min(i + 1, rects.count - 1)
+        let v = rects[i] + (rects[j] - rects[i]) * Float(f - Double(i))
+        return PxRect(x: Double(v.x), y: Double(v.y), w: Double(v.z), h: Double(v.w))
+    }
+}
+
 public struct DerivedTracks: Sendable, Equatable {
     public var revision: Int
     public var sourceSize: SIMD2<Double>
@@ -164,14 +181,18 @@ public struct DerivedTracks: Sendable, Equatable {
     public var personMask: PersonMaskInfo?
     /// Empty keys mean "no smart crop"; FrameState.cropRect is then .zero.
     public var crop: CropTrack
+    /// F1: dense browser-content crop track (source px, 480 Hz).
+    public var viewportCrop: DenseCropTrack
     public init(revision: Int, sourceSize: SIMD2<Double>, outputDuration: Double, cursor: CursorTrack, camera: CameraTrack,
                 clicks: [ClickFX], cues: [SFXCue], duck: [Float], face: [SIMD3<Float>], webcamAspect: Float,
                 layout: LayoutTrack = LayoutTrack(), placement: PlacementTrack = PlacementTrack(), captions: [CaptionChunk] = [],
-                autoMasks: [Mask] = [], personMask: PersonMaskInfo? = nil, crop: CropTrack = CropTrack()) {
+                autoMasks: [Mask] = [], personMask: PersonMaskInfo? = nil, crop: CropTrack = CropTrack(),
+                viewportCrop: DenseCropTrack = DenseCropTrack()) {
         self.revision = revision; self.sourceSize = sourceSize; self.outputDuration = outputDuration; self.cursor = cursor
         self.camera = camera; self.clicks = clicks; self.cues = cues; self.duck = duck; self.face = face; self.webcamAspect = webcamAspect
         self.layout = layout; self.placement = placement; self.captions = captions; self.autoMasks = autoMasks; self.personMask = personMask
         self.crop = crop
+        self.viewportCrop = viewportCrop
     }
     public static func == (a: Self, b: Self) -> Bool { a.revision == b.revision }
 }
