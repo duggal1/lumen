@@ -1,0 +1,14 @@
+{
+  "demoSrc": "demo.mp4",
+  "demoDurationSec": 42.5,
+  "demoAspect": 0.5625,
+  "hook": ["Your demo *looks* like a screen recording.", "It shouldn’t.", "Meet *Lumen*."],
+  "beatSec": 1.15,
+  "headline": "Press record. Ship the demo.",
+  "chapters": [
+    {"at": 12, "text": "Zoom follows *what changes*."},
+    {"at": 26, "text": "Secrets get *blurred* automatically."}
+  ],
+  "outro": ["Record once.", "*Ship* everywhere."],
+  "cta": "lumen.app"
+}

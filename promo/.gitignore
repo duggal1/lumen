@@ -1,0 +1,4 @@
+node_modules/
+out/
+public/demo.mp4
+*.tsbuildinfo
