@@ -195,7 +195,12 @@ public final class ProjectSession: @unchecked Sendable {
             onPrivacyStart()
         }, onActivity: { [self] result in
             guard !Task.isCancelled, analysisSequence.withLock({ $0 == sequence }) else { return }
-            inputState.withLock { $0.activity = result.activity }
+            inputState.withLock { current in
+                current.activity = result.activity
+                if let grids = result.activityGrids?.grids {
+                    current.activityGrids = grids.map { ActivityGrid(t: $0.t, cells: $0.cells) }
+                }
+            }
             onActivity()
         })
         guard !Task.isCancelled else { return result }
@@ -203,6 +208,10 @@ public final class ProjectSession: @unchecked Sendable {
         inputState.withLock { current in
             if result.errors["face"] == nil, meta.webcam != nil { current.face = result.face }
             if result.errors["activity"] == nil, appliedRequest.includeActivity { current.activity = result.activity }
+            // F2: grids feed auto-zoom even when the legacy includeActivity flag is off.
+            if result.errors["activity"] == nil, let grids = result.activityGrids?.grids {
+                current.activityGrids = grids.map { ActivityGrid(t: $0.t, cells: $0.cells) }
+            }
             if timeline.overlays.privacy.enabled, timeline.overlays.privacy.autoDetect { current.ocr = result.ocr }
             if result.errors["speech"] == nil, let transcript = result.transcript { current.transcript = transcript }
             if result.errors["personMask"] == nil, let personMask = result.personMask { current.personMask = personMask }
@@ -250,9 +259,11 @@ public final class ProjectSession: @unchecked Sendable {
         // VAD is empty until the background preparation publishes it. A derive
         // with no voice regions simply has no speed ramps yet; it is replanned
         // when the regions arrive.
+        // F1: viewport observations are read from the append-only log if present.
+        let viewportSamples = ViewportLog.read(b.url.appendingPathComponent("viewport.bin")).map(ViewportSample.init)
         let input = DirectorInput(events: events, source: meta.source, vad: [], ax: ax, face: [],
-                                  webcamAspect: aspect, transcript: tf?.transcript.shifted(by: micOff),
-                                  markers: markers)
+                                  webcamAspect: aspect, viewportSamples: viewportSamples,
+                                  transcript: tf?.transcript.shifted(by: micOff), markers: markers)
         // Declick windows are source-time; convert to mic-file time by micOff.
         let keyTimesInMicFile = events.filter { $0.kind == .keyDown }.map { $0.t - micOff }.filter { $0 >= 0 }
         let mixer = AudioMixer(micURL: meta.mic == nil ? nil : b.micURL, micOffset: micOff,

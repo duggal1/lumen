@@ -39,3 +39,23 @@
 - Auto zoom treats markers as explicit intent: a marker rect frames its control through `Focus.element`, a bare marker borrows the nearest click within 1.2 s, and a marker with no location creates no zoom.
 - A click centred on its verified AX control frames the whole control; an off-centre click keeps the exact clicked pixel, because the click is the more precise evidence there.
 - Recordful's GPL-3.0 source was studied for architecture only and then removed from the checkout; its auto-zoom engine is not in that repository. Its signal ideas (click plus clicked-control box, downsampled pointer path, labelled markers) were reimplemented clean-room in Swift — no source was copied.
+
+## NEW_FEATURES_WITH_CODE.md — F2 (activity-driven auto-zoom)
+- B2: reused the repo's `AnalysisCache`/`ReaderHandle` cancellation instead of a second `CVMetalTextureCache` cache scheme; the "LACT" binary cache was dropped.
+- B2: `ActivityGrid` is named `ActivityGridPayload` in LumenAnalysis (one-way dependency); the Director-side `ActivityGrid` is mapped in `ProjectSession`.
+- B2: `analyze` is `async` on a detached `.utility` task with `os_signpost("activity.analyze")` and a Logger category `activity`.
+- B3: `ActivitySettings` lives in LumenProject because persisted settings must not be owned by LumenDirector; `ActivitySettingsPatch` routes edits through `Command.setActivitySettings`.
+- B3: `build` was split into `mask`/`assign`/`shots`/`target`/`chain` to keep functions under 60 lines; thresholds are unchanged.
+- B3: overlapping activity shots chain into one `VisualShot` with in-shot waypoints, so the camera pans inside a single segment instead of emitting overlapping segments.
+- B4: `ZoomPlanner.plan` receives precomputed `VisualShot`s (one pure pass in `Director.deriveCancellable` feeds both zoom and speed ramps); click/typing intents keep priority via the existing `.visual` rank.
+- F2: `busy` spans are added to the speed-ramp candidate boundaries and any ramp crossing them is skipped, so idle ramps never cross visibly changing content.
+- F2: `DirectorInput.activityGrids` affects the derive cache digest by count and end times only, avoiding a ~1300-byte hash per grid on every interactive replan.
+- F2: activity analysis runs for all desktop recordings; `includeActivity` is kept for API compatibility but no longer gates the analyzer stage.
+
+## NEW_FEATURES_WITH_CODE.md — F1 (browser-content crop)
+- A1/A4 types were renamed to ViewportCropTrack/ViewportCropPlan to avoid the existing keyframed LumenProject.CropTrack; a LumenProject-native DenseCropTrack carries the 480 Hz track in derived data.
+- CropSettings was moved to LumenProject because LumenDirector depends on LumenProject, never the reverse.
+- Viewport sampling is gated by a Sendable lock mirror of the recording pause state (actor state cannot be read from the recorder's @Sendable clock closure).
+- SmartCropPlanner's browser-chrome detector was removed; WindowContent and FrameCropper were retained because they still serve window capture, not browser chrome.
+- FrameState gained `crop: PxRect` alongside the legacy `cropRect`; the renderer prefers it and falls back to the legacy rect.
+- The old offline ActivityPoint detector and the old browser-chrome crop planner were replaced by the supplied superior implementations as instructed.

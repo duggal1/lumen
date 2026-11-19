@@ -17,7 +17,7 @@ import LumenSpeech
 @main
 struct LumenCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "lumen-cli", abstract: "Headless Lumen",
-        subcommands: [Analyze.self, Render.self, Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self, Bench.self, Golden.self, AudioCheckCmd.self, GpuInfo.self, TapMove.self, ZoomVerify.self, MCP.self, Agent.self])
+        subcommands: [Analyze.self, Activity.self, Crop.self, Render.self Frame.self, Smoothness.self, SyncCheck.self, Probe.self, Transcribe.self, Bench.self, Golden.self, AudioCheckCmd.self, GpuInfo.self, TapMove.self, ZoomVerify.self, MCP.self, Agent.self])
 }
 
 struct TapMove: AsyncParsableCommand {
@@ -41,6 +41,52 @@ struct TapMove: AsyncParsableCommand {
         // AGENT: CLI edits must honor the same on-disk revision lock as the editor and daemon.
         try s.saveImmediately(tl)
         print("moved \(uuid.uuidString)")
+    }
+}
+
+/// Tuning aid: dump the browser-content crop state changes for a project.
+struct Crop: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "crop", abstract: "Dump browser crop changes")
+    @Argument var project: String
+    func run() async throws {
+        let bundle = ProjectBundle(url: URL(fileURLWithPath: project))
+        let file = try bundle.load()
+        let samples = ViewportLog.read(bundle.url.appendingPathComponent("viewport.bin")).map(ViewportSample.init)
+        let events = (try? bundle.events(origin: file.meta.clock.originHostSeconds)) ?? []
+        let plan = CropPlanner.plan(samples: samples, inputs: CropInputs.make(events: events, samples: samples),
+                                    duration: file.meta.source.duration,
+                                    source: PxRect(x: 0, y: 0, w: Double(file.meta.source.width),
+                                                   h: Double(file.meta.source.height)),
+                                    settings: file.timeline.cropSettings)
+        for change in plan.changes {
+            print("crop start=\(change.start) duration=\(change.duration) mode=\(change.mode.rawValue)")
+        }
+        for t in stride(from: 0.0, through: min(file.meta.source.duration, 20), by: 2.0) {
+            let r = plan.track.rect(at: t)
+            print("  t=\(t) rect=(\(r.x), \(r.y), \(r.w), \(r.h))")
+        }
+    }
+}
+
+/// Tuning aid: dump the activity-driven zoom shots and busy spans for a project.
+struct Activity: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "activity", abstract: "Dump activity zoom shots")
+    @Argument var project: String
+    func run() async throws {
+        guard let dev = MTLCreateSystemDefaultDevice() else { throw ValidationError("no Metal device") }
+        let (s, tl) = try await ProjectSession.open(ProjectBundle(url: URL(fileURLWithPath: project)), device: dev)
+        let result = await s.analyze(tl)
+        let grids = (result.activityGrids?.grids ?? []).map { ActivityGrid(t: $0.t, cells: $0.cells) }
+        let built = ActivityShotBuilder.build(grids: grids,
+            source: (Double(s.meta.source.width), Double(s.meta.source.height)),
+            inputs: ActivityInputs.make(events: s.input.events), settings: tl.activity)
+        for shot in built.shots {
+            print("shot start=\(shot.start) end=\(shot.end) kind=\(shot.kind.rawValue) strength=\(shot.strength)")
+            for wp in shot.waypoints {
+                print("  wp t=\(wp.t) rect=(\(wp.rect.x), \(wp.rect.y), \(wp.rect.w), \(wp.rect.h)) scale=\(wp.scale)")
+            }
+        }
+        for span in built.mergedBusy { print("busy \(span.lowerBound)...\(span.upperBound)") }
     }
 }
 

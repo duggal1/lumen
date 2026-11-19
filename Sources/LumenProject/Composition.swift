@@ -244,6 +244,8 @@ public extension ProjectBundle {
         tl.timeMap.cuts = (tl.timeMap.cuts + pauses).sorted { $0.start < $1.start }
         if meta.webcam != nil { tl.webcam = WebcamLayout() }
         guard meta.source.duration > 0, tl.timeMap.trimEnd > tl.timeMap.trimStart else { return nil }
+        // F1: a crash can leave a partial viewport record; keep whole records only.
+        ViewportLog.truncateToWholeRecords(at: url.appendingPathComponent("viewport.bin"))
         let file = ProjectFile(meta: meta, timeline: tl)
         try save(file)
         try clearJournal().get()
