@@ -172,6 +172,11 @@ extension RecordingStage {
 public actor RecordingSession {
     private var engine: CaptureEngine?
     private var input: InputRecorder?
+    /// 10 Hz AXWebArea observer. Owned for one recording; all of its state is
+    /// confined to its own serial queue, never the capture or event-tap threads.
+    private var viewport: ViewportRecorder?
+    /// Mirrors `isPaused` for the recorder's non-isolated `now` closure.
+    private var viewportPaused: OSAllocatedUnfairLock<Bool>?
     private var webcam: WebcamRecorder?
     private var extraMicrophones: [ExtraMicrophoneRecorder] = []
     private var bundle: ProjectBundle?
@@ -256,6 +261,24 @@ public actor RecordingSession {
                 input = i
                 e.setInputScaleHook { [weak i] scale in i?.setSourceScale(scale) }
             }
+            // Browser-content crop evidence. The recorder writes viewport.bin
+            // on its own queue; `now` reads the engine's source clock and is nil
+            // while paused, so no samples land in a removed pause span.
+            if let info = e.info {
+                do {
+                    let ox = info.originX, oy = info.originY, scale = info.backingScale
+                    let paused = OSAllocatedUnfairLock(initialState: false)
+                    let writer = try ViewportLog.Writer(url: b.url.appendingPathComponent("viewport.bin"))
+                    let recorder = ViewportRecorder(
+                        writer: writer,
+                        geometry: .init(originPt: { (x: ox, y: oy) }, pixelsPerPoint: scale),
+                        now: { paused.withLock { $0 } ? nil : (e.firstPTS == nil ? nil : e.elapsed) })
+                    viewportPaused = paused
+                    viewport = recorder
+                } catch {
+                    logger.warning("viewport log unavailable: \(error.localizedDescription, privacy: .public)")
+                }
+            }
             if config.webcamDeviceID != nil { webcam = try WebcamRecorder(url: b.webcamURL, deviceID: config.webcamDeviceID, quality: config.webcamQuality) }
             // Device IDs are unique and checked before recording starts; never
             // quietly substitute the system default if a requested device vanished.
@@ -263,6 +286,7 @@ public actor RecordingSession {
                 try ExtraMicrophoneRecorder(deviceID: id, file: "mic-extra-\(index + 1).caf", in: b)
             }
         } catch {
+            viewport?.stop(); viewport = nil; viewportPaused = nil
             transition(to: .failed("Preparing stalled. \(error)"))
             throw error
         }
@@ -287,11 +311,14 @@ public actor RecordingSession {
             journalStart = Date()
             try await writeJournal()
             try await MainActor.run { try input.start() }
+            viewportPaused?.withLock { $0 = false }
+            viewport?.start()
             for recorder in extraMicrophones { recorder.start() }
             webcam?.start()
             do {
                 try await engine.start()
             } catch {
+                viewport?.stop()
                 for recorder in extraMicrophones { await recorder.stop() }
                 await webcam?.stop()
                 await input.stop()
@@ -315,6 +342,7 @@ public actor RecordingSession {
     public func pause() {
         guard !isPaused else { return }
         engine?.pause(); webcam?.pause(); extraMicrophones.forEach { $0.pause() }
+        viewportPaused?.withLock { $0 = true }
         isPaused = true
         transition(to: .paused)
     }
@@ -322,6 +350,7 @@ public actor RecordingSession {
     public func resume() {
         guard isPaused else { return }
         engine?.resume(); webcam?.resume(); extraMicrophones.forEach { $0.resume() }
+        viewportPaused?.withLock { $0 = false }
         isPaused = false
         transition(to: .recording)
     }
@@ -435,6 +464,7 @@ public actor RecordingSession {
             stopWatchdog()
             if isPaused { resume() }
             isPaused = false
+            viewport?.stop(); viewport = nil; viewportPaused = nil
             async let inputStop: Void = input.stop()
             async let webcamStop: Void = webcam?.stop() ?? ()
             async let engineStop: Void = engine.stop()
@@ -509,6 +539,9 @@ public actor RecordingSession {
                     os_log("finalize: event sidecar unreadable: %@", log: .default, type: .error, String(describing: error))
                 }
                 progress(0.8)
+                // Drop a torn tail record (crash mid-write) so viewport.bin
+                // always contains whole 48-byte records for the Director.
+                ViewportLog.truncateToWholeRecords(at: b.url.appendingPathComponent("viewport.bin"))
                 guard finalMeta.source.duration.isFinite, finalMeta.source.duration > 0,
                       working.timeMap.trimEnd > working.timeMap.trimStart else {
                     throw CaptureError.writer("Recording has no usable duration.")
@@ -551,6 +584,7 @@ public actor RecordingSession {
         }
         for recorder in extraMicrophones { await recorder.stop() }
         extraMicrophones = []
+        viewport?.stop(); viewport = nil; viewportPaused = nil
         if let webcam { await webcam.stop() }
         if let input { await input.stop() }
         if let engine { await engine.cancel() }

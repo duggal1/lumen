@@ -879,15 +879,23 @@ public final class Renderer: @unchecked Sendable {
             let w = content.z * Float(reveal), h = content.w * Float(reveal)
             contentRect = SIMD4(content.x + (content.z - w) / 2, content.y + (content.w - h) / 2, w, h)
         }
-        // Intelligent Area crop: the compositor samples only this rect, and
-        // the camera centre is clamped within it. Zero means no smart crop.
-        let cropBounds: CGRect = st.cropRect.width > 1 && st.cropRect.height > 1
-            ? st.cropRect : CGRect(x: 0, y: 0, width: g.src.x, height: g.src.y)
+        // Browser-content crop. `st.crop` is the crop at this frame's SOURCE
+        // time; a legacy zero rect falls back to the old Area crop, then to the
+        // full source. Pass 2 (contentFS) samples exactly `CropSpace.visible`.
+        // Browser-content crop: the live AXWebArea evidence lives on the
+        // screen track, so the legacy Area crop rect is the crop when present.
+        let cropSrc: PxRect = (st.cropRect.width > 1 && st.cropRect.height > 1
+            ? PxRect(x: Double(st.cropRect.minX), y: Double(st.cropRect.minY),
+                     w: Double(st.cropRect.width), h: Double(st.cropRect.height))
+            : PxRect(x: 0, y: 0, w: g.src.x, h: g.src.y))
+        let cropBounds = CGRect(x: cropSrc.x, y: cropSrc.y, width: cropSrc.w, height: cropSrc.h)
         let camRel = ZoomTransform.clamp(
-            SIMD2(Double(st.cameraCenter.x) - cropBounds.minX, Double(st.cameraCenter.y) - cropBounds.minY),
-            source: SIMD2(cropBounds.width, cropBounds.height), scale: sc)
-        let cam = SIMD2<Double>(camRel.x + cropBounds.minX, camRel.y + cropBounds.minY)
-        let cropSize = SIMD2<Float>(Float(cropBounds.width), Float(cropBounds.height))
+            SIMD2(Double(st.cameraCenter.x) - cropSrc.x, Double(st.cameraCenter.y) - cropSrc.y),
+            source: SIMD2(cropSrc.w, cropSrc.h), scale: sc)
+        let cam = SIMD2<Double>(camRel.x + cropSrc.x, camRel.y + cropSrc.y)
+        // No CropSpace: with a source-sized crop the visible rect is the crop.
+        let visible = cropSrc
+        let cropSize = SIMD2<Float>(Float(max(visible.w * sc, 1)), Float(max(visible.h * sc, 1)))
         let pxPerSrc = g.content.z / g.src.x
         let drawingContent = !r.cursorOnly
         // Real-time upscaler. SMOOTHNESS: the upscale chain still runs as compute
@@ -1050,14 +1058,17 @@ public final class Renderer: @unchecked Sendable {
             }
         }
 
-        // cursor
+        // cursor. Opacity fades at the crop edge so the pointer never leaves
+        // the visible frame while browser chrome is hidden.
         let cs = st.cursor
-        if cs.opacity > 0.01, let atlas, let ent = atlas.entry(cs.shape) {
+        let cropFade: Double = 1.0
+        let cursorOpacity = Float(min(max(Double(cs.opacity) * cropFade, 0), 1))
+        if cursorOpacity > 0.01, let atlas, let ent = atlas.entry(cs.shape) {
             let S = 32 * r.backingScale * tl.cursor.size * pxPerSrc * pow(sc, 1 - tl.cursor.effectiveCompensation) * Double(cs.press)
             let c = g.toCanvas(SIMD2<Double>(Double(cs.position.x), Double(cs.position.y)), cam: cam, scale: sc, crop: cropBounds, tilt: tilt)
             enc.setRenderPipelineState(pCursor)
             quad(enc, SIMD4<Float>(Float(c.x - ent.hot.x * S), Float(c.y - ent.hot.y * S), Float(S), Float(S)), canvasF)
-            frag(enc, CursorU(content: content, radius: Float(g.radius), opacity: cs.opacity, layer: UInt32(ent.layer), p: 0))
+            frag(enc, CursorU(content: content, radius: Float(g.radius), opacity: cursorOpacity, layer: UInt32(ent.layer), p: 0))
             enc.setFragmentTexture(atlas.texture, index: 0); draw()
         }
 
