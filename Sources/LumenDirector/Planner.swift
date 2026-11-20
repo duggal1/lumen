@@ -62,6 +62,7 @@ enum ZoomPlanner {
         var t: Double, tEnd: Double            // source seconds
         var x: Double, y: Double               // click pixel, or resolved field centre (source px)
         var rect: CGRect? = nil                // click: verified AX element; typing: the field
+        var preferredScale: Double? = nil
         /// Rect to frame as a whole, independent of the scale-only `rect`.
         /// Set for marker beats, for clicks centred on their control, and for
         /// the resolved text field of a typing burst.
@@ -260,8 +261,9 @@ enum ZoomPlanner {
                                       scale: fixedScale, focus: .follow, origin: .auto)
             return ZoomPlan(segments: [segment])
         }
-        let sorted = events.sorted { $0.t < $1.t }
-        func ok(_ t: Double) -> Bool { t.isFinite && t >= tm.trimStart + 0.2 && t <= tm.trimEnd - 0.2 && !tm.isCut(t) }
+        let sorted = events.filter { $0.t.isFinite && $0.t >= tm.trimStart && $0.t < tm.trimEnd }
+            .sorted { $0.t < $1.t }
+        func ok(_ t: Double) -> Bool { t.isFinite && t >= tm.trimStart && t < tm.trimEnd && !tm.isCut(t) }
         // `maxScale` is a hard cap, not a suggestion: the Inspector's "Max zoom"
         // slider goes down to 1.2×, and quietly clamping the cap up to 1.3×
         // pushed the camera past what the user asked for.
@@ -323,8 +325,7 @@ enum ZoomPlanner {
         // Built entirely in TypingFocus; no caret follow and no last-click
         // invention (that synthesis is what produced the 2.0x block cascade).
         intents += TypingFocus.intents(events: sorted, ax: ax, traces: typing,
-                                       W: W, H: H, b: b,
-                                       trimStart: tm.trimStart, trimEnd: tm.trimEnd)
+                                       W: W, H: H, b: b, timeMap: tm)
         // Marker beats are explicit intent. An agent step carries the rect of
         // the thing it was about; a plain marker inherits the nearest recent
         // click as its location. Never invent a location from nothing.
@@ -351,6 +352,7 @@ enum ZoomPlanner {
         // F2: activity grids replace the old detector; click/typing still outrank
         // these `.visual` shots. Do NOT also call VisualZoom.intents here.
         intents += VisualAutofocus.intents(shots: activityShots, input: intents, src: src, tm: tm)
+        intents = intents.filter { ok($0.t) && $0.tEnd.isFinite && $0.x.isFinite && $0.y.isFinite }
         intents.sort { a, b in
             if a.t != b.t { return a.t < b.t }
             // Deterministic tie order: the subject that opened a dialog is not
@@ -407,15 +409,15 @@ enum ZoomPlanner {
         func close(at end: Double) {
             guard let o = cur else { return }
             cur = nil
-            let e = min(max(end, o.start + 0.2), o.start + shotCap, tm.trimEnd)
-            guard e - o.start > 0.2, o.scale > 1.001 else { return }
+            let e = min(end, o.start + shotCap, tm.trimEnd)
+            guard e - o.start > 0.02, o.scale > 1.001 else { return }
             let id = stableID(o.start, e)
             var path = o.path.filter { $0.t >= o.start - 1e-6 && $0.t <= e + 1e-6 }
             if path.isEmpty || path[0].t > o.start + 0.05 {
                 path.insert(FollowPoint(t: o.start, p: SIMD2(o.c.x / W, o.c.y / H)), at: 0)
             }
             let focus: Focus
-            let maxFrac = o.kind == .dialog ? 0.95 : 0.6
+            let maxFrac = o.kind == .dialog || o.kind == .typing ? 0.95 : 0.6
             if let r = o.frameRect, r.width >= 8, r.height >= 6,
                r.width <= W * maxFrac, r.height <= H * maxFrac {
                 // A marked control, resolved field or whole dialog is the
@@ -448,10 +450,8 @@ enum ZoomPlanner {
             var s: Double
             switch i.kind {
             case .visual:
-                guard let r = i.rect else { return 1 }
-                let fit = min(W / max(r.width * 1.35, 1), H / max(r.height * 1.35, 1))
-                guard fit >= max(lo, 1.2) else { return 1 }
-                s = min(clamp(fit, lo, hi), 1.6)
+                guard let scale = i.preferredScale, scale.isFinite else { return 1 }
+                return min(scale, hi)
             case .dialog:
                 guard let r = i.frameRect ?? i.rect, r.width > 1, r.height > 1 else { return 1 }
                 // Frame the entire dialog, not a slice of it. The margin is
@@ -540,6 +540,15 @@ enum ZoomPlanner {
         }
 
         for it in intents {
+            if let o = cur {
+                if it.kind == .visual, o.kind != .visual {
+                    if it.t <= last + hold { continue }
+                    close(at: last + hold)
+                }
+                if o.kind == .typing, it.kind == .click, it.t <= last,
+                   o.frameRect?.contains(CGPoint(x: it.x, y: it.y)) == true { continue }
+                if o.kind == .visual, it.kind != .visual { close(at: it.t) }
+            }
             // A shot never outlives its action window, even under a dense run
             // of clicks that would otherwise keep pushing `last` forward.
             if let o = cur, it.t >= o.start + shotCap - 0.05 {
@@ -554,12 +563,21 @@ enum ZoomPlanner {
             // subject: re-aim now, rather than folding it into the open shot.
             // Only a *resolved* field is a new subject. The synthetic typing
             // fallback (no field) anchors to the last click and stays one shot.
-            let reaim = (it.kind == .typing && it.frameRect != nil) || it.kind == .dialog
+            let reaim = it.kind == .typing || it.kind == .dialog
             if want <= 1.001 {
                 if cur != nil { last = max(last, it.tEnd) }
                 continue
             }
             if reaim {
+                if it.kind == .typing, let o = cur, o.kind == .click, it.t <= last + hold,
+                   let point = o.path.last?.p, let rect = it.frameRect,
+                   rect.insetBy(dx: -8 * b, dy: -8 * b).contains(CGPoint(x: point.x * W, y: point.y * H)) {
+                    var joined = it
+                    joined.t = o.start
+                    cur = nil
+                    beginScene(joined, want, anchor)
+                    continue
+                }
                 beginScene(it, want, anchor, force: true)
                 continue
             }
@@ -614,26 +632,27 @@ enum ZoomPlanner {
         }
 
         // ---- 3. cursor paths ----
-        // Visual scenes get the pointer motion inside their viewport;
-        // a click scene gets drag motion only (the click itself is the target,
-        // and a later hover must not steal it). Typing and marker scenes keep
-        // their steady subject — a field rect or a marker rect — and cursor
-        // motion must never replace it.
-        let drags = sorted.filter { $0.kind == .drag && $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
+        let drags = sorted.filter { $0.kind == .drag && $0.x.isFinite && $0.y.isFinite && !tm.isCut($0.t) }
+        var dragStart = 0
         for i in shots.indices {
             let kind = kinds[shots[i].id] ?? .click
-            if kind == .typing || kind == .marker || kind == .dialog { continue }
             let s = shots[i]
+            if kind == .visual {
+                if let path = followPaths[s.id] { followPaths[s.id] = smoothFollow(path) }
+                continue
+            }
+            guard kind == .click else { continue }
             let c = centers[s.id] ?? SIMD2(s.focusX * W, s.focusY * H)
             var path = followPaths[s.id] ?? []
-            let samples = kind == .click ? drags : sorted.filter { $0.kind == .move && $0.t.isFinite && $0.x.isFinite && $0.y.isFinite }
-            var j = 0
-            while j < samples.count, samples[j].t < s.start - 0.35 { j += 1 }
-            var k = j
-            while k < samples.count, samples[k].t <= s.end + 0.35 {
-                let p = SIMD2(Double(samples[k].x), Double(samples[k].y))
+            while dragStart < drags.count, drags[dragStart].t < s.start { dragStart += 1 }
+            var k = dragStart
+            while k < drags.count, drags[k].t <= s.end {
+                let p = SIMD2(Double(drags[k].x), Double(drags[k].y))
                 if p.x >= 0, p.x <= W, p.y >= 0, p.y <= H, inside(p, c, s.scale) {
-                    path.append(FollowPoint(t: samples[k].t, p: SIMD2(p.x / W, p.y / H)))
+                    if path.isEmpty {
+                        path.append(FollowPoint(t: s.start, p: SIMD2(c.x / W, c.y / H)))
+                    }
+                    path.append(FollowPoint(t: drags[k].t, p: SIMD2(p.x / W, p.y / H)))
                 }
                 k += 1
             }
