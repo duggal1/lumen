@@ -481,7 +481,14 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         Task {
             let result = await Task.detached(priority: .userInitiated) {
                 do {
-                    guard try bundle.recoverFromJournal() != nil else { return RecoveryResult.noUsableFrames }
+                    let asset = AVURLAsset(url: bundle.screenURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+                    guard let video = try await asset.loadTracks(withMediaType: .video).first else {
+                        return RecoveryResult.noUsableFrames
+                    }
+                    let duration = try await video.load(.timeRange).duration.seconds
+                    guard try bundle.recoverFromJournal(playableScreenDuration: duration) != nil else {
+                        return RecoveryResult.noUsableFrames
+                    }
                     return RecoveryResult.recovered
                 } catch {
                     return RecoveryResult.failed(error.localizedDescription)
