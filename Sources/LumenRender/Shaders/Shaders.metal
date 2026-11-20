@@ -256,7 +256,7 @@ struct ContentU {
     float2 tilt; float4 radii;
     // SMOOTHNESS: the upscaler now feeds this pass directly (texture 1) instead
     // of a separate full-canvas compute pass. `upBlend` 0 keeps plain Catmull.
-    float4 upRegion; float2 upTexSize; float upFactor; float upBlend;
+    float4 upRegion; float2 upTexSize; float upFactor; float upBlend; float opacity;
 };
 
 // Standard rounded box with one radius per corner (tl, tr, br, bl). Only used
@@ -304,6 +304,7 @@ fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]]
         rgb = mix(rgb, catmull5(up, q / u.upTexSize, 0u), u.upBlend);
     }
     if (u.border > 0.5) rgb = mix(rgb, float3(1.0), 0.08 * clamp(0.5 + (d + 1.0) / w, 0.0, 1.0));
+    a *= u.opacity;
     return float4(rgb * a, a);
 }
 
