@@ -47,7 +47,34 @@ enum Cinematic3D {
 
 struct Inspector: View {
     let model: EditorModel
-    enum Tab: String, CaseIterable { case background = "Studio", tools = "Tools", focus = "Focus", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
+    enum Tab: String, CaseIterable { case background = "Studio", tools = "Tools", webcam = "Webcam", captions = "Captions", timeline = "Timeline", privacy = "Privacy", audio = "Audio", export = "Export" }
+
+    /// A saved "Focus" tab no longer has a page to open. Retired cursor/camera
+    /// tabs land on Studio instead, where the toolbar skin chooser is reachable.
+    static func normalizeTab(_ saved: String) -> String {
+        switch saved {
+        case "Camera", "Cursor", "Layout", "Focus": "Studio"
+        case "Transcript": "Captions"
+        case "Background": "Studio"
+        default: saved
+        }
+    }
+
+    /// Framing used to live on the deleted Focus page. It survives here: the
+    /// controls are unchanged, only their home is quieter.
+    enum FramingLayoutStyle: Sendable {
+        static let all: [(LayoutKind, String)] = [
+            (.screenOnly, "Screen only"), (.cameraOverlay, "Camera overlay"),
+            (.split, "Split"), (.cameraFullscreen, "Camera fullscreen"),
+            (.cameraCutout, "Cutout"),
+        ]
+    }
+
+    static func currentLayout(in timeline: Timeline, at playhead: Double) -> LayoutKind {
+        let source = timeline.timeMap.source(atOutput: playhead)
+        return timeline.layouts.first { source >= $0.start && source < $0.end }?.kind
+            ?? (timeline.webcam != nil ? .cameraOverlay : .screenOnly)
+    }
 
     /// Groups transcript words into sentences at terminal punctuation so the
     /// "delete a sentence cuts the video" action has a real UI trigger.
@@ -89,7 +116,7 @@ struct Inspector: View {
             }
             .onAppear {
                 if let saved = UserDefaults.standard.string(forKey: "lumen.inspector.tab") {
-                    let normalized = FocusTabMigration.normalize(saved)
+                    let normalized = Self.normalizeTab(saved)
                     if normalized == "Captions" { tab = .captions }
                     else if normalized == "Studio" { tab = .background }
                     else if let t = Inspector.Tab(rawValue: normalized) { tab = t }
@@ -101,6 +128,12 @@ struct Inspector: View {
             // The presets live on disk: read them on a worker so opening the
             // editor never waits for the filesystem.
             .task { presets = await EditorModel.loadPresetsOffMain() }
+            // One filesystem walk per session, not one per redraw.
+            .task {
+                let choices = await Task.detached(priority: .utility) { Inspector.loadWallpaperChoices() }.value
+                wallpaperChoices = choices
+                wallpapersLoaded = true
+            }
     }
 
     private var content: some View {
@@ -138,7 +171,6 @@ struct Inspector: View {
         switch tab {
         case .background: backgroundPage
         case .tools: tools
-        case .focus: UnifiedFocusPage(model: model)
         case .audio: audio
         case .webcam: webcam
         case .captions: captions
@@ -150,18 +182,44 @@ struct Inspector: View {
 
     /// Secondary editor actions live in the inspector, not the preview transport.
     private var tools: some View {
-        VStack(spacing: 0) {
-            LButton(title: "Import clip", icon: "film") { model.importClips() }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            LButton(title: "Add title", icon: "textformat") { model.addManualTitle() }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            LButton(title: "Add highlight", icon: "highlighter") { model.addManualHighlight() }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            LButton(title: "Speed 2×", icon: "gauge") { addSpeedRamp(speed: 2) }
-                .frame(maxWidth: .infinity, alignment: .leading)
+        let m = model
+        return VStack(spacing: 16) {
+            VStack(spacing: 0) {
+                ToggleRow(label: "Auto zoom", on: m.bind(\.camera.autoZoom))
+                SliderRow(label: "Zoom amount",
+                          v: Binding(get: { m.timeline.camera.baseScale },
+                                     set: { v in m.edit(coalesce: true) { $0.camera.baseScale = v } }),
+                          range: 1.3...3.0, fmt: { String(format: "%.1f×", $0) })
+                SliderRow(label: "Smoothness", v: m.bind(\.camera.leadIn), range: 0.3...1.0,
+                          fmt: { "\(Int($0 * 1000)) ms" })
+                Row(label: "Layout") {
+                    LDropdown(sel: framingLayout,
+                              options: FramingLayoutStyle.all.map { ($0.0, $0.1, "rectangle.3.group") })
+                        .frame(width: 150)
+                }
+            }.card(padding: 16)
+            VStack(spacing: 0) {
+                LButton(title: "Import clip", icon: "film") { m.importClips() }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                LButton(title: "Add title", icon: "textformat") { m.addManualTitle() }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                LButton(title: "Add highlight", icon: "highlighter") { m.addManualHighlight() }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                LButton(title: "Speed 2×", icon: "gauge") { addSpeedRamp(speed: 2) }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .card(padding: 16)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .card(padding: 16)
+    }
+
+    private var framingLayout: Binding<LayoutKind> {
+        Binding(get: { Self.currentLayout(in: model.timeline, at: model.playhead) },
+                set: { kind in
+                    model.edit { timeline in
+                        timeline.layouts = [LayoutSegment(start: 0, end: timeline.timeMap.sourceDuration, kind: kind)]
+                    }
+                })
     }
 
     private func addSpeedRamp(speed: Double) {
@@ -178,7 +236,7 @@ struct Inspector: View {
     private func icon(_ t: Inspector.Tab) -> String {
         switch t {
         case .background: "photo.stack"
-        case .tools: "slider.horizontal.3"; case .focus: "cursorarrow"
+        case .tools: "slider.horizontal.3"
         case .audio: "waveform"; case .webcam: "person.crop.circle"
         case .captions: "captions.bubble"; case .timeline: "timeline.selection"; case .privacy: "lock"; case .export: "square.and.arrow.up"
         }
@@ -201,7 +259,7 @@ struct Inspector: View {
 
     private static let wallpaperExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "webp"]
 
-    private static func isJunkToken(_ token: String) -> Bool {
+    private nonisolated static func isJunkToken(_ token: String) -> Bool {
         let t = token.lowercased()
         if ["download", "light", "dark", "web", "4k", "iclarified", "cma", "the", "a", "an"].contains(t) { return true }
         if t.isEmpty { return true }
@@ -211,7 +269,7 @@ struct Inspector: View {
         return false
     }
 
-    private static func titleWord(_ w: String) -> String {
+    private nonisolated static func titleWord(_ w: String) -> String {
         let l = w.lowercased()
         switch l {
         case "macos": return "macOS"
@@ -226,7 +284,7 @@ struct Inspector: View {
         }
     }
 
-    private static func humanizedTokens(_ raw: String) -> [String] {
+    private nonisolated static func humanizedTokens(_ raw: String) -> [String] {
         var parts: [String] = []
         for chunk in raw.split(separator: "_", omittingEmptySubsequences: true) {
             for w in chunk.split(separator: "-", omittingEmptySubsequences: true) {
@@ -240,7 +298,7 @@ struct Inspector: View {
 
     /// Humanized tooltip/VoiceOver name: strip folder prefixes, hashes,
     /// extensions, "download-light_web" junk, Title Case, macOS-style.
-    static func humanizedName(for url: URL) -> String {
+    nonisolated static func humanizedName(for url: URL) -> String {
         var raw = (url.lastPathComponent as NSString).deletingPathExtension
         // System wallpapers already humanized ("iMac Blue.heic").
         if raw.contains(" ") && !raw.contains("_") && !raw.contains("download") {
@@ -273,7 +331,7 @@ struct Inspector: View {
         return tokens.map(titleWord).joined(separator: " ")
     }
 
-    private static func wallpaperChoices() -> [WallpaperSource: [WallpaperChoice]] {
+    private nonisolated static func loadWallpaperChoices() -> [WallpaperSource: [WallpaperChoice]] {
         var out: [WallpaperSource: [WallpaperChoice]] = [.macOS: [], .painting: []]
         var seen = Set<String>()
         func add(_ url: URL, to source: WallpaperSource) {
@@ -318,7 +376,7 @@ struct Inspector: View {
 
     /// Solid colours and gradients are not wallpapers, and a thumbnail-sized
     /// file is not a wallpaper either. Both used to reach the grid.
-    private static func isUsableWallpaper(_ url: URL) -> Bool {
+    private nonisolated static func isUsableWallpaper(_ url: URL) -> Bool {
         let name = url.lastPathComponent.lowercased()
         let junk = ["grid", "chroma", "hello", "solid", "gradient", "colorful", "aurora", "bubble", "shade", "radial"]
         if junk.contains(where: { name.contains($0) }) { return false }
@@ -330,13 +388,23 @@ struct Inspector: View {
 
     @State private var wallpaperSource: WallpaperSource = .painting
     @State private var wallpaperSelectTask: Task<Void, Never>?
+    /// Walking the bundled gallery plus every system wallpaper is expensive.
+    /// Do it once off-main and reuse the result: re-walking on every slider
+    /// drag was the Studio's main source of lag.
+    @State private var wallpaperChoices: [WallpaperSource: [WallpaperChoice]] = [:]
+    @State private var wallpapersLoaded = false
 
     private var wallpaperList: some View {
-        let choices = Self.wallpaperChoices()[wallpaperSource] ?? []
+        let choices = wallpaperChoices[wallpaperSource] ?? []
         return VStack(spacing: 12) {
             LSegmented(sel: Binding(get: { wallpaperSource }, set: { source in selectWallpaperSource(source) }),
                        items: WallpaperSource.allCases.map { ($0, $0.rawValue) })
                 .frame(maxWidth: .infinity)
+            if !wallpapersLoaded && (wallpaperSource == .painting || wallpaperSource == .macOS) {
+                Text("Loading wallpapers.")
+                    .font(AppType.caption).foregroundStyle(Tok.text2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             switch wallpaperSource {
             case .painting, .macOS:
                 WallpaperGrid(model: model, choices: choices) { choice in
@@ -380,7 +448,7 @@ struct Inspector: View {
         wallpaperSource = source
         switch source {
         case .painting, .macOS:
-            let choices = Self.wallpaperChoices()[source] ?? []
+            let choices = wallpaperChoices[source] ?? []
             let currentPath = model.timeline.style.backgroundImagePath
             let choice = choices.first { $0.url.path == currentPath } ?? choices.first
             if model.timeline.style.background == .image, choice?.url.path == currentPath { return }
@@ -996,13 +1064,4 @@ extension Inspector.Tab {
         Inspector.Tab.allCases.filter { $0 != Inspector.Tab.webcam || model.timeline.webcam != nil }
     }
 
-    static var primaryTabs: [Inspector.Tab] { [Inspector.Tab.focus, Inspector.Tab.captions, Inspector.Tab.audio] }
-
-    var isPrimary: Bool {
-        switch self { case Inspector.Tab.focus, Inspector.Tab.captions, Inspector.Tab.audio: return true; default: return false }
-    }
-
-    @MainActor static func moreTabs(for model: EditorModel) -> [Inspector.Tab] {
-        visibleFor(model: model).filter { !primaryTabs.contains($0) }
-    }
 }

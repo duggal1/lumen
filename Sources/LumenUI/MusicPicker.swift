@@ -5,25 +5,25 @@ import UniformTypeIdentifiers
 import LumenAudio
 import LumenProject
 
-/// Music as a grid of sleeves, not a dropdown. Pick a mood, tap a sleeve to
-/// audition it, tap Add to drop it on the music lane. Every sleeve is a flat
-/// block in its mood's hue with a real waveform comb, so the shelf reads as a
-/// record bin instead of a form. Adding a track puts it on the timeline where
-/// it can be dragged and trimmed.
+/// Music is a quiet record bin: pick a mood, tap a sleeve to audition it, tap
+/// the cell to put it on the music lane. The previous picker decoded six
+/// seconds of every bundled track the moment the page appeared — that was the
+/// Studio's other source of lag. Here a sleeve decodes its own short prefix
+/// only when it is on screen, and the result is cached in a bounded store.
 struct MusicPicker: View {
     let model: EditorModel
     @State private var category = "calm"
     @State private var playing: String?
     @State private var player: AVAudioPlayer?
     @State private var durations: [UUID: Double] = [:]
-    @State private var waveforms: [String: [Float]] = [:]
 
     private static let moods = ["calm", "epic", "upbeat", "futuristic", "tension"]
     private var tracks: [BundledAudioAssets.Music] { BundledAudioAssets.music }
     private var filtered: [BundledAudioAssets.Music] { tracks.filter { $0.category == category } }
     private var addedPaths: Set<String> { Set(model.timeline.audio.lanes.compactMap { $0.path }) }
+    private var addedTracks: [AudioLane] { model.timeline.audio.lanes.filter { $0.role == .music } }
 
-    private let columns = [GridItem(.adaptive(minimum: 128), spacing: 8)]
+    private let columns = [GridItem(.adaptive(minimum: 132), spacing: 8)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -35,121 +35,74 @@ struct MusicPicker: View {
                 }
                 LButton(title: "Import…", icon: "plus", kind: .quiet) { importMusic() }
             }
-
-            moodBar
-
+            LSegmented(sel: $category, items: Self.moods.map { ($0, $0.capitalized) })
+                .frame(maxWidth: .infinity)
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(filtered, id: \.url) { track in
-                    sleeve(track)
+                    Sleeve(track: track,
+                           hue: MusicInk.mood(track.category),
+                           playing: playing == track.url.path,
+                           added: addedPaths.contains(track.url.path),
+                           onPreview: { playing == track.url.path ? stop() : play(track) },
+                           onAdd: { add(track) },
+                           onRemove: { remove(track) })
                 }
             }
-
             if !addedTracks.isEmpty { addedSection }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .task { await loadWaveforms() }
         .onDisappear { stop() }
     }
 
-    // MARK: Mood: a quiet segmented row, not a dropdown. Each mood is a label
-    // that owns the grid below it.
+    // MARK: One sleeve — loads only its own comb, only while visible
 
-    private var moodBar: some View {
-        HStack(spacing: 4) {
-            ForEach(Self.moods, id: \.self) { mood in
-                let on = mood == category
-                Button { category = mood; stop() } label: {
-                    Text(mood.capitalized)
-                        .font(AppType.caption)
-                        .foregroundStyle(on ? Tok.text : Tok.text2)
-                        .padding(.horizontal, 10)
-                        .frame(height: 24)
-                        .background(Capsule().fill(on ? Tok.control : .clear))
-                }
-                .buttonStyle(.plain)
-                .pointerStyle(.link)
-            }
-            Spacer(minLength: 0)
-        }
-    }
+    private struct Sleeve: View {
+        let track: BundledAudioAssets.Music
+        let hue: Color
+        let playing: Bool
+        let added: Bool
+        let onPreview: () -> Void
+        let onAdd: () -> Void
+        let onRemove: () -> Void
+        @State private var peaks: [Float] = []
 
-    // MARK: One sleeve
-
-    private func sleeve(_ track: BundledAudioAssets.Music) -> some View {
-        let hue = MusicInk.mood(track.category)
-        let isPlaying = playing == track.url.path
-        let added = addedPaths.contains(track.url.path)
-        return Button { isPlaying ? stop() : play(track) } label: {
+        var body: some View {
             HStack(alignment: .center, spacing: 8) {
-                VStack(alignment: .leading, spacing: 0) {
-                    WaveformPeaks(peaks: waveforms[track.url.path] ?? [], tint: hue)
-                        .frame(height: 26)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 2)
-                    Text(track.title)
-                        .font(AppType.body)
-                        .foregroundStyle(Tok.text)
-                        .lineLimit(1)
-                    Text(track.category.capitalized)
-                        .font(AppType.caption)
-                        .foregroundStyle(Tok.text2)
+                Button(action: onPreview) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        WaveformPeaks(peaks: peaks, tint: hue)
+                            .frame(height: 26)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 2)
+                        Text(track.title).font(AppType.body).foregroundStyle(Tok.text).lineLimit(1)
+                        Text(track.category.capitalized).font(AppType.caption).foregroundStyle(Tok.text2)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                trailing(track, added: added, hue: hue)
-                    .padding(.trailing, 8)
-            }
-            .background(RoundedRectangle(cornerRadius: Radius.field).fill(Tok.well))
-            .overlay { if isPlaying { RoundedRectangle(cornerRadius: Radius.field).fill(Tok.accentSoft) } }
-        }
-        .buttonStyle(.plain)
-        .pointerStyle(.link)
-        .accessibilityLabel("\(track.title), \(track.category) music. \(isPlaying ? "Playing, tap to stop" : "Tap to preview")")
-    }
-
-    /// One trailing cell: an add affordance until the track is on the lane,
-    /// then a remove affordance. Both are their own buttons so they never
-    /// start a preview.
-    @ViewBuilder private func trailing(_ track: BundledAudioAssets.Music, added: Bool, hue: Color) -> some View {
-        if added {
-            Button {
-                // Resolve the real lane id. Inventing a UUID here silently
-                // dispatched a delete for a lane that cannot exist, which is
-                // exactly the "delete does nothing" report.
-                if let id = model.timeline.audio.lanes.first(where: { $0.path == track.url.path })?.id {
-                    model.removeMusicLane(id)
+                .buttonStyle(.plain).clickable()
+                .accessibilityLabel("\(track.title), \(track.category) music. \(playing ? "Playing, tap to stop" : "Tap to preview")")
+                Button(action: added ? onRemove : onAdd) {
+                    Image(systemName: added ? "check" : "plus")
+                        .font(AppType.glyph).foregroundStyle(added ? Tok.text2 : Tok.text)
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(added ? Tok.control : hue.opacity(0.22)))
                 }
-            } label: {
-                Image(systemName: "check").font(.system(size: 11)).foregroundStyle(Tok.text2)
-                    .frame(width: 24, height: 24).background(Circle().fill(Tok.control))
+                .buttonStyle(.plain).clickable().padding(.trailing, 8)
+                .accessibilityLabel(added ? "Remove \(track.title) from the timeline" : "Add \(track.title) to the timeline")
             }
-            .buttonStyle(.plain).pointerStyle(.link)
-            .accessibilityLabel("Remove \(track.title) from the timeline")
-        } else {
-            Button { add(track) } label: {
-                Image(systemName: "plus").font(.system(size: 11)).foregroundStyle(Tok.text)
-                    .frame(width: 24, height: 24).background(Circle().fill(hue.opacity(0.22)))
-            }
-            .buttonStyle(.plain).pointerStyle(.link)
-            .accessibilityLabel("Add \(track.title) to the timeline")
+            .background(RoundedRectangle(cornerRadius: Radius.field).fill(playing ? Tok.accentSoft : Tok.well))
+            .task(id: track.url.path) { peaks = await WaveformStore.shared.peaks(for: track.url) }
         }
     }
 
-    // MARK: Tracks already on the music lane
-
-    private var addedTracks: [AudioLane] { model.timeline.audio.lanes.filter { $0.role == .music } }
+    // MARK: Tracks on the music lane
 
     private var addedSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("On the timeline").font(AppType.caption).foregroundStyle(Tok.text2)
-                Spacer(minLength: 8)
-            }
-            ForEach(addedTracks) { lane in
-                addedRow(lane)
-            }
+            Text("On the timeline").font(AppType.caption).foregroundStyle(Tok.text2)
+            ForEach(addedTracks) { lane in addedRow(lane) }
         }
         .padding(.top, 4)
     }
@@ -162,9 +115,7 @@ struct MusicPicker: View {
                 PixelBitmap(rows: Bitmap.disc, cell: 1, color: MusicInk.lane).frame(width: 8, height: 8)
                 Text(name).font(AppType.label).foregroundStyle(Tok.text).lineLimit(1)
                 Spacer(minLength: 8)
-                LIconButton(icon: "trash", label: "Remove \(name)") {
-                    model.removeMusicLane(lane.id)
-                }
+                LIconButton(icon: "trash", label: "Remove \(name)") { model.removeMusicLane(lane.id) }
             }
             SliderRow(label: "Start", v: laneValue(lane.id, \.placement),
                       range: 0...max(model.timeline.compositionDuration, 0.01),
@@ -207,6 +158,11 @@ struct MusicPicker: View {
         stop()
     }
 
+    private func remove(_ track: BundledAudioAssets.Music) {
+        guard let id = model.timeline.audio.lanes.first(where: { $0.path == track.url.path })?.id else { return }
+        model.removeMusicLane(id)
+    }
+
     private func importMusic() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.audio]
@@ -214,19 +170,6 @@ struct MusicPicker: View {
         if panel.runModal() == .OK, let url = panel.url {
             model.edit { $0.audio.lanes.append(AudioLane(role: .music, path: url.path, placement: model.playhead, gainDb: -18)) }
         }
-    }
-
-    private func loadWaveforms() async {
-        let list = tracks
-        let loaded: [String: [Float]] = await Task.detached(priority: .utility) {
-            var out: [String: [Float]] = [:]
-            for t in list {
-                guard let pcm = try? AudioIO.readMonoPrefix(t.url, seconds: 6), !pcm.isEmpty else { continue }
-                out[t.url.path] = MusicPicker.combed(pcm, buckets: 40)
-            }
-            return out
-        }.value
-        waveforms = loaded
     }
 
     /// Peak-pool a sample into fixed buckets so a sleeve shows the real
@@ -269,5 +212,32 @@ struct MusicPicker: View {
                     guard let index = timeline.audio.lanes.firstIndex(where: { $0.id == id }) else { return }
                     timeline.audio.lanes[index][keyPath: key] = value
                 } })
+    }
+}
+
+/// A bounded, off-main cache of short waveform prefixes. Only a sleeve that is
+/// actually on screen asks for an entry, and at most eight stay resident.
+private actor WaveformStore {
+    static let shared = WaveformStore()
+    private var cache: [String: [Float]] = [:]
+    private var order: [String] = []
+    private let limit = 8
+
+    func peaks(for url: URL) async -> [Float] {
+        let key = url.path
+        if let hit = cache[key] { return hit }
+        let value = await Task.detached(priority: .utility) {
+            guard let pcm = try? AudioIO.readMonoPrefix(url, seconds: 1.5), !pcm.isEmpty else { return [] as [Float] }
+            return MusicPicker.combed(pcm, buckets: 24)
+        }.value
+        guard !value.isEmpty else { return [] }
+        cache[key] = value
+        order.removeAll { $0 == key }
+        order.append(key)
+        while order.count > limit {
+            let oldest = order.removeFirst()
+            cache[oldest] = nil
+        }
+        return value
     }
 }

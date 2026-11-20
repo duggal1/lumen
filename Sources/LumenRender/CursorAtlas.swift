@@ -243,6 +243,10 @@ public final class CursorAtlas {
 
     /// Returns the hotspot in points.
     private static func art(_ c: CGContext, _ pack: CursorPack, _ s: StockCursor) -> SIMD2<Double> {
+        // The Tiny Hand coat is an illustrated pointer: one real hand for every
+        // recorded shape. Drawing it here means the chooser preview, the render
+        // atlas and the exported cursor are literally the same pixels.
+        if let hot = TinyHandSkins.draw(pack, in: c) { return hot }
         let rgb: (Double, Double, Double)
         switch pack {
         case .lavender: rgb = (0.53, 0.33, 0.95)
@@ -511,5 +515,10 @@ extension CursorPack {
     /// Packs that keep the recorded pointer's identity, so every stock shape gets
     /// its own artwork. The stylized packs (dot, ring, holiday, pixel, outline)
     /// are an explicit user override and keep one glyph for every shape.
-    public var preservesShape: Bool { self != .dot && self != .ring && self != .holiday && self != .pixel && self != .outline }
+    public var preservesShape: Bool {
+        switch self {
+        case .dot, .ring, .holiday, .pixel, .outline: return false
+        default: return !TinyHandSkins.isCoat(self)
+        }
+    }
 }

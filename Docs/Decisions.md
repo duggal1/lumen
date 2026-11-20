@@ -89,3 +89,8 @@
 // Deleted RenderVisualAccuracy.dialogCropContainsSubjectAndNeverSamplesOutside: asserted offline SmartCropPlanner keyframes; dialog framing is now covered by the planner's dialog-priority intents.
 // Deleted AutoZoomRegressionTests.autonomousVisualZoomWorksWithMouseEventsButNoClick: fed the removed ActivityPoint detector directly; equivalent no-click visual-shot coverage is in the ported VisualAutofocusTests (resultAppearingCreatesOneHeldBeat, hoverOnlyHighlightNeverTriggers).
 // Deleted BrutalSmartCropTests.chromeClickRevealsThenRecrops: asserted offline SmartCropPlanner.revealRect keyframes for the old Area-crop planner; browser chrome reveal/recrop is now covered by the ported TypingFocusBrowserCropTests viewport-sample suites.
+
+## Cursor page deletion + Tiny Hand skins (2026-11-20)
+// Rewrote UnifiedFocusUIStateTests in place (no test deleted). Every removed assertion encoded the internals of the deleted Focus page (FocusControlSet, FocusCursorStyle, FocusFeedbackMeter, FocusTabMigration→Focus); the rewrite pins the replacement contracts instead: no Focus tab, framing preserved in Tools, the Tiny Hand catalog wired to the atlas, lazy music decode, and a one-time wallpaper walk.
+// Kept existing ink packs (.lavender, .coral, …) as shape-preserving vector art so their persisted meaning and `preservesShape` tests stay intact; the stolen coat is the 25 new illustrated packs, which are stylized overrides in both the chooser and the atlas.
+// Bundled Tiny Hand PNG artwork was downsampled from 1024×1536 to 512 px max (62 MB → 1.8 MB). The atlas layer is 256 px, so no rendered detail is lost. MIT license ships at Sources/LumenRender/Resources/Cursors/LICENSE-tinyhand.txt.

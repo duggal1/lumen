@@ -1078,7 +1078,6 @@ enum TimelineSelection: Equatable {
         var plan = timeline.audio
         plan.soundEffectsEnabled = true; plan.clickSounds = true
         player.previewClick(plan)
-        FocusFeedbackMeter.post(.click)
     }
 
     /// Clicking a sound tile both selects that click and auditions it, so the
@@ -1088,7 +1087,6 @@ enum TimelineSelection: Equatable {
         var plan = timeline.audio
         plan.soundEffectsEnabled = true; plan.clickSounds = true
         player.previewClick(plan)
-        FocusFeedbackMeter.post(.click)
     }
 
     func importMusic() {

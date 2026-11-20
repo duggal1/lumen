@@ -77,11 +77,13 @@ struct EditorView: View {
     let model: EditorModel
     @State private var inspectorTab: Inspector.Tab = .background
     @State private var showsInspector = true
+    @State private var showsCursorSkins = false
 
     var body: some View {
         VStack(spacing: 0) {
             PageBar(title: "Lumen Studio") {
                 HStack(spacing: 8) {
+                    LIconButton(icon: "cursorarrow", label: "Choose cursor skins") { showsCursorSkins = true }
                     LIconButton(icon: "sidebar.right", label: showsInspector ? "Hide inspector" : "Show inspector") {
                         showsInspector.toggle()
                     }
@@ -132,8 +134,13 @@ struct EditorView: View {
                 .frame(maxWidth: .infinity)
         }
         .background(Tok.bg)
+        .overlay {
+            if showsCursorSkins {
+                CursorSkinChooser(model: model) { showsCursorSkins = false }
+            }
+        }
         .focusable().focusEffectDisabled()
-        .onKeyPress(.space) { model.togglePlay(); return .handled }
+        .onKeyPress(.space) { guard !showsCursorSkins else { return .ignored }; model.togglePlay(); return .handled }
         .onKeyPress(.delete) {
             if model.pendingCut != nil { model.commitPendingCut() } else { model.deleteSelected() }
             return .handled

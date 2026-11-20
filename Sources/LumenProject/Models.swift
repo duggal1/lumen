@@ -169,7 +169,17 @@ public struct Style: Codable, Equatable, Sendable {
     }
 }
 
-public enum CursorPack: String, Codable, CaseIterable, Sendable { case system, minimal, dot, ring, pro, holiday, lavender, coral, sky, mint, lemon, pink, wood, chrome, grass, pixel, outline, ember, mono }
+/// Cursor artwork packs. The first group is Lumen's own vector art; the
+/// `glove`…`cookie` range is the Tiny Hand coat (MIT artwork, see
+/// `Sources/LumenRender/Resources/Cursors/LICENSE-tinyhand.txt`). Those packs
+/// replace the recorded pointer with the illustrated hand, so the rendered
+/// cursor and the toolbar chooser always show the same pixels.
+public enum CursorPack: String, Codable, CaseIterable, Sendable {
+    case system, minimal, dot, ring, pro, holiday, lavender, coral, sky, mint, lemon, pink, wood, chrome, grass, pixel, outline, ember, mono
+    case glove, plush, robot, holo, fuzzy, marble, terrazzo, glass, jelly, pastel
+    case lowpoly, knit, skeleton, astro, space, monster, water, lava, cactus, choco
+    case cloud, mech, neon, leaf, cookie
+}
 public struct CursorStyle: Codable, Equatable, Sendable {
     public var pack: CursorPack = .system
     public var size: Double = 1.0
