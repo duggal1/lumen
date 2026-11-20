@@ -18,7 +18,7 @@ public struct CropInputs: Sendable {
         var si = 0
         for e in events {
             switch e.kind {
-            case .keyDown:
+            case .keyDown where e.isTypingKey:
                 keys.append(e.t)
             case .down:
                 while si + 1 < samples.count && samples[si + 1].t <= e.t { si += 1 }
@@ -124,13 +124,13 @@ public enum CropPlanner {
                             source: PxRect, settings s: CropSettings) -> ViewportCropPlan {
         os_signpost(.begin, log: signpost, name: "crop.plan")
         defer { os_signpost(.end, log: signpost, name: "crop.plan") }
-        let n = max(2, Int((duration * hz).rounded(.up)) + 1)
-        guard s.enabled, samples.count >= 2, duration > 0.5 else {
-            let r = SIMD4<Float>(Float(source.x), Float(source.y), Float(source.w), Float(source.h))
+        guard s.enabled, samples.count >= 2, duration.isFinite, duration > 0.5 else {
+            let full = SIMD4<Float>(Float(source.x), Float(source.y), Float(source.w), Float(source.h))
             return ViewportCropPlan(
                 changes: [.init(start: 0, duration: 0, mode: .full)],
-                track: ViewportCropTrack(hz: hz, rects: [SIMD4<Float>](repeating: r, count: n)))
+                track: ViewportCropTrack(hz: hz, rects: [full]))
         }
+        let n = Int((duration * hz).rounded(.up)) + 1
         let web = series(samples, duration, source, sigma: s.trackSigma) { $0.webValid ? $0.web : nil }
         let win = series(samples, duration, source, sigma: s.trackSigma) { $0.window.isValid ? $0.window : nil }
         var runs = baseRuns(samples, s, duration)
