@@ -228,7 +228,7 @@ public extension ProjectBundle {
     /// Rebuilds a usable project from a crashed session. Returns nil when the
     /// bundle has no journal or the checkpoint contains no usable frames.
     @discardableResult
-    func recoverFromJournal() throws -> ProjectFile? {
+    func recoverFromJournal(playableScreenDuration: Double? = nil) throws -> ProjectFile? {
         guard isUnfinished else { return nil }
         if let existing = try? load(), existing.meta.source.duration.isFinite,
            existing.meta.source.duration > 0 {
@@ -237,7 +237,14 @@ public extension ProjectBundle {
         }
         guard let j = try readJournal() else { return nil }
         let origin = j.firstFramePTS ?? 0
-        let duration = max(j.lastFramePTS - origin, 0)
+        let checkpointDuration = max(j.lastFramePTS - origin, 0)
+        let duration: Double
+        if let playableScreenDuration {
+            guard playableScreenDuration.isFinite, playableScreenDuration > 0 else { return nil }
+            duration = min(playableScreenDuration, checkpointDuration)
+        } else {
+            duration = checkpointDuration
+        }
         guard duration > 0.1 else { return nil }
         var info = j.source
         info.duration = duration
