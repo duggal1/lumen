@@ -56,6 +56,8 @@ public struct DeriveCache: Sendable {
         var style: CursorStyle
         var taps: [TapIndicator]
         var timeMap: [Double]
+        var source: SIMD3<Double>
+        var events: [InputEvent]
     }
     var cursorKey: CursorKey?
     var cursor: (CursorTrack, [ClickFX])?
@@ -251,7 +253,9 @@ public enum Director {
             }
         }
         if cancelled() { return nil }
-        let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature)
+        let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature,
+                                       source: SIMD3(Double(src.width), Double(src.height), src.backingScale),
+                                       events: input.events)
         let cursor: CursorTrack, clicks: [ClickFX]
         if cache.cursorKey == key, let cached = cache.cursor {
             (cursor, clicks) = cached
@@ -275,20 +279,23 @@ public enum Director {
         }
         if cancelled() { return nil }
         let size = SIMD2(Double(src.width), Double(src.height))
-        // F1: the solver works in crop-normalised channels against the SAME dense
-        // crop the renderer samples, at each target's own time and tick.
+        let viewport = DenseCropTrack(hz: viewportPlan.track.hz,
+                                      rects: viewportPlan.track.rects.count > 1 ? viewportPlan.track.rects : [])
         guard let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size,
                                            outDur: tm.outputDuration, loop: t.cursor.loop,
-                                           crop: DenseCropTrack(hz: viewportPlan.track.hz,
-                                                                rects: viewportPlan.track.rects),
-                                           aspect: t.style.aspectRatio,
+                                           crop: viewport,
                                            follow: followPaths,
                                            cancelled: cancelled) else { return nil }
         let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad,
-                                             outDur: tm.outputDuration, clicks: clicks)
+                                             outDur: tm.outputDuration, clicks: clicks, crop: viewport)
         let layoutSpans = LayoutSolver.spans(t, tm, hasWebcam: t.webcam != nil)
+        let layoutTimeMap = tm
+        let viewportAtOutput: (@Sendable (Double) -> PxRect)? = viewport.rects.isEmpty ? nil : { @Sendable time in
+            viewport.rect(at: layoutTimeMap.source(atOutput: time))
+        }
         let layout = LayoutSolver.solve(t, spans: layoutSpans.spans, fallback: layoutSpans.fallback, src: size,
-                                        webcamAspect: Double(input.webcamAspect), placement: placement, outDur: tm.outputDuration)
+                                        webcamAspect: Double(input.webcamAspect), placement: placement, outDur: tm.outputDuration,
+                                        cropAt: viewportAtOutput)
         let autoMasks = MaskTracks.build(input.ocr, plan: t.overlays.privacy, src: src,
                                         contexts: PrivacyContextTrack.from(ax: input.ax))
             + MaskTracks.secureFields(events: input.events, ax: input.ax, plan: t.overlays.privacy, src: src,
@@ -352,7 +359,7 @@ public enum Director {
                                   clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm, camera: cam, layout: t.webcam),
                                   webcamAspect: input.webcamAspect, layout: layout, placement: placement,
                                    captions: captions, autoMasks: autoMasks, personMask: input.personMask, crop: crop,
-                                   viewportCrop: DenseCropTrack(hz: viewportPlan.track.hz, rects: viewportPlan.track.rects))
+                                   viewportCrop: viewport)
         if ProcessInfo.processInfo.environment["LUMEN_ZOOM_DEBUG"] == "1" {
             let cam = t.derived?.camera
             for event in input.events where event.kind == .down && event.button == 0 {
@@ -547,13 +554,7 @@ extension Timeline {
         let camN = SIMD2<Double>(Double(qhm(c.nx, c.vx, c.ax, cameraFrame, rate: c.rate)),
                                  Double(qhm(c.ny, c.vy, c.ay, cameraFrame, rate: c.rate)))
         let logZ = qhm(c.lz, c.vz, c.az, cameraFrame, rate: c.rate)
-        // F1: reconstruct the visible source rect from crop-normalised channels.
-        // CropSpace.visible applies the same per-crop clamp the solver baked, so
-        // the camera cannot drift outside a crop that is moving under it. Scale
-        // stays relative to the crop's base view: the renderer derives view size
-        // as baseView / scale, which matches visible in BOTH dimensions even
-        // when the crop and frame aspects differ.
-        let visible = CropSpace.visible(crop: viewportCrop, aspect: style.aspectRatio,
+        let visible = CropSpace.visible(crop: viewportCrop, aspect: nil,
                                         u: camN.x, v: camN.y, logZ: Double(logZ))
         let cam: SIMD2<Float>
         if viewportCrop.isValid, visible.isValid {
@@ -590,13 +591,17 @@ extension Timeline {
         // webcam crop: face-aware or centered square
         let ar = max(d.webcamAspect, 0.1)
         var ch: Float = 1, cx: Float = 0.5, cy: Float = 0.5
-        let layoutKind = d.layout.kind(at: t)
+        let layoutKind = d.layout.kind(at: t), layout = d.layout.sample(at: t)
         if layoutSettings[layoutKind].autoFrame, !d.face.isEmpty {
             let fp = t * faceGridRate, i0 = min(Int(fp), d.face.count - 1), i1 = min(i0 + 1, d.face.count - 1)
             let fc = d.face[i0] + (d.face[i1] - d.face[i0]) * Float(fp - Double(i0))
             cx = fc.x; cy = fc.y; ch = cf(fc.z, 0.25, 1)
         }
-        let cw = min(ch / ar, 1)
+        let rect = layout.cameraRect
+        let targetAspect = rect.z > 0 && rect.w > 0 ? rect.z / rect.w * Float(style.aspectRatio) : 1
+        let cropRatio = max(targetAspect / ar, 0.01)
+        ch = min(ch, 1 / cropRatio)
+        let cw = min(ch * cropRatio, 1)
         let crop = SIMD4<Float>(cf(cx - cw / 2, 0, 1 - cw), cf(cy - ch / 2, 0, 1 - ch), cw, ch)
         let emphasis = Emphasis.evaluate(overlays: overlays, autoMasks: d.autoMasks, sourceTime: sourceTime,
                                          cursor: pos, sourceSize: d.sourceSize)
@@ -618,7 +623,7 @@ extension Timeline {
         return FrameState(cameraCenter: cam, cameraScale: scale, cameraTilt: tilt, cropRect: screenCrop,
                            crop: viewportCrop,
                           cursor: cs, clickFX: rings, webcamCrop: crop,
-                          sourceTime: sourceTime, layout: d.layout.sample(at: t), layoutKind: layoutKind,
+                           sourceTime: sourceTime, layout: layout, layoutKind: layoutKind,
                           webcamCorner: d.placement.corner(at: t), webcamOpacity: d.placement.visibility(at: t),
                           caption: caption, emphasis: emphasis)
     }
