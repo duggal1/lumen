@@ -130,7 +130,7 @@ enum LayoutSolver {
             return track
         }
         var x = SIMD16<Double>(repeating: 0), v = x
-        var cache: (LayoutKind, WebcamLayout.Corner, ResolvedLayout)?
+        var cache: (kind: LayoutKind, corner: WebcamLayout.Corner, crop: PxRect, target: ResolvedLayout)?
         var out: [ResolvedLayout] = []; out.reserveCapacity(n)
         var si = 0
         for i in 0..<n {
@@ -140,20 +140,20 @@ enum LayoutSolver {
             let set = tl.layoutSettings[kind]
             let corner = placement.corner(at: t) ?? set.corner
             let cr = crop(t)
-            if cache == nil || cache!.0 != kind || cache!.1 != corner {
-                cache = (kind, corner, LayoutResolver.target(kind, set, corner: corner, aspect: a, srcAspect: sa,
-                                                             insets: ins, webcamAspect: webcamAspect,
-                                                             crop: cr, fillFollow: fillFollow))
+            let target: ResolvedLayout
+            if let cache, cache.kind == kind, cache.corner == corner, cache.crop == cr {
+                target = cache.target
+            } else {
+                target = LayoutResolver.target(kind, set, corner: corner, aspect: a, srcAspect: sa,
+                                               insets: ins, webcamAspect: webcamAspect,
+                                               crop: cr, fillFollow: fillFollow)
+                cache = (kind, corner, cr, target)
             }
-            var tgt = SIMD16<Double>(cache!.2.v)
+            var tgt = SIMD16<Double>(target.v)
             if kind == .cameraOverlay || kind == .cameraCutout { tgt[10] *= Double(placement.visibility(at: t)) }
             if i == 0 { x = tgt }
             for k in 0..<12 { springStep(&x[k], &v[k], target: tgt[k], omega: omega, dt: dt) }
-            var sample = ResolvedLayout(v: SIMD16<Float>(x))
-            // Fit mode is evaluated per tick OUTSIDE the spring, so the view
-            // aspect always equals the frame aspect even mid-transition.
-            if kind == .screenOnly || kind == .cameraOverlay { sample.screenRect = fit(cr) }
-            out.append(sample)
+            out.append(ResolvedLayout(v: SIMD16<Float>(x)))
         }
         track.samples = out
         return track
