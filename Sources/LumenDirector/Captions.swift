@@ -18,8 +18,9 @@ enum CaptionPlanner {
                      kindAt: (Double) -> LayoutKind, cornerAt: (Double) -> WebcamLayout.Corner?) -> [CaptionChunk] {
         guard p.enabled else { return [] }
         let timed = mappedWords(words, timeMap: tm, plan: p)
-        let groups = chunkWords(timed, perLine: perLine(p, aspect: aspect), maxLines: 2)
-        return makeChunks(groups, perLine: perLine(p, aspect: aspect), plan: p, aspect: aspect,
+        let width = perLine(p, aspect: aspect)
+        let groups = chunkWords(timed, perLine: width)
+        return makeChunks(groups, perLine: width, duration: tm.outputDuration, aspect: aspect,
                           kindAt: kindAt, cornerAt: cornerAt)
     }
 
@@ -42,7 +43,7 @@ enum CaptionPlanner {
                                  start: start, end: end))
             if let last = text.last, ".?!".contains(last) { sentenceStart = true } else { sentenceStart = false }
         }
-        return out
+        return out.sorted { $0.start < $1.start }
     }
 
     /// Sentence case, and nothing else: the first word of a sentence starts
@@ -56,13 +57,13 @@ enum CaptionPlanner {
         return String(trimmed.prefix(1).uppercased()) + String(trimmed.dropFirst())
     }
 
-    private static func chunkWords(_ words: [TimedWord], perLine: Int, maxLines: Int) -> [[TimedWord]] {
-        let capacity = perLine * max(maxLines, 1)
+    private static func chunkWords(_ words: [TimedWord], perLine: Int) -> [[TimedWord]] {
+        let capacity = perLine * 2
         var groups: [[TimedWord]] = [], current: [TimedWord] = []
         for word in words {
             if let first = current.first, let previous = current.last {
                 let count = characterCount(current)
-                let overflow = count + word.text.count + 1 > capacity
+                let overflow = wrap(current + [word], perLine: perLine).count > 2
                 let long = word.end - first.start > 4
                 let pause = word.start - previous.end > 0.3 && count >= capacity * 2 / 5
                 if overflow || long || pause { groups.append(current); current = [] }
@@ -77,14 +78,14 @@ enum CaptionPlanner {
         return groups
     }
 
-    private static func makeChunks(_ groups: [[TimedWord]], perLine: Int, plan: CaptionPlan, aspect: Double,
+    private static func makeChunks(_ groups: [[TimedWord]], perLine: Int, duration: Double, aspect: Double,
                                    kindAt: (Double) -> LayoutKind, cornerAt: (Double) -> WebcamLayout.Corner?) -> [CaptionChunk] {
         var out: [CaptionChunk] = []
         for (index, group) in groups.enumerated() where !group.isEmpty {
-            let nextStart = index + 1 < groups.count ? groups[index + 1][0].start : Double.infinity
+            let nextStart = index + 1 < groups.count ? groups[index + 1][0].start : duration
             let start = max(group[0].start - 0.05, out.last?.end ?? 0)
-            let desiredEnd = min(group[group.count - 1].end + 0.2, nextStart - 0.02)
-            let end = max(group[group.count - 1].end, min(desiredEnd, start + 4.0))
+            let speechEnd = group.map(\.end).max() ?? start
+            let end = min(speechEnd + 0.2, nextStart, duration, start + 4)
             guard end > start else { continue }
             let lines = wrap(group, perLine: perLine)
             let position = yPosition(aspect: aspect, kind: kindAt(start), corner: cornerAt(start))
@@ -99,7 +100,8 @@ enum CaptionPlanner {
             var current = lines[lines.count - 1]
             let addition = word.text.count + (current.isEmpty ? 0 : 1)
             if width(current) + addition > perLine, !current.isEmpty {
-                let cut = phraseBoundary(current)
+                let candidate = phraseBoundary(current)
+                let cut = width(Array(current.suffix(from: candidate))) + addition <= perLine ? candidate : current.count
                 lines[lines.count - 1] = Array(current.prefix(cut))
                 current = Array(current.suffix(from: cut))
                 lines.append(current)
@@ -136,8 +138,9 @@ enum CaptionPlanner {
     /// The caption sits low enough to read as a lower third but never on the
     /// dock: roughly 10 % of the frame stays clear under it.
     private static func yPosition(aspect: Double, kind: LayoutKind, corner: WebcamLayout.Corner?) -> Double {
+        if (kind == .cameraOverlay || kind == .cameraCutout), corner == .bottomLeft || corner == .bottomRight { return 0.16 }
+        if kind == .split, aspect < 1 { return 0.46 }
         if aspect < 1 { return 0.84 }
-        if kind == .cameraOverlay, corner == .bottomLeft || corner == .bottomRight { return 0.16 }
         return 0.90
     }
 }
