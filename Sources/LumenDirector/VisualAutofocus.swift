@@ -59,6 +59,7 @@ enum VisualAutofocus {
         var result = ZoomPlanner.Intent(kind: .visual, t: t, tEnd: tEnd,
                                         x: r.midX, y: r.midY)
         result.rect = r
+        result.preferredScale = waypoint.scale
         return result
     }
 
