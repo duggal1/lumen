@@ -6,16 +6,18 @@ enum CursorPipeline {
     static func run(events: [InputEvent], taps: [TapIndicator], st: CursorStyle, tm: TimeMap, src: SourceInfo) -> (CursorTrack, [ClickFX]) {
         let rate = gridRate, lo = tm.trimStart, hi = tm.trimEnd
         let n = max(Int((hi - lo) * rate) + 1, 3)
-        let cutoff = hi - 0.8                                   // Stop click / hotkey at the very end: no ring, no hand
+        let events = events.filter {
+            $0.t.isFinite && (!$0.hasPosition || ($0.x.isFinite && $0.y.isFinite))
+        }.sorted { $0.t < $1.t }
 
         // manual taps act like a press/release pair; they never move the cursor
         var tapEv: [InputEvent] = []
-        for t in taps where t.t >= lo && t.t <= hi {
+        for t in taps where t.t >= lo && t.t <= hi && t.x.isFinite && t.y.isFinite {
             tapEv.append(InputEvent(t: t.t, kind: .down, x: Float(t.x), y: Float(t.y)))
             tapEv.append(InputEvent(t: t.t + 0.12, kind: .up, x: Float(t.x), y: Float(t.y)))
         }
         let pressEv = (events.filter { $0.kind == .down || $0.kind == .up } + tapEv).sorted { $0.t < $1.t }
-        let downs = events.filter { $0.kind == .down && $0.t <= cutoff } + tapEv.filter { $0.kind == .down }
+        let downs = pressEv.filter { $0.kind == .down && $0.t >= lo && $0.t <= hi }
 
         // 1. ingest: monotonic, deduped
         var ts: [Double] = [], xs: [Double] = [], ys: [Double] = []
@@ -77,9 +79,8 @@ enum CursorPipeline {
             }
         }
 
-        // 6. click pinning (after glide so pins stay exact). Every offset is
-        // measured against the pre-pin path, so a press and its release cannot
-        // compound into an overshoot past the click point.
+        // Pin recorded pointer events after glide. Corrections have disjoint
+        // endpoints, so adjacent clicks cannot shift each other's position.
         let w = 0.065 * rate, r = Int(3 * w)
         let baseX = X, baseY = Y
         /// Manual taps carry the only position evidence for that click, so the
@@ -98,11 +99,25 @@ enum CursorPipeline {
                 X[j] += ex * k; Y[j] += ey * k
             }
         }
-        for e in events where e.kind == .down || e.kind == .up {
-            let c = Int(((e.t - lo) * rate).rounded()); guard c >= 0, c < n else { continue }
-            let ex = Double(e.x) - baseX[c], ey = Double(e.y) - baseY[c]
-            for j in max(0, c - r)...min(n - 1, c + r) {
-                let k = exp(-0.5 * pow(Double(j - c) / w, 2)); X[j] += ex * k; Y[j] += ey * k
+        let pins = events.filter { ($0.kind == .down || $0.kind == .up) && $0.t >= lo && $0.t <= hi && !tm.isCut($0.t) }
+        var targets: [(tick: Int, position: SIMD2<Double>)] = []
+        for event in pins {
+            let tick = min(Int(((event.t - lo) * rate).rounded()), n - 1)
+            let pin = (tick: tick, position: SIMD2(Double(event.x), Double(event.y)))
+            if targets.last?.tick == tick { targets[targets.count - 1] = pin }
+            else { targets.append(pin) }
+        }
+        for (index, pin) in targets.enumerated() {
+            let c = pin.tick
+            let left = index > 0 ? (targets[index - 1].tick + c) / 2 : 0
+            let right = index + 1 < targets.count ? (c + targets[index + 1].tick) / 2 : n - 1
+            let ex = pin.position.x - X[c], ey = pin.position.y - Y[c]
+            let start = max(c - r, left), end = min(c + r, right)
+            for j in start...end {
+                let distance = j < c ? c - start : end - c
+                let k = j == c ? 1 : 1 - smoothstep(Double(abs(j - c)) / Double(max(distance, 1)))
+                X[j] += ex * k
+                Y[j] += ey * k
             }
         }
 
