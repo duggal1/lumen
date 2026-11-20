@@ -10,13 +10,10 @@ struct ZoomDebugOverlay: View {
     var body: some View {
         GeometryReader { geometry in
             if let d = model.timeline.derived {
-                let state = model.timeline.evaluate(at: model.playhead)
                 let source = d.sourceSize
                 let transform = ZoomTransform(canvas: SIMD2(max(2, Int(geometry.size.width)),
                                                              max(2, Int(geometry.size.height))),
-                                              source: source, style: model.timeline.style,
-                                              cameraCenter: SIMD2(Double(state.cameraCenter.x), Double(state.cameraCenter.y)),
-                                              scale: Double(state.cameraScale))
+                                              source: source, timeline: model.timeline, at: model.playhead)
                 let click = d.clicks.last(where: { $0.t <= model.playhead && model.playhead - $0.t < 0.75 })
                 Canvas { ctx, size in
                     let cam = transform.sourceToCanvas(transform.cameraCenter)
