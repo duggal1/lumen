@@ -67,7 +67,7 @@ public enum TranscriptEdits {
                              padding: Double = defaultPadding) -> [CutRange] {
         let unique = Set(indices).sorted()
         return merge(unique.compactMap { i in
-            words.indices.contains(i) ? span(for: words[i], padding: padding) : nil
+            words.indices.contains(i) ? sentenceSpan(for: words, range: i..<(i + 1), padding: padding) : nil
         })
     }
 
@@ -82,8 +82,11 @@ public enum TranscriptEdits {
         let starts = slice.map(\.start), ends = slice.map(\.end)
         guard let lo = starts.min(), let hi = ends.max(),
               starts.allSatisfy(\.isFinite), ends.allSatisfy(\.isFinite) else { return nil }
-        let a = max(lo - max(padding, 0), 0)
-        let b = hi + max(padding, 0)
+        let pad = padding.isFinite ? max(padding, 0) : 0
+        let before = range.lowerBound > 0 ? words[range.lowerBound - 1].end : 0
+        let after = range.upperBound < words.count ? words[range.upperBound].start : .infinity
+        let a = max(0, lo - pad, before.isFinite ? min(before, lo) : lo)
+        let b = min(hi + pad, after.isNaN ? hi : max(after, hi))
         guard b > a else { return nil }
         return CutRange(start: a, end: b, origin: .transcript)
     }
@@ -94,25 +97,21 @@ public enum TranscriptEdits {
     public static func cleanupCuts(transcript: Transcript, events: [InputEvent] = [],
                                    maxPause: Double = 0.6, keepPause: Double = 0.25,
                                    padding: Double = defaultPadding) -> [CutRange] {
-        var cuts: [CutRange] = []
-        for i in fillerIndices(in: transcript) {
-            if let cut = span(for: transcript.words[i], padding: padding) { cuts.append(cut) }
-        }
-        guard maxPause >= 0, keepPause >= 0 else { return merge(cuts) }
-        let ordered = transcript.words.sorted { $0.start < $1.start }
-        for pair in zip(ordered, ordered.dropFirst()) {
-            let start = pair.0.end, end = pair.1.start, gap = end - start
-            guard start.isFinite, end.isFinite, gap > maxPause, gap < 2 else { continue }
-            // A click/key inside the gap means the speaker was doing something:
-            // never silently delete that part of the recording.
-            guard !events.contains(where: { $0.t > start && $0.t < end }) else { continue }
-            let kept = min(keepPause, gap)
-            let removed = gap - kept
-            guard removed > 0 else { continue }
-            // Keep `kept` seconds centered in the gap, remove the rest. Using
-            // kept/2 (not removed/2) is what actually removes `removed` seconds.
-            let edge = kept / 2
-            cuts.append(CutRange(start: start + edge, end: end - edge, origin: .transcript))
+        var cuts = spans(for: transcript.words, at: fillerIndices(in: transcript), padding: padding)
+        guard maxPause.isFinite, keepPause.isFinite, maxPause >= 0, keepPause >= 0 else { return cuts }
+        let ordered = transcript.words.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
+            .sorted { $0.start < $1.start }
+        let activity = events.lazy.filter { $0.t.isFinite && $0.kind != .move && $0.kind != .flagsChanged }
+            .map(\.t).sorted()
+        var activityIndex = 0
+        var speechEnd = ordered.first?.end ?? 0
+        for word in ordered.dropFirst() {
+            let start = speechEnd, end = word.start, gap = end - start
+            speechEnd = max(speechEnd, word.end)
+            guard gap > max(maxPause, keepPause), gap < 2 else { continue }
+            while activityIndex < activity.count, activity[activityIndex] <= start { activityIndex += 1 }
+            guard activityIndex == activity.count || activity[activityIndex] >= end else { continue }
+            cuts.append(CutRange(start: start + keepPause / 2, end: end - keepPause / 2, origin: .transcript))
         }
         return merge(cuts)
     }
