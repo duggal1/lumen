@@ -40,7 +40,7 @@ struct MusicPicker: View {
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(filtered, id: \.url) { track in
                     Sleeve(track: track,
-                           hue: MusicInk.mood(track.category),
+                           hue: Dieother.mood(track.category),
                            playing: playing == track.url.path,
                            added: addedPaths.contains(track.url.path),
                            onPreview: { playing == track.url.path ? stop() : play(track) },
@@ -70,11 +70,10 @@ struct MusicPicker: View {
             HStack(alignment: .center, spacing: 8) {
                 Button(action: onPreview) {
                     VStack(alignment: .leading, spacing: 0) {
-                        DitherWaveformView(peaks: peaks, hue: 5, height: 32)
-                            .frame(height: 32)
+                        WaveformPeaks(peaks: peaks, tint: hue)
+                            .frame(height: 26)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                            .accessibilityHidden(true)
+                            .padding(.horizontal, 2)
                         Text(track.title).font(AppType.body).foregroundStyle(Tok.text).lineLimit(1)
                         Text(track.category.capitalized).font(AppType.caption).foregroundStyle(Tok.text2)
                     }
@@ -229,7 +228,7 @@ private actor WaveformStore {
         if let hit = cache[key] { return hit }
         let value = await Task.detached(priority: .utility) {
             guard let pcm = try? AudioIO.readMonoPrefix(url, seconds: 1.5), !pcm.isEmpty else { return [] as [Float] }
-            return MusicPicker.combed(pcm, buckets: 64)
+            return MusicPicker.combed(pcm, buckets: 24)
         }.value
         guard !value.isEmpty else { return [] }
         cache[key] = value

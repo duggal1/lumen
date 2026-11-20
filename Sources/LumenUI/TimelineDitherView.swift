@@ -24,7 +24,6 @@ struct TimelineDitherView: NSViewRepresentable {
 }
 
 final class TimelineDitherNSView: NSView {
-    var bandLayout = TimelineDitherRenderer.timelineLayout
     var snapshot = TimelineDitherRenderer.Frame(spans: Array(repeating: [], count: 5), peaks: [], clicks: [], head: -1,
                                              playing: false, reduced: false, dt: 0, t: 0)
 
@@ -126,16 +125,14 @@ final class TimelineDitherNSView: NSView {
         let scale = min(2, max(1, window?.backingScaleFactor ?? 2))
         let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         if let r = renderer, r.width == w.rounded(.down), r.height == bounds.height.rounded(.down),
-           r.scale == scale, r.isDark == dark, r.layout.bands == bandLayout.bands,
-           r.layout.bandHeight == bandLayout.bandHeight { return }
+           r.scale == scale, r.isDark == dark { return }
         releaseRenderer()
-        renderer = TimelineDitherRenderer(width: w, height: bounds.height, scale: scale, isDark: dark, layout: bandLayout)
+        renderer = TimelineDitherRenderer(width: w, height: bounds.height, scale: scale, isDark: dark)
         glowLayer.opacity = dark ? 0.3 : 0.2
         let pad = CGFloat(TimelineDitherRenderer.glowPad) * TimelineDitherRenderer.pitch
         let cols = max(1, Int((w - 2 * TimelineDitherRenderer.inset) / TimelineDitherRenderer.pitch))
         let glowW = CGFloat(cols + TimelineDitherRenderer.glowPad * 2) * TimelineDitherRenderer.pitch
-        let rows = max(1, Int(bandLayout.bandHeight / TimelineDitherRenderer.pitch)) * bandLayout.bands
-        let glowH = CGFloat(rows + TimelineDitherRenderer.glowPad * 2) * TimelineDitherRenderer.pitch
+        let glowH = CGFloat(TimelineDitherRenderer.lanes * 10 + TimelineDitherRenderer.glowPad * 2) * TimelineDitherRenderer.pitch
         let cellRect = CGRect(x: 0, y: 0, width: w, height: bounds.height)
         cellsLayer.frame = cellRect
         overlayLayer.frame = cellRect
@@ -159,7 +156,7 @@ final class TimelineDitherNSView: NSView {
             link = l
             last = 0
         }
-        link?.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 120)
+        link?.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
     }
 
     @objc private func tick(_ link: CADisplayLink) {
