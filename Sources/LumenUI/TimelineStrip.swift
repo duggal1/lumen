@@ -105,20 +105,87 @@ struct TimelineStrip: View {
                 }))
     }
 
+    /// The Clove dither instrument is the timeline's surface. Slats are drawn
+    /// by `TimelineDitherView` as Bayer cells; the lane canvases keep only the
+    /// things that carry meaning on top of it: labels, brackets, cuts, head.
+    static let dither = true
+
     private func timelineLayers(_ vp: Viewport) -> some View {
-        VStack(spacing: 0) {
-            rulerLane(vp)
-            clipLane(vp)
-            zoomLane(vp)
-            eventsLane(vp)
-            audioLane(vp)
-            musicLane(vp)
+        ZStack {
+            TimelineDitherView(snapshot: ditherFrame(vp))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            VStack(spacing: 0) {
+                rulerLane(vp)
+                clipLane(vp)
+                zoomLane(vp)
+                eventsLane(vp)
+                audioLane(vp)
+                musicLane(vp)
+            }
+            .overlay { threadLayer(vp) }
+            .overlay { GhostLine(vp: vp, col: drag == nil ? scrubCol : nil) }
+            .overlay { PlayheadLine(model: model, vp: vp) }
+            .overlay { pendingLayer(vp) }
+            .overlay { seamLayer(vp) }
         }
-        .overlay { threadLayer(vp) }
-        .overlay { GhostLine(vp: vp, col: drag == nil ? scrubCol : nil) }
-        .overlay { PlayheadLine(model: model, vp: vp) }
-        .overlay { pendingLayer(vp) }
-        .overlay { seamLayer(vp) }
+    }
+
+    /// Builds the renderer's frame from the same model reads the lane canvases
+    /// use, in visible-column space, so labels and cells land on one lattice.
+    func ditherFrame(_ vp: Viewport) -> TimelineDitherRenderer.Frame {
+        typealias Span = TimelineDitherRenderer.Span
+        let tl = model.timeline, tm = tl.timeMap
+        var lanes = Array(repeating: [Span](), count: 5)
+
+        // 0 — recording strips and clips.
+        for segment in tl.recordingSegments {
+            lanes[0].append(Span(vp.colFloor(segment.outputStart), vp.colCeil(segment.outputEnd), 0))
+        }
+        let primary = tl.clips.first?.path
+        for clip in tl.clips {
+            let imported = primary != nil && clip.path != primary
+            lanes[0].append(Span(vp.colFloor(clip.start), vp.colCeil(clip.end), imported ? 1 : 0))
+        }
+
+        // 1 — zoom regions.
+        for z in tl.zoom {
+            let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
+            guard b > a else { continue }
+            lanes[1].append(Span(vp.colFloor(a), vp.colCeil(b), 2))
+        }
+
+        // 2 — typing bursts; clicks are a separate set of tall slats.
+        for burst in TimelineGeometry.bursts(times: keyOutputs(), gap: 0.5) {
+            lanes[2].append(Span(vp.colFloor(burst.start), vp.colCeil(burst.end), 3, 0.7))
+        }
+
+        // 3 — the voice tape is gated by real peaks, one full-width run.
+        lanes[3].append(Span(0, vp.cols, 4))
+
+        // 4 — music beds.
+        for lane in musicLanes() {
+            let start = lane.placement, end = start + musicDuration(for: lane)
+            lanes[4].append(Span(vp.colFloor(start), vp.colCeil(end), 5))
+        }
+
+        let wave = model.session.waveform
+        var peaks = [Float](repeating: 0, count: vp.cols)
+        if !wave.isEmpty {
+            for col in 0..<vp.cols {
+                let t0 = vp.time(atCol: col), t1 = vp.time(atCol: col + 1)
+                peaks[col] = min(1, TimelineGeometry.columnPeak(wave: wave,
+                    srcStart: tm.source(atOutput: t0), srcEnd: tm.source(atOutput: t1)))
+            }
+        }
+        let clicks = Set(outEvents()
+            .filter { $0.t >= vp.origin && $0.t <= vp.origin + vp.visible }
+            .map { vp.col($0.t) })
+        return TimelineDitherRenderer.Frame(
+            spans: lanes, peaks: peaks, clicks: clicks,
+            head: model.playhead >= vp.origin && model.playhead <= vp.origin + vp.visible
+                ? vp.col(model.playhead) : -1,
+            playing: model.isPlaying, reduced: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, dt: 0, t: 0)
     }
 
     // MARK: - Viewport

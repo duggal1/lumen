@@ -22,6 +22,8 @@ extension TimelineStrip {
     }
 
     func drawBase(_ c: GraphicsContext, _ size: CGSize, _ lat: TimelineStrip.Lattice, dust: Bool, holes: [Range<Int>] = []) {
+        // The dither instrument owns the lane surface: cells, dust and glow.
+        guard !TimelineStrip.dither else { return }
         let strip = CGRect(x: TimelineStrip.Lattice.inset, y: 2, width: floor(size.width) - 2 * TimelineStrip.Lattice.inset, height: 36)
         c.fill(Path(roundedRect: strip, cornerRadius: 8), with: .color(Tok.well))
         guard dust else { return }
@@ -74,8 +76,10 @@ extension TimelineStrip {
                 body.addRect(CGRect(x: x, y: yb, width: TimelineStrip.Lattice.cell, height: r.bodyH))
             }
         }
-        c.fillCells(body, r.body)
-        c.fillCells(cap, r.cap)
+        if !TimelineStrip.dither {
+            c.fillCells(body, r.body)
+            c.fillCells(cap, r.cap)
+        }
         if let l = r.label {
             let x = max(lat.x(col: r.c0 + r.caps + 1), lat.x0 + 6)
             c.draw(Text(l).font(TimelineStrip.Face.label).foregroundStyle(Tok.text),
@@ -298,7 +302,7 @@ extension TimelineStrip {
                 guard c1 > c0 else { continue }
                 for col in c0..<c1 { typing.addRect(CGRect(x: lat.x(col: col), y: 28, width: TimelineStrip.Lattice.cell, height: 4)) }
             }
-            c.fillCells(typing, StripInk.cell)
+            if !TimelineStrip.dither { c.fillCells(typing, StripInk.cell) }
 
             // Solid slat = click, dotted slat = tap. Orange [4] = it caused a zoom, grey = it did not.
             var head = Path(), focused = Path(), trig = Path(), idle = Path()
@@ -322,9 +326,11 @@ extension TimelineStrip {
                 else if triggered { trig.addPath(p) }
                 else { idle.addPath(p) }
             }
-            c.fillCells(idle, StripInk.cell)
-            c.fillCells(trig, StripInk.click)
-            c.fillCells(focused, StripInk.clickDeep)
+            if !TimelineStrip.dither {
+                c.fillCells(idle, StripInk.cell)
+                c.fillCells(trig, StripInk.click)
+                c.fillCells(focused, StripInk.clickDeep)
+            }
             c.fillCells(head, Tok.text)
 
             for l in labels {
@@ -354,38 +360,44 @@ extension TimelineStrip {
                 if wave.isEmpty { drawEmpty(c, "No audio. Speech will appear here."); return }
                 let ph = playing ? model.clock.time(at: HostClock.now()) : frozen
                 var played = Path(), tips = Path(), idle = Path(), ramp = Path(), quiet = Path(), head = Path()
-                for col in 0..<lat.cols {
-                    let t0 = vp.time(atCol: col), t1 = vp.time(atCol: col + 1)
-                    let peak = TimelineGeometry.columnPeak(wave: wave, srcStart: tm.source(atOutput: t0), srcEnd: tm.source(atOutput: t1))
-                    let level = TimelineGeometry.level(peak: peak)
-                    let x = lat.x(col: col)
-                    if t0 <= ph && t1 > ph {
-                        head.addRect(CGRect(x: x, y: 8, width: TimelineStrip.Lattice.cell, height: 16))
+                if !TimelineStrip.dither {
+                    for col in 0..<lat.cols {
+                        let t0 = vp.time(atCol: col), t1 = vp.time(atCol: col + 1)
+                        let peak = TimelineGeometry.columnPeak(wave: wave, srcStart: tm.source(atOutput: t0), srcEnd: tm.source(atOutput: t1))
+                        let level = TimelineGeometry.level(peak: peak)
+                        let x = lat.x(col: col)
+                        if t0 <= ph && t1 > ph {
+                            head.addRect(CGRect(x: x, y: 8, width: TimelineStrip.Lattice.cell, height: 16))
+                        }
+                        if level == 0 {
+                            quiet.addRect(CGRect(x: x, y: 19, width: TimelineStrip.Lattice.cell, height: 2))
+                            continue
+                        }
+                        let inRamp = tm.ramps.contains { s in
+                            let a = tm.output(atSource: s.start), b = tm.output(atSource: s.end)
+                            return t0 >= a && t0 <= b
+                        }
+                        let isPlayed = t0 < ph
+                        for k in 0..<level {
+                            let up = CGRect(x: x, y: 16 - 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
+                            let dn = CGRect(x: x, y: 21 + 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
+                            let isTip = k == level - 1
+                            if inRamp { ramp.addRect(up); ramp.addRect(dn) }
+                            else if isPlayed && isTip { tips.addRect(up); tips.addRect(dn) }
+                            else if isPlayed { played.addRect(up); played.addRect(dn) }
+                            else { idle.addRect(up); idle.addRect(dn) }
+                        }
                     }
-                    if level == 0 {
-                        quiet.addRect(CGRect(x: x, y: 19, width: TimelineStrip.Lattice.cell, height: 2))
-                        continue
-                    }
-                    let inRamp = tm.ramps.contains { s in
-                        let a = tm.output(atSource: s.start), b = tm.output(atSource: s.end)
-                        return t0 >= a && t0 <= b
-                    }
-                    let isPlayed = t0 < ph
-                    for k in 0..<level {
-                        let up = CGRect(x: x, y: 16 - 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
-                        let dn = CGRect(x: x, y: 21 + 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
-                        let isTip = k == level - 1
-                        if inRamp { ramp.addRect(up); ramp.addRect(dn) }
-                        else if isPlayed && isTip { tips.addRect(up); tips.addRect(dn) }
-                        else if isPlayed { played.addRect(up); played.addRect(dn) }
-                        else { idle.addRect(up); idle.addRect(dn) }
-                    }
+                    c.fillCells(quiet, Tok.controlPressed)
+                    c.fillCells(ramp, Tok.controlPressed)
+                    c.fillCells(idle, StripInk.cell)
+                    c.fillCells(played, StripInk.hot)
+                    c.fillCells(tips, StripInk.hotDeep)
+                } else if !wave.isEmpty {
+                    // The dither renderer owns the tape; keep the white head on it.
+                    let col = vp.col(ph)
+                    head.addRect(CGRect(x: lat.x(col: col), y: 8, width: TimelineStrip.Lattice.cell, height: 16))
                 }
-                c.fillCells(quiet, Tok.controlPressed)
-                c.fillCells(ramp, Tok.controlPressed)
-                c.fillCells(idle, StripInk.cell)
-                c.fillCells(played, StripInk.hot)
-                c.fillCells(tips, StripInk.hotDeep)
                 c.fillCells(head, Tok.text)
             }
         }
