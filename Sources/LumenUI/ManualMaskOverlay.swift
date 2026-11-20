@@ -37,12 +37,9 @@ struct ManualMaskOverlay: View {
                     }
                     guard let d = model.timeline.derived,
                           geometry.size.width > 0, geometry.size.height > 0 else { return }
-                    let state = model.timeline.evaluate(at: model.playhead)
                     let transform = ZoomTransform(
                         canvas: SIMD2(max(Int(geometry.size.width), 2), max(Int(geometry.size.height), 2)),
-                        source: d.sourceSize, style: model.timeline.style,
-                        cameraCenter: SIMD2(Double(state.cameraCenter.x), Double(state.cameraCenter.y)),
-                        scale: Double(state.cameraScale))
+                        source: d.sourceSize, timeline: model.timeline, at: model.playhead)
                     func source(_ p: CGPoint) -> SIMD2<Double> {
                         let converted = transform.canvasToSource(SIMD2(Double(p.x), Double(p.y)))
                         return SIMD2(min(max(converted.x, 0), d.sourceSize.x),
