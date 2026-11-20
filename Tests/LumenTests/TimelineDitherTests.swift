@@ -58,6 +58,43 @@ struct TimelineDitherTests {
         }
     }
 
+    @Test func outputImagesOutliveTheirRenderer() throws {
+        // The view holds these CGImages in CALayers while appearance and
+        // backing changes replace (and deallocate) the renderer. They must own
+        // their bytes, not alias the renderer's raw buffers.
+        var output: TimelineDitherRenderer.Output?
+        do {
+            let r = try #require(TimelineDitherRenderer(width: 400, height: 224, scale: 1, isDark: true))
+            output = r.draw(TimelineDitherRenderer.Frame(
+                spans: [[.init(2, 80, 0)], [], [], [.init(0, 80, 4)], []],
+                peaks: [Float](repeating: 0.7, count: 80), clicks: [], head: -1,
+                playing: false, reduced: true, dt: 0, t: 0))
+        }
+        // Reuse the freed pages aggressively; an aliased image would now read
+        // garbage or trap when CoreAnimation copies its provider.
+        var churn: [[UInt8]] = []
+        for _ in 0..<48 { churn.append([UInt8](repeating: 0xA5, count: 1 << 20)) }
+        let cells = try #require(output?.cells)
+        let bytes = try #require(cells.dataProvider?.data as? Data)
+        #expect(bytes.count > 0)
+        #expect(bytes.contains { $0 != 0 }, "cell image still carries pixels after its renderer is gone")
+        withExtendedLifetime(churn) {}
+    }
+
+    @Test func rendererLifecycleNeverLeavesStaleImages() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let host = try String(contentsOf: root.appendingPathComponent("Sources/LumenUI/TimelineDitherView.swift"), encoding: .utf8)
+        #expect(host.contains("func releaseRenderer()"))
+        #expect(host.contains("glowLayer.contents = nil"))
+        #expect(host.contains("renderer = nil"))
+        #expect(!host.contains("fatalError"))
+        let renderer = try String(contentsOf: root.appendingPathComponent("Sources/LumenUI/TimelineDither.swift"), encoding: .utf8)
+        #expect(renderer.contains("ownedImage(cellsContext"))
+        #expect(renderer.contains("ownedImage(glowContext"))
+        #expect(renderer.contains("while resolved.count < Self.lanes"))
+    }
+
     @Test func timelineKeepsItsChromeOverlays() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

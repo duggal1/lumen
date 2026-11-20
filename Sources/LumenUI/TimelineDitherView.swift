@@ -54,7 +54,34 @@ final class TimelineDitherNSView: NSView {
         setAccessibilityElement(false)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        glowLayer.magnificationFilter = .linear
+        glowLayer.opacity = 0.3
+        cellsLayer.magnificationFilter = .nearest
+        overlayLayer.magnificationFilter = .nearest
+        for l in [glowLayer, cellsLayer, overlayLayer] {
+            l.contentsGravity = .resize
+            l.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
+            layer?.addSublayer(l)
+        }
+        setAccessibilityElement(false)
+    }
+
+    /// Never let a CALayer keep an image produced by a renderer we are about
+    /// to drop. The images now own their bytes, but clearing first also stops
+    /// a stale frame from flashing during an appearance or backing change.
+    private func releaseRenderer() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        glowLayer.contents = nil
+        cellsLayer.contents = nil
+        overlayLayer.contents = nil
+        CATransaction.commit()
+        renderer = nil
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -82,14 +109,13 @@ final class TimelineDitherNSView: NSView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        renderer = nil
+        releaseRenderer()
         rebuildIfNeeded()
-        wake()
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        renderer = nil
+        releaseRenderer()
         rebuildIfNeeded()
     }
 
@@ -100,6 +126,7 @@ final class TimelineDitherNSView: NSView {
         let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         if let r = renderer, r.width == w.rounded(.down), r.height == bounds.height.rounded(.down),
            r.scale == scale, r.isDark == dark { return }
+        releaseRenderer()
         renderer = TimelineDitherRenderer(width: w, height: bounds.height, scale: scale, isDark: dark)
         glowLayer.opacity = dark ? 0.3 : 0.2
         let pad = CGFloat(TimelineDitherRenderer.glowPad) * TimelineDitherRenderer.pitch

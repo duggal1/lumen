@@ -155,13 +155,18 @@ final class TimelineDitherRenderer {
         memset(glowPixels, 0, glowWidth * glowHeight * 4)
 
         // Per-lane column ownership, resolved once per frame.
-        edges = f.spans.map { spans in
+        var resolved = f.spans.map { spans -> [Int] in
             var row = [Int](repeating: -1, count: cols)
             for span in spans {
-                for c in max(0, span.col0)..<min(cols, span.col1) { row[c] = span.hue }
+                let from = max(0, span.col0), to = min(cols, span.col1)
+                guard to > from else { continue }
+                for c in from..<to { row[c] = span.hue }
             }
             return row
         }
+        // A frame with fewer lanes must never index past the lane table.
+        while resolved.count < Self.lanes { resolved.append([Int](repeating: -1, count: cols)) }
+        edges = resolved
 
         var lc = 0
         for lane in 0..<Self.lanes {
@@ -246,7 +251,23 @@ final class TimelineDitherRenderer {
         if !warm {
             for n in 0..<kind.count where heat[n] > 0.02 { warm = true; break }
         }
-        return Output(cells: cellsContext.makeImage(), glow: glowContext.makeImage(), overlay: overlay, isWarm: warm)
+        // The cell and glow contexts are backed by the raw buffers above.
+        // `makeImage()` is copy-on-write, so handing those images to the view
+        // would leave CoreAnimation reading memory this renderer owns and
+        // frees on replacement. Copy into contexts that own their storage:
+        // the returned images must outlive this renderer.
+        return Output(cells: ownedImage(cellsContext, width: cellsWidth, height: cellsHeight),
+                      glow: ownedImage(glowContext, width: glowWidth, height: glowHeight),
+                      overlay: overlay, isWarm: warm)
+    }
+
+    private func ownedImage(_ source: CGContext, width: Int, height: Int) -> CGImage? {
+        guard let snapshot = source.makeImage(),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: Self.space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.draw(snapshot, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     /// Seams between neighbouring hues, and the motes rising off cleared cells.
@@ -260,8 +281,9 @@ final class TimelineDitherRenderer {
         let topF = Float(Self.top)
         let laneF = Float(Self.laneHeight)
         let scaleF = Float(scale)
-        for lane in 0..<Self.lanes {
+        for lane in 0..<min(Self.lanes, edges.count) {
             let owners = edges[lane]
+            guard owners.count == cols else { continue }
             for col in 1..<cols where owners[col] >= 0 && owners[col] != owners[col - 1] {
                 let xf = (insetF + Float(col) * p) * scaleF
                 let yf = (topF + Float(lane) * laneF + p) * scaleF

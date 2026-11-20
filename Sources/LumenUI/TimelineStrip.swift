@@ -137,27 +137,33 @@ struct TimelineStrip: View {
         typealias Span = TimelineDitherRenderer.Span
         let tl = model.timeline, tm = tl.timeMap
         var lanes = Array(repeating: [Span](), count: 5)
+        // Converting NaN/infinity to Int traps. A recovered project can carry
+        // one; skip the span instead of taking the whole process down on paint.
+        func span(_ a: Double, _ b: Double, _ hue: Int, _ level: Float = 1) -> Span? {
+            guard a.isFinite, b.isFinite else { return nil }
+            return Span(vp.colFloor(a), vp.colCeil(b), hue, level)
+        }
 
         // 0 — recording strips and clips.
         for segment in tl.recordingSegments {
-            lanes[0].append(Span(vp.colFloor(segment.outputStart), vp.colCeil(segment.outputEnd), 0))
+            if let s = span(segment.outputStart, segment.outputEnd, 0) { lanes[0].append(s) }
         }
         let primary = tl.clips.first?.path
         for clip in tl.clips {
             let imported = primary != nil && clip.path != primary
-            lanes[0].append(Span(vp.colFloor(clip.start), vp.colCeil(clip.end), imported ? 1 : 0))
+            if let s = span(clip.start, clip.end, imported ? 1 : 0) { lanes[0].append(s) }
         }
 
         // 1 — zoom regions.
         for z in tl.zoom {
             let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
-            guard b > a else { continue }
-            lanes[1].append(Span(vp.colFloor(a), vp.colCeil(b), 2))
+            guard b > a, let s = span(a, b, 2) else { continue }
+            lanes[1].append(s)
         }
 
         // 2 — typing bursts; clicks are a separate set of tall slats.
         for burst in TimelineGeometry.bursts(times: keyOutputs(), gap: 0.5) {
-            lanes[2].append(Span(vp.colFloor(burst.start), vp.colCeil(burst.end), 3, 0.7))
+            if let s = span(burst.start, burst.end, 3, 0.7) { lanes[2].append(s) }
         }
 
         // 3 — the voice tape is gated by real peaks, one full-width run.
@@ -166,7 +172,7 @@ struct TimelineStrip: View {
         // 4 — music beds.
         for lane in musicLanes() {
             let start = lane.placement, end = start + musicDuration(for: lane)
-            lanes[4].append(Span(vp.colFloor(start), vp.colCeil(end), 5))
+            if let s = span(start, end, 5) { lanes[4].append(s) }
         }
 
         let wave = model.session.waveform
@@ -180,10 +186,11 @@ struct TimelineStrip: View {
         }
         let clicks = Set(outEvents()
             .filter { $0.t >= vp.origin && $0.t <= vp.origin + vp.visible }
+            .filter { $0.t.isFinite }
             .map { vp.col($0.t) })
         return TimelineDitherRenderer.Frame(
             spans: lanes, peaks: peaks, clicks: clicks,
-            head: model.playhead >= vp.origin && model.playhead <= vp.origin + vp.visible
+            head: model.playhead.isFinite && model.playhead >= vp.origin && model.playhead <= vp.origin + vp.visible
                 ? vp.col(model.playhead) : -1,
             playing: model.isPlaying, reduced: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, dt: 0, t: 0)
     }
