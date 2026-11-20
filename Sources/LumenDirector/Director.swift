@@ -228,6 +228,7 @@ public enum Director {
         }
         if cancelled() { return nil }
         t.timeMap = tm
+        var autoKinds: [UUID: ZoomPlanner.IntentKind] = [:]
         if t.camera.autoZoom {
             let manual = t.zoom.filter { $0.origin == .manual }
             let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
@@ -243,6 +244,7 @@ public enum Director {
                                            activityShots: activityResult.shots)
                 cache.planKey = pkey; cache.plan = planned
             }
+            autoKinds = planned.kinds
             // AGENT: applying suppression here covers normal derives as well as explicit replans.
             let suppressed = Set(t.suppressedAuto)
             t.zoom = (manual + planned.segments.filter { !suppressed.contains($0.id.uuidString) }).sorted { $0.start < $1.start }
@@ -281,9 +283,15 @@ public enum Director {
         let size = SIMD2(Double(src.width), Double(src.height))
         let viewport = DenseCropTrack(hz: viewportPlan.track.hz,
                                       rects: viewportPlan.track.rects.count > 1 ? viewportPlan.track.rects : [])
+        // The camera clamps against the same aspect the renderer draws: the
+        // renderer samples/draws `CropSpace.baseView(crop, drawAspect)`, so the
+        // camera's view and clamp use the drawn quad's aspect — never the
+        // canvas aspect.
+        let drawAspect = size.x / max(size.y, 1.0)
         guard let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size,
                                            outDur: tm.outputDuration, loop: t.cursor.loop,
-                                           crop: viewport,
+                                           crop: viewport, aspect: drawAspect,
+                                           kinds: autoKinds,
                                            follow: followPaths,
                                            cancelled: cancelled) else { return nil }
         let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad,
@@ -554,7 +562,8 @@ extension Timeline {
         let camN = SIMD2<Double>(Double(qhm(c.nx, c.vx, c.ax, cameraFrame, rate: c.rate)),
                                  Double(qhm(c.ny, c.vy, c.ay, cameraFrame, rate: c.rate)))
         let logZ = qhm(c.lz, c.vz, c.az, cameraFrame, rate: c.rate)
-        let visible = CropSpace.visible(crop: viewportCrop, aspect: nil,
+        let visible = CropSpace.visible(crop: viewportCrop,
+                                        aspect: d.sourceSize.x / max(d.sourceSize.y, 1.0),
                                         u: camN.x, v: camN.y, logZ: Double(logZ))
         let cam: SIMD2<Float>
         if viewportCrop.isValid, visible.isValid {

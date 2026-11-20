@@ -42,6 +42,7 @@ enum CameraSolver {
     static func solve(zoom: [ZoomSegment], tm: TimeMap, cursor: CursorTrack, p: CameraParams,
                       src: SIMD2<Double>, outDur: Double, loop: Double?,
                       crop: DenseCropTrack = DenseCropTrack(), aspect: Double? = nil,
+                      kinds: [UUID: ZoomPlanner.IntentKind] = [:],
                       follow: [UUID: [(t: Double, c: SIMD2<Double>)]],
                       cancelled: () -> Bool) -> CameraTrack? {
         guard outDur.isFinite, outDur > 0, src.x.isFinite, src.y.isFinite, src.x > 0, src.y > 0 else {
@@ -53,11 +54,13 @@ enum CameraSolver {
                           aspect: aspect, p: p)
         let scenes = buildScenes(zoom: zoom, tm: tm, ctx: ctx, follow: follow)
         if scenes.isEmpty, p.tilt != .reveal { return CameraTrack(count: 2, rate: cameraRate) }
-        return solveScenes(scenes, context: ctx, cursor: cursor, params: p, loop: loop, cancelled: cancelled)
+        return solveScenes(scenes, context: ctx, cursor: cursor, params: p, loop: loop,
+                           kinds: kinds, cancelled: cancelled)
     }
 
     private static func solveScenes(_ scenes: [Scene], context ctx: Context, cursor: CursorTrack,
-                                    params: CameraParams, loop: Double?, cancelled: () -> Bool) -> CameraTrack? {
+                                    params: CameraParams, loop: Double?,
+                                    kinds: [UUID: ZoomPlanner.IntentKind], cancelled: () -> Bool) -> CameraTrack? {
         let baked = assignChains(scenes, mergeHorizon: ctx.panThroughGap)
         let (followX, followY) = globalFollow(cursor: cursor, baked: baked, ctx: ctx)
         var followTracks: [(start: Int, centers: [SIMD2<Double>])?] = []
@@ -67,7 +70,7 @@ enum CameraSolver {
             followTracks.append(pathCenters(s, ctx: ctx))
         }
         guard var track = bake(baked, ctx: ctx, followX: followX, followY: followY,
-                               followTracks: followTracks, cancelled: cancelled) else { return nil }
+                               followTracks: followTracks, kinds: kinds, cancelled: cancelled) else { return nil }
         blendLoop(&track, duration: loop)
         applyTilt(&track, params: params)
         return track
@@ -347,23 +350,36 @@ enum CameraSolver {
         let n: Int
         let activeAt: [Int]
         let nextAt: [Int]
+        let kinds: [UUID: ZoomPlanner.IntentKind]
 
         init(baked: [Scene], ctx: Context, followX: [Double], followY: [Double],
-             followTracks: [(start: Int, centers: [SIMD2<Double>])?]) {
+             followTracks: [(start: Int, centers: [SIMD2<Double>])?],
+             kinds: [UUID: ZoomPlanner.IntentKind] = [:]) {
             self.ctx = ctx; self.baked = baked
             self.followX = followX; self.followY = followY
             self.followTracks = followTracks
+            self.kinds = kinds
             n = ctx.n
             activeAt = Self.activeSceneIndices(baked: baked, n: ctx.n, rate: ctx.rate)
             nextAt = Self.nextSceneIndices(baked: baked, n: ctx.n, rate: ctx.rate)
         }
 
         func rawCenter(_ i: Int, _ k: Int) -> SIMD2<Double> {
+            let s = baked[i]
+            if kinds[s.segment.id] == .typing {
+                // Typing holds a stable target: the aim is the resolved field
+                // centre in SOURCE space, re-expressed against the current crop
+                // each tick, so a jittering AXWebArea crop cannot carry the
+                // camera with it while the user types.
+                let crop = ctx.crop(at: k)
+                let src = SIMD2(s.center.x * ctx.src.x, s.center.y * ctx.src.y)
+                return SIMD2((src.x - crop.x) / max(crop.w, 1e-9),
+                             (src.y - crop.y) / max(crop.h, 1e-9))
+            }
             if i < followTracks.count, let d = followTracks[i], !d.centers.isEmpty {
                 let idx = min(max(k - d.start, 0), d.centers.count - 1)
                 return d.centers[idx]
             }
-            let s = baked[i]
             if case .follow = s.segment.focus { return SIMD2(followX[k], followY[k]) }
             return normalise(s.center, at: k, ctx: ctx)
         }
@@ -448,10 +464,11 @@ enum CameraSolver {
     private static func bake(_ baked: [Scene], ctx: Context,
                              followX: [Double], followY: [Double],
                              followTracks: [(start: Int, centers: [SIMD2<Double>])?],
+                             kinds: [UUID: ZoomPlanner.IntentKind],
                              cancelled: () -> Bool) -> CameraTrack? {
         let n = ctx.n
         let baker = Baker(baked: baked, ctx: ctx, followX: followX, followY: followY,
-                          followTracks: followTracks)
+                          followTracks: followTracks, kinds: kinds)
         let activeAt = baker.activeAt
         var track = CameraTrack(count: n, rate: ctx.rate)
         var scaleSpring = 0.0, panX = 0.5, panY = 0.5

@@ -55,6 +55,9 @@ enum ZoomPlanner {
     struct ZoomPlan {
         var segments: [ZoomSegment] = []
         var follow: [UUID: [FollowPoint]] = [:]
+        /// Intent kinds by segment id, so the camera solver can tell a typing
+        /// shot (stable target) from a follow shot.
+        var kinds: [UUID: IntentKind] = [:]
     }
     enum IntentKind { case click, typing, visual, marker, dialog }
     struct Intent {
@@ -463,8 +466,12 @@ enum ZoomPlanner {
                     // camera does not move during it, so every caret position
                     // inside the field must stay in the viewport.
                     let typing = i.kind == .typing
-                    s = adaptiveScale(r, marginW: typing ? 2.4 : 2.0,
-                                      marginH: typing ? 2.8 : 2.0)
+                    // One margin, applied once. Typing frames the resolved
+                    // field at the activity padFraction convention; the old
+                    // 2.4/2.8 branch re-margined a rect that was already the
+                    // subject and rejected common typing targets.
+                    s = adaptiveScale(r, marginW: typing ? 1.35 : 2.0,
+                                      marginH: typing ? 1.35 : 2.0)
                 } else {
                     // No resolved rect: keep the configured feel, but do not
                     // blindly hit the cap when a preset's base asks for more.
@@ -669,7 +676,8 @@ enum ZoomPlanner {
         }
         // Only the paths of segments that survived the filter travel on.
         let ids = Set(kept.map(\.id))
-        return ZoomPlan(segments: kept, follow: followPaths.filter { ids.contains($0.key) })
+        return ZoomPlan(segments: kept, follow: followPaths.filter { ids.contains($0.key) },
+                        kinds: kinds.filter { ids.contains($0.key) })
     }
 
 }
