@@ -2,6 +2,14 @@ import Foundation
 import LumenCore
 import LumenProject
 
+/// The live (real-time) camera for the capture overlay: same critically
+/// damped model as the recorded solver, driven causally from the event
+/// stream instead of baked. Not wired into the offline derive; used by the
+/// capture-time preview.
+/// Threading/ownership: value type, mutated only from the capture queue that
+/// ingests events (`ingest`/`step` are serialised by that queue). `Sendable`
+/// for hand-off to the render side, which treats the returned `FrameState`
+/// as read-only.
 public struct LiveCamera: Sendable {
     public var maxScale = 2.0, hold = 2.6, omegaZoom = 7.5
     public var cursor = CursorStyle()
@@ -14,7 +22,8 @@ public struct LiveCamera: Sendable {
     private var pointer: Spring3, camera: Spring3, press: Spring3
     private var tgt = SIMD2<Double>(0.5, 0.5)
     private var rings: [(t: Double, x: Float, y: Float)] = []
-    private var focusTime = -Double.infinity
+    private var typingField: TypingFocus.Field?
+    private var lastTyping = -Double.infinity
     /// Causal intelligent crop. No future events: a revealed rect is held for
     /// a fixed window and then springs back to the content ROI.
     private var cropConfig: SmartCropConfig?
@@ -70,25 +79,25 @@ public struct LiveCamera: Sendable {
         }
         switch e.kind {
         case .down:
-            down = true; lastActivity = e.t; focusTime = e.t
+            down = true; lastActivity = e.t; typingField = nil
             rings.append((e.t, e.x, e.y))
             if e.button == 0 { aim(raw, scale: min(max(maxScale, 1), 1.7)) }
         case .up: down = false; lastActivity = e.t
         case .keyDown:
-            lastActivity = max(lastActivity, e.t)
-            guard e.t >= focusTime, let f = focus,
-                  f.x.isFinite, f.y.isFinite, f.w.isFinite, f.h.isFinite,
-                  f.w > 0, f.h > 0 else { return }
-            focusTime = e.t
-            if let c = f.caret, c.x.isFinite, c.y.isFinite, c.w.isFinite, c.h.isFinite, c.h > 0 {
-                let point = SIMD2(c.w <= 3 ? c.x + c.w / 2 : c.x + c.w, c.y + c.h / 2)
-                guard point.x >= 0, point.x <= src.x, point.y >= 0, point.y <= src.y else { return }
-                let fieldWidth = min(max(f.w * 1.3, src.x * 0.42), src.x * 0.62)
-                aim(point, scale: min(clamp(src.x / fieldWidth, 1.6, 2), max(maxScale, 1)))
-            } else if f.h <= src.y * 0.12 {
-                let fit = src.x / max(f.w * 1.25, 1)
-                if fit >= 1.25 { aim(SIMD2(f.x + f.w / 2, f.y + f.h / 2), scale: min(fit, maxScale, 2)) }
+            guard e.isTypingKey, e.t >= lastTyping else { return }
+            let sameRun = e.t - lastTyping <= 1.5
+            lastTyping = e.t
+            if !sameRun { typingField = nil }
+            let bounds = CGRect(x: 0, y: 0, width: src.x, height: src.y)
+            if let focus, let field = TypingFocus.field(focus, at: e.t, bounds: bounds, backing: 1),
+               typingField?.matches(field, backing: 1) != true {
+                let rect = field.rect
+                let fit = min(src.x / (rect.width * 1.25), src.y / (rect.height * 1.25))
+                let scale = max(1, min(fit, maxScale))
+                aim(SIMD2(rect.midX, rect.midY), scale: scale)
+                typingField = field
             }
+            if typingField != nil { lastActivity = e.t }
         case .drag, .scroll: lastActivity = e.t
         default: break
         }
