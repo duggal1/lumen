@@ -43,26 +43,31 @@ public enum ActivityShotBuilder {
     /// with in-shot waypoints, never emitted as two overlapping segments.
     public static func build(grids: [ActivityGrid], source: (w: Double, h: Double),
                              inputs: ActivityInputs, settings s: ActivitySettings) -> ActivityResult {
-        guard s.enabled, grids.count > 3 else { return ActivityResult() }
+        guard s.enabled, grids.count > 3, source.w > 0, source.h > 0 else { return ActivityResult() }
         let dt = (grids[grids.count - 1].t - grids[0].t) / Double(grids.count - 1)
         guard dt > 0 else { return ActivityResult() }
         let cw = source.w / Double(ActivityConst.gw)
         let ch = source.h / Double(ActivityConst.gh)
         var tracks: [Track] = []
+        var live: [Int] = []
 
-        for g in grids {
+        for g in grids where g.cells.count == ActivityConst.cells && g.t.isFinite {
+            live.removeAll { g.t - tracks[$0].lastT > s.settleHold + 1e-6 }
             let active = mask(for: g, t: g.t, inputs: inputs, settings: s, cw: cw, ch: ch)
             for c in components(active, g.cells) {
                 var best = -1, bestOv = 0
-                for (i, tr) in tracks.enumerated() where g.t - tr.lastT <= s.settleHold + 1e-6 {
+                for i in live {
+                    let tr = tracks[i]
+                    guard tr.lastT < g.t else { continue }
                     let ov = tr.union.inflated(1).overlapArea(c.box)
                     if ov > bestOv { bestOv = ov; best = i }
                 }
                 if best < 0 {
                     tracks.append(Track(firstT: g.t, lastT: g.t, union: c.box))
                     best = tracks.count - 1
+                    live.append(best)
                 }
-                assign(c, at: g.t, to: best, in: &tracks, settings: s)
+                tracks[best].absorb(c, t: g.t, s: s)
             }
         }
 
@@ -96,11 +101,6 @@ public enum ActivityShotBuilder {
         }
         let covered = active.reduce(0) { $0 + ($1 ? 1 : 0) }
         return Double(covered) / Double(ActivityConst.cells) > s.maxAreaFraction ? none : active
-    }
-
-    private static func assign(_ c: Comp, at t: Double, to i: Int,
-                               in tracks: inout [Track], settings s: ActivitySettings) {
-        tracks[i].absorb(c, t: t, s: s)
     }
 
     private static func shots(from tracks: [Track], grids: [ActivityGrid], dt: Double,
