@@ -56,16 +56,54 @@ public struct Geometry: Sendable {
         let r = style.radii
         radii = SIMD4(r.tl, r.tr, r.br, r.bl) * ui
     }
+
+    func positioned(in layout: ResolvedLayout, contentScale: Double) -> Geometry {
+        let rect = SIMD4<Double>(layout.screenRect)
+        guard rect.z > 0, rect.w > 0, rect.x.isFinite, rect.y.isFinite, rect.z.isFinite, rect.w.isFinite else { return self }
+        let scale = min(max(contentScale, 0.3), 2)
+        let size = SIMD2(rect.z * canvas.x, rect.w * canvas.y) * scale
+        let center = SIMD2((rect.x + rect.z / 2) * canvas.x, (rect.y + rect.w / 2) * canvas.y)
+        var result = self
+        result.content = SIMD4(center.x - size.x / 2, center.y - size.y / 2, size.x, size.y)
+        return result
+    }
+    /// Contained camera centre: the sampled view (`baseView / scale`, where the
+    /// base view is the largest rect of `aspect` inside the crop) stays inside
+    /// the crop — and therefore inside the source. A no-op for a feasible
+    /// camera; the single safety net for a hostile one. This is the render-side
+    /// twin of `CropSpace.visible`'s centre clamp, sharing its per-crop logic,
+    /// with the caller choosing the base-view aspect.
+    static func containedCenter(_ cam: SIMD2<Double>, crop: PxRect, aspect: Double, scale: Double) -> SIMD2<Double> {
+        let base = CropSpace.baseView(crop: crop, aspect: aspect)
+        let s = scale.isFinite ? max(scale, 1) : 1
+        let vw = max(base.w / s, 1), vh = max(base.h / s, 1)
+        func axis(_ v: Double, _ lo: Double, _ hi: Double, _ span: Double) -> Double {
+            let a = lo + span / 2, b = hi - span / 2
+            // Hostile centre (NaN/Inf) snaps to the crop centre — the same
+            // fallback ZoomTransform.clamp and the rest of the layer use.
+            guard v.isFinite, a.isFinite, b.isFinite else { return (lo + hi) / 2 }
+            if b >= a { return min(max(v, a), b) }
+            return (lo + hi) / 2
+        }
+        let x = axis(cam.x, crop.x, crop.x + crop.w, vw)
+        let y = axis(cam.y, crop.y, crop.y + crop.h, vh)
+        guard x.isFinite, y.isFinite else { return SIMD2(crop.x + crop.w / 2, crop.y + crop.h / 2) }
+        return SIMD2(x, y)
+    }
+
     /// Source px -> canvas px for a given camera.
     public func toCanvas(_ p: SIMD2<Double>, cam: SIMD2<Double>, scale: Double,
                          crop: CGRect? = nil, tilt: SIMD2<Float> = .zero) -> SIMD2<Double> {
+        // The sampled view keeps the DRAWN rect's aspect, exactly as contentFS
+        // draws it: one rule, one result, for the image and for the overlays.
         let bounds = crop ?? CGRect(x: 0, y: 0, width: src.x, height: src.y)
-        let relCam = SIMD2<Double>(cam.x - bounds.minX, cam.y - bounds.minY)
-        let cropSrc = SIMD2<Double>(bounds.width, bounds.height)
+        let cropPx = PxRect(x: bounds.minX, y: bounds.minY, w: bounds.width, h: bounds.height)
         let s = scale.isFinite ? max(scale, 1) : 1
-        let center = ZoomTransform.clamp(relCam, source: cropSrc, scale: s)
-        let view: SIMD2<Double> = cropSrc / s
-        let origin = SIMD2<Double>(bounds.minX, bounds.minY) + center - view / 2
+        let aspect = content.w > 1 ? content.z / content.w : 1
+        let center = Geometry.containedCenter(cam, crop: cropPx, aspect: aspect, scale: s)
+        let base = CropSpace.baseView(crop: cropPx, aspect: aspect)
+        let view: SIMD2<Double> = SIMD2(base.w / s, base.h / s)
+        let origin = center - view / 2
         let srcN = SIMD2<Float>(Float((p.x - origin.x) / view.x - 0.5),
                                Float((p.y - origin.y) / view.y - 0.5))
         // contentFS warps the canvas quad with the homography, so a source
@@ -87,7 +125,7 @@ private struct ContentU {
     var cropSize: SIMD2<Float>
     var scale: Float; var radius: Float; var border: Float
     var tilt: SIMD2<Float>; var radii: SIMD4<Float>
-    var upRegion: SIMD4<Float>; var upTexSize: SIMD2<Float>; var upFactor: Float; var upBlend: Float
+    var upRegion: SIMD4<Float>; var upTexSize: SIMD2<Float>; var upFactor: Float; var upBlend: Float; var opacity: Float
 }
 private struct CursorU { var content: SIMD4<Float>; var radius: Float; var opacity: Float; var layer: UInt32; var p: Float }
 private struct RingU { var content: SIMD4<Float>; var color: SIMD4<Float>; var center: SIMD2<Float>; var radius: Float; var progress: Float; var fade: Float; var cr: Float; var mode: Int32; var cam: SIMD2<Float>; var scale: Float; var srcSize: SIMD2<Float> }
@@ -124,7 +162,10 @@ private struct HighlightU {
     var strength: Float
     var mode: Int32
 }
-private struct BackdropKey: Equatable { var style: Style; var size: SIMD2<Int>; var wall: String; var phase: Double; var pointer: SIMD4<Float> }
+private struct BackdropKey: Equatable {
+    var style: Style; var size: SIMD2<Int>; var wall: String; var phase: Double; var pointer: SIMD4<Float>
+    var shadowRect: SIMD4<Double>; var shadowOpacity: Float
+}
 private struct Keep: @unchecked Sendable { let o: Any }
 
 /// BGRA source -> mip-mapped copy, regenerated only when a NEW source frame arrives (sample-and-hold reuses the chain).
@@ -534,9 +575,9 @@ public final class Renderer: @unchecked Sendable {
         work = w; accum = a; backdrop = b
         backdropKey = nil
         captionSrc = [nil, nil, nil]; blurA = [nil, nil, nil]; blurB = [nil, nil, nil]
-        fadePrev = nil; fadeMix = nil; fadeValid = false; fadeSize = s
         maskedSources = [nil, nil, nil]; maskKey = [nil, nil, nil]
         size = s
+        fadePrev = nil; fadeMix = nil; fadeValid = false; fadeSize = s
     }
 
     // MARK: Entry points
@@ -624,7 +665,7 @@ public final class Renderer: @unchecked Sendable {
             // clamp is applied, so 60/120/240 fps stay deterministic.
             st.cameraTilt = CameraTilt.effective(st.cameraTilt, mode: tiltMode,
                                                 maxYaw: tl.camera.maxYaw,
-                                                maxPitch: tl.camera.maxPitch,)
+                                                maxPitch: tl.camera.maxPitch)
             stateBuffers[s].append(st)
         }
         let states = stateBuffers[s]
@@ -681,9 +722,14 @@ public final class Renderer: @unchecked Sendable {
         let backgroundTime = animatedBackground ? (r.quality == .export ? t : (r.uiTime.isFinite ? r.uiTime : 0)) * (tl.style.background == .canvas ? tl.style.canvasSpeed : 1) : 0
         let dither = tl.style.background == .dither
         let pointer = dither && r.quality == .preview ? r.pointer : .zero
+        let hasLayout = r.live == nil && tl.derived?.layout.samples.isEmpty == false && tl.clipSource(atOutput: t) == nil
+        let layout = hasLayout ? states[states.count / 2].layout : nil
+        let shadowRect = layout.map { g.positioned(in: $0, contentScale: tl.style.contentScale).content } ?? g.content
+        let shadowOpacity = Float(tl.style.shadow) * (layout.map { min(max($0.screenOpacity, 0), 1) } ?? 1)
         let key = BackdropKey(style: tl.style, size: cs,
                               wall: tl.style.background == .wallpaper ? a.wallID : (tl.style.background == .image ? a.styleImageID : ""),
-                              phase: backgroundTime, pointer: pointer)
+                              phase: backgroundTime, pointer: pointer,
+                              shadowRect: shadowOpacity > 0 ? shadowRect : .zero, shadowOpacity: shadowOpacity)
         let needsBackdrop = !r.transparent && !r.cursorOnly
         if needsBackdrop && backdropKey != key {
             backdropKey = key
@@ -725,9 +771,9 @@ public final class Renderer: @unchecked Sendable {
                 let hasStyleImage = st.background == .image && a.styleImage != nil
                 if st.background == .wallpaper, let wallTex = a.wall?.tex { e.setFragmentTexture(wallTex, index: 0) }
                 if hasStyleImage, let styleImage = a.styleImage?.tex { e.setFragmentTexture(styleImage, index: 0) }
-                frag(e, BackdropU(content: SIMD4<Float>(g.content), canvas: canvasF, angle: Float(st.gradientAngle * .pi / 180),
+                frag(e, BackdropU(content: SIMD4<Float>(shadowRect), canvas: canvasF, angle: Float(st.gradientAngle * .pi / 180),
                                   count: Int32(colorCount), kind: kind, canvasStyle: canvasStyle,
-                                  radius: Float(g.radius), shadow: Float(st.shadow), scale: Float(g.ui * 1.33),
+                                  radius: Float(g.radius), shadow: shadowOpacity, scale: Float(g.ui * 1.33),
                                   cell: Float(max(2, st.ditherCell * g.ui)), density: Float(st.ditherDensity),
                                   hasWall: (st.background == .wallpaper && a.wall != nil) || hasStyleImage ? 1 : 0,
                                   time: Float(backgroundTime), pointer: pointer,
@@ -751,7 +797,10 @@ public final class Renderer: @unchecked Sendable {
                                                        levels: levelsNeeded, slot: s, cb: cb) else {
                 sem.signal(); return false
             }
-            scene(cb, into: work[s], slot: s, st: st, r: r, g: g, src: protectedSource, web: webTex, matte: matte)
+            let frameGeometry = hasLayout ? g.positioned(in: st.layout, contentScale: tl.style.contentScale) : g
+            let screenOpacity = hasLayout ? min(max(st.layout.screenOpacity, 0), 1) : 1
+            scene(cb, into: work[s], slot: s, st: st, r: r, g: frameGeometry, screenOpacity: screenOpacity,
+                  src: protectedSource, web: webTex, matte: matte)
             if K > 1 {
                 let pd = MTLRenderPassDescriptor()
                 pd.colorAttachments[0].texture = accum[s]; pd.colorAttachments[0].loadAction = i == 0 ? .clear : .load
@@ -770,10 +819,13 @@ public final class Renderer: @unchecked Sendable {
         // to black. `effectiveCrossfade` is the project-wide usable window.
         let currentScene = K > 1 ? accum[s] : work[s]
         var sceneForResolve = currentScene
-        if tl.effectiveCrossfade > 0, !r.transparent, !r.cursorOnly,
+        let joinWeight = crossfadeWeight(tl, t)
+        let frameInterval = 1 / max(r.fps, 1)
+        let approachingJoin = joinWeight == nil && crossfadeWeight(tl, t + frameInterval * 1.5) != nil
+        if !r.transparent, !r.cursorOnly, (approachingJoin || joinWeight != nil),
            let (prev, mix) = crossfadeTargets(cs) {
-            let sequential = fadeValid && t > fadeTime && t - fadeTime <= 1.5 / max(r.fps, 1)
-            if sequential, let w = crossfadeWeight(tl, t), w < 1 {
+            let sequential = fadeValid && t > fadeTime && t - fadeTime <= frameInterval * 1.5
+            if sequential, let w = joinWeight, w < 1 {
                 let rp = MTLRenderPassDescriptor()
                 rp.colorAttachments[0].texture = mix
                 rp.colorAttachments[0].loadAction = .clear
@@ -789,20 +841,26 @@ public final class Renderer: @unchecked Sendable {
                     sceneForResolve = mix
                 }
             }
-            // Publish this frame's scene as the outgoing side for the next one.
-            let hp = MTLRenderPassDescriptor()
-            hp.colorAttachments[0].texture = prev
-            hp.colorAttachments[0].loadAction = .clear
-            hp.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-            hp.colorAttachments[0].storeAction = .store
-            if let e = cb.makeRenderCommandEncoder(descriptor: hp) {
-                e.setRenderPipelineState(pTextSprite); quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
-                frag(e, TextSpriteU(opacity: 1)); e.setFragmentTexture(currentScene, index: 0)
-                e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-                e.endEncoding()
-                fadeValid = true
+            if approachingJoin {
+                fadeValid = false
+                let hp = MTLRenderPassDescriptor()
+                hp.colorAttachments[0].texture = prev
+                hp.colorAttachments[0].loadAction = .clear
+                hp.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+                hp.colorAttachments[0].storeAction = .store
+                if let e = cb.makeRenderCommandEncoder(descriptor: hp) {
+                    e.setRenderPipelineState(pTextSprite); quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
+                    frag(e, TextSpriteU(opacity: 1)); e.setFragmentTexture(currentScene, index: 0)
+                    e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    e.endEncoding()
+                    fadeValid = true
+                }
+            } else if !sequential {
+                fadeValid = false
             }
             fadeTime = t
+        } else {
+            fadeValid = false
         }
 
         // 3. resolve
@@ -836,17 +894,17 @@ public final class Renderer: @unchecked Sendable {
         let tl = r.timeline
         let k = g.content.z / g.src.x, sc = b.cameraScale.isFinite ? max(Double(b.cameraScale), 1) : 1
         let cam = Double(simd_length(b.cameraCenter - a.cameraCenter)) * k * sc
-        let zb = b.cameraScale.isFinite ? max(Double(b.cameraScale), 0.001) : 1
-        let za = a.cameraScale.isFinite ? max(Double(a.cameraScale), 0.001) : 1
+        let zb = b.cameraScale.isFinite ? max(Double(b.cameraScale), 1) : 1
+        let za = a.cameraScale.isFinite ? max(Double(a.cameraScale), 1) : 1
         let zoom = abs(log(zb / za)) * g.content.z * 0.5
         let cur = Double(simd_length(b.cursor.position - a.cursor.position)) * k * sc
         // Tilt is a moving camera too: a Lean/Float/Reveal change needs the
         // same 180-degree shutter as pan/zoom/cursor. ~0.4% of frame width per
         // degree matches the bounded homography at its 8 degree limit.
         let tiltA = CameraTilt.effective(a.cameraTilt, mode: tl.camera.tilt, maxYaw: tl.camera.maxYaw,
-                                         maxPitch: tl.camera.maxPitch,)
+                                         maxPitch: tl.camera.maxPitch)
         let tiltB = CameraTilt.effective(b.cameraTilt, mode: tl.camera.tilt, maxYaw: tl.camera.maxYaw,
-                                         maxPitch: tl.camera.maxPitch,)
+                                         maxPitch: tl.camera.maxPitch)
         let tiltDelta = max(abs(Double(tiltB.x - tiltA.x)), abs(Double(tiltB.y - tiltA.y)))
         return max(cam, zoom, cur, tiltDelta * g.content.z * 0.004)
     }
@@ -888,16 +946,16 @@ public final class Renderer: @unchecked Sendable {
             return 1
         }
         let n = Int(ceil(blurPx))
-        var cap = tl.camera.maxSamples
+        var cap = max(1, tl.camera.maxSamples)     // a corrupted maxSamples must never mean "render nothing"
         if r.quality == .preview {
             // Spend at most half of the frame budget on blur samples. Once
             // the GPU cost is measured, this can rise above 2 on fast Macs
             // and falls back to a sharp frame before the first measurement.
             let per = perSample.withLock { $0 }
             let budget = per > 0 ? min(max(Int(0.5 / max(r.fps, 1) / per), 1), tl.camera.maxSamples) : 1
-            cap = min(budget, tl.camera.maxSamples)
+            cap = min(max(1, budget), cap)
         }
-        let want = min(max(n, 1), cap)
+        let want = min(max(n, 1), max(cap, 1))
         guard r.quality == .preview else { return want }        // export: pure function of the request
         // SMOOTHNESS: sticky sample count. K flipping 1↔2↔3 on consecutive
         // frames changes the ghost structure of the blur and the GPU cost in
@@ -911,30 +969,24 @@ public final class Renderer: @unchecked Sendable {
     }
 
     private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, slot: Int, st: FrameState, r: RenderRequest, g: Geometry,
-                       src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
+                       screenOpacity: Float, src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
         let tl = r.timeline
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y)), content = SIMD4<Float>(g.content)
         let tiltMode = tl.camera.tilt
         let tilt = CameraTilt.effective(st.cameraTilt, mode: tiltMode,
                                         maxYaw: tl.camera.maxYaw,
-                                        maxPitch: tl.camera.maxPitch,)
+                                        maxPitch: tl.camera.maxPitch)
         let sc = st.cameraScale.isFinite ? max(Double(st.cameraScale), 1) : 1
-        // Reveal's 0.92 entrance scale shrinks the framed video inside the
-        // canvas and grows it back to full size. It is a content-rect scale,
-        // NOT a source zoom-out: the sample view stays at `sc`, so the smart
-        // camera clamp and the crop containment are untouched.
-        let reveal = CameraTilt.revealScale(mode: tiltMode, tilt: tilt)
-        var contentRect = content
-        if reveal < 0.9999 {
-            let w = content.z * Float(reveal), h = content.w * Float(reveal)
-            contentRect = SIMD4(content.x + (content.z - w) / 2, content.y + (content.w - h) / 2, w, h)
-        }
+        // The camera NEVER scales the content rect. Reveal's entrance shrink is
+        // gone from the renderer entirely (it was the reported "shrink"); the
+        // drawn rect is always `content`, and the .off (default) path applies
+        // no warp, no tilt and no extra scale — a pure viewport magnification.
+        let contentRect = content
         // Browser-content crop: the dense AXWebArea track is authoritative; a
         // legacy Area crop is the fallback, then the full source. The Director
-        // already reconstructed the visible rect with CropSpace.visible, so the
-        // camera centre is feasible for THIS crop — no second clamp on derived
-        // frames. A Studio-supplied live state may carry an arbitrary focus and
-        // is clamped here as the single remaining safety net.
+        // already reconstructs a camera centre feasible for ITS view; the
+        // renderer must guarantee the view IT draws stays inside the crop, so
+        // every state (live and derived) passes through one containment clamp.
         let cropSrc: PxRect = st.crop.isValid
             ? st.crop
             : (st.cropRect.width > 1 && st.cropRect.height > 1
@@ -942,20 +994,18 @@ public final class Renderer: @unchecked Sendable {
                          w: Double(st.cropRect.width), h: Double(st.cropRect.height))
                 : PxRect(x: 0, y: 0, w: g.src.x, h: g.src.y))
         let cropBounds = CGRect(x: cropSrc.x, y: cropSrc.y, width: cropSrc.w, height: cropSrc.h)
-        let cam: SIMD2<Double>
-        if r.live != nil {
-            let rel = ZoomTransform.clamp(
-                SIMD2(Double(st.cameraCenter.x) - cropSrc.x, Double(st.cameraCenter.y) - cropSrc.y),
-                source: SIMD2(cropSrc.w, cropSrc.h), scale: sc)
-            cam = SIMD2(rel.x + cropSrc.x, rel.y + cropSrc.y)
-        } else {
-            cam = SIMD2(Double(st.cameraCenter.x), Double(st.cameraCenter.y))
-        }
-        // contentFS maps view = cropSize / scale. The Director reports scale
-        // relative to the crop's base view, so cropSize is that base view: the
-        // visible source rect is baseView / scale == CropSpace.visible, in both
-        // dimensions even when the crop and frame aspects differ.
-        let baseView = CropSpace.baseView(crop: cropSrc, aspect: tl.style.aspectRatio)
+        // Invariant: the sampled source view has the SAME aspect as the drawn
+        // content rect (source aspect by construction, never the canvas
+        // aspect), so a zoom is a true magnification in both dimensions — not
+        // a stretch, squash or crop of the frame.
+        let drawAspect = g.content.w > 1 ? g.content.z / g.content.w : 1
+        let cam = Geometry.containedCenter(SIMD2<Double>(Double(st.cameraCenter.x), Double(st.cameraCenter.y)),
+                                           crop: cropSrc, aspect: drawAspect, scale: sc)
+        // contentFS maps view = cropSize / scale. The base view is the zero-zoom
+        // view: the largest rect of the drawn rect's aspect inside the crop.
+        // Dividing by the scale keeps the aspect, so the sampled view is a true
+        // sub-rect of the source at 1:1 aspect — never a resampling axis swap.
+        let baseView = CropSpace.baseView(crop: cropSrc, aspect: drawAspect)
         let cropSize = SIMD2<Float>(Float(max(baseView.w, 1)), Float(max(baseView.h, 1)))
         let pxPerSrc = g.content.z / g.src.x
         let drawingContent = !r.cursorOnly
@@ -965,7 +1015,7 @@ public final class Renderer: @unchecked Sendable {
         // pass that wrote the scene target. Tilt is no longer gated out: the
         // fragment shader warps first, then samples the upscaled lattice.
         var upscaled: (UpscaleResult, Float)?
-        if drawingContent, tl.camera.upscaleEnabled, let cp = contentPass, let up = upscaler {
+        if drawingContent, screenOpacity > 0.001, tl.camera.upscaleEnabled, let cp = contentPass, let up = upscaler {
             let layout = ContentLayout(canvas: SIMD2<Int32>(Int32(g.canvas.x), Int32(g.canvas.y)),
                                        contentRect: content, radii: SIMD4<Float>(g.radii),
                                        srcSize: SIMD2<Float>(g.src))
@@ -990,14 +1040,17 @@ public final class Renderer: @unchecked Sendable {
         func draw() { enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
 
         // content (fragment path; the upscaler, when engaged, is sampled here)
-        if drawingContent {
+        var upBlend = upscaled?.1 ?? 0
+        if !upBlend.isFinite { upBlend = 0 }     // hostile blend can never reach the shader
+        upBlend = min(max(upBlend, 0), 1)
+        if drawingContent, screenOpacity > 0.001 {
             enc.setRenderPipelineState(pContent); quad(enc, contentRect, canvasF)
             frag(enc, ContentU(content: contentRect, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam),
                              cropSize: cropSize, scale: Float(sc),
                              radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0,
                              tilt: tilt, radii: SIMD4<Float>(g.radii),
                              upRegion: upscaled?.0.region ?? .zero, upTexSize: upscaled?.0.texSize ?? .one,
-                             upFactor: upscaled?.0.factor ?? 1, upBlend: upscaled?.1 ?? 0))
+                             upFactor: upscaled?.0.factor ?? 1, upBlend: upBlend, opacity: screenOpacity))
             enc.setFragmentTexture(src, index: 0)
             enc.setFragmentTexture(upscaled?.0.texture ?? src, index: 1)
             draw()
@@ -1005,7 +1058,7 @@ public final class Renderer: @unchecked Sendable {
 
         // Highlight geometry follows the exact source-pixel camera transform.
         // Dimmer is drawn AFTER privacy redaction and never resamples raw pixels.
-        if drawingContent, !st.emphasis.highlights.isEmpty {
+        if drawingContent, screenOpacity > 0.001, !st.emphasis.highlights.isEmpty {
             enc.setRenderPipelineState(pHighlight)
             for mark in st.emphasis.highlights where mark.opacity > 0.001 {
                 let start = g.toCanvas(SIMD2(Double(mark.rect.x), Double(mark.rect.y)), cam: cam, scale: sc, crop: cropBounds, tilt: tilt)
@@ -1019,7 +1072,7 @@ public final class Renderer: @unchecked Sendable {
                 case .glow: 2
                 }
                 quad(enc, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
-                frag(enc, HighlightU(rect: bounds, content: content, opacity: mark.opacity,
+                frag(enc, HighlightU(rect: bounds, content: content, opacity: mark.opacity * screenOpacity,
                                     strength: mark.dim, mode: mode))
                 draw()
             }
@@ -1027,7 +1080,7 @@ public final class Renderer: @unchecked Sendable {
 
         // Glass loupes: a magnified window over the source. Drawn before the
         // cursor so the pointer stays visible above the glass.
-        if drawingContent, !st.emphasis.loupes.isEmpty {
+        if drawingContent, screenOpacity > 0.001, !st.emphasis.loupes.isEmpty {
             enc.setRenderPipelineState(pLoupe)
             let sourceSize = SIMD2<Float>(Float(g.src.x), Float(g.src.y))
             for glass in st.emphasis.loupes where glass.opacity > 0.001 {
@@ -1045,7 +1098,7 @@ public final class Renderer: @unchecked Sendable {
                 frag(enc, LoupeU(glass: SIMD4<Float>(center.x, center.y, R, R * glass.border * 2),
                                source: SIMD4<Float>(glass.target.x, glass.target.y, sourceSize.x, sourceSize.y),
                                zoom: SIMD2<Float>(Float(sc), Float(max(glass.magnification, 1))),
-                               opacity: glass.opacity, round: glass.round ? 1 : 0,
+                               opacity: glass.opacity * screenOpacity, round: glass.round ? 1 : 0,
                                radius: R * 0.32))
                 enc.setFragmentTexture(src, index: 0)
                 draw()
@@ -1056,7 +1109,7 @@ public final class Renderer: @unchecked Sendable {
         // source: the raw texture still contains masked pixels, so sampling it
         // would displace a secret out from under its mosaic. Copy the scene
         // once per frame (only while a click is on screen) and sample that.
-        if tl.cursor.clickRing != nil, !st.clickFX.isEmpty {
+        if screenOpacity > 0.001, tl.cursor.clickRing != nil, !st.clickFX.isEmpty {
             let ringSize = min(max(tl.cursor.clickSize, 0.5), 2.0)
             let R = 70 * g.ui * pow(sc, 0.5) * ringSize
             // A ring at exactly 0 or 1 carries no motion: at 0 it would pop at
@@ -1099,7 +1152,7 @@ public final class Renderer: @unchecked Sendable {
                 }
             }
             enc.setRenderPipelineState(pRing)
-            let ringAlpha = Float(min(max(tl.cursor.clickIntensity, 0), 1.5))
+            let ringAlpha = Float(min(max(tl.cursor.clickIntensity, 0), 1.5)) * screenOpacity
             let ringColor = SIMD4<Float>(tl.cursor.clickColor.r, tl.cursor.clickColor.g, tl.cursor.clickColor.b, tl.cursor.clickColor.a * ringAlpha)
             let mode: Int32 = switch tl.cursor.clickEffect {
             case .none, .ripple: 0
@@ -1122,8 +1175,8 @@ public final class Renderer: @unchecked Sendable {
         // cursor. Opacity fades at the crop edge so the pointer never leaves
         // the visible frame while browser chrome is hidden.
         let cs = st.cursor
-        let cropFade: Double = 1.0
-        let cursorOpacity = Float(min(max(Double(cs.opacity) * cropFade, 0), 1))
+        let cropFade = CropSpace.cursorVisibility(x: Double(cs.position.x), y: Double(cs.position.y), crop: cropSrc)
+        let cursorOpacity = Float(min(max(Double(cs.opacity) * cropFade, 0), 1)) * screenOpacity
         if cursorOpacity > 0.01, let atlas, let ent = atlas.entry(cs.shape) {
             let S = 32 * r.backingScale * tl.cursor.size * pxPerSrc * pow(sc, 1 - tl.cursor.effectiveCompensation) * Double(cs.press)
             let c = g.toCanvas(SIMD2<Double>(Double(cs.position.x), Double(cs.position.y)), cam: cam, scale: sc, crop: cropBounds, tilt: tilt)
