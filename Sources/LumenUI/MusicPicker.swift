@@ -70,10 +70,11 @@ struct MusicPicker: View {
             HStack(alignment: .center, spacing: 8) {
                 Button(action: onPreview) {
                     VStack(alignment: .leading, spacing: 0) {
-                        WaveformPeaks(peaks: peaks, tint: hue)
-                            .frame(height: 26)
+                        DitherWaveformView(peaks: peaks, hue: 5, height: 32)
+                            .frame(height: 32)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 2)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .accessibilityHidden(true)
                         Text(track.title).font(AppType.body).foregroundStyle(Tok.text).lineLimit(1)
                         Text(track.category.capitalized).font(AppType.caption).foregroundStyle(Tok.text2)
                     }
@@ -228,7 +229,7 @@ private actor WaveformStore {
         if let hit = cache[key] { return hit }
         let value = await Task.detached(priority: .utility) {
             guard let pcm = try? AudioIO.readMonoPrefix(url, seconds: 1.5), !pcm.isEmpty else { return [] as [Float] }
-            return MusicPicker.combed(pcm, buckets: 24)
+            return MusicPicker.combed(pcm, buckets: 64)
         }.value
         guard !value.isEmpty else { return [] }
         cache[key] = value

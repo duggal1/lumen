@@ -45,15 +45,21 @@ final class TimelineDitherRenderer {
         let isWarm: Bool
     }
 
+    /// The same instrument can draw the five-lane timeline or one waveform
+    /// band. A layout is geometry only; the Frame supplies the hues.
+    struct Layout: Sendable {
+        var bands: Int
+        var top: CGFloat
+        var bandHeight: CGFloat
+    }
+    static let timelineLayout = Layout(bands: 5, top: 24, bandHeight: 40)
+    static let waveformLayout = Layout(bands: 1, top: 0, bandHeight: 44)
+
     static let pitch: CGFloat = 4
     static let cell: CGFloat = 3
     /// Matches `TimelineStrip.Lattice`: 8 pt card inset + 8 pt lattice pad.
     static let inset: CGFloat = 16
-    static let top: CGFloat = 24  // the ruler sits above lane zero
-    static let laneHeight: CGFloat = 40
-    static let lanes = 5
     static let glowPad = 6
-    private static let rowsPerLane = Int(laneHeight / pitch) // 10
     private static let space = CGColorSpace(name: CGColorSpace.displayP3) ?? CGColorSpaceCreateDeviceRGB()
     /// Bayer 4×4, in the same order as Clove.
     private static let bayer: [Float] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map { (Float($0) + 0.5) / 16 }
@@ -81,6 +87,11 @@ final class TimelineDitherRenderer {
 
     let width: CGFloat, height: CGFloat, scale: CGFloat
     let isDark: Bool
+    let layout: Layout
+    private let bands: Int
+    private let top: CGFloat
+    private let bandHeight: CGFloat
+    private let rowsPerLane: Int
     private let cols: Int
     private let rows: Int
     private let colors: [RGB], hot: [RGB], colorRefs: [CGColor]
@@ -97,13 +108,19 @@ final class TimelineDitherRenderer {
     private let glowPixels: UnsafeMutablePointer<UInt8>, glowScratch: UnsafeMutablePointer<UInt8>
     private let cellsContext: CGContext, glowContext: CGContext, overlayContext: CGContext
 
-    init?(width: CGFloat, height: CGFloat, scale: CGFloat, isDark: Bool) {
+    init?(width: CGFloat, height: CGFloat, scale: CGFloat, isDark: Bool,
+          layout: Layout = TimelineDitherRenderer.timelineLayout) {
         self.width = max(40, width.rounded(.down))
         self.height = height
         self.scale = min(2, max(1, scale))
         self.isDark = isDark
+        self.layout = layout
+        bands = max(1, layout.bands)
+        top = layout.top
+        bandHeight = layout.bandHeight
+        rowsPerLane = max(1, Int(bandHeight / Self.pitch))
         cols = max(1, Int((self.width - 2 * Self.inset) / Self.pitch))
-        rows = Self.rowsPerLane * Self.lanes
+        rows = rowsPerLane * bands
         let palette = isDark ? Self.hues : Self.lightHues
         colors = palette.map { RGB(r: Float($0.0 * 255), g: Float($0.1 * 255), b: Float($0.2 * 255)) }
         // White-hot on graphite; on paper white would vanish, so cells run deep.
@@ -140,7 +157,7 @@ final class TimelineDitherRenderer {
     /// Rasterizes one frame into the three compositing layers.
     @_optimize(speed)
     func draw(_ f: Frame) -> Output {
-        let insetF = Float(Self.inset), topF = Float(Self.top), laneF = Float(Self.laneHeight)
+        let insetF = Float(Self.inset), topF = Float(top), laneF = Float(bandHeight)
         let cool = Float(exp(-f.dt / 0.42))
         let dt = Float(f.dt)
         let drift = Float(f.t) * 0.28
@@ -165,14 +182,14 @@ final class TimelineDitherRenderer {
             return row
         }
         // A frame with fewer lanes must never index past the lane table.
-        while resolved.count < Self.lanes { resolved.append([Int](repeating: -1, count: cols)) }
+        while resolved.count < bands { resolved.append([Int](repeating: -1, count: cols)) }
         edges = resolved
 
         var lc = 0
-        for lane in 0..<Self.lanes {
+        for lane in 0..<bands {
             let owners = edges[lane]
-            for r in 0..<Self.rowsPerLane {
-                let row = lane * Self.rowsPerLane + r
+            for r in 0..<rowsPerLane {
+                let row = lane * rowsPerLane + r
                 for col in 0..<cols {
                     let n = row * cols + col
                     var want = owners[col]
@@ -278,16 +295,16 @@ final class TimelineDitherRenderer {
         ctx.setLineWidth(scale)
         let p = Float(Self.pitch)
         let insetF = Float(Self.inset)
-        let topF = Float(Self.top)
-        let laneF = Float(Self.laneHeight)
+        let topF = Float(top)
+        let laneF = Float(bandHeight)
         let scaleF = Float(scale)
-        for lane in 0..<min(Self.lanes, edges.count) {
+        for lane in 0..<min(bands, edges.count) {
             let owners = edges[lane]
             guard owners.count == cols else { continue }
             for col in 1..<cols where owners[col] >= 0 && owners[col] != owners[col - 1] {
                 let xf = (insetF + Float(col) * p) * scaleF
                 let yf = (topF + Float(lane) * laneF + p) * scaleF
-                let h = Float(Self.rowsPerLane) * p * scaleF - 2 * scaleF
+                let h = Float(rowsPerLane) * p * scaleF - 2 * scaleF
                 ctx.beginPath()
                 ctx.setStrokeColor(seam.copy(alpha: seam.alpha * 0.45) ?? seam)
                 ctx.move(to: CGPoint(x: CGFloat(xf), y: CGFloat(yf)))

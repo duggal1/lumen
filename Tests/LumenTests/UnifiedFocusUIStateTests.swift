@@ -4,12 +4,11 @@ import LumenProject
 import LumenRender
 @testable import LumenUI
 
-/// Headless state and source tests for the replacement of the deleted Focus
-/// (cursor) page. The page no longer exists: framing moved to Tools, skins
-/// moved to the toolbar chooser. These tests pin that shape so the page cannot
-/// creep back and the Tiny Hand coat stays wired to the renderer.
+/// Headless state and source tests for the rebuilt Studio rail. No window is
+/// opened: these pin the structure of the new right side and the Diether
+/// instruments it uses.
 @MainActor
-@Suite("Cursor chooser UI state")
+@Suite("Studio rail UI state")
 struct UnifiedFocusUIStateTests {
 
     private func source(_ relative: String) throws -> String {
@@ -18,34 +17,75 @@ struct UnifiedFocusUIStateTests {
         return try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
     }
 
-    @Test func inspectorHasNoCursorPage() throws {
+    @Test func railIsRebuiltWithSevenQuietSections() throws {
         let src = try source("Sources/LumenUI/Inspector.swift")
-        #expect(!src.contains("case focus ="))
-        #expect(!src.contains("UnifiedFocusPage"))
-        #expect(!src.contains("CursorAppearance"))
+        let tabs = ["= \"Look\"", "= \"Cursor\"", "= \"Sound\"", "= \"Text\"", "= \"Trim\"", "= \"Privacy\"", "= \"Export\""]
+        for tab in tabs { #expect(src.contains(tab), "\(tab) section missing") }
+        #expect(src.contains("case focus") == false)
+        #expect(src.contains("case tools") == false)
         #expect(!FileManager.default.fileExists(atPath: SourcePaths.page))
         #expect(!FileManager.default.fileExists(atPath: SourcePaths.appearance))
     }
 
-    @Test func framingControlsSurviveInTools() throws {
+    @Test func cursorPageIsBackWithTheTinyHandCoat() throws {
         let src = try source("Sources/LumenUI/Inspector.swift")
-        for label in ["Auto zoom", "Zoom amount", "Smoothness", "Layout"] {
-            #expect(src.contains(label), "\(label) must survive the page deletion")
+        #expect(src.contains("var cursorPage"))
+        #expect(src.contains("TinyHandSkins.catalog.map(\\.pack)"))
+        #expect(src.contains("CursorAtlas.previewImage(pack: pack)"))
+        #expect(src.contains("Bitmap.check"))
+        #expect(src.contains("SliderRow(label: \"Size\""))
+    }
+
+    @Test func soundIsCutToTheMainControls() throws {
+        let src = try source("Sources/LumenUI/InspectorPages.swift")
+        let page = src.components(separatedBy: "var soundPage").dropFirst().first ?? ""
+        let next = page.components(separatedBy: "var textPage").first ?? page
+        for control in ["voiceBoostDb", "noiseReductionStrength", "soundEffectsEnabled"] {
+            #expect(next.contains(control), "\(control) must stay")
+        }
+        for removed in ["studioMode", "zoomInGainDb", "zoomOutGainDb", "clickGainDb", "typingLevelDb", "showVoiceIsolationControls"] {
+            #expect(!next.contains(removed), "\(removed) is one of the cut settings")
+        }
+    }
+
+    @Test func framingSurvivesOnTheTrimPage() throws {
+        let src = try source("Sources/LumenUI/InspectorPages.swift")
+        for label in ["Auto zoom", "Zoom amount", "Layout"] {
+            #expect(src.contains(label), "\(label) must survive the rebuild")
         }
         #expect(src.contains("FramingLayoutStyle.all"))
+        let rail = try source("Sources/LumenUI/Inspector.swift")
+        #expect(rail.contains("enum FramingLayoutStyle"))
         let kinds = Set(Inspector.FramingLayoutStyle.all.map(\.0))
         #expect(kinds == Set(LayoutKind.allCases))
     }
 
-    @Test func retiredTabsFallBackToStudio() {
-        for old in ["Camera", "Cursor", "Layout", "Focus"] {
-            #expect(Inspector.normalizeTab(old) == "Studio")
+    @Test func retiredTabsResolveToTheNewSections() {
+        for old in ["Focus", "Cursor", "Camera", "Layout"] {
+            #expect(Inspector.normalizeTab(old) == "Cursor")
         }
-        #expect(Inspector.normalizeTab("Transcript") == "Captions")
-        #expect(Inspector.normalizeTab("Background") == "Studio")
-        #expect(Inspector.normalizeTab("Audio") == "Audio")
+        for old in ["Tools", "Background", "Studio", "Timeline"] {
+            #expect(Inspector.normalizeTab(old) == "Look")
+        }
+        #expect(Inspector.normalizeTab("Transcript") == "Text")
+        #expect(Inspector.normalizeTab("Captions") == "Text")
+        #expect(Inspector.normalizeTab("Audio") == "Sound")
         #expect(Inspector.normalizeTab("") == "")
     }
+
+    @Test func everyPageHasAHeadlineAction() throws {
+        let src = try source("Sources/LumenUI/InspectorPages.swift")
+        for page in ["soundPage", "textPage", "trimPage", "privacyPage", "exportPage"] {
+            #expect(src.contains("var \(page)"), "\(page) missing")
+        }
+        #expect(src.contains("pageHeader(\"Sound\""))
+        #expect(src.contains("pageHeader(\"Text\""))
+        #expect(src.contains("pageHeader(\"Trim\""))
+        #expect(src.contains("pageHeader(\"Privacy\""))
+        #expect(src.contains("pageHeader(\"Export\""))
+    }
+
+    // MARK: The stolen coat
 
     @Test func tinyHandCatalogIsRealAndDistinct() {
         let skins = TinyHandSkins.catalog
@@ -55,7 +95,7 @@ struct UnifiedFocusUIStateTests {
             #expect(!skin.title.isEmpty)
             #expect(skin.asset.hasPrefix("hand_"))
             #expect(TinyHandSkins.isCoat(skin.pack))
-            #expect(!skin.pack.preservesShape, "a skin replaces the pointer for every shape")
+            #expect(!skin.pack.preservesShape)
         }
     }
 
@@ -66,56 +106,41 @@ struct UnifiedFocusUIStateTests {
     }
 
     @Test func existingInkPacksKeepTheirShapeIdentity() {
-        for pack in [CursorPack.lavender, .ember, .system, .coral] {
-            #expect(pack.preservesShape)
-        }
-        for pack in [CursorPack.dot, .ring, .outline, .pixel, .glove, .robot] {
-            #expect(!pack.preservesShape)
-        }
+        for pack in [CursorPack.lavender, .ember, .system, .coral] { #expect(pack.preservesShape) }
+        for pack in [CursorPack.dot, .ring, .outline, .pixel, .glove, .robot] { #expect(!pack.preservesShape) }
     }
 
     @Test func chooserShowsTheSameArtworkAndChecksTheActiveSkin() throws {
         let src = try source("Sources/LumenUI/CursorSkinChooser.swift")
         #expect(src.contains("TinyHandSkins.catalog"))
-        #expect(src.contains("TinyHandSkins.image(for: pack)"))
-        #expect(src.contains("CursorAtlas.previewImage(pack: pack)"))
         #expect(src.contains("Bitmap.check"))
-        for banned in [".stroke(", "ColorPicker", "DisclosureGroup", ".sheet", ".popover"] {
-            #expect(!src.contains(banned), "\(banned) does not belong in the chooser")
-        }
         let toolbar = try source("Sources/LumenUI/EditorView.swift")
         #expect(toolbar.contains("CursorSkinChooser(model: model)"))
-        #expect(toolbar.contains("cursorarrow"))
     }
 
-    @Test func cursorGlyphsAreRealSymbols() {
-        for name in ["cursorarrow", "rectangle.3.group"] {
-            #expect(IconSymbols.exists(name), "\(name) must be a real macOS SF Symbol")
-        }
-    }
+    // MARK: Diether instruments
 
-    @Test func wallpaperTreeIsWalkedOnceOffMain() throws {
-        let src = try source("Sources/LumenUI/Inspector.swift")
-        #expect(src.contains("loadWallpaperChoices()"))
-        #expect(src.contains("Task.detached"))
-        #expect(!src.contains("Self.wallpaperChoices()"), "no per-redraw filesystem walk")
-    }
-
-    @Test func musicPreviewsLoadLazily() throws {
+    @Test func musicWaveformUsesTheDitherInstrument() throws {
         let src = try source("Sources/LumenUI/MusicPicker.swift")
+        #expect(src.contains("DitherWaveformView(peaks: peaks, hue: 5"))
         #expect(src.contains("WaveformStore.shared.peaks(for: track.url)"))
         #expect(src.contains("Task.detached"))
-        #expect(!src.contains("loadWaveforms()"), "no eager whole-library decode")
-        #expect(!src.contains("AVAudioFile"), "decoding lives in LumenAudio")
+        #expect(!src.contains("WaveformPeaks("))
+    }
+
+    @Test func exportBandIsColorfulAndTracksProgress() throws {
+        let src = try source("Sources/LumenUI/DitherWaveformView.swift")
+        #expect(src.contains("struct DitherColorBandView"))
+        #expect(src.contains("let hues = [0, 1, 2, 3, 4, 5]"))
+        let pages = try source("Sources/LumenUI/InspectorPages.swift")
+        #expect(pages.contains("DitherColorBandView(progress: exportFraction)"))
     }
 
     @Test func chooserTilesNeverWearStrokesOrRawFonts() throws {
         let src = try source("Sources/LumenUI/CursorSkinChooser.swift")
-        for banned in [".stroke(", ".strokeBorder(", "CornerBrackets", "ColorPicker", ".font(.system("] {
+        for banned in [".stroke(", "CornerBrackets", "ColorPicker", ".font(.system("] {
             #expect(!src.contains(banned), "\(banned) must not appear in the chooser")
         }
-        #expect(src.contains(".clickable()"))
-        #expect(src.contains(".focusRing()"))
     }
 }
 

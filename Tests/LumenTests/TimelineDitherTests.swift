@@ -92,7 +92,7 @@ struct TimelineDitherTests {
         let renderer = try String(contentsOf: root.appendingPathComponent("Sources/LumenUI/TimelineDither.swift"), encoding: .utf8)
         #expect(renderer.contains("ownedImage(cellsContext"))
         #expect(renderer.contains("ownedImage(glowContext"))
-        #expect(renderer.contains("while resolved.count < Self.lanes"))
+        #expect(renderer.contains("while resolved.count < bands"))
     }
 
     @Test func timelineKeepsItsChromeOverlays() throws {
