@@ -190,16 +190,13 @@ struct PreviewView: NSViewRepresentable {
                 if Task.isCancelled { break }
                 let frames: (screen: SourceFrame, webcam: SourceFrame?)
                 do { frames = try await session.frames(atOutput: tick.t, timeline: tick.timeline) } catch { continue }
-                // SMOOTHNESS: decode can eat the scheduling slack. Re-pick the
-                // vsync and recompute content time from the same clock together,
-                // so a late frame is never shown with content for a passed vsync.
-                var present = tick.present, t = tick.t
-                let now = CACurrentMediaTime(), slack = 0.003
-                if present - now < slack {
-                    present = vc.firstVsync(after: now + slack)
-                    t = clock.time(at: present)
+                let now = CACurrentMediaTime()
+                var present = tick.present
+                if present <= now {
+                    guard now - present < 1 / tick.fps else { continue }
+                    present = vc.firstVsync(after: now)
                 }
-                let request = RenderRequest(timeline: tick.timeline, t: t, screen: frames.screen, webcam: frames.webcam,
+                let request = RenderRequest(timeline: tick.timeline, t: tick.t, screen: frames.screen, webcam: frames.webcam,
                                             canvas: tick.size, fps: tick.fps, backingScale: tick.backingScale,
                                             quality: .preview, uiTime: tick.uiTime, pointer: tick.pointer,
                                             personMaskDirectory: tick.maskDirectory)
@@ -227,6 +224,12 @@ struct PreviewView: NSViewRepresentable {
         // The link lives on its own runloop so SwiftUI layout and 12 Hz playhead
         // publishes cannot starve vsync callbacks.
         let l = displayLink(target: driver, selector: #selector(PreviewDriver.tick(_:)))
+        if let screen = window?.screen {
+            let maximum = Float(screen.maximumFramesPerSecond)
+            if maximum > 0 {
+                l.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, maximum), maximum: maximum, preferred: maximum)
+            }
+        }
         let box = Unsafe(v: l)
         let runner = linkRunner
         let th = Thread {
@@ -285,13 +288,9 @@ struct PreviewView: NSViewRepresentable {
         let pixel = SIMD2(Double(point.x / bounds.width) * Double(canvas.width),
                           Double(1 - point.y / bounds.height) * Double(canvas.height))
         let tl = model.timeline
-        let frame = tl.evaluate(at: model.playhead)
         let size = SIMD2(Double(source.width), Double(source.height))
-        let camera = tl.derived == nil ? size / 2 :
-            SIMD2(Double(frame.cameraCenter.x), Double(frame.cameraCenter.y))
         let transform = ZoomTransform(canvas: SIMD2(Int(canvas.width), Int(canvas.height)),
-                                      source: size, style: tl.style,
-                                      cameraCenter: camera, scale: tl.derived == nil ? 1 : Double(frame.cameraScale))
+                                      source: size, timeline: tl, at: model.playhead)
         let rect = transform.videoRect
         guard pixel.x >= rect.x, pixel.y >= rect.y,
               pixel.x <= rect.x + rect.z, pixel.y <= rect.y + rect.w else { return }
@@ -346,12 +345,10 @@ struct FocusOverlay: View {
             .gesture(DragGesture(minimumDistance: 4).onChanged { v in a = v.startLocation; b = v.location }
                 .onEnded { v in
                     defer { a = nil; b = nil; model.focusEditing = false }
-                    let tl = model.timeline, st = tl.evaluate(at: model.playhead)
+                    let tl = model.timeline
                     guard let d = tl.derived else { return }
                     let size = SIMD2<Int>(Int(g.size.width), Int(g.size.height))
-                    let transform = ZoomTransform(canvas: size, source: d.sourceSize, style: tl.style,
-                                                  cameraCenter: SIMD2<Double>(Double(st.cameraCenter.x), Double(st.cameraCenter.y)),
-                                                  scale: Double(st.cameraScale))
+                    let transform = ZoomTransform(canvas: size, source: d.sourceSize, timeline: tl, at: model.playhead)
                     func toSrc(_ p: CGPoint) -> CGPoint {
                         let s = transform.sourceNormalized(transform.canvasToSource(SIMD2(Double(p.x), Double(p.y))))
                         return CGPoint(x: min(max(s.x, 0), 1), y: min(max(s.y, 0), 1))
