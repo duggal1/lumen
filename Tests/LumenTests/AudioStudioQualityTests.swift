@@ -281,9 +281,11 @@ private func derived(_ tl: Timeline, duration: Double) -> Timeline {
     #expect(baseKey != loudKey)
 }
 
-// MARK: - 3. Two genuinely distinct, selectable modes
+// MARK: - 3. One always-on chain (legacy mode values stay decodable)
 
-@Test func twoStudioModesAreDistinctAndSelectable() throws {
+@Test func studioChainIgnoresLegacyModeSelection() throws {
+    // The owner removed Studio modes: the DSP is one fixed chain. Old projects
+    // still decode their stored mode, but it must not change the audio.
     #expect(StudioMode.allCases.count == 2)
     #expect(Set(StudioMode.allCases.map(\.title)).count == 2)
 
@@ -299,13 +301,7 @@ private func derived(_ tl: Timeline, duration: Double) -> Timeline {
     let (x, vad) = echoFan()
     let s = VoiceStudio.finish(x, vad: vad, plan: standard, denoiser: nil)
     let o = VoiceStudio.finish(x, vad: vad, plan: optimized, denoiser: nil)
-    let sGap = loudFloorGap(s), oGap = loudFloorGap(o)
-    #expect(oGap > sGap + 3,
-            "Optimized gap \(oGap) dB must beat Standard \(sGap) dB by >3 dB")
-    #expect(s != o)
-    let sLufs = Loudness.integrated([s, s]), oLufs = Loudness.integrated([o, o])
-    #expect(abs(sLufs - oLufs) > 0.2,
-            "Standard \(sLufs) and Optimized \(oLufs) LUFS must be measurably different")
+    #expect(s == o, "a legacy mode toggled the Studio chain")
 
     let decoded = try JSONDecoder().decode(AudioPlan.self, from: JSONEncoder().encode(optimized))
     #expect(decoded.studioMode == .optimized)

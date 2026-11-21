@@ -112,10 +112,12 @@ import LumenDirector
 }
 
 @Test func voiceNormalizationMeasuresFinalProgram() throws {
+    // One fixed Studio loudness target; stored overrides no longer branch it.
     var plan = AudioPlan()
     plan.targetLUFSOverride = -16
     let signal = (0..<48_000).map { Float(0.04 * sin(2 * .pi * 440 * Double($0) / 48_000)) }
     let mastered = AudioMaster.process([signal, signal], plan: plan, hasProgram: true)
+    #expect(plan.targetLUFS == AudioPlan.studioTargetLUFS)
     #expect(abs(mastered.lufs - plan.targetLUFS) < 0.5)
     #expect(mastered.truePeakDb <= -1)
     plan.outputGainDb = -6
