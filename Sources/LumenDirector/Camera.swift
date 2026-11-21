@@ -71,9 +71,48 @@ enum CameraSolver {
         }
         guard var track = bake(baked, ctx: ctx, followX: followX, followY: followY,
                                followTracks: followTracks, kinds: kinds, cancelled: cancelled) else { return nil }
+        if params.preset != .fixed, let last = baked.max(by: { $0.off < $1.off }),
+           last.segment.origin == .auto {
+            let end = track.lz.count - 1
+            let duration = params.tail.isFinite ? clamp(params.tail, 0.3, 2) : 0.7
+            let start = max(last.event, min(last.off, Double(end) / track.rate - duration))
+            finishAutomaticZoom(&track, startingAt: start, duration: duration)
+        }
         blendLoop(&track, duration: loop)
         applyTilt(&track, params: params)
         return track
+    }
+
+    private static func finishAutomaticZoom(_ track: inout CameraTrack, startingAt time: Double,
+                                            duration requestedDuration: Double) {
+        let last = track.lz.count - 1
+        let start = min(max(Int((time * track.rate).rounded(.up)), 0), last - 1)
+        let end = min(start + Int((requestedDuration * track.rate).rounded(.up)), last)
+        let span = Double(end - start)
+        let duration = span / track.rate
+        let initialLog = Double(track.lz[start])
+        let neutral = SIMD2<Double>(repeating: 0.5)
+        let initialCenter = SIMD2(Double(track.nx[start]), Double(track.ny[start]))
+        let pivot = initialLog > 1e-6 ? initialCenter + (initialCenter - neutral) / expm1(initialLog) : neutral
+        for i in start...last {
+            let u = min(Double(i - start) / span, 1)
+            let remaining = 1 - u
+            let logScale = initialLog * remaining * remaining * remaining * (1 + 3 * u + 6 * u * u)
+            let speed = -30 * initialLog * u * u * remaining * remaining / duration
+            let acceleration = -60 * initialLog * u * remaining * (1 - 2 * u) / (duration * duration)
+            let center = neutral + (pivot - neutral) * -expm1(-logScale)
+            let velocity = (pivot - center) * speed
+            let centerAcceleration = (pivot - center) * (acceleration - speed * speed)
+            track.lz[i] = Float(logScale)
+            track.nx[i] = Float(center.x)
+            track.ny[i] = Float(center.y)
+            track.vz[i] = Float(speed)
+            track.vx[i] = Float(velocity.x)
+            track.vy[i] = Float(velocity.y)
+            track.az[i] = Float(acceleration)
+            track.ax[i] = Float(centerAcceleration.x)
+            track.ay[i] = Float(centerAcceleration.y)
+        }
     }
 
     private static func blendLoop(_ track: inout CameraTrack, duration: Double?) {

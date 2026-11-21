@@ -2,8 +2,10 @@ import Foundation
 import Metal
 import CoreVideo
 import QuartzCore
+import os
 import LumenCore
 import LumenProject
+import LumenDirector
 
 // MARK: - Budget
 
@@ -25,8 +27,8 @@ public struct FrameBudget: Sendable, Equatable {
 
     public var budgetMilliseconds: Double { 1000 / fps }
 
-    public func evaluate(_ samples: [Double]) -> FrameBudgetReport {
-        guard !samples.isEmpty else {
+    public func evaluate(_ samples: [Double], clickScenario: Bool = false) -> FrameBudgetReport {
+        guard !samples.isEmpty, samples.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
             return FrameBudgetReport(frames: 0, averageMs: 0, p95Ms: 0, p99Ms: 0, worstMs: 0,
                                      overBudget: 0, passes: false, summary: "no frames measured")
         }
@@ -36,9 +38,11 @@ public struct FrameBudget: Sendable, Equatable {
         let p95 = sorted[min(n - 1, Int(Double(n - 1) * 0.95))]
         let p99 = sorted[min(n - 1, Int(Double(n - 1) * 0.99))]
         let worst = sorted[n - 1]
-        let deadline = budgetMilliseconds * latencyAllowance
+        let deadline = clickScenario ? budgetMilliseconds : budgetMilliseconds * latencyAllowance
         let over = samples.filter { $0 > deadline }.count
-        let passes = p99 <= deadline && Double(over) / Double(n) <= allowedOverBudgetFraction
+        let passes = clickScenario
+            ? p99 < 16.6 && worst <= 33 && over == 0
+            : p99 <= deadline && Double(over) / Double(n) <= allowedOverBudgetFraction
         let summary = String(format: "%d frames · avg %.2f ms · p95 %.2f · p99 %.2f · worst %.2f · over %d/%d · %@",
                              n, average, p95, p99, worst, over, n, passes ? "pass" : "FAIL")
         return FrameBudgetReport(frames: n, averageMs: average, p95Ms: p95, p99Ms: p99, worstMs: worst,
@@ -70,7 +74,7 @@ public struct RenderBenchmarkResult: Sendable, Equatable {
 /// smoke check.
 public enum RenderBenchmark {
     public static func run(frames: Int = 120, width: Int = 1920, height: Int = 1080,
-                           fps: Double = 60, motionBlur: Bool = false) throws -> RenderBenchmarkResult {
+                           fps: Double = 60, motionBlur: Bool = false, clicks: Bool = false) throws -> RenderBenchmarkResult {
         let count = max(frames, 1)
         let w = max(width, 16), h = max(height, 16)
         let renderer = try Renderer()
@@ -78,6 +82,16 @@ public enum RenderBenchmark {
         var timeline = Timeline(duration: Double(count) / max(fps, 1) + 1)
         timeline.audio.speedRampsAuto = false
         if motionBlur { timeline.camera.maxSamples = max(timeline.camera.maxSamples, 4) }
+        if clicks {
+            let events = stride(from: 60, to: count, by: 120).enumerated().map { index, frame in
+                InputEvent(t: Double(frame) / fps, kind: .down,
+                           x: Float(w) * (index.isMultiple(of: 2) ? 0.28 : 0.72),
+                           y: Float(h) * (index.isMultiple(of: 2) ? 0.35 : 0.65), button: 0)
+            }
+            let source = SourceInfo(width: w, height: h, fps: fps, duration: timeline.compositionDuration,
+                                    backingScale: 1, originX: 0, originY: 0)
+            timeline = Director.derive(timeline, input: DirectorInput(events: events, source: source), revision: 1)
+        }
 
         guard let device = MTLCreateSystemDefaultDevice() else { throw RenderError.noDevice }
         let screen = try syntheticFrame(device: device, width: w, height: h)
@@ -88,28 +102,31 @@ public enum RenderBenchmark {
         samples.reserveCapacity(count)
 
         // One warm-up frame keeps shader/pipeline creation out of the numbers.
-        _ = try render(renderer: renderer, timeline: timeline, screen: screen, output: output,
+        try render(renderer: renderer, timeline: timeline, screen: screen, output: output,
                        t: 0, canvas: SIMD2(w, h), fps: fps)
 
+        let log = OSLog(subsystem: "com.lumen.studio", category: "render-benchmark")
         for i in 0..<count {
+            if clicks, i % 120 == 60 { os_signpost(.event, log: log, name: "Click", "%d", i) }
             let start = CACurrentMediaTime()
-            _ = try render(renderer: renderer, timeline: timeline, screen: screen, output: output,
+            try render(renderer: renderer, timeline: timeline, screen: screen, output: output,
                            t: min(Double(i) / max(fps, 1), timeline.compositionDuration),
                            canvas: SIMD2(w, h), fps: fps)
             samples.append((CACurrentMediaTime() - start) * 1000)
         }
         return RenderBenchmarkResult(width: w, height: h, frames: count, fps: fps,
-                                     report: budget.evaluate(samples))
+                                     report: budget.evaluate(samples, clickScenario: clicks))
     }
 
     private static func render(renderer: Renderer, timeline: Timeline, screen: SourceFrame,
-                               output: CVPixelBuffer, t: Double, canvas: SIMD2<Int>, fps: Double) throws -> Bool {
+                               output: CVPixelBuffer, t: Double, canvas: SIMD2<Int>, fps: Double) throws {
         let request = RenderRequest(timeline: timeline, t: t, screen: screen, canvas: canvas, fps: fps,
                                     backingScale: 1, quality: .export)
         let latch = DispatchSemaphore(value: 0)
-        guard renderer.render(request, into: output, completion: { latch.signal() }) else { return false }
+        guard renderer.render(request, into: output, completion: { latch.signal() }) else {
+            throw RenderError.pipeline("frame rejected at \(t) s")
+        }
         guard latch.wait(timeout: .now() + 30) == .success else { throw RenderError.pipeline("frame timeout") }
-        return true
     }
 
     private static func makeBuffer(_ w: Int, _ h: Int) -> CVPixelBuffer? {
