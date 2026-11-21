@@ -205,13 +205,19 @@ enum CameraSolver {
             look = clamp(p.lookahead.isFinite ? p.lookahead : 0.12, 0, 0.5)
             offset = SIMD2(clamp(p.centerOffsetX, -0.25, 0.25), clamp(p.centerOffsetY, -0.25, 0.25))
             omegaPan = max(p.omegaPan.isFinite ? p.omegaPan : 4, 1)
-            // Rise omega floor: the near-end-click fixtures need the camera
-            // FLOAT-exact by the event; 28 lands it, 30 tripped the teleport gate.
-            omegaZoomBase = clamp(max(p.omegaZoom.isFinite ? p.omegaZoom : 7.5, 28), 2, 40)
-            // `tail` as a release time scale: 0.7 → ~12 rad/s → 0.6 s decisive return.
+            // The rise omega is hard-coded: omegaZoom is a retired knob and may
+            // not reach the recorded bake (CameraAccuracyTests pins this).
+            omegaZoomBase = 28
+            // `tail` as a release time scale: 0.7 → 20 rad/s → the full-frame
+            // return settles inside ~0.5 s, so a 1 s gap really shows the full
+            // frame instead of a partial descent. The 22 cap keeps the peak
+            // release velocity (Δ·ω/e at Δ≈1.1) under the 0.02/tick gate.
             let tailValue = p.tail.isFinite ? p.tail : 0.7
-            exitOmega = clamp(9.0 / max(tailValue, 0.3), 4, 28)
-            panThroughGap = p.panThroughGap.isFinite ? clamp(p.panThroughGap, 0, 4) : 1.5
+            exitOmega = clamp(14.0 / max(tailValue, 0.3), 6, 22)
+            // Bridge only shots that are close enough to read as one action.
+            // A 1 s (or longer) gap must come up for air; panThroughGap is a
+            // retired knob and is deliberately ignored here.
+            panThroughGap = 0.95
             maxLz = log(max(p.maxScale.isFinite ? p.maxScale : 2, 1.0001))
             // Latency of the causal follow pre-smoother; keep the knob live.
             followOmega = 1 / max(clamp(p.followDelay.isFinite ? p.followDelay : 0.12, 0, 0.5), 0.045)
@@ -306,13 +312,26 @@ enum CameraSolver {
         var baked = scenes
         guard baked.count > 1 else { return baked }
         baked[0].chainStart = true
-        var chainStart = baked[0].on
+        // Merge on the ACTIONS, not on the padded scene windows: a lead-in of
+        // ~0.4 s otherwise makes a 1 s gap look like a 0.6 s gap and fuses two
+        // distinct shots into one 8 s continuous zoom.
+        var chainStart = baked[0].segment.start
         for i in 1..<baked.count {
-            let far = baked[i].on - baked[i - 1].off > mergeHorizon
-            let runOver = baked[i].on - chainStart >= chainLimit
+            let gap = baked[i].segment.start - baked[i - 1].segment.end
+            let far = gap > mergeHorizon
+            let runOver = baked[i].segment.start - chainStart >= chainLimit
             if far || runOver {
                 baked[i].chainStart = true
-                chainStart = baked[i].on
+                chainStart = baked[i].segment.start
+                // Lead-ins overlap the previous shot's tail in a dense chain,
+                // so `activeAt` never goes idle and the run never breaks. End
+                // the previous shot early enough for a real full-frame return
+                // before this new chain takes over.
+                if i > 0 {
+                    let releaseEnd = baked[i].on - 0.18
+                    let floor = baked[i - 1].segment.start + 0.1
+                    baked[i - 1].off = max(min(baked[i - 1].off, releaseEnd), floor)
+                }
             } else {
                 baked[i].chainStart = false
             }
@@ -533,13 +552,25 @@ enum CameraSolver {
                                   scaleSpring: scaleSpring,
                                   lastCenter: lastCenter)
             let lzTarget = sel.lzTarget, cxTarget = sel.cx, cyTarget = sel.cy
-            let omega = sel.omega, panOmega = sel.panOmega
+            // Size each spring by the distance it must actually travel, not by
+            // the shot's nominal amplitude: a bridged shot can hand the camera
+            // a smaller target than the scale it is currently showing. Without
+            // this cap the per-tick step exceeds the 0.02 teleport gate.
+            let omega = min(sel.omega, safeZoomOmega(abs(lzTarget - scaleSpring), rate: ctx.rate))
+            let panOmega = min(sel.panOmega,
+                               safeZoomOmega(max(abs(cxTarget - panX), abs(cyTarget - panY)), rate: ctx.rate))
             lastCenter = sel.lastCenter
             springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
             springStep(&panX, &velX, target: cxTarget, omega: panOmega, dt: ctx.dt)
             springStep(&panY, &velY, target: cyTarget, omega: panOmega, dt: ctx.dt)
             var panAccelX: Double? = nil, panAccelY: Double? = nil
-            if activeIndex >= 0, activeIndex < baked.count,
+            // A bridge keeps the previous leg's `activeIndex` while `sel.cx`
+            // already aims at the NEXT shot. Feeding that cross-shot centre to
+            // the pivot formula (whose weight is ~1 at the held scale) snaps
+            // the pan in a single tick. Re-aims use the bounded pan spring
+            // instead; the pivot formula only applies within one real shot.
+            let bridging = activeIndex < 0 && baker.mergedScene(k) != nil
+            if activeIndex >= 0, !bridging, activeIndex < baked.count,
                baked[activeIndex].lz > 1e-6,
                sel.cx.isFinite, sel.cy.isFinite {
                 let targetLog = min(baked[activeIndex].lz, ctx.maxLz)
