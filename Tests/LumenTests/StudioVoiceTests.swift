@@ -19,6 +19,10 @@ import LumenDirector
     #expect(legacy.studio == 0.42)
 }
 
+/// The old name is kept so this test stays identifiable across the Studio
+/// change. Since commit c0a5b69 the Studio chain is one fixed always-on path:
+/// `studio`, `studioMode` and `voiceClarity` are inert persisted fields, so the
+/// same input must produce bit-identical output whatever they are set to.
 @Test func voiceStudioIsDeterministicAndRespondsToStudioAmount() {
     let fs = 48_000.0
     let raw = (0..<48_000).map { i -> Float in
@@ -32,9 +36,15 @@ import LumenDirector
     let dryPlan = plan
     let dry = VoiceStudio.finish(raw, vad: [0.0...1.0], plan: dryPlan, denoiser: nil)
     plan.studio = 0.65
+    plan.studioMode = .optimized
+    plan.voiceClarity = true
     let wet = VoiceStudio.finish(raw, vad: [0.0...1.0], plan: plan, denoiser: nil)
+    // Determinism and the fixed chain: retired controls cannot branch the DSP.
     #expect(dry == VoiceStudio.finish(raw, vad: [0.0...1.0], plan: dryPlan, denoiser: nil))
-    #expect(wet != dry)
+    #expect(wet == dry)
+    // Equivalent coverage of the old `wet != dry`: the chain is real, not a
+    // bypass that would make "identical regardless of controls" vacuous.
+    #expect(dry != raw)
     #expect(wet.allSatisfy { $0.isFinite })
     #expect(wet.reduce(Float(0)) { max($0, abs($1)) } < 1.0)
 }
@@ -55,6 +65,11 @@ import LumenDirector
     #expect(mix.truePeakDb <= -1.0 + 0.01)
     #expect(mix.lufs > -20 && mix.lufs < -10)
 }
+/// Legacy name kept for continuity with the red baseline. The fixed Studio
+/// chain ignores `studio` and `voiceClarity`; they no longer colour the mix.
+/// They are still part of the persisted plan, so the content-addressed cache
+/// key must still change when they change (an honest, stale-free recompute of
+/// an identical fixed-chain result).
 @Test func voiceControlsReachMixerAndInvalidateVoiceCache() throws {
     let src = SourceInfo(width: 640, height: 360, fps: 60, duration: 1, backingScale: 1, originX: 0, originY: 0)
     var tl = Timeline(duration: 1)
@@ -71,12 +86,17 @@ import LumenDirector
     let key = try ProcessedVoiceCache.key(samples: samples, plan: tl.audio, keyTimes: [])
     tl.audio.studio = 0.75
     let compressed = try #require(mixer.mix(tl))
-    #expect(compressed.l != base.l)
+    #expect(compressed.l == base.l)
     #expect(key != (try ProcessedVoiceCache.key(samples: samples, plan: tl.audio, keyTimes: [])))
     tl.audio.studio = 0; tl.audio.voiceClarity = true
     let clear = try #require(mixer.mix(tl))
-    #expect(clear.l != base.l)
+    #expect(clear.l == base.l)
     #expect(key != (try ProcessedVoiceCache.key(samples: samples, plan: tl.audio, keyTimes: [])))
+    // Equivalent coverage of the old inequality: the offline mix still runs
+    // the real fixed chain (not a pass-through) and respects the master ceiling.
+    #expect(Array(base.l.prefix(samples.count)) != samples)
+    #expect(base.l.allSatisfy { $0.isFinite })
+    #expect(base.truePeakDb <= -1.0 + 0.01)
 }
 
 @Test func spectralNoiseControlIsBoundedAndBypassesAtZero() {
