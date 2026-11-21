@@ -102,15 +102,17 @@ public enum WindowContent {
             return nil
         }
         guard let contentTop = contentTop(window, frame: frame) else { return nil }
-        let inset = min(max(contentTop - frame.minY, 0), frame.height * 0.6)
+        // CGFloat and Double are distinct types on some Swift toolchains;
+        // convert explicitly so this compiles on both the local and CI SDKs.
+        let inset = min(max(contentTop - Double(frame.minY), 0), Double(frame.height) * 0.6)
         guard inset > 1 else { return nil }
-        return Geometry(topInset: inset, width: frame.width, height: frame.height)
+        return Geometry(topInset: inset, width: Double(frame.width), height: Double(frame.height))
     }
 
     /// Point height of the chrome band for a window we can describe but cannot
     /// inspect (used only to keep an estimate while the window is off-screen).
     public static func estimatedInset(for frame: CGRect) -> Double {
-        min(52, max(frame.height * 0.05, 28))
+        min(52, max(Double(frame.height) * 0.05, 28))
     }
 
     // MARK: AX helpers
@@ -134,14 +136,14 @@ public enum WindowContent {
             // frame, then prefer the one whose title matches the captured one.
             let distance = abs(rect.minX - frame.minX) + abs(rect.minY - frame.minY)
                 + abs(rect.width - frame.width) + abs(rect.height - frame.height)
-            var score = distance
+            var score = Double(distance)
             if let title, let own = attribute(element, kAXTitleAttribute) as? String, !title.isEmpty, own == title {
                 score -= 400
             }
             if best == nil || score < best!.1 { best = (element, score) }
         }
         // A collapsed mismatch means we found a different window of the app.
-        guard let best, best.1 < max(frame.width, frame.height) * 0.5 else { return nil }
+        guard let best, best.1 < Double(max(frame.width, frame.height)) * 0.5 else { return nil }
         return best.0
     }
 
@@ -157,7 +159,7 @@ public enum WindowContent {
             let spansWidth = rect.width >= frame.width * 0.5
             let touchesBottom = rect.maxY >= frame.maxY - 10
             let startsBelowTop = rect.minY > frame.minY + 1
-            if spansWidth && touchesBottom && startsBelowTop { tops.append(rect.minY) }
+            if spansWidth && touchesBottom && startsBelowTop { tops.append(Double(rect.minY)) }
         }
         return tops.min()
     }
@@ -208,7 +210,7 @@ public enum WindowContent {
             let role = info?.role ?? "AXWindow"
             let subrole = info?.subrole
             let kind = AXSurface.classify(role: role, subrole: subrole) ?? .window
-            var surface = AXSurface(id: number, kind: kind, role: role, subrole: subrole,
+            let surface = AXSurface(id: number, kind: kind, role: role, subrole: subrole,
                                     title: title ?? info?.title, frame: frame, appName: owner)
             result.append(surface)
             // Native sheets/dialogs are AX children, not separate CG windows.
@@ -229,12 +231,13 @@ public enum WindowContent {
         for window in windows {
             AXUIElementSetMessagingTimeout(window, 0.05)
             guard let rect = axFrame(window) else { continue }
-            var score = abs(rect.minX - frame.minX) + abs(rect.minY - frame.minY)
+            let distance = abs(rect.minX - frame.minX) + abs(rect.minY - frame.minY)
                 + abs(rect.width - frame.width) + abs(rect.height - frame.height)
+            var score = Double(distance)
             if let title, let own = attribute(window, kAXTitleAttribute) as? String, own == title { score -= 400 }
             if best == nil || score < best!.1 { best = (window, score) }
         }
-        guard let best, best.1 < max(frame.width, frame.height) * 0.5 else { return nil }
+        guard let best, best.1 < Double(max(frame.width, frame.height)) * 0.5 else { return nil }
         return (attribute(best.0, kAXRoleAttribute) as? String,
                 attribute(best.0, kAXSubroleAttribute) as? String,
                 attribute(best.0, kAXTitleAttribute) as? String)
