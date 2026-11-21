@@ -629,7 +629,7 @@ enum CameraSolver {
                     // Reach the target slightly before the event so there is a
                     // real still window at arrival; 0.92 of the runway.
                     let runway = max(scene.event - legStartTime, 0.2)
-                    legRiseT = max(0.92 * runway, 0.18)
+                    legRiseT = max(0.88 * runway, 0.18)
                 } else {
                     legTargetLog = 0
                     legTargetCenter = legStartCenter
