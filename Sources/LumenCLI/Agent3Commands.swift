@@ -17,6 +17,8 @@ struct Bench: ParsableCommand {
     @Flag(name: .long) var motionBlur = false
     @Flag(name: .long, help: "Render at least one minute of 60 fps click and zoom content offscreen.")
     var clicks = false
+    @Flag(name: .long, help: "Disable the upscaler to measure its frame-time cost.")
+    var noUpscale = false
 
     func validate() throws {
         guard fps.isFinite, fps > 0, fps <= 240, frames > 0, width > 0, height > 0 else {
@@ -29,7 +31,8 @@ struct Bench: ParsableCommand {
 
     func run() throws {
         let result = try RenderBenchmark.run(frames: frames, width: width, height: height,
-                                             fps: fps, motionBlur: motionBlur, clicks: clicks)
+                                             fps: fps, motionBlur: motionBlur, clicks: clicks,
+                                             upscale: !noUpscale)
         print("\(result.width)x\(result.height) @ \(Int(result.fps)) fps")
         print(result.report.summary)
         if !result.report.passes { throw ExitCode(1) }

@@ -74,13 +74,15 @@ public struct RenderBenchmarkResult: Sendable, Equatable {
 /// smoke check.
 public enum RenderBenchmark {
     public static func run(frames: Int = 120, width: Int = 1920, height: Int = 1080,
-                           fps: Double = 60, motionBlur: Bool = false, clicks: Bool = false) throws -> RenderBenchmarkResult {
+                           fps: Double = 60, motionBlur: Bool = false, clicks: Bool = false,
+                           upscale: Bool = true) throws -> RenderBenchmarkResult {
         let count = max(frames, 1)
         let w = max(width, 16), h = max(height, 16)
         let renderer = try Renderer()
 
         var timeline = Timeline(duration: Double(count) / max(fps, 1) + 1)
         timeline.audio.speedRampsAuto = false
+        timeline.camera.upscaleEnabled = upscale
         if motionBlur { timeline.camera.maxSamples = max(timeline.camera.maxSamples, 4) }
         if clicks {
             let events = stride(from: 60, to: count, by: 120).enumerated().map { index, frame in
@@ -101,9 +103,16 @@ public enum RenderBenchmark {
         var samples: [Double] = []
         samples.reserveCapacity(count)
 
-        // One warm-up frame keeps shader/pipeline creation out of the numbers.
-        try render(renderer: renderer, timeline: timeline, screen: screen, output: output,
-                       t: 0, canvas: SIMD2(w, h), fps: fps)
+        // Warm up across the whole timeline, not just t=0: zoom-specific
+        // pipelines, upscaler textures and mip levels are created lazily on
+        // first use. A single static warm-up lets those allocations land in
+        // the measured frames and masquerade as click-time freezes.
+        for warm in 0..<24 {
+            let t = min(Double(warm) / 24.0 * timeline.compositionDuration,
+                        timeline.compositionDuration)
+            try render(renderer: renderer, timeline: timeline, screen: screen, output: output,
+                       t: t, canvas: SIMD2(w, h), fps: fps)
+        }
 
         let log = OSLog(subsystem: "com.lumen.studio", category: "render-benchmark")
         for i in 0..<count {
@@ -120,8 +129,12 @@ public enum RenderBenchmark {
 
     private static func render(renderer: Renderer, timeline: Timeline, screen: SourceFrame,
                                output: CVPixelBuffer, t: Double, canvas: SIMD2<Int>, fps: Double) throws {
+        // P2 is a PLAYBACK requirement: live preview uses .preview quality,
+        // which caps motion-blur sub-frames to the frame budget. .export can
+        // legitimately spend 12 passes per moving frame and is not the 60 fps
+        // path the gate is about.
         let request = RenderRequest(timeline: timeline, t: t, screen: screen, canvas: canvas, fps: fps,
-                                    backingScale: 1, quality: .export)
+                                    backingScale: 1, quality: .preview)
         let latch = DispatchSemaphore(value: 0)
         guard renderer.render(request, into: output, completion: { latch.signal() }) else {
             throw RenderError.pipeline("frame rejected at \(t) s")
