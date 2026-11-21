@@ -574,7 +574,9 @@ enum CameraSolver {
                 w = clamp(9.4 / max(gap - 0.05, 0.25), 9, restOmega)
             }
             w = clamp(min(w, safeZoomOmega(scaleSpring, rate: ctx.rate)), 2, 40)
-            return (0.0, c.x, c.y, w, restPan, c)
+            // The return pan must not snap the subject home; a gentle pan
+            // here is what keeps the release jerk bounded.
+            return (0.0, c.x, c.y, w, 1.0, c)
         }
         // Fully full frame: drift home and rest.
         return (0.0, 0.5, 0.5, restOmega, restPan, SIMD2(0.5, 0.5))
@@ -608,7 +610,7 @@ enum CameraSolver {
         var legPivot = SIMD2<Double>(0.5, 0.5)
         var legS0 = 1.0, legS1 = 1.0
         var legPanOnly = false
-        var legStartTime = 0.0, legRiseT = 0.4
+        var legStartTime = 0.0, legRiseT = 0.4, legReaimT = 0.4
         var legV0 = SIMD2<Double>.zero, legA0 = SIMD2<Double>.zero
         var panAccelPrev = SIMD2<Double>.zero
         for k in 0..<n {
@@ -618,8 +620,8 @@ enum CameraSolver {
                 activeScene = activeIndex
                 legStartLog = scaleSpring
                 legStartCenter = SIMD2(panX, panY)
-                legV0 = SIMD2(velX, velY)
-                legA0 = panAccelPrev
+                legV0 = .zero
+                legA0 = .zero
                 legStartTime = Double(k) / ctx.rate
                 if activeIndex >= 0, activeIndex < baked.count {
                     let scene = baked[activeIndex]
@@ -629,7 +631,7 @@ enum CameraSolver {
                     // Reach the target slightly before the event so there is a
                     // real still window at arrival; 0.92 of the runway.
                     let runway = max(scene.event - legStartTime, 0.2)
-                    legRiseT = max(0.92 * runway, 0.18)
+                    legRiseT = max(0.85 * runway, 0.18)
                 } else {
                     legTargetLog = 0
                     legTargetCenter = legStartCenter
@@ -641,6 +643,11 @@ enum CameraSolver {
                 legPivot = SIMD2(clamp(rawPivot.x, -2, 3), clamp(rawPivot.y, -2, 3))
                 legPanOnly = abs(legS1 - legS0) < 0.02 ||
                     max(abs(legPivot.x - legStartCenter.x), abs(legPivot.y - legStartCenter.y)) > 0.4
+                // A pure re-aim has no scale runway to inherit; give it its own
+                // duration that grows with the distance (quintic jerk ~ d/T³).
+                let rd = max(abs(legTargetCenter.x - legStartCenter.x),
+                             abs(legTargetCenter.y - legStartCenter.y))
+                legReaimT = max(legRiseT, 0.35, pow(max(rd, 1e-4), 1.0 / 3.0) * 0.6)
             }
             let sel = tickTargets(baker, activeAt: activeAt, k: k,
                                   scaleSpring: scaleSpring,
@@ -687,10 +694,10 @@ enum CameraSolver {
                 if onShot {
                     // Re-aim with no scale change: carry the incoming velocity
                     // and acceleration on a C2 quintic, arrive at rest.
-                    let moveX = QuinticMove(t0: legStartTime, T: legRiseT,
+                    let moveX = QuinticMove(t0: legStartTime, T: legReaimT,
                                             x0: legStartCenter.x, v0: legV0.x, a0: legA0.x,
                                             x1: legTargetCenter.x)
-                    let moveY = QuinticMove(t0: legStartTime, T: legRiseT,
+                    let moveY = QuinticMove(t0: legStartTime, T: legReaimT,
                                             x0: legStartCenter.y, v0: legV0.y, a0: legA0.y,
                                             x1: legTargetCenter.y)
                     let sx = moveX.sample(Double(k) / ctx.rate)
