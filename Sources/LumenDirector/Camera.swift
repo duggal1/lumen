@@ -611,6 +611,7 @@ enum CameraSolver {
         var legStartTime = 0.0, legRiseT = 0.4
         var legV0 = SIMD2<Double>.zero, legA0 = SIMD2<Double>.zero
         var panAccelPrev = SIMD2<Double>.zero
+        var idleMoveX: QuinticMove?, idleMoveY: QuinticMove?
         for k in 0..<n {
             if (k & 1023) == 0, cancelled() { return nil }
             let activeIndex = activeAt[k]
@@ -642,6 +643,19 @@ enum CameraSolver {
                 let pivotDelta = max(abs(legPivot.x - legStartCenter.x),
                                      abs(legPivot.y - legStartCenter.y))
                 legPanOnly = abs(legS1 - legS0) < 0.02 || pivotDelta > 0.4 || pivotDelta < 1e-3
+                // No shot is active between scenes: settle the pan on a C2
+                // quintic instead of spring-chasing a target that can flip
+                // while the pan still carries velocity (a one-tick reversal).
+                if activeIndex < 0 {
+                    idleMoveX = QuinticMove(t0: legStartTime, T: 0.35,
+                                            x0: legStartCenter.x, v0: legV0.x, a0: legA0.x,
+                                            x1: legStartCenter.x)
+                    idleMoveY = QuinticMove(t0: legStartTime, T: 0.35,
+                                            x0: legStartCenter.y, v0: legV0.y, a0: legA0.y,
+                                            x1: legStartCenter.y)
+                } else {
+                    idleMoveX = nil; idleMoveY = nil
+                }
             }
             let sel = tickTargets(baker, activeAt: activeAt, k: k,
                                   scaleSpring: scaleSpring,
@@ -709,6 +723,11 @@ enum CameraSolver {
                                             x1: legTargetCenter.y)
                     let sx = moveX.sample(Double(k) / ctx.rate)
                     let sy = moveY.sample(Double(k) / ctx.rate)
+                    panX = sx.x; panY = sy.x
+                    velX = sx.v; velY = sy.v
+                    panAccelX = sx.a; panAccelY = sy.a
+                } else if !bridging, let mx = idleMoveX, let my = idleMoveY {
+                    let sx = mx.sample(Double(k) / ctx.rate), sy = my.sample(Double(k) / ctx.rate)
                     panX = sx.x; panY = sy.x
                     velX = sx.v; velY = sy.v
                     panAccelX = sx.a; panAccelY = sy.a
