@@ -538,27 +538,31 @@ enum CameraSolver {
             springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
             springStep(&panX, &velX, target: cxTarget, omega: panOmega, dt: ctx.dt)
             springStep(&panY, &velY, target: cyTarget, omega: panOmega, dt: ctx.dt)
+            var panAccelX: Double? = nil, panAccelY: Double? = nil
             if activeIndex >= 0, activeIndex < baked.count,
                baked[activeIndex].lz > 1e-6,
                sel.cx.isFinite, sel.cy.isFinite {
                 let targetLog = min(baked[activeIndex].lz, ctx.maxLz)
-                // c(s) = c0 + (c1-c0) * (1 - s0/s) / (1 - s0/s1) is the same
-                // fixed-pivot path, written without dividing by (s1-s0), which
-                // explodes when two chained shots have almost equal scales.
-                if abs(targetLog - legStartLog) > 1e-3 {
+                // A leg needs a real scale change; a 5% floor keeps the pivot
+                // from amplifying near-equal chained scales into a teleport.
+                if abs(targetLog - legStartLog) > 0.05 {
                     let lo = min(legStartLog, targetLog), hi = max(legStartLog, targetLog)
                     let s0 = exp(legStartLog), s1 = exp(targetLog)
                     let now = exp(min(max(scaleSpring, lo), hi))
                     let c0 = legStartCenter, c1 = SIMD2(sel.cx, sel.cy)
-                    let weight = (1 - s0 / now) / (1 - s0 / s1)
+                    let denom = 1 - s0 / s1
+                    let weight = (1 - s0 / now) / denom
                     panX = c0.x + (c1.x - c0.x) * weight
                     panY = c0.y + (c1.y - c0.y) * weight
-                    let rate = s0 * scaleVel / (now * (1 - s0 / s1))
-                    velX = (c1.x - c0.x) * rate
-                    velY = (c1.y - c0.y) * rate
-                } else {
-                    // Same (capped) scale: there is no zoom leg to follow, so
-                    // keep the pan spring's smooth move to the new subject.
+                    // Publish the first AND second derivatives of this exact
+                    // path. A spring-derived acceleration next to an analytic
+                    // velocity makes the Hermite reconstruction spike.
+                    let scaleAccel = omega * omega * (lzTarget - scaleSpring) - 2 * omega * scaleVel
+                    let common = s0 / (now * denom)
+                    velX = (c1.x - c0.x) * common * scaleVel
+                    velY = (c1.y - c0.y) * common * scaleVel
+                    panAccelX = (c1.x - c0.x) * common * (scaleAccel - scaleVel * scaleVel)
+                    panAccelY = (c1.y - c0.y) * common * (scaleAccel - scaleVel * scaleVel)
                 }
             }
             // Quiescence snap: a channel within float-exact distance of target
@@ -568,16 +572,16 @@ enum CameraSolver {
             // arrival ~50 ms earlier, so an auto shot is settled >=40 ms before
             // the click it anticipates.
             if abs(scaleSpring - lzTarget) < 5e-4 && abs(scaleVel) < 1e-2 { scaleSpring = lzTarget; scaleVel = 0 }
-            if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 { panX = cxTarget; velX = 0 }
-            if abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0 }
+            if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 { panX = cxTarget; velX = 0; panAccelX = nil }
+            if abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0; panAccelY = nil }
             // The clamp can only move the position sideways to the boundary;
             // the spring keeps its state so there is never a velocity step.
             let clamped = clampCenter(SIMD2(panX, panY), max(scaleSpring, 0), k, ctx: ctx)
             panX = clamped.x; panY = clamped.y
             let lz = clamp(scaleSpring, 0, ctx.maxLz)
             let ax = omega * omega * (lzTarget - scaleSpring) - 2 * omega * scaleVel
-            let px = panOmega * panOmega * (cxTarget - panX) - 2 * panOmega * velX
-            let py = panOmega * panOmega * (cyTarget - panY) - 2 * panOmega * velY
+            let px = panAccelX ?? (panOmega * panOmega * (cxTarget - panX) - 2 * panOmega * velX)
+            let py = panAccelY ?? (panOmega * panOmega * (cyTarget - panY) - 2 * panOmega * velY)
             track.lz[k] = Float(lz); track.nx[k] = Float(panX); track.ny[k] = Float(panY)
             track.vz[k] = Float(scaleVel); track.vx[k] = Float(velX); track.vy[k] = Float(velY)
             track.az[k] = Float(ax); track.ax[k] = Float(px); track.ay[k] = Float(py)
