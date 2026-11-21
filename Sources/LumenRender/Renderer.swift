@@ -800,7 +800,7 @@ public final class Renderer: @unchecked Sendable {
             let frameGeometry = hasLayout ? g.positioned(in: st.layout, contentScale: tl.style.contentScale) : g
             let screenOpacity = hasLayout ? min(max(st.layout.screenOpacity, 0), 1) : 1
             scene(cb, into: work[s], slot: s, st: st, r: r, g: frameGeometry, screenOpacity: screenOpacity,
-                  src: protectedSource, web: webTex, matte: matte)
+                  subframes: K, src: protectedSource, web: webTex, matte: matte)
             if K > 1 {
                 let pd = MTLRenderPassDescriptor()
                 pd.colorAttachments[0].texture = accum[s]; pd.colorAttachments[0].loadAction = i == 0 ? .clear : .load
@@ -971,7 +971,7 @@ public final class Renderer: @unchecked Sendable {
     }
 
     private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, slot: Int, st: FrameState, r: RenderRequest, g: Geometry,
-                       screenOpacity: Float, src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
+                       screenOpacity: Float, subframes: Int, src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
         let tl = r.timeline
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y)), content = SIMD4<Float>(g.content)
         let tiltMode = tl.camera.tilt
@@ -1025,7 +1025,7 @@ public final class Renderer: @unchecked Sendable {
         // there; settled frames (K == 1) keep full quality and hit the ROI
         // cache. Both paths are the same renderer and the same resample-once
         // compositor, so preview and export stay aligned.
-        if drawingContent, screenOpacity > 0.001, K <= 1, tl.camera.upscaleEnabled, let cp = contentPass, let up = upscaler {
+        if drawingContent, screenOpacity > 0.001, subframes <= 1, tl.camera.upscaleEnabled, let cp = contentPass, let up = upscaler {
             let layout = ContentLayout(canvas: SIMD2<Int32>(Int32(g.canvas.x), Int32(g.canvas.y)),
                                        contentRect: content, radii: SIMD4<Float>(g.radii),
                                        srcSize: SIMD2<Float>(g.src))
