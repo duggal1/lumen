@@ -182,7 +182,7 @@
     const body = v === "overview" ? overview() : v === "issues" ? issueWorkspace() : v === "agent" ? agent() : regressions();
     const headPrimary = v === "overview" || v === "issues";
     return '<div class="shell"><aside class="side">' +
-      '<div class="brand"><img class="brand-logo" src="./assets/lumen.svg" alt="Lumen" width="112" height="32"><span class="brand-sub">Reliability<br>engineering</span></div>' +
+      '<button type="button" class="brand" data-a="view" data-view="overview" aria-label="Lumen, overview"><img class="brand-logo" src="./assets/lumen.svg" alt="Lumen" width="112" height="32"><span class="brand-sub">Reliability<br>engineering</span></button>' +
       '<nav aria-label="Primary"><div class="nav-label">Workspace</div><div class="nav-list">' +
         nav("overview", "Overview") + nav("issues", "Issue map", all().length) + nav("agent", "Agent workspace") + nav("regressions", "Regression log", store.logs.length) +
       "</div></nav>" +
