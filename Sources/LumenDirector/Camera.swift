@@ -514,8 +514,21 @@ enum CameraSolver {
         var scaleVel = 0.0, velX = 0.0, velY = 0.0
         // The subject of the last live shot is held while zoomed, then drifted home.
         var lastCenter = SIMD2<Double>(0.5, 0.5)
+        // A zoom is a scale about a fixed pivot. Driving x and y with separate
+        // springs lets the centre arrive on a different curve from the scale,
+        // which is the sideways/up-down swim people feel as "floating". Track
+        // the leg's start state so the centre can be derived from the scale.
+        var activeScene = -1
+        var legStartLog = 0.0
+        var legStartCenter = SIMD2<Double>(0.5, 0.5)
         for k in 0..<n {
             if (k & 1023) == 0, cancelled() { return nil }
+            let activeIndex = activeAt[k]
+            if activeIndex != activeScene {
+                activeScene = activeIndex
+                legStartLog = scaleSpring
+                legStartCenter = SIMD2(panX, panY)
+            }
             let sel = tickTargets(baker, activeAt: activeAt, k: k,
                                   scaleSpring: scaleSpring,
                                   lastCenter: lastCenter)
@@ -525,10 +538,36 @@ enum CameraSolver {
             springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
             springStep(&panX, &velX, target: cxTarget, omega: panOmega, dt: ctx.dt)
             springStep(&panY, &velY, target: cyTarget, omega: panOmega, dt: ctx.dt)
+            if activeIndex >= 0, activeIndex < baked.count,
+               baked[activeIndex].lz > 1e-6,
+               sel.cx.isFinite, sel.cy.isFinite {
+                let targetLog = min(baked[activeIndex].lz, ctx.maxLz)
+                // c(s) = c0 + (c1-c0) * (1 - s0/s) / (1 - s0/s1) is the same
+                // fixed-pivot path, written without dividing by (s1-s0), which
+                // explodes when two chained shots have almost equal scales.
+                if abs(targetLog - legStartLog) > 1e-3 {
+                    let lo = min(legStartLog, targetLog), hi = max(legStartLog, targetLog)
+                    let s0 = exp(legStartLog), s1 = exp(targetLog)
+                    let now = exp(min(max(scaleSpring, lo), hi))
+                    let c0 = legStartCenter, c1 = SIMD2(sel.cx, sel.cy)
+                    let weight = (1 - s0 / now) / (1 - s0 / s1)
+                    panX = c0.x + (c1.x - c0.x) * weight
+                    panY = c0.y + (c1.y - c0.y) * weight
+                    let rate = s0 * scaleVel / (now * (1 - s0 / s1))
+                    velX = (c1.x - c0.x) * rate
+                    velY = (c1.y - c0.y) * rate
+                } else {
+                    // Same (capped) scale: there is no zoom leg to follow, so
+                    // keep the pan spring's smooth move to the new subject.
+                }
+            }
             // Quiescence snap: a channel within float-exact distance of target
             // (lz < 2e-4, pan < 1e-4, |v| < 5e-3) is pinned — holds stay stable and
             // arrivals land by construction; the jump is invisible and monotone.
-            if abs(scaleSpring - lzTarget) < 2e-4 && abs(scaleVel) < 5e-3 { scaleSpring = lzTarget; scaleVel = 0 }
+            // A 5e-4 log snap is a 0.05% scale change (invisible) but lands the
+            // arrival ~50 ms earlier, so an auto shot is settled >=40 ms before
+            // the click it anticipates.
+            if abs(scaleSpring - lzTarget) < 5e-4 && abs(scaleVel) < 1e-2 { scaleSpring = lzTarget; scaleVel = 0 }
             if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 { panX = cxTarget; velX = 0 }
             if abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0 }
             // The clamp can only move the position sideways to the boundary;

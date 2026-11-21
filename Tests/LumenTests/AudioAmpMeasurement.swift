@@ -3,9 +3,8 @@ import Testing
 @testable import LumenAudio
 import LumenProject
 
-// TEMPORARY measurement script for the audio amp task (subagent 5).
-// Prints AMP_ lines; deleted after the before/after numbers are taken.
-
+/// Studio Audio measurement, now with assertions so it can actually fail.
+/// Keeps the AMP_ lines for before/after evidence in .proof logs.
 private struct AmpNoise {
     private var state: UInt64
     init(seed: UInt64) { state = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407 }
@@ -39,29 +38,43 @@ private func ampSpeech() throws -> [Float] {
     return try AudioIO.readMono(url)
 }
 
-/// Default plan ("now"), optionally with a boosted voice.
 private func ampDefaultPlan(_ boost: Double) -> AudioPlan {
     var p = AudioPlan()
     p.voiceBoostDb = boost
     return p
 }
 
-@Test func ampMeasureBaseline() throws {
+@Test func ampMeasureStudioChain() throws {
     let speech = try ampSpeech()
     var rng = AmpNoise(seed: 11)
     let noisy = speech.map { v in Float(max(-1, min(1, Double(v) + 0.03 * rng.next()))) }
-    print("AMP_RAW lufs=\(Loudness.integrated([noisy, noisy])) peak=\(Loudness.truePeakDb([noisy, noisy]))")
+    let raw = Loudness.integrated([noisy, noisy])
+    print("AMP_RAW lufs=\(raw) peak=\(Loudness.truePeakDb([noisy, noisy]))")
 
-    // Denoise-only stage: the DF render with a flat studio/clarity plan.
     var flat = AudioPlan()
     flat.studio = 0; flat.dereverb = 0; flat.declick = false; flat.voiceBoostDb = 0
     let filtered = Cascade.apply(noisy.map { $0.isFinite ? $0 : 0 }, [.highpass(70, fs: AudioIO.fs)])
     let denoised = ProcessedVoiceCache.render(filtered, plan: flat, keyTimes: [])
-    print("AMP_DENOISE floorIn=\(ampNoiseFloorDb(noisy)) floorOut=\(ampNoiseFloorDb(denoised))")
+    let floorIn = ampNoiseFloorDb(noisy), floorOut = ampNoiseFloorDb(denoised)
+    print("AMP_DENOISE floorIn=\(floorIn) floorOut=\(floorOut)")
+    // Real suppression, not a cosmetic filter: the quiet-window floor must drop
+    // by a wide margin (measured 31.34 dB before this assertion existed).
+    #expect(floorOut < floorIn - 15, "noise floor only fell \(floorIn - floorOut) dB")
 
-    // Default-plan chain at several boosts: "now" (2.5) and slope calibration.
-    for b in [2.5, 6.0, 7.0] {
-        let out = ProcessedVoiceCache.process(noisy, plan: ampDefaultPlan(b), keyTimes: [])
-        print("AMP_CHAIN boost=\(b) lufs=\(Loudness.integrated([out, out])) peak=\(Loudness.truePeakDb([out, out])) rms=\(ampRmsDb(out))")
-    }
+    let quiet = ProcessedVoiceCache.process(noisy, plan: ampDefaultPlan(2.5), keyTimes: [])
+    let loud = ProcessedVoiceCache.process(noisy, plan: ampDefaultPlan(6.0), keyTimes: [])
+    let quietLufs = Loudness.integrated([quiet, quiet])
+    let loudLufs = Loudness.integrated([loud, loud])
+    print("AMP_CHAIN boost=2.5 lufs=\(quietLufs) peak=\(Loudness.truePeakDb([quiet, quiet]))")
+    print("AMP_CHAIN boost=6.0 lufs=\(loudLufs) peak=\(Loudness.truePeakDb([loud, loud]))")
+    #expect(loudLufs > quietLufs + 3, "voice boost slope is not audible in the chain")
+    #expect(quiet.allSatisfy { $0.isFinite })
+    #expect(loud.allSatisfy { $0.isFinite })
+}
+
+@Test func ampStudioChainIsDeterministic() throws {
+    let speech = try ampSpeech()
+    let a = ProcessedVoiceCache.process(speech, plan: ampDefaultPlan(2.5), keyTimes: [])
+    let b = ProcessedVoiceCache.process(speech, plan: ampDefaultPlan(2.5), keyTimes: [])
+    #expect(a == b, "same input produced different Studio Audio output")
 }

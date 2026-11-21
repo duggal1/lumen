@@ -160,10 +160,13 @@ private enum ZoomOutProbe {
         maxRise = max(maxRise, frame.cameraScale - previous)
         previous = frame.cameraScale
     }
-    #expect(last.cameraScale == 1)
+    // The track is Float32 and evaluate() interpolates neighbours, so a fully
+    // released camera reads 1.0000002 rather than bit-exact 1.0. A tight
+    // tolerance (stricter than expectFullFrame's 1e-3) tests the real intent.
+    #expect(abs(last.cameraScale - 1) < 1e-4, "released scale: \(last.cameraScale)")
     #expect(maxDrift < 0.5, "fixed-pivot residual: \(maxDrift) pixels")
     #expect(maxRise <= 1e-6, "release rose by \(maxRise)")
-    #expect(derived.evaluate(at: 3.7001).cameraScale == 1)
+    #expect(abs(derived.evaluate(at: 3.7001).cameraScale - 1) < 1e-4)
 }
 
 @Test func idleCameraRemainsStillAcrossRepeatedDerives() {
