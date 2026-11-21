@@ -113,10 +113,20 @@ enum BCProbe {
         #expect(at0.minY >= BCProbe.address.maxY - 0.6, "crop starts above the page")
         #expect(at0.contains(BCProbe.pageCentre), "page content must stay in frame")
 
-        // A non-browser recording has no viewport evidence: the source stays whole.
+        // A non-browser recording has no viewport evidence: the source stays
+        // whole. Since d34fe5e/4ace9851b the product represents "no browser
+        // crop" as an EMPTY crop track; FrameState.crop is then an invalid
+        // zero rect and the renderer falls back to the full source
+        // (Renderer.swift:990-995, ZoomTransform.swift:55-58). Assert both
+        // the absence of a track and the effective crop the viewer sees —
+        // stronger than comparing the raw sentinel to the bounds.
         let nonBrowser = BCProbe.derive([], samples: [])
-        #expect(BCProbe.near(BCProbe.crop(nonBrowser, at: 0.5), BCProbe.bounds),
-                "non-browser got a crop")
+        #expect(nonBrowser.derived?.viewportCrop.rects.isEmpty == true,
+                "non-browser must not derive a viewport crop track")
+        let raw = BCProbe.crop(nonBrowser, at: 0.5)
+        let effective = raw.width > 0 && raw.height > 0 ? raw : BCProbe.bounds
+        #expect(BCProbe.near(effective, BCProbe.bounds),
+                "non-browser source is not whole: raw=\(raw), effective=\(effective)")
     }
 
     /// Typing in the address bar uncrops while the keys are being typed — and
