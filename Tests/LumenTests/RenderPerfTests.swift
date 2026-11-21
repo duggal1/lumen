@@ -28,6 +28,22 @@ final class RenderPerfTests: XCTestCase {
     }
 }
 
+/// P3: crystal-clear upscaling must not buy quality with frame time. The
+/// sharpness/SSIM side is covered by UpscalerSharpnessFieldTests; this measures
+/// the cost of engaging the same scaler in the shared render path.
+final class UpscaleCostTests: XCTestCase {
+    func testUpscalerStaysInsideFrameBudget() throws {
+        let on = try RenderBenchmark.run(frames: 240, width: 1920, height: 1080,
+                                         fps: 60, upscale: true)
+        let off = try RenderBenchmark.run(frames: 240, width: 1920, height: 1080,
+                                          fps: 60, upscale: false)
+        let delta = on.report.averageMs - off.report.averageMs
+        print("UPSCALE-COST on=\(String(format: "%.2f", on.report.averageMs)) off=\(String(format: "%.2f", off.report.averageMs)) delta=\(String(format: "%.2f", delta)) ms")
+        XCTAssertTrue(on.report.passes)
+        XCTAssertLessThan(delta, 1.0, "upscaler cost \(delta) ms per frame")
+    }
+}
+
 @Test func clickBudgetGateRejectsMissedDeadlines() {
     let b = FrameBudget(fps: 60)
     let good = Array(repeating: 8.0, count: 120)
