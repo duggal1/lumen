@@ -977,10 +977,12 @@ public final class Renderer: @unchecked Sendable {
                                         maxYaw: tl.camera.maxYaw,
                                         maxPitch: tl.camera.maxPitch)
         let sc = st.cameraScale.isFinite ? max(Double(st.cameraScale), 1) : 1
-        // The camera NEVER scales the content rect. Reveal's entrance shrink is
-        // gone from the renderer entirely (it was the reported "shrink"); the
-        // drawn rect is always `content`, and the .off (default) path applies
-        // no warp, no tilt and no extra scale — a pure viewport magnification.
+        // The camera NEVER scales the content rect. Reveal's 0.92 entrance
+        // shrink was removed on purpose: it was the reported "Zoom shrinks"
+        // defect (Docs/REBUILD-FORENSICS.md 3.3). The reveal entrance now lives
+        // entirely in the tilt track (yaw 12 -> 0 over 0.9 s), which this shader
+        // applies through the same homography as Lean. No mode applies a hidden
+        // content-scale shrink; preview, sub-frames and export stay identical.
         let contentRect = content
         // Browser-content crop: the dense AXWebArea track is authoritative; a
         // legacy Area crop is the fallback, then the full source. The Director
