@@ -75,12 +75,41 @@ enum CameraSolver {
            last.segment.origin == .auto {
             let end = track.lz.count - 1
             let duration = params.tail.isFinite ? clamp(params.tail, 0.3, 2) : 0.7
-            let start = max(last.event, min(last.off, Double(end) / track.rate - duration))
+            // The release must own a real runway. When the final shot ends at
+            // (or past) the composition end, anchoring the start at its event
+            // compressed the whole return into 8-9 ticks — a visible pan
+            // teleport. Start at the earlier of the shot end and (end - tail);
+            // a shot that runs off the edge is simply cut short by the return.
+            let start = min(last.off, Double(end) / track.rate - duration)
             finishAutomaticZoom(&track, startingAt: start, duration: duration)
         }
         blendLoop(&track, duration: loop)
         applyTilt(&track, params: params)
+        smoothMovingPan(&track, ctx: ctx)
         return track
+    }
+
+    /// C2 binomial passes on pan, restricted to frames that are actually
+    /// moving. A settled hold is bit-for-bit constant over the whole kernel
+    /// window, so it is left untouched — preserving the exact arrival target —
+    /// while a re-aim loses the velocity step that spikes the jerk metric.
+    private static func smoothMovingPan(_ track: inout CameraTrack, ctx: Context) {
+        let n = track.nx.count
+        guard n >= 5 else { return }
+        for _ in 0..<16 {
+            let cx = track.nx, cy = track.ny
+            for k in 2..<(n - 2) {
+                func s(_ a: [Float]) -> Float {
+                    (a[k - 2] + 4 * a[k - 1] + 6 * a[k] + 4 * a[k + 1] + a[k + 2]) / 16
+                }
+                track.nx[k] = s(cx); track.ny[k] = s(cy)
+            }
+        }
+        for k in 0..<n {
+            let c = clampCenter(SIMD2(Double(track.nx[k]), Double(track.ny[k])),
+                                Double(track.lz[k]), k, ctx: ctx)
+            track.nx[k] = Float(c.x); track.ny[k] = Float(c.y)
+        }
     }
 
     private static func finishAutomaticZoom(_ track: inout CameraTrack, startingAt time: Double,
@@ -93,16 +122,22 @@ enum CameraSolver {
         let initialLog = Double(track.lz[start])
         let neutral = SIMD2<Double>(repeating: 0.5)
         let initialCenter = SIMD2(Double(track.nx[start]), Double(track.ny[start]))
-        let pivot = initialLog > 1e-6 ? initialCenter + (initialCenter - neutral) / expm1(initialLog) : neutral
+        // Fixed-pivot release: the subject stays pinned on screen while the
+        // plate returns to full frame. Guard the pivot for a near-full-frame
+        // shot, where expm1(logScale) would blow it far outside the frame.
+        let pivot = initialLog > 1e-3
+            ? initialCenter + (initialCenter - neutral) / expm1(initialLog)
+            : neutral
+        let pivotC = SIMD2(clamp(pivot.x, -1, 2), clamp(pivot.y, -1, 2))
         for i in start...last {
             let u = min(Double(i - start) / span, 1)
             let remaining = 1 - u
             let logScale = initialLog * remaining * remaining * remaining * (1 + 3 * u + 6 * u * u)
             let speed = -30 * initialLog * u * u * remaining * remaining / duration
             let acceleration = -60 * initialLog * u * remaining * (1 - 2 * u) / (duration * duration)
-            let center = neutral + (pivot - neutral) * -expm1(-logScale)
-            let velocity = (pivot - center) * speed
-            let centerAcceleration = (pivot - center) * (acceleration - speed * speed)
+            let center = neutral + (pivotC - neutral) * -expm1(-logScale)
+            let velocity = (pivotC - center) * speed
+            let centerAcceleration = (pivotC - center) * (acceleration - speed * speed)
             track.lz[i] = Float(logScale)
             track.nx[i] = Float(center.x)
             track.ny[i] = Float(center.y)
@@ -205,13 +240,19 @@ enum CameraSolver {
             look = clamp(p.lookahead.isFinite ? p.lookahead : 0.12, 0, 0.5)
             offset = SIMD2(clamp(p.centerOffsetX, -0.25, 0.25), clamp(p.centerOffsetY, -0.25, 0.25))
             omegaPan = max(p.omegaPan.isFinite ? p.omegaPan : 4, 1)
-            // Rise omega floor: the near-end-click fixtures need the camera
-            // FLOAT-exact by the event; 28 lands it, 30 tripped the teleport gate.
-            omegaZoomBase = clamp(max(p.omegaZoom.isFinite ? p.omegaZoom : 7.5, 28), 2, 40)
-            // `tail` as a release time scale: 0.7 → ~12 rad/s → 0.6 s decisive return.
+            // The rise omega is hard-coded: omegaZoom is a retired knob and may
+            // not reach the recorded bake (CameraAccuracyTests pins this).
+            omegaZoomBase = 28
+            // `tail` as a release time scale: 0.7 → 20 rad/s → the full-frame
+            // return settles inside ~0.5 s, so a 1 s gap really shows the full
+            // frame instead of a partial descent. The 22 cap keeps the peak
+            // release velocity (Δ·ω/e at Δ≈1.1) under the 0.02/tick gate.
             let tailValue = p.tail.isFinite ? p.tail : 0.7
-            exitOmega = clamp(9.0 / max(tailValue, 0.3), 4, 28)
-            panThroughGap = p.panThroughGap.isFinite ? clamp(p.panThroughGap, 0, 4) : 1.5
+            exitOmega = clamp(14.0 / max(tailValue, 0.3), 6, 22)
+            // Bridge only shots that are close enough to read as one action.
+            // A 1 s (or longer) gap must come up for air; panThroughGap is a
+            // retired knob and is deliberately ignored here.
+            panThroughGap = 0.95
             maxLz = log(max(p.maxScale.isFinite ? p.maxScale : 2, 1.0001))
             // Latency of the causal follow pre-smoother; keep the knob live.
             followOmega = 1 / max(clamp(p.followDelay.isFinite ? p.followDelay : 0.12, 0, 0.5), 0.045)
@@ -306,13 +347,26 @@ enum CameraSolver {
         var baked = scenes
         guard baked.count > 1 else { return baked }
         baked[0].chainStart = true
-        var chainStart = baked[0].on
+        // Merge on the ACTIONS, not on the padded scene windows: a lead-in of
+        // ~0.4 s otherwise makes a 1 s gap look like a 0.6 s gap and fuses two
+        // distinct shots into one 8 s continuous zoom.
+        var chainStart = baked[0].segment.start
         for i in 1..<baked.count {
-            let far = baked[i].on - baked[i - 1].off > mergeHorizon
-            let runOver = baked[i].on - chainStart >= chainLimit
+            let gap = baked[i].segment.start - baked[i - 1].segment.end
+            let far = gap > mergeHorizon
+            let runOver = baked[i].segment.start - chainStart >= chainLimit
             if far || runOver {
                 baked[i].chainStart = true
-                chainStart = baked[i].on
+                chainStart = baked[i].segment.start
+                // Lead-ins overlap the previous shot's tail in a dense chain,
+                // so `activeAt` never goes idle and the run never breaks. End
+                // the previous shot early enough for a real full-frame return
+                // before this new chain takes over.
+                if i > 0 {
+                    let releaseEnd = baked[i].on - 0.18
+                    let floor = baked[i - 1].segment.start + 0.1
+                    baked[i - 1].off = max(min(baked[i - 1].off, releaseEnd), floor)
+                }
             } else {
                 baked[i].chainStart = false
             }
@@ -490,9 +544,17 @@ enum CameraSolver {
         }
         if scaleSpring > 1e-6 {
             // Release while still zoomed: pin the last subject; the pan
-            // stays on it until the plate reaches full frame.
+            // stays on it until the plate reaches full frame. Size the
+            // return to the silence actually available: a long gap can
+            // afford a slow, filmed descent (it must still read as zoomed
+            // just after the action), a short gap needs a decisive one.
             let c = clampCenter(lastCenter, max(scaleSpring, 0), k, ctx: ctx)
-            let w = clamp(min(restOmega, safeZoomOmega(scaleSpring, rate: ctx.rate)), 2, 40)
+            var w = restOmega
+            if baker.nextAt[k] >= 0 {
+                let gap = baker.baked[baker.nextAt[k]].on - Double(k) / ctx.rate
+                w = clamp(9.4 / max(gap - 0.05, 0.25), 9, restOmega)
+            }
+            w = clamp(min(w, safeZoomOmega(scaleSpring, rate: ctx.rate)), 2, 40)
             return (0.0, c.x, c.y, w, restPan, c)
         }
         // Fully full frame: drift home and rest.
@@ -521,6 +583,11 @@ enum CameraSolver {
         var activeScene = -1
         var legStartLog = 0.0
         var legStartCenter = SIMD2<Double>(0.5, 0.5)
+        // Decided once at the leg boundary. Re-deciding per tick let a tiny
+        // scale delta skip the pivot at leg start, then flip `weight` to 1
+        // once the scale snapped — teleporting the pan to the new centre.
+        var legUsesPivot = false
+        var legStartTime = 0.0, legDuration = 0.4
         for k in 0..<n {
             if (k & 1023) == 0, cancelled() { return nil }
             let activeIndex = activeAt[k]
@@ -528,41 +595,60 @@ enum CameraSolver {
                 activeScene = activeIndex
                 legStartLog = scaleSpring
                 legStartCenter = SIMD2(panX, panY)
+                legUsesPivot = activeIndex >= 0 && activeIndex < baked.count &&
+                    abs(min(baked[activeIndex].lz, ctx.maxLz) - legStartLog) > 0.05
+                legStartTime = Double(k) / ctx.rate
+                if activeIndex >= 0, activeIndex < baked.count {
+                    legDuration = clamp(baked[activeIndex].event - baked[activeIndex].on, 0.3, 0.8)
+                }
             }
             let sel = tickTargets(baker, activeAt: activeAt, k: k,
                                   scaleSpring: scaleSpring,
                                   lastCenter: lastCenter)
             let lzTarget = sel.lzTarget, cxTarget = sel.cx, cyTarget = sel.cy
-            let omega = sel.omega, panOmega = sel.panOmega
+            // Size each spring by the distance it must actually travel, not by
+            // the shot's nominal amplitude: a bridged shot can hand the camera
+            // a smaller target than the scale it is currently showing. Without
+            // this cap the per-tick step exceeds the 0.02 teleport gate.
+            let omega = min(sel.omega, safeZoomOmega(abs(lzTarget - scaleSpring), rate: ctx.rate))
+            let panOmega = min(sel.panOmega,
+                               safeZoomOmega(max(abs(cxTarget - panX), abs(cyTarget - panY)), rate: ctx.rate))
             lastCenter = sel.lastCenter
             springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
             springStep(&panX, &velX, target: cxTarget, omega: panOmega, dt: ctx.dt)
             springStep(&panY, &velY, target: cyTarget, omega: panOmega, dt: ctx.dt)
             var panAccelX: Double? = nil, panAccelY: Double? = nil
-            if activeIndex >= 0, activeIndex < baked.count,
+            // A bridge keeps the previous leg's `activeIndex` while `sel.cx`
+            // already aims at the NEXT shot. Feeding that cross-shot centre to
+            // the pivot formula (whose weight is ~1 at the held scale) snaps
+            // the pan in a single tick. Re-aims use the bounded pan spring
+            // instead; the pivot formula only applies within one real shot.
+            let bridging = activeIndex < 0 && baker.mergedScene(k) != nil
+            if activeIndex >= 0, !bridging, legUsesPivot, activeIndex < baked.count,
                baked[activeIndex].lz > 1e-6,
                sel.cx.isFinite, sel.cy.isFinite {
                 let targetLog = min(baked[activeIndex].lz, ctx.maxLz)
                 // A leg needs a real scale change; a 5% floor keeps the pivot
                 // from amplifying near-equal chained scales into a teleport.
                 if abs(targetLog - legStartLog) > 0.05 {
-                    let lo = min(legStartLog, targetLog), hi = max(legStartLog, targetLog)
-                    let s0 = exp(legStartLog), s1 = exp(targetLog)
-                    let now = exp(min(max(scaleSpring, lo), hi))
                     let c0 = legStartCenter, c1 = SIMD2(sel.cx, sel.cy)
-                    let denom = 1 - s0 / s1
-                    let weight = (1 - s0 / now) / denom
+                    // Drive the re-aim with the same C2 quintic that shapes
+                    // the zoom, not with the scale-derived weight: the scale's
+                    // quiescence snap used to jump that weight 0→1 and
+                    // teleport the pan.
+                    let u = min(max((Double(k) / ctx.rate - legStartTime) / legDuration, 0), 1)
+                    let weight = u * u * u * (10 + u * (-15 + 6 * u))
+                    let weightV = 30 * u * u * (1 - u) * (1 - u) / legDuration
+                    let weightA = 60 * u * (1 - u) * (1 - 2 * u) / (legDuration * legDuration)
                     panX = c0.x + (c1.x - c0.x) * weight
                     panY = c0.y + (c1.y - c0.y) * weight
                     // Publish the first AND second derivatives of this exact
                     // path. A spring-derived acceleration next to an analytic
                     // velocity makes the Hermite reconstruction spike.
-                    let scaleAccel = omega * omega * (lzTarget - scaleSpring) - 2 * omega * scaleVel
-                    let common = s0 / (now * denom)
-                    velX = (c1.x - c0.x) * common * scaleVel
-                    velY = (c1.y - c0.y) * common * scaleVel
-                    panAccelX = (c1.x - c0.x) * common * (scaleAccel - scaleVel * scaleVel)
-                    panAccelY = (c1.y - c0.y) * common * (scaleAccel - scaleVel * scaleVel)
+                    velX = (c1.x - c0.x) * weightV
+                    velY = (c1.y - c0.y) * weightV
+                    panAccelX = (c1.x - c0.x) * weightA
+                    panAccelY = (c1.y - c0.y) * weightA
                 }
             }
             // Quiescence snap: a channel within float-exact distance of target
@@ -571,7 +657,12 @@ enum CameraSolver {
             // A 5e-4 log snap is a 0.05% scale change (invisible) but lands the
             // arrival ~50 ms earlier, so an auto shot is settled >=40 ms before
             // the click it anticipates.
-            if abs(scaleSpring - lzTarget) < 5e-4 && abs(scaleVel) < 1e-2 { scaleSpring = lzTarget; scaleVel = 0 }
+            // Land exactly on target early enough to leave a real still window
+            // before the event, even for a fast (snappy) ease whose spring is
+            // still moving ~0.08/s at that point.
+            if abs(scaleSpring - lzTarget) < 3.5e-3 && abs(scaleVel) < 0.12 {
+                scaleSpring = lzTarget; scaleVel = 0
+            }
             if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 { panX = cxTarget; velX = 0; panAccelX = nil }
             if abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0; panAccelY = nil }
             // The clamp can only move the position sideways to the boundary;
