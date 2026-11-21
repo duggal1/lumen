@@ -627,7 +627,12 @@ enum CameraSolver {
                     let scene = baked[activeIndex]
                     let h = baker.holdTarget(activeIndex, k)
                     legTargetLog = min(scene.lz, ctx.maxLz)
-                    legTargetCenter = SIMD2(h.center.x, h.center.y)
+                    // A focus outside the feasible box at the leg's smallest
+                    // scale would be clamped mid-move then released when the
+                    // box opens — a one-tick pan jerk. Aim only at a centre
+                    // feasible for the entire leg.
+                    legTargetCenter = clampCenter(SIMD2(h.center.x, h.center.y),
+                                                  min(legStartLog, legTargetLog), k, ctx: ctx)
                     // Reach the target slightly before the event so there is a
                     // real still window at arrival; 0.92 of the runway.
                     let runway = max(scene.event - legStartTime, 0.2)
