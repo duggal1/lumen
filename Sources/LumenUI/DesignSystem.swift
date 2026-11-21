@@ -35,15 +35,17 @@ enum AppKitToken {
 
 /// Lumen design tokens. Surfaces separate by one luminance step; no hex outside this file.
 enum Tok {
-    // surfaces (dark is near-black elite: bg 030303, steps 5-7 pts)
-    static let bg = Color(light: 0xF4F4F4, dark: 0x030303)
+    // Surfaces: the dark ladder is pitch black chrome on neutral steps —
+    // bg #000 (canvas), card neutral-950 #0A0A0A, select/track neutral-925
+    // #101010, control neutral-900 #171717. Light stays neutral paper.
+    static let bg = Color(light: 0xF4F4F4, dark: 0x000000)
     static let surface = Color(light: 0xFFFFFF, dark: 0x0A0A0A)
-    static let well = Color(light: 0xEDEDED, dark: 0x121212)
+    static let well = Color(light: 0xEDEDED, dark: 0x101010)
     static let control = Color(light: 0xEBEBEB, dark: 0x171717)
     static let controlHover = Color(light: 0xE3E3E3, dark: 0x1F1F1F)
     static let controlPressed = Color(light: 0xDADADA, dark: 0x282828)
-    static let field = Color(light: 0xEAEAEA, dark: 0x060606)
-    static let fieldHover = Color(light: 0xE3E3E3, dark: 0x0C0C0C)
+    static let field = Color(light: 0xEAEAEA, dark: 0x0A0A0A)
+    static let fieldHover = Color(light: 0xE3E3E3, dark: 0x101010)
     static let island = Color(hex: 0x000000)
     // text
     static let text = Color(light: 0x0A0A0A, dark: 0xFAFAFA)
@@ -90,7 +92,7 @@ enum Tok {
 
 enum Ramp {   // rest, dust, quiet, body, tip
     static let orange: [Color] = [
-        Color(light: 0xE9E9E9, dark: 0x171717), Color(light: 0xFFEDD5, dark: 0x431407),
+        Color(light: 0xE9E9E9, dark: 0x101010), Color(light: 0xFFEDD5, dark: 0x431407),
         Color(light: 0xFDBA74, dark: 0x7C2D12), Color(light: 0xF05A00, dark: 0xFF6A00),
         Color(light: 0x9A3412, dark: 0xFFA14D)]
     /// Recording activity. Zero activity is a gap, never a colour.

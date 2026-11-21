@@ -71,9 +71,48 @@ enum CameraSolver {
         }
         guard var track = bake(baked, ctx: ctx, followX: followX, followY: followY,
                                followTracks: followTracks, kinds: kinds, cancelled: cancelled) else { return nil }
+        if params.preset != .fixed, let last = baked.max(by: { $0.off < $1.off }),
+           last.segment.origin == .auto {
+            let end = track.lz.count - 1
+            let duration = params.tail.isFinite ? clamp(params.tail, 0.3, 2) : 0.7
+            let start = max(last.event, min(last.off, Double(end) / track.rate - duration))
+            finishAutomaticZoom(&track, startingAt: start, duration: duration)
+        }
         blendLoop(&track, duration: loop)
         applyTilt(&track, params: params)
         return track
+    }
+
+    private static func finishAutomaticZoom(_ track: inout CameraTrack, startingAt time: Double,
+                                            duration requestedDuration: Double) {
+        let last = track.lz.count - 1
+        let start = min(max(Int((time * track.rate).rounded(.up)), 0), last - 1)
+        let end = min(start + Int((requestedDuration * track.rate).rounded(.up)), last)
+        let span = Double(end - start)
+        let duration = span / track.rate
+        let initialLog = Double(track.lz[start])
+        let neutral = SIMD2<Double>(repeating: 0.5)
+        let initialCenter = SIMD2(Double(track.nx[start]), Double(track.ny[start]))
+        let pivot = initialLog > 1e-6 ? initialCenter + (initialCenter - neutral) / expm1(initialLog) : neutral
+        for i in start...last {
+            let u = min(Double(i - start) / span, 1)
+            let remaining = 1 - u
+            let logScale = initialLog * remaining * remaining * remaining * (1 + 3 * u + 6 * u * u)
+            let speed = -30 * initialLog * u * u * remaining * remaining / duration
+            let acceleration = -60 * initialLog * u * remaining * (1 - 2 * u) / (duration * duration)
+            let center = neutral + (pivot - neutral) * -expm1(-logScale)
+            let velocity = (pivot - center) * speed
+            let centerAcceleration = (pivot - center) * (acceleration - speed * speed)
+            track.lz[i] = Float(logScale)
+            track.nx[i] = Float(center.x)
+            track.ny[i] = Float(center.y)
+            track.vz[i] = Float(speed)
+            track.vx[i] = Float(velocity.x)
+            track.vy[i] = Float(velocity.y)
+            track.az[i] = Float(acceleration)
+            track.ax[i] = Float(centerAcceleration.x)
+            track.ay[i] = Float(centerAcceleration.y)
+        }
     }
 
     private static func blendLoop(_ track: inout CameraTrack, duration: Double?) {
@@ -475,8 +514,21 @@ enum CameraSolver {
         var scaleVel = 0.0, velX = 0.0, velY = 0.0
         // The subject of the last live shot is held while zoomed, then drifted home.
         var lastCenter = SIMD2<Double>(0.5, 0.5)
+        // A zoom is a scale about a fixed pivot. Driving x and y with separate
+        // springs lets the centre arrive on a different curve from the scale,
+        // which is the sideways/up-down swim people feel as "floating". Track
+        // the leg's start state so the centre can be derived from the scale.
+        var activeScene = -1
+        var legStartLog = 0.0
+        var legStartCenter = SIMD2<Double>(0.5, 0.5)
         for k in 0..<n {
             if (k & 1023) == 0, cancelled() { return nil }
+            let activeIndex = activeAt[k]
+            if activeIndex != activeScene {
+                activeScene = activeIndex
+                legStartLog = scaleSpring
+                legStartCenter = SIMD2(panX, panY)
+            }
             let sel = tickTargets(baker, activeAt: activeAt, k: k,
                                   scaleSpring: scaleSpring,
                                   lastCenter: lastCenter)
@@ -486,20 +538,50 @@ enum CameraSolver {
             springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
             springStep(&panX, &velX, target: cxTarget, omega: panOmega, dt: ctx.dt)
             springStep(&panY, &velY, target: cyTarget, omega: panOmega, dt: ctx.dt)
+            var panAccelX: Double? = nil, panAccelY: Double? = nil
+            if activeIndex >= 0, activeIndex < baked.count,
+               baked[activeIndex].lz > 1e-6,
+               sel.cx.isFinite, sel.cy.isFinite {
+                let targetLog = min(baked[activeIndex].lz, ctx.maxLz)
+                // A leg needs a real scale change; a 5% floor keeps the pivot
+                // from amplifying near-equal chained scales into a teleport.
+                if abs(targetLog - legStartLog) > 0.05 {
+                    let lo = min(legStartLog, targetLog), hi = max(legStartLog, targetLog)
+                    let s0 = exp(legStartLog), s1 = exp(targetLog)
+                    let now = exp(min(max(scaleSpring, lo), hi))
+                    let c0 = legStartCenter, c1 = SIMD2(sel.cx, sel.cy)
+                    let denom = 1 - s0 / s1
+                    let weight = (1 - s0 / now) / denom
+                    panX = c0.x + (c1.x - c0.x) * weight
+                    panY = c0.y + (c1.y - c0.y) * weight
+                    // Publish the first AND second derivatives of this exact
+                    // path. A spring-derived acceleration next to an analytic
+                    // velocity makes the Hermite reconstruction spike.
+                    let scaleAccel = omega * omega * (lzTarget - scaleSpring) - 2 * omega * scaleVel
+                    let common = s0 / (now * denom)
+                    velX = (c1.x - c0.x) * common * scaleVel
+                    velY = (c1.y - c0.y) * common * scaleVel
+                    panAccelX = (c1.x - c0.x) * common * (scaleAccel - scaleVel * scaleVel)
+                    panAccelY = (c1.y - c0.y) * common * (scaleAccel - scaleVel * scaleVel)
+                }
+            }
             // Quiescence snap: a channel within float-exact distance of target
             // (lz < 2e-4, pan < 1e-4, |v| < 5e-3) is pinned — holds stay stable and
             // arrivals land by construction; the jump is invisible and monotone.
-            if abs(scaleSpring - lzTarget) < 2e-4 && abs(scaleVel) < 5e-3 { scaleSpring = lzTarget; scaleVel = 0 }
-            if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 { panX = cxTarget; velX = 0 }
-            if abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0 }
+            // A 5e-4 log snap is a 0.05% scale change (invisible) but lands the
+            // arrival ~50 ms earlier, so an auto shot is settled >=40 ms before
+            // the click it anticipates.
+            if abs(scaleSpring - lzTarget) < 5e-4 && abs(scaleVel) < 1e-2 { scaleSpring = lzTarget; scaleVel = 0 }
+            if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 { panX = cxTarget; velX = 0; panAccelX = nil }
+            if abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0; panAccelY = nil }
             // The clamp can only move the position sideways to the boundary;
             // the spring keeps its state so there is never a velocity step.
             let clamped = clampCenter(SIMD2(panX, panY), max(scaleSpring, 0), k, ctx: ctx)
             panX = clamped.x; panY = clamped.y
             let lz = clamp(scaleSpring, 0, ctx.maxLz)
             let ax = omega * omega * (lzTarget - scaleSpring) - 2 * omega * scaleVel
-            let px = panOmega * panOmega * (cxTarget - panX) - 2 * panOmega * velX
-            let py = panOmega * panOmega * (cyTarget - panY) - 2 * panOmega * velY
+            let px = panAccelX ?? (panOmega * panOmega * (cxTarget - panX) - 2 * panOmega * velX)
+            let py = panAccelY ?? (panOmega * panOmega * (cyTarget - panY) - 2 * panOmega * velY)
             track.lz[k] = Float(lz); track.nx[k] = Float(panX); track.ny[k] = Float(panY)
             track.vz[k] = Float(scaleVel); track.vx[k] = Float(velX); track.vy[k] = Float(velY)
             track.az[k] = Float(ax); track.ax[k] = Float(px); track.ay[k] = Float(py)

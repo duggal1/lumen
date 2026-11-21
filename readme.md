@@ -44,7 +44,8 @@ open .build/Lumen.app
 make probe       # Encoder capabilities on this Mac
 ```
 
-The app icon is generated from `App/public/assets/brand/logo/lumen.svg`.
+The app icon is generated from `App/public/assets/brand/logo/lumen-icon.png`,
+which is rendered from `lumen-tracker/assets/lumen-icon.svg`.
 Local builds use ad hoc signing by default. Set `CODE_SIGN_IDENTITY` to a stable
 local signing identity to preserve permission identity across rebuilds.
 

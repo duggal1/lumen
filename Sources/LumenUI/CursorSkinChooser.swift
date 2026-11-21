@@ -4,28 +4,27 @@ import LumenProject
 import LumenRender
 
 /// The cursor chooser. It lives in the Studio toolbar, not in the inspector:
-/// the right side no longer has a cursor page. Every illustrated tile is the
-/// same Tiny Hand artwork the render atlas rasterizes, and the active pack
-/// wears a pixel check. No strokes, no cards-in-cards, no modal sheet.
+/// the right side has its own cursor page. Every tile is artwork the render
+/// atlas rasterizes, and the active pack wears a pixel check. No strokes, no
+/// cards-in-cards, no modal sheet.
 struct CursorSkinChooser: View {
     let model: EditorModel
     let close: () -> Void
 
-    private static let pointer: [CursorPack] = [.system, .minimal, .dot, .ring, .outline, .pixel, .pro, .holiday]
+    private static let pointer: [CursorPack] = [.system, .minimal, .dot, .ring, .outline, .pixel]
     private static let ink: [CursorPack] = [.lavender, .coral, .sky, .mint, .lemon, .pink, .wood, .chrome, .grass, .ember, .mono]
-    private static let coat: [CursorPack] = TinyHandSkins.catalog.map(\.pack)
 
     private static func preview(_ pack: CursorPack) -> NSImage? {
-        TinyHandSkins.isCoat(pack) ? TinyHandSkins.image(for: pack) : CursorAtlas.previewImage(pack: pack)
+        CursorAtlas.previewImage(pack: pack)
     }
 
     private static let previews: [CursorPack: NSImage] = Dictionary(
-        uniqueKeysWithValues: (pointer + ink + coat).compactMap { pack in
+        uniqueKeysWithValues: (pointer + ink).compactMap { pack in
             preview(pack).map { (pack, $0) }
         })
 
     private static func title(_ pack: CursorPack) -> String {
-        TinyHandSkins.isCoat(pack) ? TinyHandSkins.title(for: pack) : pack.rawValue.capitalized
+        pack.rawValue.capitalized
     }
 
     var body: some View {
@@ -37,7 +36,6 @@ struct CursorSkinChooser: View {
                     VStack(alignment: .leading, spacing: 20) {
                         section("Pointer", packs: Self.pointer, columns: 6)
                         section("Color", packs: Self.ink, columns: 6)
-                        section("Tiny Hand", packs: Self.coat, columns: 5)
                         controls
                     }
                     .padding(.horizontal, 24)
@@ -61,7 +59,7 @@ struct CursorSkinChooser: View {
             PixelLens(cell: 2).padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Cursor skins.").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
-                Text("Tiny Hand artwork renders in the export.").font(AppType.caption).foregroundStyle(Tok.text2)
+                Text("Cursor artwork renders in the export.").font(AppType.caption).foregroundStyle(Tok.text2)
             }
             Spacer(minLength: 8)
             LIconButton(icon: "xmark", label: "Close cursor skins") { close() }

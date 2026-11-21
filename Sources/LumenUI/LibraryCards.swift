@@ -211,7 +211,7 @@ private struct RecordingRow: View {
         }
         .padding(.horizontal, Space.s3)
         .frame(height: 48)
-        .background(RoundedRectangle(cornerRadius: Radius.field).fill(hover || focused ? Tok.control : .clear))
+        .background(RoundedRectangle(cornerRadius: Radius.field).fill(hover || focused ? Tok.well : .clear))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)

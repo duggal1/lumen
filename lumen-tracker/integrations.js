@@ -8,7 +8,7 @@
   const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const ph=(name)=>'<i class="ph ph-'+name+'" aria-hidden="true"></i>';
   const PLUS_ONE_SVG='<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="plus-one-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M3 12H11"/><path d="M7 8V16"/><path d="M15.5 9L18 7V17"/><path d="M15 17H21"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#plus-one-m)"/></svg>';
-  const badge=(txt,kind="orange")=>'<span class="badge '+kind+'">'+esc(txt)+'</span>';
+  const badge=(txt,kind="neutral")=>'<span class="badge '+kind+'">'+esc(txt)+'</span>';
   const element=(tag,cls,html)=>{const d=document.createElement(tag);d.className=cls;d.innerHTML=html;return d};
   const safeUrl=(number)=>"https://github.com/"+REPO+"/issues/"+encodeURIComponent(String(number));
   function feedback(text,type="error"){
@@ -99,7 +99,7 @@
       '<div class="ix-grid" style="margin-top:18px"><div><label class="field-label" for="ix-modules">Affected modules (known only)</label><textarea class="textarea" id="ix-modules" rows="2" placeholder="Sources/LumenCapture/…">'+v("modules")+'</textarea></div>'+
       '<div><label class="field-label" for="ix-evidence">Logs and source links</label><textarea class="textarea" id="ix-evidence" rows="2" placeholder="CI run URL, commit, trace…">'+v("evidence")+'</textarea></div></div>'+
       '<div style="max-width:180px;margin-top:17px"><label class="field-label" for="ix-priority">Priority estimate</label><select class="select" id="ix-priority">'+["P0","P1","P2","P3"].map(p=>'<option '+(d.priority===p?"selected":"")+'>'+p+'</option>').join("")+'</select></div></div>'+
-      '<div class="ix-section"><div class="ix-section-head"><div class="ix-section-title">'+ph("sparkle")+' AI issue writer <span class="badge orange">Reflection Beam</span></div><span class="ix-help">Optional</span></div>'+
+      '<div class="ix-section"><div class="ix-section-head"><div class="ix-section-title">'+ph("sparkle")+' AI issue writer <span class="badge accent">Reflection Beam</span></div><span class="ix-help">Optional</span></div>'+
       '<label class="field-label" for="ix-reflection-key">Reflection API key (optional when Vercel has a server key)</label>'+
       '<input class="field" type="password" id="ix-reflection-key" autocomplete="off" autocapitalize="off" placeholder="'+(memory.reflectionKey?"Key set for this tab":"Enter session-only Reflection API key")+'">'+
       '<p class="ix-help">Never stored in your browser or GitHub. The app sends it to its Vercel function, which forwards it to Reflection. A server-side key, when configured, is restricted to the repository owner.</p>'+

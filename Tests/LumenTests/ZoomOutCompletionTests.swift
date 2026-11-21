@@ -130,3 +130,57 @@ private enum ZoomOutProbe {
     ZoomOutProbe.expectFullFrame(track, at: 4.0)
     ZoomOutProbe.expectCleanDescent(track, from: 2.0, to: 4.0)
 }
+
+@Test func automaticReleaseKeepsItsPivotFixedThroughSubframeSamples() {
+    let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 6,
+                            backingScale: 1, originX: 0, originY: 0)
+    var timeline = Timeline(duration: source.duration)
+    timeline.camera.autoZoom = false
+    timeline.audio.speedRampsAuto = false
+    timeline.zoom = [ZoomSegment(start: 2, end: 3, scale: 2,
+                                 focus: .fixed(x: 0.35, y: 0.6), origin: .auto)]
+    let input = DirectorInput(events: [], source: source)
+    let derived = Director.derive(timeline, input: input, revision: 1)
+    let first = derived.evaluate(at: 3)
+    let last = derived.evaluate(at: 3.7)
+    let span = first.cameraScale - last.cameraScale
+    guard span > 0 else {
+        Issue.record("Expected a zoomed shot followed by a full-frame release")
+        return
+    }
+    let pivot = (first.cameraCenter * first.cameraScale - last.cameraCenter * last.cameraScale) / span
+    var previous = first.cameraScale
+    var maxDrift: Float = 0
+    var maxRise: Float = 0
+    for tick in 0...1000 {
+        let frame = derived.evaluate(at: 3 + 0.7 * Double(tick) / 1000)
+        let residual = (frame.cameraCenter - pivot) * frame.cameraScale
+            - (first.cameraCenter - pivot) * first.cameraScale
+        maxDrift = max(maxDrift, abs(residual.x), abs(residual.y))
+        maxRise = max(maxRise, frame.cameraScale - previous)
+        previous = frame.cameraScale
+    }
+    // The track is Float32 and evaluate() interpolates neighbours, so a fully
+    // released camera reads 1.0000002 rather than bit-exact 1.0. A tight
+    // tolerance (stricter than expectFullFrame's 1e-3) tests the real intent.
+    #expect(abs(last.cameraScale - 1) < 1e-4, "released scale: \(last.cameraScale)")
+    #expect(maxDrift < 0.5, "fixed-pivot residual: \(maxDrift) pixels")
+    #expect(maxRise <= 1e-6, "release rose by \(maxRise)")
+    #expect(abs(derived.evaluate(at: 3.7001).cameraScale - 1) < 1e-4)
+}
+
+@Test func idleCameraRemainsStillAcrossRepeatedDerives() {
+    let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 4,
+                            backingScale: 1, originX: 0, originY: 0)
+    let timeline = Timeline(duration: source.duration)
+    let input = DirectorInput(events: [], source: source)
+    let derived = Director.derive(timeline, input: input, revision: 1)
+    let repeated = Director.derive(timeline, input: input, revision: 2)
+    #expect(derived.zoom.isEmpty)
+    #expect(derived.derived?.camera == repeated.derived?.camera)
+    let neutral = SIMD2<Float>(960, 540)
+    #expect((0...1000).allSatisfy { tick in
+        let frame = derived.evaluate(at: 4 * Double(tick) / 1000)
+        return frame.cameraScale == 1 && frame.cameraCenter == neutral
+    })
+}

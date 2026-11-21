@@ -169,11 +169,9 @@ public struct Style: Codable, Equatable, Sendable {
     }
 }
 
-/// Cursor artwork packs. The first group is Lumen's own vector art; the
-/// `glove`…`cookie` range is the Tiny Hand coat (MIT artwork, see
-/// `Sources/LumenRender/Resources/Cursors/LICENSE-tinyhand.txt`). Those packs
-/// replace the recorded pointer with the illustrated hand, so the rendered
-/// cursor and the toolbar chooser always show the same pixels.
+/// Cursor artwork packs. Lumen's own vector art comes first; the
+/// `glove`…`cookie` range is retired now (the Tiny Hand coat is gone), and
+/// the packs render as stock glyphs again.
 public enum CursorPack: String, Codable, CaseIterable, Sendable {
     case system, minimal, dot, ring, pro, holiday, lavender, coral, sky, mint, lemon, pink, wood, chrome, grass, pixel, outline, ember, mono
     case glove, plush, robot, holo, fuzzy, marble, terrazzo, glass, jelly, pastel
@@ -305,9 +303,10 @@ public struct CameraParams: Codable, Equatable, Sendable {
 
 public enum MicMode: String, Codable, CaseIterable, Sendable {
     case standard, loud, podcast, off
-    /// Streaming/web target (-14 LUFS) by default; `.podcast` keeps the Apple
-    /// Podcasts -16 LUFS spec and `.loud` is the -12 LUFS option.
-    public var targetLUFS: Double { switch self { case .standard: -14; case .loud: -12; case .podcast: -16; case .off: -14 } }
+    /// Kept for decoding older projects and for the mic mute (`.off`) semantics.
+    /// Studio Audio now has ONE target regardless of the stored mode; see
+    /// `AudioPlan.studioTargetLUFS`.
+    public var targetLUFS: Double { switch self { case .standard: -12; case .loud: -12; case .podcast: -16; case .off: -12 } }
 }
 public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
     public enum Role: String, Codable, Sendable { case mic, system, voiceover, music, sfx }
@@ -363,7 +362,11 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     /// chain and before the shared master, so the -1 dBTP ceiling still holds.
     public var voiceBoostDb: Double = 2.5
     public var targetLUFSOverride: Double?
-    public var targetLUFS: Double { targetLUFSOverride ?? micMode.targetLUFS }
+    /// One always-on Studio Audio loudness target. +2 dB over the old -14 LUFS
+    /// program (the owner's >= +1.6 dB floor) with the shared -1 dBTP limiter.
+    /// The stored mode/override stay decodable but never branch the chain.
+    public static let studioTargetLUFS = -12.0
+    public var targetLUFS: Double { Self.studioTargetLUFS }
     public var studioMode: StudioMode = .standard
     public var soundEffectsEnabled = true
     /// Zoom whooshes were removed. The symbol stays only because out-of-scope code and
