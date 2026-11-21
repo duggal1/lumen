@@ -116,7 +116,20 @@ struct VideoCaptionEditTests {
         try apply(.restoreTranscriptWords([0], cuts: TranscriptEdits.spans(for: w, at: [0])), to: &tl)
         #expect(tl.captions.deletedWords == [1])
         #expect(tl.timeMap.cuts.count == 1)
-        #expect(tl.timeMap.cuts[0].start > 1.3, "the second burst stays cut: \(tl.timeMap.cuts)")
+        // Commit 8534d09 ("Protect adjacent speech") made spans(for:at:)
+        // clamp a word's padded span at the next word's start. `um` ends at
+        // 1.3 and `uh` starts at 1.2, so restoring `um` returns 0.96-1.3 and
+        // the surviving cut is EXACTLY 1.3-1.54. The old `> 1.3` encoded the
+        // pre-clamp 1.34 boundary, i.e. it demanded that restoring `um`
+        // swallow 0.04 s of `uh`. Pin both ends and assert the uh burst's
+        // exclusive span stays cut — strictly stronger coverage.
+        let remaining = tl.timeMap.cuts[0]
+        #expect(abs(remaining.start - 1.3) < eps,
+                "restore must return exactly through um's end: \(remaining)")
+        #expect(abs(remaining.end - 1.54) < eps,
+                "uh's padded end must stay cut: \(remaining)")
+        #expect(remaining.start <= 1.3 && remaining.end >= 1.5,
+                "uh's exclusive span 1.3..<1.5 must stay cut: \(remaining)")
     }
 
     // MARK: - Sentence deletion
