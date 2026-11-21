@@ -559,7 +559,7 @@ enum CameraSolver {
             let next = baker.baked[mi]
             let raw = baker.rawCenter(mi, k) - ctx.offset * exp(-next.lz)
             let c = clampCenter(raw, max(next.lz, 0), k, ctx: ctx)
-            return (next.lz, c.x, c.y, next.omega, 1.0, c)
+            return (next.lz, c.x, c.y, min(next.omega, 6.0), 1.0, c)
         }
         if scaleSpring > 1e-6 {
             // Release while still zoomed: pin the last subject; the pan
