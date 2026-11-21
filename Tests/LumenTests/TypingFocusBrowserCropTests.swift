@@ -3,6 +3,7 @@ import Testing
 import CoreGraphics
 import LumenCore
 import LumenProject
+import LumenRender
 @testable import LumenDirector
 
 // MARK: - Browser chrome default crop (headless)
@@ -115,18 +116,21 @@ enum BCProbe {
 
         // A non-browser recording has no viewport evidence: the source stays
         // whole. Since d34fe5e/4ace9851b the product represents "no browser
-        // crop" as an EMPTY crop track; FrameState.crop is then an invalid
-        // zero rect and the renderer falls back to the full source
-        // (Renderer.swift:990-995, ZoomTransform.swift:55-58). Assert both
-        // the absence of a track and the effective crop the viewer sees —
-        // stronger than comparing the raw sentinel to the bounds.
+        // crop" as an EMPTY crop track. Verify the PRODUCT's own fallback —
+        // ZoomTransform(canvas:source:timeline:at:) resolves FrameState.crop
+        // the same way preview and export do (ZoomTransform.swift:50-60) —
+        // rather than computing a surrogate in this test.
         let nonBrowser = BCProbe.derive([], samples: [])
         #expect(nonBrowser.derived?.viewportCrop.rects.isEmpty == true,
                 "non-browser must not derive a viewport crop track")
-        let raw = BCProbe.crop(nonBrowser, at: 0.5)
-        let effective = raw.width > 0 && raw.height > 0 ? raw : BCProbe.bounds
-        #expect(BCProbe.near(effective, BCProbe.bounds),
-                "non-browser source is not whole: raw=\(raw), effective=\(effective)")
+        let transform = ZoomTransform(canvas: SIMD2<Int>(Int(BCProbe.W), Int(BCProbe.H)),
+                                      source: SIMD2<Double>(BCProbe.W, BCProbe.H),
+                                      timeline: nonBrowser, at: 0.5)
+        let viewport = transform.viewport
+        #expect(abs(viewport.x) <= 3 && abs(viewport.y) <= 3,
+                "non-browser product viewport moved off the source origin: \(viewport)")
+        #expect(abs(viewport.z - BCProbe.W) <= 3 && abs(viewport.w - BCProbe.H) <= 3,
+                "non-browser product viewport was shrunk/cropped: \(viewport)")
     }
 
     /// Typing in the address bar uncrops while the keys are being typed — and
