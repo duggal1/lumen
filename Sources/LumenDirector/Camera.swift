@@ -85,8 +85,27 @@ enum CameraSolver {
         }
         blendLoop(&track, duration: loop)
         applyTilt(&track, params: params)
-        smoothMovingPan(&track, ctx: ctx)
+        publishDerivatives(&track)
         return track
+    }
+
+    /// Publish derivatives from the baked positions so `qhm` reconstructs the
+    /// same trajectory at sub-tick times (positions are left untouched, so the
+    /// fixed-pivot invariant stays exact).
+    private static func publishDerivatives(_ track: inout CameraTrack) {
+        let n = track.lz.count
+        guard n >= 3 else { return }
+        let r = track.rate, r2 = r * r
+        for k in 1..<(n - 1) {
+            func d(_ a: [Float]) -> Double { Double(a[k + 1]) - Double(a[k - 1]) }
+            func dd(_ a: [Float]) -> Double {
+                Double(a[k + 1]) - 2 * Double(a[k]) + Double(a[k - 1])
+            }
+            track.vx[k] = Float(d(track.nx) * r / 2)
+            track.vy[k] = Float(d(track.ny) * r / 2)
+            track.ax[k] = Float(dd(track.nx) * r2)
+            track.ay[k] = Float(dd(track.ny) * r2)
+        }
     }
 
     /// C2 binomial passes on pan, restricted to frames that are actually
@@ -581,13 +600,17 @@ enum CameraSolver {
         // which is the sideways/up-down swim people feel as "floating". Track
         // the leg's start state so the centre can be derived from the scale.
         var activeScene = -1
-        var legStartLog = 0.0
+        // P1 target design: for a zoom leg the centre is a pure function of
+        // the scale about a fixed pivot, never an independent spring.
+        var legStartLog = 0.0, legTargetLog = 0.0
         var legStartCenter = SIMD2<Double>(0.5, 0.5)
-        // Decided once at the leg boundary. Re-deciding per tick let a tiny
-        // scale delta skip the pivot at leg start, then flip `weight` to 1
-        // once the scale snapped — teleporting the pan to the new centre.
-        var legUsesPivot = false
-        var legStartTime = 0.0, legDuration = 0.4
+        var legTargetCenter = SIMD2<Double>(0.5, 0.5)
+        var legPivot = SIMD2<Double>(0.5, 0.5)
+        var legS0 = 1.0, legS1 = 1.0
+        var legPanOnly = false
+        var legStartTime = 0.0, legRiseT = 0.4
+        var legV0 = SIMD2<Double>.zero, legA0 = SIMD2<Double>.zero
+        var panAccelPrev = SIMD2<Double>.zero
         for k in 0..<n {
             if (k & 1023) == 0, cancelled() { return nil }
             let activeIndex = activeAt[k]
@@ -595,12 +618,29 @@ enum CameraSolver {
                 activeScene = activeIndex
                 legStartLog = scaleSpring
                 legStartCenter = SIMD2(panX, panY)
-                legUsesPivot = activeIndex >= 0 && activeIndex < baked.count &&
-                    abs(min(baked[activeIndex].lz, ctx.maxLz) - legStartLog) > 0.05
+                legV0 = SIMD2(velX, velY)
+                legA0 = panAccelPrev
                 legStartTime = Double(k) / ctx.rate
                 if activeIndex >= 0, activeIndex < baked.count {
-                    legDuration = clamp(baked[activeIndex].event - baked[activeIndex].on, 0.3, 0.8)
+                    let scene = baked[activeIndex]
+                    let h = baker.holdTarget(activeIndex, k)
+                    legTargetLog = min(scene.lz, ctx.maxLz)
+                    legTargetCenter = SIMD2(h.center.x, h.center.y)
+                    // Reach the target slightly before the event so there is a
+                    // real still window at arrival; 0.92 of the runway.
+                    let runway = max(scene.event - legStartTime, 0.2)
+                    legRiseT = max(0.92 * runway, 0.18)
+                } else {
+                    legTargetLog = 0
+                    legTargetCenter = legStartCenter
                 }
+                legS0 = exp(legStartLog); legS1 = exp(legTargetLog)
+                let rawPivot = abs(legS1 - legS0) > 0.02
+                    ? (legTargetCenter * legS1 - legStartCenter * legS0) / (legS1 - legS0)
+                    : legStartCenter
+                legPivot = SIMD2(clamp(rawPivot.x, -2, 3), clamp(rawPivot.y, -2, 3))
+                legPanOnly = abs(legS1 - legS0) < 0.02 ||
+                    max(abs(legPivot.x - legStartCenter.x), abs(legPivot.y - legStartCenter.y)) > 0.4
             }
             let sel = tickTargets(baker, activeAt: activeAt, k: k,
                                   scaleSpring: scaleSpring,
@@ -614,41 +654,53 @@ enum CameraSolver {
             let panOmega = min(sel.panOmega,
                                safeZoomOmega(max(abs(cxTarget - panX), abs(cyTarget - panY)), rate: ctx.rate))
             lastCenter = sel.lastCenter
-            springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
-            springStep(&panX, &velX, target: cxTarget, omega: panOmega, dt: ctx.dt)
-            springStep(&panY, &velY, target: cyTarget, omega: panOmega, dt: ctx.dt)
-            var panAccelX: Double? = nil, panAccelY: Double? = nil
-            // A bridge keeps the previous leg's `activeIndex` while `sel.cx`
-            // already aims at the NEXT shot. Feeding that cross-shot centre to
-            // the pivot formula (whose weight is ~1 at the held scale) snaps
-            // the pan in a single tick. Re-aims use the bounded pan spring
-            // instead; the pivot formula only applies within one real shot.
+            // A bridge keeps the previous leg active while `sel.cx` already
+            // aims at the next shot — never mix those centres into this leg.
             let bridging = activeIndex < 0 && baker.mergedScene(k) != nil
-            if activeIndex >= 0, !bridging, legUsesPivot, activeIndex < baked.count,
-               baked[activeIndex].lz > 1e-6,
-               sel.cx.isFinite, sel.cy.isFinite {
-                let targetLog = min(baked[activeIndex].lz, ctx.maxLz)
-                // A leg needs a real scale change; a 5% floor keeps the pivot
-                // from amplifying near-equal chained scales into a teleport.
-                if abs(targetLog - legStartLog) > 0.05 {
-                    let c0 = legStartCenter, c1 = SIMD2(sel.cx, sel.cy)
-                    // Drive the re-aim with the same C2 quintic that shapes
-                    // the zoom, not with the scale-derived weight: the scale's
-                    // quiescence snap used to jump that weight 0→1 and
-                    // teleport the pan.
-                    let u = min(max((Double(k) / ctx.rate - legStartTime) / legDuration, 0), 1)
-                    let weight = u * u * u * (10 + u * (-15 + 6 * u))
-                    let weightV = 30 * u * u * (1 - u) * (1 - u) / legDuration
-                    let weightA = 60 * u * (1 - u) * (1 - 2 * u) / (legDuration * legDuration)
-                    panX = c0.x + (c1.x - c0.x) * weight
-                    panY = c0.y + (c1.y - c0.y) * weight
-                    // Publish the first AND second derivatives of this exact
-                    // path. A spring-derived acceleration next to an analytic
-                    // velocity makes the Hermite reconstruction spike.
-                    velX = (c1.x - c0.x) * weightV
-                    velY = (c1.y - c0.y) * weightV
-                    panAccelX = (c1.x - c0.x) * weightA
-                    panAccelY = (c1.y - c0.y) * weightA
+            let onShot = activeIndex >= 0 && !bridging
+            var panAccelX: Double? = nil, panAccelY: Double? = nil
+            var legScaleAccel: Double? = nil
+            if onShot, !legPanOnly, legTargetCenter.x.isFinite, legTargetCenter.y.isFinite {
+                // s(t) = exp(lerp(ln s0, ln s1, E(t))) — bounded quintic ease,
+                // monotone, zero velocity and acceleration at both endpoints.
+                let u = min(max((Double(k) / ctx.rate - legStartTime) / legRiseT, 0), 1)
+                let e = u * u * u * (10 + u * (-15 + 6 * u))
+                let e1 = 30 * u * u * (1 - u) * (1 - u) / legRiseT
+                let e2 = 60 * u * (1 - u) * (1 - 2 * u) / (legRiseT * legRiseT)
+                let delta = legTargetLog - legStartLog
+                scaleSpring = legStartLog + delta * e
+                scaleVel = delta * e1
+                legScaleAccel = delta * e2
+                // Fixed pivot: p = (c1 s1 - c0 s0)/(s1 - s0), held for the
+                // whole leg. c(t) = p - (p - c0) s0 / s(t) — no lateral swim.
+                let s = exp(scaleSpring)
+                let kf = legS0 / max(s, 1e-9)
+                let a = legPivot - legStartCenter
+                panX = legPivot.x - a.x * kf
+                panY = legPivot.y - a.y * kf
+                velX = a.x * kf * scaleVel
+                velY = a.y * kf * scaleVel
+                let kAcc = kf * ((legScaleAccel ?? 0) - scaleVel * scaleVel)
+                panAccelX = a.x * kAcc; panAccelY = a.y * kAcc
+            } else {
+                springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
+                if onShot {
+                    // Re-aim with no scale change: carry the incoming velocity
+                    // and acceleration on a C2 quintic, arrive at rest.
+                    let moveX = QuinticMove(t0: legStartTime, T: legRiseT,
+                                            x0: legStartCenter.x, v0: legV0.x, a0: legA0.x,
+                                            x1: legTargetCenter.x)
+                    let moveY = QuinticMove(t0: legStartTime, T: legRiseT,
+                                            x0: legStartCenter.y, v0: legV0.y, a0: legA0.y,
+                                            x1: legTargetCenter.y)
+                    let sx = moveX.sample(Double(k) / ctx.rate)
+                    let sy = moveY.sample(Double(k) / ctx.rate)
+                    panX = sx.x; panY = sy.x
+                    velX = sx.v; velY = sy.v
+                    panAccelX = sx.a; panAccelY = sy.a
+                } else {
+                    springStep(&panX, &velX, target: cxTarget, omega: panOmega, dt: ctx.dt)
+                    springStep(&panY, &velY, target: cyTarget, omega: panOmega, dt: ctx.dt)
                 }
             }
             // Quiescence snap: a channel within float-exact distance of target
@@ -660,22 +712,26 @@ enum CameraSolver {
             // Land exactly on target early enough to leave a real still window
             // before the event, even for a fast (snappy) ease whose spring is
             // still moving ~0.08/s at that point.
-            if abs(scaleSpring - lzTarget) < 3.5e-3 && abs(scaleVel) < 0.12 {
-                scaleSpring = lzTarget; scaleVel = 0
+            let pivotLeg = onShot && !legPanOnly
+            if !pivotLeg {
+                if abs(scaleSpring - lzTarget) < 5e-4 && abs(scaleVel) < 1e-2 {
+                    scaleSpring = lzTarget; scaleVel = 0
+                }
+                if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 { panX = cxTarget; velX = 0; panAccelX = nil }
+                if abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0; panAccelY = nil }
             }
-            if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 { panX = cxTarget; velX = 0; panAccelX = nil }
-            if abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0; panAccelY = nil }
             // The clamp can only move the position sideways to the boundary;
             // the spring keeps its state so there is never a velocity step.
             let clamped = clampCenter(SIMD2(panX, panY), max(scaleSpring, 0), k, ctx: ctx)
             panX = clamped.x; panY = clamped.y
             let lz = clamp(scaleSpring, 0, ctx.maxLz)
-            let ax = omega * omega * (lzTarget - scaleSpring) - 2 * omega * scaleVel
+            let ax = legScaleAccel ?? (omega * omega * (lzTarget - scaleSpring) - 2 * omega * scaleVel)
             let px = panAccelX ?? (panOmega * panOmega * (cxTarget - panX) - 2 * panOmega * velX)
             let py = panAccelY ?? (panOmega * panOmega * (cyTarget - panY) - 2 * panOmega * velY)
             track.lz[k] = Float(lz); track.nx[k] = Float(panX); track.ny[k] = Float(panY)
             track.vz[k] = Float(scaleVel); track.vx[k] = Float(velX); track.vy[k] = Float(velY)
             track.az[k] = Float(ax); track.ax[k] = Float(px); track.ay[k] = Float(py)
+            panAccelPrev = SIMD2(Double(px), Double(py))
         }
         return track
     }
