@@ -75,7 +75,7 @@ public struct RenderBenchmarkResult: Sendable, Equatable {
 public enum RenderBenchmark {
     public static func run(frames: Int = 120, width: Int = 1920, height: Int = 1080,
                            fps: Double = 60, motionBlur: Bool = false, clicks: Bool = false,
-                           upscale: Bool = true) throws -> RenderBenchmarkResult {
+                           upscale: Bool = true, blur: Bool = true) throws -> RenderBenchmarkResult {
         let count = max(frames, 1)
         let w = max(width, 16), h = max(height, 16)
         let renderer = try Renderer()
@@ -83,6 +83,7 @@ public enum RenderBenchmark {
         var timeline = Timeline(duration: Double(count) / max(fps, 1) + 1)
         timeline.audio.speedRampsAuto = false
         timeline.camera.upscaleEnabled = upscale
+        if !blur { timeline.camera.shutter = 0 }
         if motionBlur { timeline.camera.maxSamples = max(timeline.camera.maxSamples, 4) }
         if clicks {
             let events = stride(from: 60, to: count, by: 120).enumerated().map { index, frame in
@@ -107,9 +108,23 @@ public enum RenderBenchmark {
         // pipelines, upscaler textures and mip levels are created lazily on
         // first use. A single static warm-up lets those allocations land in
         // the measured frames and masquerade as click-time freezes.
+        var warmTimes: [Double] = []
         for warm in 0..<24 {
-            let t = min(Double(warm) / 24.0 * timeline.compositionDuration,
-                        timeline.compositionDuration)
+            warmTimes.append(min(Double(warm) / 24.0 * timeline.compositionDuration,
+                                 timeline.compositionDuration))
+        }
+        if clicks {
+            // Each click starts an eased zoom. Exercise the whole transition,
+            // not just the settled endpoints, so every quantized upscaler crop
+            // and mip level is allocated before the measured loop begins.
+            for frame in stride(from: 60, to: count, by: 120) {
+                for offset in [-0.10, -0.04, 0.0, 0.06, 0.16, 0.32, 0.6, 1.0] {
+                    let t = Double(frame) / max(fps, 1) + offset
+                    if t >= 0, t <= timeline.compositionDuration { warmTimes.append(t) }
+                }
+            }
+        }
+        for t in warmTimes {
             try render(renderer: renderer, timeline: timeline, screen: screen, output: output,
                        t: t, canvas: SIMD2(w, h), fps: fps)
         }
