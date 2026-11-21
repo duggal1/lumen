@@ -10,7 +10,13 @@
 
   const AREAS = ["All", "Build", "Recording", "Transcription", "Paste", "Recovery", "Audio", "Zoom", "Motion", "Framing", "Export"];
   const RANK = { P0: 0, P1: 1, P2: 2, P3: 3 };
-  const PRIORITY_COLOR = { P0: "bad", P1: "accent", P2: "neutral", P3: "neutral" };
+  const PRIORITY = {
+    P0: { label: "Blocker", steps: 4, glyph: "cross", kind: "bad" },
+    P1: { label: "Gate", steps: 3, glyph: "bar", kind: "accent" },
+    P2: { label: "Watch", steps: 2, glyph: "dot", kind: "ok" },
+    P3: { label: "Note", steps: 1, glyph: "dot", kind: "neutral" }
+  };
+  const PRIO_PIX = { bad: "cross", ok: "check", accent: "bar", neutral: "dot", run: "dot" };
   const TITLES = { overview: "Reliability", issues: "Issue map", agent: "Agent workspace", regressions: "Regression log" };
   const SUBS = {
     overview: "What ships, what breaks, and what is still a hypothesis.",
@@ -19,13 +25,44 @@
     regressions: "Observations that never pass as release proof."
   };
   const NAV_ICON = { overview: "dashboard", issues: "issues", agent: "agent", regressions: "history" };
+  /* Clove's instrument language: every mark is an integer bitmap, drawn with
+     square cells and `shape-rendering: crispEdges`. No paths, no glyph font. */
+  const PIX = {
+    dashboard: ["###...###", "###...###", "###...###", ".........", ".........", ".........", "###...###", "###...###", "###...###"],
+    issues:    ["..#####..", ".##...##.", "##.....##", "##..#..##", "##.....##", "##..#..##", "##.....##", ".##...##.", "..#####.."],
+    agent:     ["..#####..", ".#######.", "##.###.##", "##.###.##", "#########", "##.###.##", ".##...##.", "##.....##", "##.....##"],
+    history:   ["..#####..", ".##...##.", "##.....##", "##..##.##", "##..##.##", "##.....##", ".##...##.", "..#####..", "........."],
+    sync:      [".#######.", "##.....##", "#.......#", "#..###..#", "#..#.#..#", "#..###..#", "#.......#", "##.....##", ".#####..."],
+    plus:      ["....#....", "....#....", "....#....", "#########", "#########", "....#....", "....#....", "....#....", "........."],
+    search:    ["..#####..", ".##...##.", "##.....##", "##.....##", "##.....##", ".##...##.", "..#####..", "....##...", "....##..."],
+    cross:     ["##.....##", ".##...##.", "..##.##..", "...###...", "...###...", "..##.##..", ".##...##.", "##.....##", "........."],
+    check:     ["........#", ".......##", "......##.", "#....##..", ".#..##...", "..###....", "...#.....", ".........", "........."],
+    dot:       [".........", ".........", ".........", "....###..", "....###..", "....###..", ".........", ".........", "........."],
+    bar:       ["....###..", "....###..", "....###..", "....###..", "....###..", "....###..", "....###..", "....###..", "........."],
+    github:    ["..#####..", ".#######.", "##.###.##", "##.###.##", "#########", "#########", ".#######.", ".##...##.", "##.....##"],
+    aperture:  ["###", "#.#", "###"],
+    wave:      ["#........", "##.......", ".##......", "..##.##...", "...####..", "..##.##..", ".##...##.", "##.....##", "#.......#"],
+    back:      ["....#....", "...##....", "..###....", ".#######.", "#########", "..###....", "...##....", "....#....", "........."],
+    frame:     ["#########", "##.....##", "##.....##", "##.....##", "##.....##", "##.....##", "##.....##", "##.....##", "#########"],
+    up:        ["....#....", "...###...", "..#####..", "....#....", "....#....", "....#....", "....#....", "....#....", "........."],
+    clipboard: ["..#####..", ".##...##.", "##.....##", "##.....##", "##.....##", ".##...##.", "..#####..", "....#....", "....#...."]
+  };
+  const AREA_PIX = { All: "dot", Build: "bar", Recording: "wave", Transcription: "clipboard", Paste: "clipboard", Recovery: "back", Audio: "wave", Zoom: "search", Motion: "plus", Framing: "frame", Export: "up" };
+  const pix = (name, size = 12) => {
+    const rows = PIX[name] || PIX.dot;
+    let minX = 99, maxX = -1, minY = 99, maxY = -1, d = "";
+    rows.forEach((row, y) => [...row].forEach((ch, x) => {
+      if (ch !== "#") return;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      d += `M${x} ${y}h1v1h-1z`;
+    }));
+    if (maxX < 0) return "";
+    return `<svg class="pix-svg" viewBox="${minX} ${minY} ${maxX - minX + 1} ${maxY - minY + 1}" width="${size}" height="${size}" shape-rendering="crispEdges" aria-hidden="true"><path fill="currentColor" d="${d}"/></svg>`;
+  };
   const NAV_SVG = {
-    dashboard: `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="dashboard-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="#fff" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M5 5H10V12H5V5Z"/><path d="M14 5H19V9H14V5Z"/><path d="M14 13H19V19H14V13Z"/><path d="M5 16H10V19H5V16Z"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#dashboard-m)"/></svg>`,
-    issues: `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="issues-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="#fff" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M20 12C20 16.4183 16.4183 20 12 20C7.5817 20 4 16.4183 4 12C4 7.5817 7.5817 4 12 4C16.4183 4 20 7.5817 20 12Z"/></g><g fill="none" stroke="#000" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M12 7.5V12.5"/></g><rect x="11" y="15.5" width="2" height="2" fill="#000"/></mask><rect width="24" height="24" fill="currentColor" mask="url(#issues-m)"/></svg>`,
-    agent: `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="agent-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="#fff" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M6 3H18V10H6V3Z"/><path d="M5 18H8V20H5V18Z"/><path d="M16 18H19V20H16V18Z"/></g><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M12 10V14"/><path d="M7 18V14H17V18"/></g><g fill="#000"><circle cx="9.5" cy="6.5" r="1.25"/><circle cx="14.5" cy="6.5" r="1.25"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#agent-m)"/></svg>`,
-    history: `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="history-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M4 12A8 8 0 1 0 6.34 6.34L4 9"/><path d="M4 4V9H9"/><path d="M12 8V12.5L15.5 14.5"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#history-m)"/></svg>`,
-    sync: `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="sync-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M4 12A8 8 0 0 1 17.66 6.34L20 9"/><path d="M20 4V9H15"/><path d="M20 12A8 8 0 0 1 6.34 17.66L4 15"/><path d="M4 20V15H9"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#sync-m)"/></svg>`,
-    "plus-one": `<svg class="ic-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><mask id="plus-one-m" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"><path d="M3 12H11"/><path d="M7 8V16"/><path d="M15.5 9L18 7V17"/><path d="M15 17H21"/></g></mask><rect width="24" height="24" fill="currentColor" mask="url(#plus-one-m)"/></svg>`
+    dashboard: pix("dashboard", 16), issues: pix("issues", 16), agent: pix("agent", 16), history: pix("history", 16),
+    sync: pix("sync", 14), "plus-one": pix("plus", 14)
   };
   const SYSTEM_LOGS = [
     { id: "CI-2026-11-13-PR22", issue: "PR #22", result: "FAIL", date: "2026-11-13T11:00:55Z", text: "Draft PR #22 at 1b8fe64: 219 tests ran; Agent3Tests expected four tools but received five.", url: "https://github.com/duggal1/lumen/actions/runs/43413001450", system: true },
@@ -38,12 +75,13 @@
   /* ───────── helpers ───────── */
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const $ = id => document.getElementById(id);
-  const ic = n => '<i class="ph ph-' + n + '" aria-hidden="true"></i>';
-  const badge = (t, c = "neutral", wrap = false) => '<span class="badge ' + c + (wrap ? " wrap" : "") + '">' + esc(t) + "</span>";
+  const ICON_PIX = { "magnifying-glass": "search", x: "cross", "check-circle": "check", "link-break": "cross", plug: "plus", "note-pencil": "bar", sparkle: "dot", "file-text": "bar", "arrow-square-out": "plus", "text-align-left": "bar", "github-logo": "github", "arrows-clockwise": "sync", plus: "plus" };
+  const ic = n => pix(ICON_PIX[n] || "dot", 12);
+  const badge = (t, c = "neutral", wrap = false) => '<span class="badge ' + c + (wrap ? " wrap" : "") + '">' + pix(PRIO_PIX[c] || "dot", 8) + "<span>" + esc(t) + "</span></span>";
   const pad = n => String(n).padStart(2, "0");
   const issueUrl = n => GH + "/issues/" + encodeURIComponent(n);
-  const GH_MARK = '<svg class="gh" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
-  const CHECK = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5 4.5 9 10 3.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+  const GH_MARK = pix("github", 14);
+  const CHECK = pix("check", 12);
   const stamp = iso => {
     if (!iso) return "Unknown";
     const d = new Date(iso);
@@ -67,7 +105,12 @@
   const all = () => seed.issues;
   const issue = id => all().find(x => x.id === id) || all()[0];
   const cmp = (a, b) => (RANK[a.priority] ?? 3) - (RANK[b.priority] ?? 3) || (b.state === "blocked") - (a.state === "blocked") || a.id.localeCompare(b.id);
-  const prio = i => badge(i.priority, PRIORITY_COLOR[i.priority] || "neutral");
+  const ladder = n => '<span class="px-ladder" aria-hidden="true">' + Array.from({ length: 4 }, (_, k) => '<i class="' + (k < n ? "on" : "") + '"></i>').join("") + "</span>";
+  const prio = i => {
+    const p = PRIORITY[i.priority] || PRIORITY.P3;
+    return '<span class="badge prio ' + p.kind + '" title="Priority ' + esc(i.priority) + '" aria-label="Priority ' + esc(i.priority) + ', ' + p.label + '">' +
+      pix(p.glyph, 8) + ladder(p.steps) + "<span>" + p.label + '</span><span class="prio-code">' + esc(i.priority) + "</span></span>";
+  };
 
   function codeStatus(i) {
     const p = i.pr != null && state.prs && state.prs[i.pr];
@@ -186,12 +229,12 @@
       '<nav aria-label="Primary"><div class="nav-label">Workspace</div><div class="nav-list">' +
         nav("overview", "Overview") + nav("issues", "Issue map", all().length) + nav("agent", "Agent workspace") + nav("regressions", "Regression log", store.logs.length) +
       "</div></nav>" +
-      '<div class="side-foot"><span class="pix ' + (ci.kind === "ok" || ci.kind === "bad" ? ci.kind : "") + '"></span><span' + (ci.kind === "run" ? ' class="shimmer"' : "") + ">Main build " + ci.foot + "</span></div></aside>" +
+      '<div class="side-foot"><span class="pix ' + (ci.kind === "ok" || ci.kind === "bad" ? ci.kind : "") + '">' + pix("dot", 6) + '</span><span' + (ci.kind === "run" ? ' class="shimmer"' : "") + ">Main build " + ci.foot + "</span></div></aside>" +
       '<main class="main"><header class="top"><div class="crumb"><span>lumen</span><i>/</i><strong>' + TITLES[v] + '</strong><i>/</i><span>main</span></div>' +
         '<div class="top-r"><span class="muted">' + (state.syncTime ? "Live check " + esc(stamp(state.syncTime)) : "Snapshot") + "</span>" +
         '<button class="btn sm" data-a="connect" type="button">' + GH_MARK + (auth.user ? "@" + esc(auth.user) : "Connect GitHub") + "</button>" +
         '<button class="btn sm" id="sync-btn" data-a="sync" type="button"><span class="wait" aria-hidden="true"><i></i><i></i><i></i></span>' + NAV_SVG.sync + '<span id="sync-label">Sync GitHub</span></button></div></header>' +
-      '<div class="page"><div class="head"><div><h1 class="title">' + TITLES[v] + '<span class="aperture" aria-hidden="true"></span></h1><p class="sub">' + SUBS[v] + "</p></div>" +
+      '<div class="page"><div class="head"><div><h1 class="title">' + TITLES[v] + '<span class="aperture">' + pix("aperture", 7) + "</span></h1><p class=\"sub\">" + SUBS[v] + "</p></div>" +
         '<div class="head-r"><button class="btn' + (headPrimary ? " primary" : "") + '" data-a="compose" type="button">New issue</button></div></div>' +
         body + "</div></main></div>";
   }
@@ -236,11 +279,18 @@
       '</h2><button class="btn sm" data-a="refresh" type="button">Refresh</button></div><div class="card list">' + body + "</div></section>";
   }
 
+  function areaRail() {
+    const counts = {};
+    for (const i of all()) counts[i.area] = (counts[i.area] || 0) + 1;
+    return '<nav class="areas" aria-label="Filter findings by area">' + AREAS.map(a =>
+      '<button class="area' + (state.filter === a ? " on" : "") + '" data-a="filter" data-filter="' + esc(a) + '" type="button" aria-pressed="' + (state.filter === a) + '">' +
+      '<span class="area-px">' + pix(AREA_PIX[a] || "dot", 12) + '</span><span class="area-n">' + esc(a) + '</span><span class="area-c">' + (a === "All" ? all().length : (counts[a] || 0)) + "</span></button>").join("") + "</nav>";
+  }
+
   function issueWorkspace() {
     const list = filtered();
-    return '<div class="split"><section class="card"><div class="p-head"><h2 class="p-title">Audit findings<span class="n" id="issues-count">' + list.length + " / " + all().length + "</span></h2>" +
+    return '<div class="split split-areas">' + areaRail() + '<section class="card"><div class="p-head"><h2 class="p-title">Audit findings<span class="n" id="issues-count">' + list.length + " / " + all().length + "</span></h2>" +
       '<div class="tools"><label class="search">' + ic("magnifying-glass") + '<input id="issue-search" autocomplete="off" value="' + esc(state.query) + '" placeholder="Search issues" aria-label="Search issues"><span class="keycap">/</span></label></div></div>' +
-      '<div class="filters">' + AREAS.map(a => '<button class="chip' + (state.filter === a ? " on" : "") + '" data-a="filter" data-filter="' + a + '" type="button">' + a + "</button>").join("") + "</div>" +
       '<table class="tbl"><colgroup><col class="c-pri"><col><col class="c-area"><col class="c-code"><col class="c-test"></colgroup><thead><tr><th>Priority</th><th>Issue</th><th>Area</th><th>Code</th><th>Tests</th></tr></thead><tbody id="issue-list">' + rows(list) + "</tbody></table>" +
       '<div class="t-foot">Select a row for evidence. Press / to search.</div></section>' +
       '<aside class="card detail" id="issue-detail">' + detail(issue(state.selected)) + "</aside></div>";
