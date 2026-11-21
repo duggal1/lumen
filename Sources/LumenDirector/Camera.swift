@@ -613,6 +613,11 @@ enum CameraSolver {
         var legStartTime = 0.0, legRiseT = 0.4, legReaimT = 0.4
         var legV0 = SIMD2<Double>.zero, legA0 = SIMD2<Double>.zero
         var panAccelPrev = SIMD2<Double>.zero
+        // A sub-pixel velocity-offset spring carries the incoming pan velocity
+        // across a leg boundary. The pivot relation stays exact apart from this
+        // decaying offset, so continuity no longer needs a hard stop.
+        var panOff = SIMD2<Double>.zero, panOffVel = SIMD2<Double>.zero
+        let offOmega = 50.0
         for k in 0..<n {
             if (k & 1023) == 0, cancelled() { return nil }
             let activeIndex = activeAt[k]
@@ -622,6 +627,8 @@ enum CameraSolver {
                 legStartCenter = SIMD2(panX, panY)
                 legV0 = .zero
                 legA0 = .zero
+                panOff = .zero
+                panOffVel = SIMD2(velX, velY)
                 legStartTime = Double(k) / ctx.rate
                 if activeIndex >= 0, activeIndex < baked.count {
                     let scene = baked[activeIndex]
@@ -693,7 +700,13 @@ enum CameraSolver {
                 velX = a.x * kf * scaleVel
                 velY = a.y * kf * scaleVel
                 let kAcc = kf * ((legScaleAccel ?? 0) - scaleVel * scaleVel)
-                panAccelX = a.x * kAcc; panAccelY = a.y * kAcc
+                let axOff = offOmega * offOmega * (0 - panOff.x) - 2 * offOmega * panOffVel.x
+                let ayOff = offOmega * offOmega * (0 - panOff.y) - 2 * offOmega * panOffVel.y
+                springStep(&panOff.x, &panOffVel.x, target: 0, omega: offOmega, dt: ctx.dt)
+                springStep(&panOff.y, &panOffVel.y, target: 0, omega: offOmega, dt: ctx.dt)
+                panX += panOff.x; panY += panOff.y
+                velX += panOffVel.x; velY += panOffVel.y
+                panAccelX = a.x * kAcc + axOff; panAccelY = a.y * kAcc + ayOff
             } else {
                 springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
                 if onShot {
