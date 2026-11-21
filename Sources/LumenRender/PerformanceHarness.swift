@@ -130,13 +130,20 @@ public enum RenderBenchmark {
         }
 
         let log = OSLog(subsystem: "com.lumen.studio", category: "render-benchmark")
+        var worstFrame = -1
+        var worstMs = -1.0
         for i in 0..<count {
             if clicks, i % 120 == 60 { os_signpost(.event, log: log, name: "Click", "%d", i) }
             let start = CACurrentMediaTime()
             try render(renderer: renderer, timeline: timeline, screen: screen, output: output,
                            t: min(Double(i) / max(fps, 1), timeline.compositionDuration),
                            canvas: SIMD2(w, h), fps: fps)
-            samples.append((CACurrentMediaTime() - start) * 1000)
+            let ms = (CACurrentMediaTime() - start) * 1000
+            if ms > worstMs { worstMs = ms; worstFrame = i }
+            samples.append(ms)
+        }
+        if clicks {
+            print("BENCH-WORST frame=\(worstFrame) ms=\(String(format: "%.2f", worstMs)) sinceClick=\(worstFrame % 120)")
         }
         return RenderBenchmarkResult(width: w, height: h, frames: count, fps: fps,
                                      report: budget.evaluate(samples, clickScenario: clicks))
