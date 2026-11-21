@@ -148,15 +148,23 @@ struct CinematicRender3DGPUTests {
         let start = try #require(startMaybe), settled = try #require(settledMaybe), again = try #require(againMaybe)
         #expect(C3DGPU.difference(start, settled) > 200, "reveal entrance must be tilted")
         #expect(C3DGPU.difference(start, again) == 0, "same request must render identically")
-        // Same constrained yaw (8 within both modes) but Reveal must ALSO
-        // apply its 0.92 -> 1.0 entrance content-rect scale; Lean must not.
-        // This proves the reveal settle is in the render, not just the track.
+        // The 0.92 content-rect entrance scale was deliberately removed: it
+        // was the reported "Zoom shrinks" defect (REBUILD-FORENSICS.md 3.3,
+        // commit e95283b). Reveal's entrance now lives in the tilt track
+        // (yaw 12 -> 0), applied by the real shader like any other tilt.
+        // At equal tilt Lean/Reveal must be identical (no hidden shrink); at
+        // the larger entrance yaw Reveal must visibly differ — tilt, not scale.
         let lean = C3DGPU.pixels(renderer, C3DGPU.timeline(.lean), tilt: SIMD2(8, 0),
                                  canvas: canvas, frame: frame)
         let reveal = C3DGPU.pixels(renderer, tl, tilt: SIMD2(8, 0), canvas: canvas, frame: frame)
         #expect(lean != nil && reveal != nil)
-        #expect(C3DGPU.difference(lean, reveal) > 50,
-                "reveal must add the entrance scale on top of the same yaw")
+        #expect(C3DGPU.difference(lean, reveal) == 0,
+                "reveal must not apply a content-scale shrink at equal tilt")
+        let revealEntrance = C3DGPU.pixels(renderer, tl, tilt: SIMD2(12, 0),
+                                           canvas: canvas, frame: frame)
+        #expect(revealEntrance != nil)
+        #expect(C3DGPU.difference(lean, revealEntrance) > 50,
+                "reveal entrance must differ through tilt, not a content scale")
     }
 
     @Test func offRenderMatchesFlatForAllModesWithZeroTilt() throws {

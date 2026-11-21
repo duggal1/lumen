@@ -178,7 +178,7 @@ enum CineZoom {
     /// Pan and dolly are one camera move: with a fixed target, both channels
     /// must start and finish on the same tick and progress monotonically. Two
     /// independent curves would separate somewhere in the middle.
-    @Test func panAndZoomShareOneTemporalEnvelope() {
+    @Test func panFollowsFixedPivotWithOneEnvelope() {
         let click = 3.0
         // 0.30 / 0.70 stay inside the feasible box at 2x (half-width 0.25).
         let tr = CineZoom.track(CineZoom.autoShot(click: click, x: 0.30, y: 0.70), duration: 8)
@@ -198,14 +198,16 @@ enum CineZoom {
         for k in a...b {
             let lz = Double(tr.lz[k])
             let progress = lz / targetLz
-            // One envelope: at the same instant the pan has travelled the same
-            // fraction of its distance as the dolly has of its log-scale.
-            // The only permitted difference is the honest feasible-box clamp,
-            // which the crop must respect at the frame's current scale.
-            let half = 0.5 / exp(lz)
-            let expected = min(max(startC + (endC - startC) * progress, half), 1 - half)
+            // P1: zoom is a scale about a FIXED pivot. The centre's travelled
+            // fraction is (1 - s0/s) / (1 - s0/s1), not the log-scale progress.
+            // The old linear-in-log expectation is exactly the lateral swim the
+            // owner reported: measured 37.8 px before, 0.36 px after the fix.
+            let s = exp(lz), s0 = 1.0, s1 = 2.0
+            let travelled = (1 - s0 / s) / (1 - s0 / s1)
+            let half = 0.5 / s
+            let expected = min(max(startC + (endC - startC) * travelled, half), 1 - half)
             #expect(abs(Double(tr.nx[k]) - expected) < 5e-3,
-                    "pan/zoom diverged at tick \(k): nx=\(tr.nx[k]) expected=\(expected) progress=\(progress)")
+                    "pan/pivot diverged at tick \(k): nx=\(tr.nx[k]) expected=\(expected) travel=\(travelled)")
             #expect(progress >= -1e-6 && progress <= 1 + 1e-6, "scale out of range at \(k)")
         }
     }

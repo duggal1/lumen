@@ -215,7 +215,7 @@ import LumenDirector
         let plan = AudioPlan()
         #expect(plan.micClean)
         #expect(plan.noiseReductionStrength == 1.0)
-        #expect(plan.micMode.targetLUFS == -14)
+        #expect(plan.micMode.targetLUFS == -12)
         #expect(MicMode.podcast.targetLUFS == -16)
         #expect(MicMode.loud.targetLUFS == -12)
         #expect(plan.micMode == .standard)

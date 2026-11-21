@@ -75,7 +75,7 @@ public struct EditorRoot: View {
 
 struct EditorView: View {
     let model: EditorModel
-    @State private var inspectorTab: Inspector.Tab = .look
+    @State private var inspectorTab: Inspector.Tab = .studio
     @State private var showsInspector = true
     @State private var showsCursorSkins = false
 
@@ -255,7 +255,7 @@ struct EditorView: View {
     }
     private func openTools() {
         showsInspector = true
-        inspectorTab = .trim
+        inspectorTab = .tools
     }
     private func fmt(_ t: Double) -> String { String(format: "%d:%04.1f", Int(t) / 60, t.truncatingRemainder(dividingBy: 60)) }
 }

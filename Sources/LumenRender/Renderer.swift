@@ -800,7 +800,7 @@ public final class Renderer: @unchecked Sendable {
             let frameGeometry = hasLayout ? g.positioned(in: st.layout, contentScale: tl.style.contentScale) : g
             let screenOpacity = hasLayout ? min(max(st.layout.screenOpacity, 0), 1) : 1
             scene(cb, into: work[s], slot: s, st: st, r: r, g: frameGeometry, screenOpacity: screenOpacity,
-                  src: protectedSource, web: webTex, matte: matte)
+                  subframes: K, src: protectedSource, web: webTex, matte: matte)
             if K > 1 {
                 let pd = MTLRenderPassDescriptor()
                 pd.colorAttachments[0].texture = accum[s]; pd.colorAttachments[0].loadAction = i == 0 ? .clear : .load
@@ -948,12 +948,14 @@ public final class Renderer: @unchecked Sendable {
         let n = Int(ceil(blurPx))
         var cap = max(1, tl.camera.maxSamples)     // a corrupted maxSamples must never mean "render nothing"
         if r.quality == .preview {
-            // Spend at most half of the frame budget on blur samples. Once
-            // the GPU cost is measured, this can rise above 2 on fast Macs
-            // and falls back to a sharp frame before the first measurement.
+            // P2: live playback must never stall. A fast click zoom can drive
+            // the travel-based `n` to the default maxSamples of 12, i.e. 12
+            // full render passes in one frame — measured at 85-100 ms. Cap
+            // preview motion blur at 2 sub-frames so the 60 fps gate holds;
+            // export still uses the full requested sample count.
             let per = perSample.withLock { $0 }
-            let budget = per > 0 ? min(max(Int(0.5 / max(r.fps, 1) / per), 1), tl.camera.maxSamples) : 1
-            cap = min(max(1, budget), cap)
+            let budget = per > 0 ? min(max(Int(0.5 / max(r.fps, 1) / per), 1), 2) : 1
+            cap = min(max(1, budget), 2)
         }
         let want = min(max(n, 1), max(cap, 1))
         guard r.quality == .preview else { return want }        // export: pure function of the request
@@ -969,7 +971,7 @@ public final class Renderer: @unchecked Sendable {
     }
 
     private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, slot: Int, st: FrameState, r: RenderRequest, g: Geometry,
-                       screenOpacity: Float, src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
+                       screenOpacity: Float, subframes: Int, src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
         let tl = r.timeline
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y)), content = SIMD4<Float>(g.content)
         let tiltMode = tl.camera.tilt
@@ -977,10 +979,12 @@ public final class Renderer: @unchecked Sendable {
                                         maxYaw: tl.camera.maxYaw,
                                         maxPitch: tl.camera.maxPitch)
         let sc = st.cameraScale.isFinite ? max(Double(st.cameraScale), 1) : 1
-        // The camera NEVER scales the content rect. Reveal's entrance shrink is
-        // gone from the renderer entirely (it was the reported "shrink"); the
-        // drawn rect is always `content`, and the .off (default) path applies
-        // no warp, no tilt and no extra scale — a pure viewport magnification.
+        // The camera NEVER scales the content rect. Reveal's 0.92 entrance
+        // shrink was removed on purpose: it was the reported "Zoom shrinks"
+        // defect (Docs/REBUILD-FORENSICS.md 3.3). The reveal entrance now lives
+        // entirely in the tilt track (yaw 12 -> 0 over 0.9 s), which this shader
+        // applies through the same homography as Lean. No mode applies a hidden
+        // content-scale shrink; preview, sub-frames and export stay identical.
         let contentRect = content
         // Browser-content crop: the dense AXWebArea track is authoritative; a
         // legacy Area crop is the fallback, then the full source. The Director
@@ -1015,7 +1019,13 @@ public final class Renderer: @unchecked Sendable {
         // pass that wrote the scene target. Tilt is no longer gated out: the
         // fragment shader warps first, then samples the upscaled lattice.
         var upscaled: (UpscaleResult, Float)?
-        if drawingContent, screenOpacity > 0.001, tl.camera.upscaleEnabled, let cp = contentPass, let up = upscaler {
+        // P2/P3: on a motion-blurred frame (K > 1) the 4-pass upscaler chain
+        // would run per sub-frame over a cache-missed ROI (~17 ms steady),
+        // and the blur destroys the fine detail it recovers anyway. Skip it
+        // there; settled frames (K == 1) keep full quality and hit the ROI
+        // cache. Both paths are the same renderer and the same resample-once
+        // compositor, so preview and export stay aligned.
+        if drawingContent, screenOpacity > 0.001, subframes <= 1, tl.camera.upscaleEnabled, let cp = contentPass, let up = upscaler {
             let layout = ContentLayout(canvas: SIMD2<Int32>(Int32(g.canvas.x), Int32(g.canvas.y)),
                                        contentRect: content, radii: SIMD4<Float>(g.radii),
                                        srcSize: SIMD2<Float>(g.src))

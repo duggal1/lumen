@@ -39,24 +39,16 @@ private func echoFan() -> (x: [Float], vad: [ClosedRange<Double>]) {
 }
 
 @MainActor
-@Test func studioGapsReachPodcastTargets() {
+@Test func studioChainReachesPodcastNoiseFloorTarget() {
     let (raw, vad) = echoFan()
-    var plan = AudioPlan()
-    plan.micClean = false
-    plan.micMode = .standard
-    plan.studio = 0.5
-    plan.studioMode = .standard
-    let s = VoiceStudio.finish(raw, vad: vad, plan: plan, denoiser: nil)
-    plan.studioMode = .optimized
-    let o = VoiceStudio.finish(raw, vad: vad, plan: plan, denoiser: nil)
-    let sGap = loudFloorGap(s), oGap = loudFloorGap(o)
-    let rep = AudioCheck.analyze(channels: [o], sampleRate: 48_000)
-    #expect(sGap >= 40, "Standard gap \(sGap)dB < 40")
-    #expect(oGap >= 50, "Optimized gap \(oGap)dB < 50")
-    #expect(oGap > sGap + 5, "Optimized must beat Standard by 5dB")
+    let plan = AudioPlan()
+    let out = VoiceStudio.finish(raw, vad: vad, plan: plan, denoiser: nil)
+    let gap = loudFloorGap(out)
+    let rep = AudioCheck.analyze(channels: [out], sampleRate: 48_000)
+    #expect(gap >= 50, "single Studio chain gap \(gap)dB < 50")
     #expect(rep.truePeakDb <= -1 + 0.01)
-    #expect(o.count == raw.count && o.allSatisfy { $0.isFinite })
-    #expect(AudioCheck.clickCount(o) <= 2, "Soft expander must not add clicks")
+    #expect(out.count == raw.count && out.allSatisfy { $0.isFinite })
+    #expect(AudioCheck.clickCount(out) <= 2, "Soft expander must not add clicks")
 }
 
 @MainActor

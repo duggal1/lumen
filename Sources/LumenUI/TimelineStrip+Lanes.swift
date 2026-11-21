@@ -359,40 +359,28 @@ extension TimelineStrip {
                 drawBase(c, size, lat, dust: false)
                 if wave.isEmpty { drawEmpty(c, "No audio. Speech will appear here."); return }
                 let ph = playing ? model.clock.time(at: HostClock.now()) : frozen
-                var played = Path(), tips = Path(), idle = Path(), ramp = Path(), quiet = Path(), head = Path()
+                var played = Path(), idle = Path(), head = Path()
                 if !TimelineStrip.dither {
+                    // Continuous Dieother voice tape: one unbroken run, no gaps.
+                    // Peaks lift the band; the newest cell while playing is white.
                     for col in 0..<lat.cols {
                         let t0 = vp.time(atCol: col), t1 = vp.time(atCol: col + 1)
                         let peak = TimelineGeometry.columnPeak(wave: wave, srcStart: tm.source(atOutput: t0), srcEnd: tm.source(atOutput: t1))
-                        let level = TimelineGeometry.level(peak: peak)
+                        let level = max(TimelineGeometry.level(peak: peak), 1)
                         let x = lat.x(col: col)
                         if t0 <= ph && t1 > ph {
                             head.addRect(CGRect(x: x, y: 8, width: TimelineStrip.Lattice.cell, height: 16))
                         }
-                        if level == 0 {
-                            quiet.addRect(CGRect(x: x, y: 19, width: TimelineStrip.Lattice.cell, height: 2))
-                            continue
-                        }
-                        let inRamp = tm.ramps.contains { s in
-                            let a = tm.output(atSource: s.start), b = tm.output(atSource: s.end)
-                            return t0 >= a && t0 <= b
-                        }
-                        let isPlayed = t0 < ph
                         for k in 0..<level {
-                            let up = CGRect(x: x, y: 16 - 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
-                            let dn = CGRect(x: x, y: 21 + 4 * CGFloat(k), width: TimelineStrip.Lattice.cell, height: 3)
-                            let isTip = k == level - 1
-                            if inRamp { ramp.addRect(up); ramp.addRect(dn) }
-                            else if isPlayed && isTip { tips.addRect(up); tips.addRect(dn) }
-                            else if isPlayed { played.addRect(up); played.addRect(dn) }
-                            else { idle.addRect(up); idle.addRect(dn) }
+                            let y = 8 + 3 * CGFloat(level - 1 - k)
+                            if t0 < ph { played.addRect(CGRect(x: x, y: y, width: TimelineStrip.Lattice.cell, height: 3)) }
+                            else { idle.addRect(CGRect(x: x, y: y, width: TimelineStrip.Lattice.cell, height: 3)) }
                         }
                     }
-                    c.fillCells(quiet, Tok.controlPressed)
-                    c.fillCells(ramp, Tok.controlPressed)
-                    c.fillCells(idle, StripInk.cell)
-                    c.fillCells(played, StripInk.hot)
-                    c.fillCells(tips, StripInk.hotDeep)
+                    // Multigradient Dieother: unplayed body, played newest row.
+                    c.fillCells(idle, Dieother.voice)
+                    c.fillCells(played, Dieother.voiceDeep)
+                    c.fillCells(head, Tok.text)
                 } else if !wave.isEmpty {
                     // The dither renderer owns the tape; keep the white head on it.
                     let col = vp.col(ph)

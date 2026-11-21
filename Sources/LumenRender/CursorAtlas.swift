@@ -243,10 +243,6 @@ public final class CursorAtlas {
 
     /// Returns the hotspot in points.
     private static func art(_ c: CGContext, _ pack: CursorPack, _ s: StockCursor) -> SIMD2<Double> {
-        // The Tiny Hand coat is an illustrated pointer: one real hand for every
-        // recorded shape. Drawing it here means the chooser preview, the render
-        // atlas and the exported cursor are literally the same pixels.
-        if let hot = TinyHandSkins.draw(pack, in: c) { return hot }
         let rgb: (Double, Double, Double)
         switch pack {
         case .lavender: rgb = (0.53, 0.33, 0.95)
@@ -518,7 +514,21 @@ extension CursorPack {
     public var preservesShape: Bool {
         switch self {
         case .dot, .ring, .holiday, .pixel, .outline: return false
-        default: return !TinyHandSkins.isCoat(self)
+        default: return true
         }
+    }
+}
+
+extension CursorAtlas {
+    /// Per-shape preview for every stock shape: shape-preserving packs draw
+    /// their own glyph, stylized packs draw theirs.
+    public static func previewImage(pack: CursorPack, shape: StockCursor) -> NSImage? {
+        let bytes = raster { context in _ = art(context, pack, shape) }
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+              let cg = CGImage(width: px, height: px, bitsPerComponent: 8, bitsPerPixel: 32,
+                               bytesPerRow: px * 4, space: CGColorSpace(name: CGColorSpace.displayP3)!,
+                               bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                               provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: pts, height: pts))
     }
 }
