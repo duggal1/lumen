@@ -109,7 +109,17 @@ enum TypingFocus {
                 continue
             }
             let index = Int(event.axFrameIndex) - 1
-            let observed = ax.indices.contains(index) ? field(ax[index], at: event.t, bounds: bounds, backing: b) : nil
+            var observed = ax.indices.contains(index) ? field(ax[index], at: event.t, bounds: bounds, backing: b) : nil
+            if let current = run, let active = current.field {
+                // Nested containers are the same field for a typing run: a
+                // later key can hint the inner frame while the caret still
+                // sits in the outer one. Keep the field the run locked onto.
+                if let candidate = observed,
+                   active.rect.contains(CGPoint(x: candidate.rect.midX, y: candidate.rect.midY)) ||
+                   candidate.rect.contains(CGPoint(x: active.rect.midX, y: active.rect.midY)) {
+                    observed = active
+                }
+            }
             if let current = run {
                 let same = current.field.flatMap { a in observed.map { a.matches($0, backing: b) } }
                 if same == false || event.t - current.end > (same == true ? 1.5 : 0.9) { finish() }
