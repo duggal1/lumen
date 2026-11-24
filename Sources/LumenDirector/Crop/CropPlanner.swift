@@ -141,7 +141,13 @@ public enum CropPlanner {
         func rect(_ m: CropMode, _ t: Double) -> PxRect {
             switch m {
             case .full: return source
-            case .content: return web.at(t).insetBy(s.insetPx).intersection(source)
+            case .content:
+                // TRUE CROP of the AXWebArea source rect: inset the chrome
+                // divider, then grow to the OUTPUT aspect so the compositor
+                // never stretches the picture. No camera zoom factor is used.
+                let detected = web.at(t).insetBy(s.insetPx)
+                return SmartCropPlanner.aspectFit(detected, source: source)
+                    .intersection(source)
             case .window: return win.at(t).intersection(source)
             }
         }
@@ -317,3 +323,51 @@ public enum CropPlanner {
         return out
     }
 }
+
+// MARK: - Source-pixel geometry for the true crop
+
+public extension SmartCropPlanner {
+    /// PxRect twin of the CGRect aspect fit. Grows a detected content rect to
+    /// the source aspect about its centre, then clamps inside the source. This
+    /// is the final step of the AUTO-CROP path: the resulting rect is a crop
+    /// of the source pixels, fitted to the output frame by the compositor.
+    static func aspectFit(_ rect: PxRect, source: PxRect) -> PxRect {
+        guard rect.w > 1, rect.h > 1, source.w > 1, source.h > 1 else { return rect }
+        let target = source.w / source.h
+        // A rect already within 0.5% of the output aspect is passed through
+        // unchanged (only its origin is clamped). Growing such a rect by a
+        // fraction of a pixel is what makes a stable AXWebArea crop breathe by
+        // a pixel between frames.
+        if abs(rect.aspect - target) <= 0.005 * target,
+           rect.w <= source.w, rect.h <= source.h {
+            return PxRect(x: min(max(rect.x, source.x), source.maxX - rect.w),
+                          y: min(max(rect.y, source.y), source.maxY - rect.h),
+                          w: rect.w, h: rect.h)
+        }
+        var w = rect.w, h = rect.h
+        if w / h < target { w = h * target } else { h = w / target }
+        if w > source.w { w = source.w; h = w / target }
+        if h > source.h { h = source.h; w = h * target }
+        let x = min(max(rect.cx - w / 2, source.x), source.maxX - w)
+        let y = min(max(rect.cy - h / 2, source.y), source.maxY - h)
+        return PxRect(x: x, y: y, w: w, h: h)
+    }
+}
+
+public extension CropPlanner {
+    /// Vision fallback: maps `ChromeDetector`'s window-relative edge result
+    /// into a source-pixel crop rect, already aspect-fitted and clamped. The
+    /// capture path uses this when no AXWebArea is available; the result has
+    /// exactly the same shape as the AX-derived `.content` rect, so the rest
+    /// of the planner (smoothing, debounce, transitions) is unchanged.
+    static func contentRect(fromEdges edges: [Float], gridW: Int, gridH: Int,
+                            window: PxRect, source: PxRect,
+                            settings: ChromeDetector.Settings = ChromeDetector.Settings(),
+                            insetPx: Double = 2) -> PxRect? {
+        guard let detected = ChromeDetector.contentRect(edges: edges, gridW: gridW, gridH: gridH,
+                                                        window: window, s: settings) else { return nil }
+        return SmartCropPlanner.aspectFit(detected.insetBy(insetPx), source: source)
+            .intersection(source)
+    }
+}
+

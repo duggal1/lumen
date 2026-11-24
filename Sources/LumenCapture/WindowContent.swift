@@ -62,17 +62,50 @@ public struct AXSurface: Sendable, Equatable {
 /// public source of window layout in points. Threading: pure queries, call
 /// from any queue, never from the video queue (AX can block for a frame).
 public enum WindowContent {
+    /// Where the content bounds came from. Reported on `Geometry` so a caller
+    /// can decide how much confidence to place in the crop (AX beats a guess).
+    public enum ContentSource: String, Sendable, Equatable {
+        case axWebArea, axChildren, estimated, fullFrame, manual
+    }
+
+    /// A resolved content area plus its provenance.
+    public struct ResolvedContent: Sendable, Equatable {
+        public var rect: CGRect
+        public var source: ContentSource
+        public init(rect: CGRect, source: ContentSource) { self.rect = rect; self.source = source }
+    }
+
+    /// Browser bundle identifiers whose AX tree exposes `AXWebArea` directly.
+    /// Chrome-family browsers need `AXManualAccessibility` (set by
+    /// `ViewportRecorder`); Safari and Arc expose it on demand. Any other app
+    /// that publishes an AXWebArea is handled too — the list only governs how
+    /// eagerly we search, never a hard exclusion.
+    public static let webBrowsers: Set<String> = [
+        "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
+        "company.thebrowser.Browser", "com.brave.Browser", "com.microsoft.edgemac",
+        "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "com.apple.Safari"
+    ]
+
     public struct Geometry: Sendable, Equatable {
         /// Chrome height in points measured from the window frame's top edge.
         public var topInset: Double
         /// Window frame in points.
         public var width: Double
         public var height: Double
+        /// Full detected content rect in the same (global, point) space as the
+        /// captured window frame. `nil` when nothing better than an estimate
+        /// was available.
+        public var contentFrame: CGRect?
+        /// Provenance of `contentFrame`.
+        public var source: ContentSource
 
-        public init(topInset: Double, width: Double, height: Double) {
+        public init(topInset: Double, width: Double, height: Double,
+                    contentFrame: CGRect? = nil, source: ContentSource = .axChildren) {
             self.topInset = topInset
             self.width = width
             self.height = height
+            self.contentFrame = contentFrame
+            self.source = source
         }
 
         /// Fraction of the window height occupied by chrome. Stable across
@@ -101,18 +134,52 @@ public enum WindowContent {
             log.notice("no accessibility window matched \(windowID)")
             return nil
         }
-        guard let contentTop = contentTop(window, frame: frame) else { return nil }
-        // CGFloat and Double are distinct types on some Swift toolchains;
-        // convert explicitly so this compiles on both the local and CI SDKs.
-        let inset = min(max(contentTop - Double(frame.minY), 0), Double(frame.height) * 0.6)
+        // Keep the historical chrome-band inset here: Capture uses it to trim
+        // the physical frame, and the viewport recorder supplies the precise
+        // AXWebArea crop separately. Cropping the physical frame to the web
+        // area would leave no pixels for the typing/chrome uncrop reveal.
+        guard let top = contentTop(window, frame: frame) else { return nil }
+        let inset = min(max(top - frame.minY, 0), frame.height * 0.6)
         guard inset > 1 else { return nil }
-        return Geometry(topInset: inset, width: Double(frame.width), height: Double(frame.height))
+        let full = resolveContent(windowID: windowID, processID: processID, frame: frame)
+        return Geometry(topInset: inset, width: frame.width, height: frame.height,
+                        contentFrame: full?.rect, source: full?.source ?? .estimated)
+    }
+
+    /// Resolves the true content area of a window: AXWebArea for browsers
+    /// (Chrome, Safari, Arc and generic AX-web hosts), then the structural
+    /// chrome band from AX children. `manualOverride`, when supplied, wins
+    /// over both. Returns `nil` when only a guess is possible, so callers keep
+    /// the full frame rather than cropping on an unverified assumption.
+    public static func resolveContent(windowID: CGWindowID, processID: pid_t, frame: CGRect,
+                                      manualOverride: ((CGRect) -> CGRect?)? = nil) -> ResolvedContent? {
+        guard frame.width > 8, frame.height > 8 else { return nil }
+        if let manual = manualOverride?(frame), manual.width > 8, manual.height > 8 {
+            return ResolvedContent(rect: manual.intersection(frame), source: .manual)
+        }
+        guard AXIsProcessTrusted() else { return nil }
+        if let web = axWebArea(processID: processID, frame: frame),
+           web.width > 8, web.height > 8 {
+            return ResolvedContent(rect: web.intersection(frame), source: .axWebArea)
+        }
+        guard let window = axWindow(processID: processID, title: windowTitle(windowID), frame: frame),
+              let top = contentTop(window, frame: frame), top > frame.minY + 1,
+              frame.maxY - top > 8 else { return nil }
+        let rect = CGRect(x: frame.minX, y: top, width: frame.width, height: frame.maxY - top)
+        return ResolvedContent(rect: rect.intersection(frame), source: .axChildren)
+    }
+
+    /// Convenience for callers that only need the rect.
+    public static func contentRect(windowID: CGWindowID, processID: pid_t, frame: CGRect,
+                                   manualOverride: ((CGRect) -> CGRect?)? = nil) -> CGRect? {
+        resolveContent(windowID: windowID, processID: processID, frame: frame,
+                       manualOverride: manualOverride)?.rect
     }
 
     /// Point height of the chrome band for a window we can describe but cannot
     /// inspect (used only to keep an estimate while the window is off-screen).
     public static func estimatedInset(for frame: CGRect) -> Double {
-        min(52, max(Double(frame.height) * 0.05, 28))
+        min(52, max(frame.height * 0.05, 28))
     }
 
     // MARK: AX helpers
@@ -136,15 +203,48 @@ public enum WindowContent {
             // frame, then prefer the one whose title matches the captured one.
             let distance = abs(rect.minX - frame.minX) + abs(rect.minY - frame.minY)
                 + abs(rect.width - frame.width) + abs(rect.height - frame.height)
-            var score = Double(distance)
+            var score = distance
             if let title, let own = attribute(element, kAXTitleAttribute) as? String, !title.isEmpty, own == title {
                 score -= 400
             }
             if best == nil || score < best!.1 { best = (element, score) }
         }
         // A collapsed mismatch means we found a different window of the app.
-        guard let best, best.1 < Double(max(frame.width, frame.height)) * 0.5 else { return nil }
+        guard let best, best.1 < max(frame.width, frame.height) * 0.5 else { return nil }
         return best.0
+    }
+
+    /// Largest AXWebArea under the windows matching `frame`. Bounded BFS so a
+    /// pathological AX tree cannot stall capture. Returns global points.
+    private static func axWebArea(processID: pid_t, frame: CGRect) -> CGRect? {
+        guard processID > 0 else { return nil }
+        let app = AXUIElementCreateApplication(processID)
+        AXUIElementSetMessagingTimeout(app, 0.12)
+        guard let windows = attribute(app, kAXWindowsAttribute) as? [AXUIElement] else { return nil }
+        var queue: [(AXUIElement, Int)] = []
+        for window in windows {
+            AXUIElementSetMessagingTimeout(window, 0.08)
+            guard let rect = axFrame(window) else { continue }
+            let overlap = rect.intersection(frame)
+            // Skip other displays/windows of the same app.
+            if overlap.width * overlap.height < frame.width * frame.height * 0.25 { continue }
+            queue.append((window, 0))
+        }
+        var best: CGRect?
+        var head = 0, visited = 0
+        func area(_ r: CGRect?) -> Double { (r?.width ?? 0) * (r?.height ?? 0) }
+        while head < queue.count, visited < 600 {
+            let (element, depth) = queue[head]; head += 1; visited += 1
+            AXUIElementSetMessagingTimeout(element, 0.06)
+            if (attribute(element, kAXRoleAttribute) as? String) == "AXWebArea" {
+                if let rect = axFrame(element), area(rect) > area(best) { best = rect }
+                continue
+            }
+            if depth < 14, let kids = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
+                for kid in kids { queue.append((kid, depth + 1)) }
+            }
+        }
+        return best
     }
 
     private static func contentTop(_ window: AXUIElement, frame: CGRect) -> Double? {
@@ -159,7 +259,7 @@ public enum WindowContent {
             let spansWidth = rect.width >= frame.width * 0.5
             let touchesBottom = rect.maxY >= frame.maxY - 10
             let startsBelowTop = rect.minY > frame.minY + 1
-            if spansWidth && touchesBottom && startsBelowTop { tops.append(Double(rect.minY)) }
+            if spansWidth && touchesBottom && startsBelowTop { tops.append(rect.minY) }
         }
         return tops.min()
     }
@@ -210,7 +310,7 @@ public enum WindowContent {
             let role = info?.role ?? "AXWindow"
             let subrole = info?.subrole
             let kind = AXSurface.classify(role: role, subrole: subrole) ?? .window
-            let surface = AXSurface(id: number, kind: kind, role: role, subrole: subrole,
+            var surface = AXSurface(id: number, kind: kind, role: role, subrole: subrole,
                                     title: title ?? info?.title, frame: frame, appName: owner)
             result.append(surface)
             // Native sheets/dialogs are AX children, not separate CG windows.
@@ -231,13 +331,12 @@ public enum WindowContent {
         for window in windows {
             AXUIElementSetMessagingTimeout(window, 0.05)
             guard let rect = axFrame(window) else { continue }
-            let distance = abs(rect.minX - frame.minX) + abs(rect.minY - frame.minY)
+            var score = abs(rect.minX - frame.minX) + abs(rect.minY - frame.minY)
                 + abs(rect.width - frame.width) + abs(rect.height - frame.height)
-            var score = Double(distance)
             if let title, let own = attribute(window, kAXTitleAttribute) as? String, own == title { score -= 400 }
             if best == nil || score < best!.1 { best = (window, score) }
         }
-        guard let best, best.1 < Double(max(frame.width, frame.height)) * 0.5 else { return nil }
+        guard let best, best.1 < max(frame.width, frame.height) * 0.5 else { return nil }
         return (attribute(best.0, kAXRoleAttribute) as? String,
                 attribute(best.0, kAXSubroleAttribute) as? String,
                 attribute(best.0, kAXTitleAttribute) as? String)

@@ -332,7 +332,10 @@ fragment float4 loupeFS(VO in [[stage_in]], constant LoupeU &u [[buffer(0)]], te
     float2 n = (p - c) / (2.0 * R);
     float2 view = u.source.zw / max(u.zoom.x * u.zoom.y, 0.01);
     float2 sp = u.source.xy + clamp(n, float2(-0.5), float2(0.5)) * view;
-    float3 rgb = src.sample(linClamp, clamp(sp / u.source.zw, 0.0, 1.0)).rgb;
+    // Crop-sample the full-resolution source (mip 0) with the 5-tap Catmull
+    // kernel. A bilinear tap here smeared magnified text in the loupe even
+    // though the camera pass was sharp; both passes now use the same resampler.
+    float3 rgb = catmull5(src, clamp(sp / u.source.zw, 0.0, 1.0), 0u);
     // Rim: a crisp light edge reads as glass against any background.
     float ringW = max(u.glass.w, 1.0);
     float rim = smoothstep(R - ringW * 1.6, R - ringW * 0.4, length(p - c));

@@ -61,8 +61,8 @@ import LumenExport
     let mixer = AudioMixer(mic: voice, micOffset: 0, system: nil, systemOffset: 0)
     let a = try #require(mixer.mix(tl)), b = try #require(mixer.mix(tl))
     #expect(a.l == b.l && a.r == b.r)
-    // Studio Audio has one fixed target: -12 LUFS, +2 dB over the old -14.
-    #expect(abs(a.lufs + 12) <= 0.5, "voice must land at -12 LUFS, got \(a.lufs)")
+    // The default mic mode normalizes to -14 LUFS (streaming/podcast target).
+    #expect(abs(a.lufs + 14) <= 0.5, "voice must land at -14 LUFS, got \(a.lufs)")
     #expect(a.truePeakDb <= -1)
 }
 

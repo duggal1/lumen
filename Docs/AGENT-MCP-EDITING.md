@@ -21,14 +21,14 @@ capture and editing; never try to drive the GUI instead.
 ```
 
 `initialize` negotiates the protocol version (supported: 2025-03-26, 2025-06-18, 2025-11-25).
-`tools/list` returns all 49 tools with their schemas and safety annotations. `tools/call` returns a
+`tools/list` returns all 52 tools with their schemas and safety annotations. `tools/call` returns a
 `content` array, an `isError` flag, and `structuredContent` when the tool declares an output schema.
 Preview frames and window captures come back as `image` content blocks — look at them; do not just
 read metadata.
 
 ## The contract at a glance
 
-Forty-nine tools in six capability groups: read (13), record (5), actuate (6), edit (22),
+Fifty-two tools in six capability groups: read (13), record (5), actuate (6), edit (25),
 network (1), export (2). Names are `verb_noun` in snake_case. Every mutating tool accepts `dry_run`.
 
 The five phases of any editing job:
@@ -36,8 +36,11 @@ The five phases of any editing job:
 1. **Preflight** — `lumen_status`, `project_list` / `project_open`.
 2. **Capture** — `record_start` → `run_script` (markers) → `record_stop`.
 3. **Edit** — `get_edit` → `cut_span` / `timeline_patch` / `edit_apply` → `add_music` /
-   `audio_mix_set` → `zoom_replan` / `style_set`.
-4. **Verify** — `render_preview` → `qa_report`; loop until every check passes.
+   `audio_mix_set` → `zoom_replan` / `style_set`; set options with `crop_set` (browser
+   auto-crop), `cursor_set` (cursor pack, size, click effect) and `style_set` (aspect,
+   background).
+4. **Verify** — `post_process` (derived-state metadata + QA checks) → `render_preview` →
+   `qa_report`; loop until every check passes.
 5. **Export** — `export_final` → `job_status` → `project_close`.
 
 Use `lumen://schema/timeline`, `lumen://project/<id>/timeline` and

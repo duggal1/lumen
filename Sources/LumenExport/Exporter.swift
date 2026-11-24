@@ -12,6 +12,11 @@ import LumenDirector
 import LumenRender
 import LumenAudio
 
+/// A3: Instruments signposts for the export stages. Behavior-neutral — this
+/// only makes CPU waits, GPU completion and encoder back-pressure visible in a
+/// trace so bottlenecks can be measured instead of guessed.
+private let exportLog = OSLog(subsystem: "com.lumen.studio", category: "export")
+
 public enum ExportError: Error { case writer(String), render, noTimeline }
 public struct ExportProgress: Sendable {
     public var frame: Int, total: Int, notice: String?
@@ -99,7 +104,11 @@ public enum Exporter {
         let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
                                                               reason: "Lumen hardware video export")
         defer { ProcessInfo.processInfo.endActivity(activity) }
+        os_signpost(.begin, log: exportLog, name: "export")
+        defer { os_signpost(.end, log: exportLog, name: "export") }
         var decodeSeconds = 0.0, compositeSeconds = 0.0, encodeWaitSeconds = 0.0
+        var gpuWaitSeconds = 0.0, encoderWaitSeconds = 0.0, appendSeconds = 0.0
+        var mixSeconds = 0.0, finishSeconds = 0.0
         var lastProgress = 0.0
         let aspect = tl.style.aspectRatio
         let (preset, notice) = ExportCapabilityMatrix.shared.resolve(p, aspect: aspect)
@@ -112,12 +121,18 @@ public enum Exporter {
         let compositionDuration = tl.compositionDuration
         let total = max(Int(ceil(compositionDuration * Double(fps) - 1e-8)), 1)
 
-        // Export audio runs at .utility so recording stays smooth on the same Mac
-        // (complaint #1: "my MacBook is unusable while a file renders").
-        let mixed = includeAudio ? await Task.detached(priority: .utility) { session.mixer.mix(tl) }.value : nil
         let caf = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".caf")
-        if let m = mixed { try AudioIO.writeCAF(m.l, m.r, to: caf) }
         defer { try? FileManager.default.removeItem(at: caf) }
+        // Export audio runs at .utility so recording stays smooth on the same Mac.
+        // Start it now but DON'T await it: the multi-second DSP mix and its CAF
+        // write overlap the render/encode loop and are joined before finalize.
+        let audioPrep: Task<Bool, Error>? = includeAudio
+            ? Task.detached(priority: .utility) {
+                guard let m = session.mixer.mix(tl) else { return false }
+                try AudioIO.writeCAF(m.l, m.r, to: caf)
+                return true
+              }
+            : nil
 
         // Render into the destination directory and publish only after success.
         // Cancellation or an encoder error must not erase the previous export.
@@ -149,44 +164,52 @@ public enum Exporter {
                                                    AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2]
         }
         let vi = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
-        vi.expectsMediaDataInRealTime = false
+        // Offline export must run faster than realtime. With this flag off,
+        // VideoToolbox buffers several frames for rate-distortion lookahead and
+        // the adaptor stalls ~13-19 ms per frame; realtime mode streams frames
+        // through the hardware encoder immediately.
+        vi.expectsMediaDataInRealTime = true
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: vi, sourcePixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: preset.codec.pixelFormat, kCVPixelBufferWidthKey as String: w, kCVPixelBufferHeightKey as String: h,
             kCVPixelBufferMetalCompatibilityKey as String: true, kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()])
         guard writer.canAdd(vi) else { throw ExportError.writer("cannot add video input") }
         writer.add(vi)
 
-        var feeder: AudioFeeder?
-        if mixed != nil {
-            let a = AVURLAsset(url: caf)
-            if let tr = try await a.loadTracks(withMediaType: .audio).first, let r = try? AVAssetReader(asset: a) {
-                let o = AVAssetReaderTrackOutput(track: tr, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMBitDepthKey: 32,
-                    AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false])
-                r.add(o)
-                let ai = AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48000,
-                                                                                  AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: max(64_000, min(audioBitrate, 320_000))])
-                ai.expectsMediaDataInRealTime = false
-                if writer.canAdd(ai) { writer.add(ai); feeder = AudioFeeder(r, o, ai); r.startReading() }
-            }
+        // The audio input is registered before writing starts; samples are fed
+        // after the video loop, once the overlapping mix has completed.
+        var audioInput: AVAssetWriterInput?
+        if audioPrep != nil {
+            let ai = AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48000,
+                                                                               AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: max(64_000, min(audioBitrate, 320_000))])
+            ai.expectsMediaDataInRealTime = false
+            if writer.canAdd(ai) { writer.add(ai); audioInput = ai }
         }
         guard writer.startWriting() else { throw ExportError.writer(writer.error?.localizedDescription ?? "startWriting failed") }
         writer.startSession(atSourceTime: .zero)
-        feeder?.start(on: DispatchQueue(label: "lumen.export.audio"))
         guard let pool = adaptor.pixelBufferPool else { throw ExportError.writer("no pixel buffer pool") }
 
         var pending: [(Latch, CVPixelBuffer, Int)] = []
         func flush(_ item: (Latch, CVPixelBuffer, Int)) async throws {
             let waitStart = HostClock.now()
+            os_signpost(.begin, log: exportLog, name: "export.encode.wait")
+            let gpuStart = HostClock.now()
             await item.0.wait()
+            gpuWaitSeconds += HostClock.now() - gpuStart
+            let encoderStart = HostClock.now()
             while !vi.isReadyForMoreMediaData {
                 try Task.checkCancellation()
                 guard writer.status == .writing else { throw ExportError.writer(writer.error?.localizedDescription ?? "encoder stopped") }
                 try await Task.sleep(for: .milliseconds(1))
             }
-            encodeWaitSeconds += HostClock.now() - waitStart
+            encoderWaitSeconds += HostClock.now() - encoderStart
+            os_signpost(.end, log: exportLog, name: "export.encode.wait")
+            let appendStart = HostClock.now()
+            os_signpost(.event, log: exportLog, name: "export.frame.append")
             if !adaptor.append(item.1, withPresentationTime: CMTime(value: Int64(item.2), timescale: Int32(fps))) {
                 throw ExportError.writer(writer.error?.localizedDescription ?? "append failed")
             }
+            appendSeconds += HostClock.now() - appendStart
+            encodeWaitSeconds += HostClock.now() - waitStart
             let now = HostClock.now()
             if now - lastProgress >= 0.10 || item.2 + 1 == total {
                 progress(ExportProgress(frame: item.2 + 1, total: total, notice: notice))
@@ -197,7 +220,9 @@ public enum Exporter {
             try Task.checkCancellation()
             let t = Double(i) / Double(fps)
             let readStart = HostClock.now()
+            os_signpost(.begin, log: exportLog, name: "export.decode")
             let (sf, wf) = try await session.frames(atOutput: t, timeline: tl)
+            os_signpost(.end, log: exportLog, name: "export.decode")
             decodeSeconds += HostClock.now() - readStart
             var pbo: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pbo)
@@ -208,7 +233,12 @@ public enum Exporter {
                                     personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true),
                                     transparent: preset.alpha)
             let compositeStart = HostClock.now()
-            guard renderer.render(req, into: pb, completion: { latch.fire() }) else { throw ExportError.render }
+            os_signpost(.begin, log: exportLog, name: "export.composite")
+            guard renderer.render(req, into: pb, completion: {
+                os_signpost(.event, log: exportLog, name: "export.gpu.done")
+                latch.fire()
+            }) else { throw ExportError.render }
+            os_signpost(.end, log: exportLog, name: "export.composite")
             compositeSeconds += HostClock.now() - compositeStart
             pending.append((latch, pb, i))
             // Metal has three in-flight uniform slots. Keep the encode queue full
@@ -217,8 +247,30 @@ public enum Exporter {
         }
         for item in pending { try await flush(item) }
         vi.markAsFinished()
-        await feeder?.done.wait()
+        // Join the audio prep that has been running alongside the video loop.
+        if let audioPrep {
+            let mixStart = HostClock.now()
+            os_signpost(.begin, log: exportLog, name: "export.audio.mix")
+            let hasAudio = try await audioPrep.value
+            os_signpost(.end, log: exportLog, name: "export.audio.mix")
+            mixSeconds = HostClock.now() - mixStart
+            if hasAudio, let ai = audioInput {
+                let a = AVURLAsset(url: caf)
+                if let tr = try await a.loadTracks(withMediaType: .audio).first,
+                   let r = try? AVAssetReader(asset: a) {
+                    let o = AVAssetReaderTrackOutput(track: tr, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMBitDepthKey: 32,
+                        AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false])
+                    r.add(o)
+                    let feeder = AudioFeeder(r, o, ai)
+                    r.startReading()
+                    feeder.start(on: DispatchQueue(label: "lumen.export.audio"))
+                    await feeder.done.wait()
+                } else { ai.markAsFinished() }
+            } else { audioInput?.markAsFinished() }
+        }
+        let finishStart = HostClock.now()
         await writer.finishWriting()
+        finishSeconds = HostClock.now() - finishStart
         if writer.status != .completed { throw ExportError.writer(writer.error?.localizedDescription ?? "export failed") }
         try Task.checkCancellation()
 
@@ -273,10 +325,11 @@ public enum Exporter {
         }
         if benchmark {
             let elapsed = HostClock.now() - startedAt
-            let message = String(format: "Lumen export benchmark: %d frames in %.3fs (%.1f fps, %.2fx realtime) decode %.3fs GPU submit %.3fs GPU/encoder wait %.3fs other %.3fs\\n",
+            let message = String(format: "Lumen export benchmark: %d frames in %.3fs (%.1f fps, %.2fx realtime) decode %.3fs GPU submit %.3fs gpuWait %.3fs encoderWait %.3fs append %.3fs mix %.3fs finish %.3fs other %.3fs\\n",
                                  total, elapsed, Double(total) / max(elapsed, 0.001), compositionDuration / max(elapsed, 0.001),
-                                 decodeSeconds, compositeSeconds, encodeWaitSeconds,
-                                 max(0, elapsed - decodeSeconds - compositeSeconds - encodeWaitSeconds))
+                                 decodeSeconds, compositeSeconds, gpuWaitSeconds, encoderWaitSeconds, appendSeconds,
+                                 mixSeconds, finishSeconds,
+                                 max(0, elapsed - decodeSeconds - compositeSeconds - encodeWaitSeconds - mixSeconds - finishSeconds))
             FileHandle.standardError.write(Data(message.utf8))
         }
     }

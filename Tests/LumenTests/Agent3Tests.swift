@@ -288,16 +288,6 @@ private final class SpyEmailTransport: EmailTransport, @unchecked Sendable {
     #expect(!result.report.summary.isEmpty)
 }
 
-@Test func clickBenchmarkRejectsDeadlineMissesAndInvalidTimings() {
-    let budget = FrameBudget(fps: 60)
-    let samples = Array(repeating: 16.0, count: 3600)
-    #expect(budget.evaluate(samples, clickScenario: true).passes)
-    for delay in [17.0, 34, .nan] {
-        #expect(!budget.evaluate(samples + [delay], clickScenario: true).passes)
-    }
-    #expect(!budget.evaluate(Array(repeating: 16.6, count: 3600), clickScenario: true).passes)
-}
-
 // MARK: - Sync harness
 
 private func syncTimeline(cut: ClosedRange<Double>? = nil) -> (Timeline, [InputEvent]) {

@@ -1,0 +1,1726 @@
+{
+  "sampleRate": 48000,
+  "targetLUFS": -16.0,
+  "files": [
+    {
+      "id": "typing/alpha/alpha-down-1.wav",
+      "path": "typing/alpha/alpha-down-1.wav",
+      "keyClass": "alpha",
+      "phase": "down",
+      "variant": 1,
+      "source": "woven-typing",
+      "sourceUrl": "https://assets.sfx.woven.video/sfx/keyboard-typing.wav",
+      "pageUrl": "https://www.woven.video/sfx/keyboard-typing-sound-effect",
+      "author": "Woven SFX",
+      "license": "CC0 1.0",
+      "sha256": "fb5064c43d27caf4a393f2b74e4da56e906f0dea78e245937b3d8d003c6b57f1",
+      "bytes": 21198,
+      "mastering": {
+        "input_lufs": -27.5,
+        "output_lufs": -16.2,
+        "gain_db": 22.8,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/alpha/alpha-down-2.wav",
+      "path": "typing/alpha/alpha-down-2.wav",
+      "keyClass": "alpha",
+      "phase": "down",
+      "variant": 2,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "685e10d72945c0c48e4b3bad7b4c82d2fbebeec680c155d3a97dfda28b1865bc",
+      "bytes": 21678,
+      "mastering": {
+        "input_lufs": -30.9,
+        "output_lufs": -16.3,
+        "gain_db": 19.27,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/alpha/alpha-down-3.wav",
+      "path": "typing/alpha/alpha-down-3.wav",
+      "keyClass": "alpha",
+      "phase": "down",
+      "variant": 3,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "571a3bdf3dd22488f88b19875adfc02302fadcd2ee60cf27705e17a6c2bdc38d",
+      "bytes": 21198,
+      "mastering": {
+        "input_lufs": -33.4,
+        "output_lufs": -16.3,
+        "gain_db": 20.44,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/alpha/alpha-down-4.wav",
+      "path": "typing/alpha/alpha-down-4.wav",
+      "keyClass": "alpha",
+      "phase": "down",
+      "variant": 4,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "cc8adbbe3d380e44106f95a247697f1d00683c4dbacd9e56d00f437706a923d7",
+      "bytes": 19278,
+      "mastering": {
+        "input_lufs": -26.9,
+        "output_lufs": -16.2,
+        "gain_db": 24.3,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/alpha/alpha-down-5.wav",
+      "path": "typing/alpha/alpha-down-5.wav",
+      "keyClass": "alpha",
+      "phase": "down",
+      "variant": 5,
+      "source": "fs-gateron",
+      "sourceUrl": "https://cdn.freesound.org/previews/583/583085_10081667-hq.mp3",
+      "pageUrl": "https://freesound.org/s/583085/",
+      "author": "IRF1010N",
+      "license": "CC0 1.0",
+      "sha256": "b06de9898b155b0467405724de58f78803adb46b982092f274ec742c97fb08c1",
+      "bytes": 17358,
+      "mastering": {
+        "input_lufs": -39.7,
+        "output_lufs": -16.1,
+        "gain_db": 31.02,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/alpha/alpha-up-1.wav",
+      "path": "typing/alpha/alpha-up-1.wav",
+      "keyClass": "alpha",
+      "phase": "up",
+      "variant": 1,
+      "source": "woven-typing",
+      "sourceUrl": "https://assets.sfx.woven.video/sfx/keyboard-typing.wav",
+      "pageUrl": "https://www.woven.video/sfx/keyboard-typing-sound-effect",
+      "author": "Woven SFX",
+      "license": "CC0 1.0",
+      "sha256": "d6b0a7b1653393f7c8906263e61a20aab349628d6c95bbd7f7408749fab7f9bb",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -24.1,
+        "output_lufs": -16.2,
+        "gain_db": 20.64,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/alpha/alpha-up-2.wav",
+      "path": "typing/alpha/alpha-up-2.wav",
+      "keyClass": "alpha",
+      "phase": "up",
+      "variant": 2,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "f5e6180aedc5701000408f0c66d073abc993ca49367a9c558855a99bfc335033",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -32.2,
+        "output_lufs": -16.3,
+        "gain_db": 22.57,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/alpha/alpha-up-3.wav",
+      "path": "typing/alpha/alpha-up-3.wav",
+      "keyClass": "alpha",
+      "phase": "up",
+      "variant": 3,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "3fff210fb3486adad8240d61543f9e529f02ad37dafcef8089c4b255253236d3",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -37.4,
+        "output_lufs": -16.3,
+        "gain_db": 29.47,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/alpha/alpha-up-4.wav",
+      "path": "typing/alpha/alpha-up-4.wav",
+      "keyClass": "alpha",
+      "phase": "up",
+      "variant": 4,
+      "source": "fs-gateron",
+      "sourceUrl": "https://cdn.freesound.org/previews/583/583085_10081667-hq.mp3",
+      "pageUrl": "https://freesound.org/s/583085/",
+      "author": "IRF1010N",
+      "license": "CC0 1.0",
+      "sha256": "2095582fe25644743b7af8528e534c057c8a67bde70bec32a998aada5e1b7075",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -28.5,
+        "output_lufs": -16.3,
+        "gain_db": 18.87,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/number/number-down-1.wav",
+      "path": "typing/number/number-down-1.wav",
+      "keyClass": "number",
+      "phase": "down",
+      "variant": 1,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "a5fd44786a781ecb6c35c73e10dc6feb5125953aff90ef7fa0d667bf4c979f7e",
+      "bytes": 22638,
+      "mastering": {
+        "input_lufs": -32.7,
+        "output_lufs": -16.3,
+        "gain_db": 27.05,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/number/number-down-2.wav",
+      "path": "typing/number/number-down-2.wav",
+      "keyClass": "number",
+      "phase": "down",
+      "variant": 2,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "2a5bc1a55bce527d8feb6f595c704682db062f81fc2bf6ed0c3c845dcbfb9eb6",
+      "bytes": 20238,
+      "mastering": {
+        "input_lufs": -34.4,
+        "output_lufs": -16.3,
+        "gain_db": 21.82,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/number/number-down-3.wav",
+      "path": "typing/number/number-down-3.wav",
+      "keyClass": "number",
+      "phase": "down",
+      "variant": 3,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "564af7280cbb77c5cec69740467780b71f01ed51e8d172a13ea9052b4ed78e70",
+      "bytes": 19758,
+      "mastering": {
+        "input_lufs": -32.6,
+        "output_lufs": -16.3,
+        "gain_db": 19.83,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/number/number-down-4.wav",
+      "path": "typing/number/number-down-4.wav",
+      "keyClass": "number",
+      "phase": "down",
+      "variant": 4,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "6a60310bd39a29cbb9cc324141c0ccffa80bb326078ce6f0e83b08792c818622",
+      "bytes": 20238,
+      "mastering": {
+        "input_lufs": -29.3,
+        "output_lufs": -16.2,
+        "gain_db": 29.07,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/number/number-down-5.wav",
+      "path": "typing/number/number-down-5.wav",
+      "keyClass": "number",
+      "phase": "down",
+      "variant": 5,
+      "source": "woven-typing",
+      "sourceUrl": "https://assets.sfx.woven.video/sfx/keyboard-typing.wav",
+      "pageUrl": "https://www.woven.video/sfx/keyboard-typing-sound-effect",
+      "author": "Woven SFX",
+      "license": "CC0 1.0",
+      "sha256": "b75e9f1498c68c1b85a3375337bcca28641ac432740e1dc73b748e6bdcc9fd46",
+      "bytes": 18798,
+      "mastering": {
+        "input_lufs": -29.8,
+        "output_lufs": -16.2,
+        "gain_db": 21.97,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/number/number-up-1.wav",
+      "path": "typing/number/number-up-1.wav",
+      "keyClass": "number",
+      "phase": "up",
+      "variant": 1,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "0b55e1789f468b46ce0e214add55676d9221e09419b2c586d50fc8c8cbc5716b",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -28.1,
+        "output_lufs": -16.3,
+        "gain_db": 23.5,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/number/number-up-2.wav",
+      "path": "typing/number/number-up-2.wav",
+      "keyClass": "number",
+      "phase": "up",
+      "variant": 2,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "580315addd5ec1aba655406cba7b80f7a3bd883959e35b9702f7bed421c0d8d2",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -37.1,
+        "output_lufs": -16.3,
+        "gain_db": 27.28,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/number/number-up-3.wav",
+      "path": "typing/number/number-up-3.wav",
+      "keyClass": "number",
+      "phase": "up",
+      "variant": 3,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "6343fa5f9d079c5ba3137757b453a3671d063312a002889b05ac3c29102e43c1",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -41.2,
+        "output_lufs": -16.3,
+        "gain_db": 32.42,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/number/number-up-4.wav",
+      "path": "typing/number/number-up-4.wav",
+      "keyClass": "number",
+      "phase": "up",
+      "variant": 4,
+      "source": "woven-typing",
+      "sourceUrl": "https://assets.sfx.woven.video/sfx/keyboard-typing.wav",
+      "pageUrl": "https://www.woven.video/sfx/keyboard-typing-sound-effect",
+      "author": "Woven SFX",
+      "license": "CC0 1.0",
+      "sha256": "152fe254184dbcc197a6b8021601c36bc47d3a3b91a1700beee7f8561514a068",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -30.6,
+        "output_lufs": -16.3,
+        "gain_db": 23.82,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/space/space-down-1.wav",
+      "path": "typing/space/space-down-1.wav",
+      "keyClass": "space",
+      "phase": "down",
+      "variant": 1,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "76c6ae98c8742ca6e691c649c99ae4937d92f71cd035e15ae8b47b78f008ab0a",
+      "bytes": 17838,
+      "mastering": {
+        "input_lufs": -32.8,
+        "output_lufs": -16.2,
+        "gain_db": 33.42,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/space/space-down-2.wav",
+      "path": "typing/space/space-down-2.wav",
+      "keyClass": "space",
+      "phase": "down",
+      "variant": 2,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "657b20f8a36f1f2f06383b078cddeb54fe1345ac639a4bd6ddd83d2e284d6df4",
+      "bytes": 20238,
+      "mastering": {
+        "input_lufs": -38.4,
+        "output_lufs": -16.2,
+        "gain_db": 24.39,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/space/space-down-3.wav",
+      "path": "typing/space/space-down-3.wav",
+      "keyClass": "space",
+      "phase": "down",
+      "variant": 3,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "f14cc757647b461a8f768d4aaa2d4e9fc9478f608c89cc53789112398dd16b1d",
+      "bytes": 24558,
+      "mastering": {
+        "input_lufs": -37.7,
+        "output_lufs": -16.3,
+        "gain_db": 24.17,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/space/space-down-4.wav",
+      "path": "typing/space/space-down-4.wav",
+      "keyClass": "space",
+      "phase": "down",
+      "variant": 4,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "9165f30b7c2e9ff2b4588a8cecf668ac8edf158778f8df89ee2b0007a03c46de",
+      "bytes": 21678,
+      "mastering": {
+        "input_lufs": -42.9,
+        "output_lufs": -16.2,
+        "gain_db": 26.9,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/space/space-down-5.wav",
+      "path": "typing/space/space-down-5.wav",
+      "keyClass": "space",
+      "phase": "down",
+      "variant": 5,
+      "source": "fs-mx-black",
+      "sourceUrl": "https://cdn.freesound.org/previews/628/628325_13894315-hq.mp3",
+      "pageUrl": "https://freesound.org/s/628325/",
+      "author": "ujonathan",
+      "license": "CC0 1.0",
+      "sha256": "2ff1487ca42c5dde6996b79acfedc5234efd0dbb498f3cf704c7db1ea7b5c3ce",
+      "bytes": 24558,
+      "mastering": {
+        "input_lufs": -26.0,
+        "output_lufs": -16.3,
+        "gain_db": 19.78,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/space/space-up-1.wav",
+      "path": "typing/space/space-up-1.wav",
+      "keyClass": "space",
+      "phase": "up",
+      "variant": 1,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "1205c7d9a4fbe442d35c404b8496344df7f91440f1fac70def03998e13574095",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -32.4,
+        "output_lufs": -16.3,
+        "gain_db": 25.42,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/space/space-up-2.wav",
+      "path": "typing/space/space-up-2.wav",
+      "keyClass": "space",
+      "phase": "up",
+      "variant": 2,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "d5046b9eb376b394d3cebb2935f77b04ef34351417544ccc217b1b6a782860a8",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -40.9,
+        "output_lufs": -16.2,
+        "gain_db": 24.9,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/space/space-up-3.wav",
+      "path": "typing/space/space-up-3.wav",
+      "keyClass": "space",
+      "phase": "up",
+      "variant": 3,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "554488dd78f4b5d056ac8dce3181bb08b0e984a1cb8313caf19a2323cb3c8cdd",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -42.4,
+        "output_lufs": -16.0,
+        "gain_db": 26.4,
+        "peak_db": -2.55
+      }
+    },
+    {
+      "id": "typing/space/space-up-4.wav",
+      "path": "typing/space/space-up-4.wav",
+      "keyClass": "space",
+      "phase": "up",
+      "variant": 4,
+      "source": "fs-mx-black",
+      "sourceUrl": "https://cdn.freesound.org/previews/628/628325_13894315-hq.mp3",
+      "pageUrl": "https://freesound.org/s/628325/",
+      "author": "ujonathan",
+      "license": "CC0 1.0",
+      "sha256": "a5e1f8da89c79e9698e4bef0d5518da705fcf5407cdde36f7ccb75bd95853135",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -40.2,
+        "output_lufs": -16.0,
+        "gain_db": 24.2,
+        "peak_db": -2.13
+      }
+    },
+    {
+      "id": "typing/enter/enter-down-1.wav",
+      "path": "typing/enter/enter-down-1.wav",
+      "keyClass": "enter",
+      "phase": "down",
+      "variant": 1,
+      "source": "fs-mx-black",
+      "sourceUrl": "https://cdn.freesound.org/previews/628/628325_13894315-hq.mp3",
+      "pageUrl": "https://freesound.org/s/628325/",
+      "author": "ujonathan",
+      "license": "CC0 1.0",
+      "sha256": "7f6b1cb8f7cbac7f0d6aefde940d82431fe3cbc0eeb48c3f035bc29c924edae8",
+      "bytes": 21678,
+      "mastering": {
+        "input_lufs": -34.4,
+        "output_lufs": -16.2,
+        "gain_db": 23.81,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/enter/enter-down-2.wav",
+      "path": "typing/enter/enter-down-2.wav",
+      "keyClass": "enter",
+      "phase": "down",
+      "variant": 2,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "357cf289c7461f572eafc0346f719eb6fe54c6ccb6ba08f1d84ea32b4f25d92b",
+      "bytes": 21678,
+      "mastering": {
+        "input_lufs": -40.3,
+        "output_lufs": -16.3,
+        "gain_db": 28.67,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/enter/enter-down-3.wav",
+      "path": "typing/enter/enter-down-3.wav",
+      "keyClass": "enter",
+      "phase": "down",
+      "variant": 3,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "e12126125be0ecca82925602204681fac97b6125df080d1eec0d5d56c166d49b",
+      "bytes": 19278,
+      "mastering": {
+        "input_lufs": -38.6,
+        "output_lufs": -16.2,
+        "gain_db": 23.36,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/enter/enter-down-4.wav",
+      "path": "typing/enter/enter-down-4.wav",
+      "keyClass": "enter",
+      "phase": "down",
+      "variant": 4,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "5e1238de980b39d9b29e8b3ddef30cd18b93ff0ed199ab07bd72006634d72e6b",
+      "bytes": 17358,
+      "mastering": {
+        "input_lufs": -39.3,
+        "output_lufs": -16.2,
+        "gain_db": 27.67,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/enter/enter-down-5.wav",
+      "path": "typing/enter/enter-down-5.wav",
+      "keyClass": "enter",
+      "phase": "down",
+      "variant": 5,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "73568e4e6b0fd880f571fef81b5df974c747d86e1e49fc6dabbd12e3f4090f5c",
+      "bytes": 20238,
+      "mastering": {
+        "input_lufs": -38.3,
+        "output_lufs": -16.3,
+        "gain_db": 27.24,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/enter/enter-up-1.wav",
+      "path": "typing/enter/enter-up-1.wav",
+      "keyClass": "enter",
+      "phase": "up",
+      "variant": 1,
+      "source": "fs-mx-black",
+      "sourceUrl": "https://cdn.freesound.org/previews/628/628325_13894315-hq.mp3",
+      "pageUrl": "https://freesound.org/s/628325/",
+      "author": "ujonathan",
+      "license": "CC0 1.0",
+      "sha256": "372457093ecd7aa8911cdcf0eb486d391f2604d5c9e7e4a8722ebfa0c7006eae",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -34.7,
+        "output_lufs": -16.2,
+        "gain_db": 19.27,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/enter/enter-up-2.wav",
+      "path": "typing/enter/enter-up-2.wav",
+      "keyClass": "enter",
+      "phase": "up",
+      "variant": 2,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "e2e25661512aa06f328b9fcb74bba9a75ac156632479ea53be414070c8ebf5b5",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -34.6,
+        "output_lufs": -16.3,
+        "gain_db": 21.55,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/enter/enter-up-3.wav",
+      "path": "typing/enter/enter-up-3.wav",
+      "keyClass": "enter",
+      "phase": "up",
+      "variant": 3,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "146e62c830d7eb9494a15b6c4f561609201e837900e381bd69e9693b821dd6c3",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -38.3,
+        "output_lufs": -16.1,
+        "gain_db": 22.3,
+        "peak_db": -2.22
+      }
+    },
+    {
+      "id": "typing/enter/enter-up-4.wav",
+      "path": "typing/enter/enter-up-4.wav",
+      "keyClass": "enter",
+      "phase": "up",
+      "variant": 4,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "66b31cd7a8b32833c02771fd20602e3cf07126f7b5340e90b135bc9e4195eff4",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -47.8,
+        "output_lufs": -16.1,
+        "gain_db": 31.8,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/backspace/backspace-down-1.wav",
+      "path": "typing/backspace/backspace-down-1.wav",
+      "keyClass": "backspace",
+      "phase": "down",
+      "variant": 1,
+      "source": "fs-model-f",
+      "sourceUrl": "https://cdn.freesound.org/previews/500/500430_5800121-hq.mp3",
+      "pageUrl": "https://freesound.org/s/500430/",
+      "author": "Fractal_",
+      "license": "CC0 1.0",
+      "sha256": "4f7fa0de476977e9abf1fe4fe2e27d18cecd42cf7183a62f6d1a2879a3de4cb0",
+      "bytes": 19758,
+      "mastering": {
+        "input_lufs": -29.7,
+        "output_lufs": -16.3,
+        "gain_db": 18.54,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/backspace/backspace-down-2.wav",
+      "path": "typing/backspace/backspace-down-2.wav",
+      "keyClass": "backspace",
+      "phase": "down",
+      "variant": 2,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "03b60c0990b06cc1bb49af296627a3ec26681e45d7128a3b15a19865b371d1a1",
+      "bytes": 15918,
+      "mastering": {
+        "input_lufs": -29.6,
+        "output_lufs": -16.1,
+        "gain_db": 19.58,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/backspace/backspace-down-3.wav",
+      "path": "typing/backspace/backspace-down-3.wav",
+      "keyClass": "backspace",
+      "phase": "down",
+      "variant": 3,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "8a8d3d8d3c9fab4f7826a5c4f898e3316d2668ab99d65b4d495d39764d46a303",
+      "bytes": 15918,
+      "mastering": {
+        "input_lufs": -26.2,
+        "output_lufs": -16.3,
+        "gain_db": 23.03,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/backspace/backspace-down-4.wav",
+      "path": "typing/backspace/backspace-down-4.wav",
+      "keyClass": "backspace",
+      "phase": "down",
+      "variant": 4,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "c4759e82a80c564e1d4dba4bdc9fda9191cba7f50f683cc5bf431a332fbeac75",
+      "bytes": 18798,
+      "mastering": {
+        "input_lufs": -29.6,
+        "output_lufs": -16.3,
+        "gain_db": 21.2,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/backspace/backspace-down-5.wav",
+      "path": "typing/backspace/backspace-down-5.wav",
+      "keyClass": "backspace",
+      "phase": "down",
+      "variant": 5,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "b8f4d542576f71a6e0194908014521fa8ad91aa0884076998d66e7b530d52d4b",
+      "bytes": 17838,
+      "mastering": {
+        "input_lufs": -25.0,
+        "output_lufs": -16.3,
+        "gain_db": 24.48,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/backspace/backspace-up-1.wav",
+      "path": "typing/backspace/backspace-up-1.wav",
+      "keyClass": "backspace",
+      "phase": "up",
+      "variant": 1,
+      "source": "fs-model-f",
+      "sourceUrl": "https://cdn.freesound.org/previews/500/500430_5800121-hq.mp3",
+      "pageUrl": "https://freesound.org/s/500430/",
+      "author": "Fractal_",
+      "license": "CC0 1.0",
+      "sha256": "43bc496661aafd3af88ff6a97d6be4d1c1cfc70778f74bdda215e4f03569dd82",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -30.4,
+        "output_lufs": -16.3,
+        "gain_db": 16.59,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/backspace/backspace-up-2.wav",
+      "path": "typing/backspace/backspace-up-2.wav",
+      "keyClass": "backspace",
+      "phase": "up",
+      "variant": 2,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "859bcb3e9a81705cd787fb6225efd2e1013abfa0877d61dfe2b02e0ce21f14a4",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -26.5,
+        "output_lufs": -16.2,
+        "gain_db": 22.47,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/backspace/backspace-up-3.wav",
+      "path": "typing/backspace/backspace-up-3.wav",
+      "keyClass": "backspace",
+      "phase": "up",
+      "variant": 3,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "772ae85f85f2318e707c494909dc08a306050e714db1af3c6e6c35627a6c7f85",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -25.9,
+        "output_lufs": -16.2,
+        "gain_db": 15.79,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/backspace/backspace-up-4.wav",
+      "path": "typing/backspace/backspace-up-4.wav",
+      "keyClass": "backspace",
+      "phase": "up",
+      "variant": 4,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "1da8a7d2b841295643752a6e0d1dee8192b12a8edb528d96ef13e35e490f853a",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -25.5,
+        "output_lufs": -16.2,
+        "gain_db": 17.1,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/shift/shift-down-1.wav",
+      "path": "typing/shift/shift-down-1.wav",
+      "keyClass": "shift",
+      "phase": "down",
+      "variant": 1,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "982f19b7798240946a7d2681fd212d9f44be8894017c0579462caddeca21f42d",
+      "bytes": 16398,
+      "mastering": {
+        "input_lufs": -24.7,
+        "output_lufs": -16.3,
+        "gain_db": 22.19,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/shift/shift-down-2.wav",
+      "path": "typing/shift/shift-down-2.wav",
+      "keyClass": "shift",
+      "phase": "down",
+      "variant": 2,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "0cdef10818d32a858e62766e90d1e7c40b254114a9bcc13c0c8289b6985ff29f",
+      "bytes": 18318,
+      "mastering": {
+        "input_lufs": -27.1,
+        "output_lufs": -16.3,
+        "gain_db": 23.55,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/shift/shift-down-3.wav",
+      "path": "typing/shift/shift-down-3.wav",
+      "keyClass": "shift",
+      "phase": "down",
+      "variant": 3,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "9fa4adbb142590b3de538cc1c059f044cdc0c1ab73591174e839107e75e68553",
+      "bytes": 16398,
+      "mastering": {
+        "input_lufs": -31.0,
+        "output_lufs": -16.2,
+        "gain_db": 28.2,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/shift/shift-down-4.wav",
+      "path": "typing/shift/shift-down-4.wav",
+      "keyClass": "shift",
+      "phase": "down",
+      "variant": 4,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "5e7ea4adcac9dc1badbeda0e649e7016088ce0bc18882e30fe5d61c562cfcaf1",
+      "bytes": 15918,
+      "mastering": {
+        "input_lufs": -30.4,
+        "output_lufs": -16.3,
+        "gain_db": 20.96,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/shift/shift-down-5.wav",
+      "path": "typing/shift/shift-down-5.wav",
+      "keyClass": "shift",
+      "phase": "down",
+      "variant": 5,
+      "source": "fs-model-f",
+      "sourceUrl": "https://cdn.freesound.org/previews/500/500430_5800121-hq.mp3",
+      "pageUrl": "https://freesound.org/s/500430/",
+      "author": "Fractal_",
+      "license": "CC0 1.0",
+      "sha256": "c001138059738fefa44b9d2196c62bbc44619df2b61d03dfb40e429607ab67b2",
+      "bytes": 20858,
+      "mastering": {
+        "input_lufs": -20.8,
+        "output_lufs": -16.2,
+        "gain_db": 17.15,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/shift/shift-up-1.wav",
+      "path": "typing/shift/shift-up-1.wav",
+      "keyClass": "shift",
+      "phase": "up",
+      "variant": 1,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "99b99fb090815b6c877db3017a0a647e73401e011252e8ffdd6d70ede486b4d8",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -34.9,
+        "output_lufs": -16.2,
+        "gain_db": 18.9,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/shift/shift-up-2.wav",
+      "path": "typing/shift/shift-up-2.wav",
+      "keyClass": "shift",
+      "phase": "up",
+      "variant": 2,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "51764f6bc7fff6797e266eb47eff742396a37186499a11d6963058913c9c9346",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -29.4,
+        "output_lufs": -16.2,
+        "gain_db": 18.81,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/shift/shift-up-3.wav",
+      "path": "typing/shift/shift-up-3.wav",
+      "keyClass": "shift",
+      "phase": "up",
+      "variant": 3,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "f42a8dbac8c48a1bbd3f9eae398f4833176eb0fcd372afb78934a0775548013f",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -27.7,
+        "output_lufs": -16.2,
+        "gain_db": 16.73,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/shift/shift-up-4.wav",
+      "path": "typing/shift/shift-up-4.wav",
+      "keyClass": "shift",
+      "phase": "up",
+      "variant": 4,
+      "source": "fs-model-f",
+      "sourceUrl": "https://cdn.freesound.org/previews/500/500430_5800121-hq.mp3",
+      "pageUrl": "https://freesound.org/s/500430/",
+      "author": "Fractal_",
+      "license": "CC0 1.0",
+      "sha256": "d56ac45f8382d8a993cb4df59b4b0420fed56cf8e8ffd15138b1e3771ede588a",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -45.7,
+        "output_lufs": -16.0,
+        "gain_db": 29.7,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/modifier/modifier-down-1.wav",
+      "path": "typing/modifier/modifier-down-1.wav",
+      "keyClass": "modifier",
+      "phase": "down",
+      "variant": 1,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "982f19b7798240946a7d2681fd212d9f44be8894017c0579462caddeca21f42d",
+      "bytes": 16398,
+      "mastering": {
+        "input_lufs": -24.7,
+        "output_lufs": -16.3,
+        "gain_db": 22.19,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/modifier/modifier-down-2.wav",
+      "path": "typing/modifier/modifier-down-2.wav",
+      "keyClass": "modifier",
+      "phase": "down",
+      "variant": 2,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "0809797218a7993c999d782942fd35d2de973bb7fce16f9181e0eafc199245ac",
+      "bytes": 17838,
+      "mastering": {
+        "input_lufs": -29.3,
+        "output_lufs": -16.3,
+        "gain_db": 24.41,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/modifier/modifier-down-3.wav",
+      "path": "typing/modifier/modifier-down-3.wav",
+      "keyClass": "modifier",
+      "phase": "down",
+      "variant": 3,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "f17964ed6faceb6205defc43b93e30f50c71241c60f254731c46ca9458e2f7e2",
+      "bytes": 22638,
+      "mastering": {
+        "input_lufs": -36.9,
+        "output_lufs": -16.3,
+        "gain_db": 22.32,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/modifier/modifier-down-4.wav",
+      "path": "typing/modifier/modifier-down-4.wav",
+      "keyClass": "modifier",
+      "phase": "down",
+      "variant": 4,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "3cf4f53b1f25e5829cff86ffcdf667420533bdc9d540e04ba468d76c0b3d6b6e",
+      "bytes": 18318,
+      "mastering": {
+        "input_lufs": -34.1,
+        "output_lufs": -16.3,
+        "gain_db": 30.17,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/modifier/modifier-down-5.wav",
+      "path": "typing/modifier/modifier-down-5.wav",
+      "keyClass": "modifier",
+      "phase": "down",
+      "variant": 5,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "b4318104320e9a7758c5a1e15b31529cd6420f00cc8262d1f0492e06827d8d70",
+      "bytes": 18798,
+      "mastering": {
+        "input_lufs": -31.1,
+        "output_lufs": -16.3,
+        "gain_db": 28.97,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/modifier/modifier-up-1.wav",
+      "path": "typing/modifier/modifier-up-1.wav",
+      "keyClass": "modifier",
+      "phase": "up",
+      "variant": 1,
+      "source": "fs-mx-blue",
+      "sourceUrl": "https://cdn.freesound.org/previews/382/382057_1106446-hq.mp3",
+      "pageUrl": "https://freesound.org/s/382057/",
+      "author": "EricsSoundschmiede",
+      "license": "CC0 1.0",
+      "sha256": "99b99fb090815b6c877db3017a0a647e73401e011252e8ffdd6d70ede486b4d8",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -34.9,
+        "output_lufs": -16.2,
+        "gain_db": 18.9,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/modifier/modifier-up-2.wav",
+      "path": "typing/modifier/modifier-up-2.wav",
+      "keyClass": "modifier",
+      "phase": "up",
+      "variant": 2,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "25b26fe597648c52bb079e8dc8dec419cd02ad3b35841da6b6876fc285d4e21c",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -34.2,
+        "output_lufs": -16.3,
+        "gain_db": 19.72,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/modifier/modifier-up-3.wav",
+      "path": "typing/modifier/modifier-up-3.wav",
+      "keyClass": "modifier",
+      "phase": "up",
+      "variant": 3,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "8539a3f26d8e54f55553cbdb43286c8eef5ca0dbf8d166837f34292aba000ba8",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -29.3,
+        "output_lufs": -16.3,
+        "gain_db": 19.95,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/modifier/modifier-up-4.wav",
+      "path": "typing/modifier/modifier-up-4.wav",
+      "keyClass": "modifier",
+      "phase": "up",
+      "variant": 4,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "39242bd6e1f508d448555c0d4b8bd98c0193be3ae1d185e4069462f401df7def",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -34.8,
+        "output_lufs": -16.2,
+        "gain_db": 30.1,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/nav/nav-down-1.wav",
+      "path": "typing/nav/nav-down-1.wav",
+      "keyClass": "nav",
+      "phase": "down",
+      "variant": 1,
+      "source": "fs-macbook",
+      "sourceUrl": "https://cdn.freesound.org/previews/565/565645_6652872-hq.mp3",
+      "pageUrl": "https://freesound.org/s/565645/",
+      "author": "khenshom",
+      "license": "CC0 1.0",
+      "sha256": "71c58b5869ffe7b896fdb68c7b37361f75e0649e3dee4979f16b623629c212df",
+      "bytes": 17838,
+      "mastering": {
+        "input_lufs": -40.8,
+        "output_lufs": -16.2,
+        "gain_db": 36.96,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/nav/nav-down-2.wav",
+      "path": "typing/nav/nav-down-2.wav",
+      "keyClass": "nav",
+      "phase": "down",
+      "variant": 2,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "f24967460d56a088224b991fbba99fc75f5826850184db26a3c96919a374b8cc",
+      "bytes": 18318,
+      "mastering": {
+        "input_lufs": -30.2,
+        "output_lufs": -16.3,
+        "gain_db": 18.19,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/nav/nav-down-3.wav",
+      "path": "typing/nav/nav-down-3.wav",
+      "keyClass": "nav",
+      "phase": "down",
+      "variant": 3,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "63b09475b07e08f946872d6ddd6299210143e433f51355b8d9dbdb66e77226c1",
+      "bytes": 20718,
+      "mastering": {
+        "input_lufs": -31.2,
+        "output_lufs": -16.3,
+        "gain_db": 25.65,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/nav/nav-down-4.wav",
+      "path": "typing/nav/nav-down-4.wav",
+      "keyClass": "nav",
+      "phase": "down",
+      "variant": 4,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "5308af2ddf7e898ccf623d8a426587823a70ec72374e36f190bc41f1dfab3d2d",
+      "bytes": 22638,
+      "mastering": {
+        "input_lufs": -28.9,
+        "output_lufs": -16.2,
+        "gain_db": 19.26,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/nav/nav-down-5.wav",
+      "path": "typing/nav/nav-down-5.wav",
+      "keyClass": "nav",
+      "phase": "down",
+      "variant": 5,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "b4318104320e9a7758c5a1e15b31529cd6420f00cc8262d1f0492e06827d8d70",
+      "bytes": 18798,
+      "mastering": {
+        "input_lufs": -31.1,
+        "output_lufs": -16.3,
+        "gain_db": 28.97,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/nav/nav-up-1.wav",
+      "path": "typing/nav/nav-up-1.wav",
+      "keyClass": "nav",
+      "phase": "up",
+      "variant": 1,
+      "source": "fs-macbook",
+      "sourceUrl": "https://cdn.freesound.org/previews/565/565645_6652872-hq.mp3",
+      "pageUrl": "https://freesound.org/s/565645/",
+      "author": "khenshom",
+      "license": "CC0 1.0",
+      "sha256": "2c8be018738c4aedf93809e33d3808954fbecd0eb214e8d3eeb640b11929cdfc",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -45.3,
+        "output_lufs": -16.2,
+        "gain_db": 29.3,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/nav/nav-up-2.wav",
+      "path": "typing/nav/nav-up-2.wav",
+      "keyClass": "nav",
+      "phase": "up",
+      "variant": 2,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "d4f693bf3d73b903e4f40ed46f18c71c4510ec735bad14cd8358f5cbce38977b",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -31.6,
+        "output_lufs": -16.3,
+        "gain_db": 26.05,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/nav/nav-up-3.wav",
+      "path": "typing/nav/nav-up-3.wav",
+      "keyClass": "nav",
+      "phase": "up",
+      "variant": 3,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "985602aa7367cc9d2af23f2a624d526d0d5397209693779fb93e6e915cbc1219",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -33.0,
+        "output_lufs": -16.3,
+        "gain_db": 28.21,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/nav/nav-up-4.wav",
+      "path": "typing/nav/nav-up-4.wav",
+      "keyClass": "nav",
+      "phase": "up",
+      "variant": 4,
+      "source": "fs-whitefox",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546167_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546167/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "39242bd6e1f508d448555c0d4b8bd98c0193be3ae1d185e4069462f401df7def",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -34.8,
+        "output_lufs": -16.2,
+        "gain_db": 30.1,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/fn/fn-down-1.wav",
+      "path": "typing/fn/fn-down-1.wav",
+      "keyClass": "fn",
+      "phase": "down",
+      "variant": 1,
+      "source": "fs-macbook",
+      "sourceUrl": "https://cdn.freesound.org/previews/565/565645_6652872-hq.mp3",
+      "pageUrl": "https://freesound.org/s/565645/",
+      "author": "khenshom",
+      "license": "CC0 1.0",
+      "sha256": "71c58b5869ffe7b896fdb68c7b37361f75e0649e3dee4979f16b623629c212df",
+      "bytes": 17838,
+      "mastering": {
+        "input_lufs": -40.8,
+        "output_lufs": -16.2,
+        "gain_db": 36.96,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/fn/fn-down-2.wav",
+      "path": "typing/fn/fn-down-2.wav",
+      "keyClass": "fn",
+      "phase": "down",
+      "variant": 2,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "c6a75bc20cc668d587ed9a4c39591a520b9af5a225a8e59fbac42fac02ccc941",
+      "bytes": 33198,
+      "mastering": {
+        "input_lufs": -37.2,
+        "output_lufs": -16.2,
+        "gain_db": 22.82,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/fn/fn-down-3.wav",
+      "path": "typing/fn/fn-down-3.wav",
+      "keyClass": "fn",
+      "phase": "down",
+      "variant": 3,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "1dc5c503eb4e9f54e737bb3bc10b5094fcac415f88df23a19394fb9d85d63164",
+      "bytes": 27918,
+      "mastering": {
+        "input_lufs": -38.0,
+        "output_lufs": -16.1,
+        "gain_db": 23.61,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/fn/fn-down-4.wav",
+      "path": "typing/fn/fn-down-4.wav",
+      "keyClass": "fn",
+      "phase": "down",
+      "variant": 4,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "79673d5517edcff6cb76950b084652f0cbd384ccc0a3546798ba865b5981e25c",
+      "bytes": 19758,
+      "mastering": {
+        "input_lufs": -40.3,
+        "output_lufs": -16.2,
+        "gain_db": 26.58,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/fn/fn-down-5.wav",
+      "path": "typing/fn/fn-down-5.wav",
+      "keyClass": "fn",
+      "phase": "down",
+      "variant": 5,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "73568e4e6b0fd880f571fef81b5df974c747d86e1e49fc6dabbd12e3f4090f5c",
+      "bytes": 20238,
+      "mastering": {
+        "input_lufs": -38.3,
+        "output_lufs": -16.3,
+        "gain_db": 27.24,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/fn/fn-up-1.wav",
+      "path": "typing/fn/fn-up-1.wav",
+      "keyClass": "fn",
+      "phase": "up",
+      "variant": 1,
+      "source": "fs-macbook",
+      "sourceUrl": "https://cdn.freesound.org/previews/565/565645_6652872-hq.mp3",
+      "pageUrl": "https://freesound.org/s/565645/",
+      "author": "khenshom",
+      "license": "CC0 1.0",
+      "sha256": "2c8be018738c4aedf93809e33d3808954fbecd0eb214e8d3eeb640b11929cdfc",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -45.3,
+        "output_lufs": -16.2,
+        "gain_db": 29.3,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/fn/fn-up-2.wav",
+      "path": "typing/fn/fn-up-2.wav",
+      "keyClass": "fn",
+      "phase": "up",
+      "variant": 2,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "f29d65edf30ec63d88a96dd783e63d361ffff14b79d7f19f421f15e32223c213",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -38.3,
+        "output_lufs": -16.0,
+        "gain_db": 22.68,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/fn/fn-up-3.wav",
+      "path": "typing/fn/fn-up-3.wav",
+      "keyClass": "fn",
+      "phase": "up",
+      "variant": 3,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "55356b6879ae2958fd842a2e92a37bbf3f72d0683f23758ed64dc17f9fedd774",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -36.0,
+        "output_lufs": -16.3,
+        "gain_db": 20.0,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "typing/fn/fn-up-4.wav",
+      "path": "typing/fn/fn-up-4.wav",
+      "keyClass": "fn",
+      "phase": "up",
+      "variant": 4,
+      "source": "fs-topre",
+      "sourceUrl": "https://cdn.freesound.org/previews/546/546033_12206738-hq.mp3",
+      "pageUrl": "https://freesound.org/s/546033/",
+      "author": "grcekh",
+      "license": "CC0 1.0",
+      "sha256": "66b31cd7a8b32833c02771fd20602e3cf07126f7b5340e90b135bc9e4195eff4",
+      "bytes": 7758,
+      "mastering": {
+        "input_lufs": -47.8,
+        "output_lufs": -16.1,
+        "gain_db": 31.8,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "clicks/mouse-click-1.wav",
+      "path": "clicks/mouse-click-1.wav",
+      "keyClass": "click",
+      "phase": "down",
+      "variant": 1,
+      "source": "click-mouse-1",
+      "sourceUrl": "https://assets.sfx.woven.video/sfx/mouse-click-1.wav",
+      "pageUrl": "https://www.woven.video/sfx/click-sound-effect",
+      "author": "Woven SFX",
+      "license": "CC0 1.0",
+      "sha256": "683c9f5c502acf733ebf4ceeaf6f3f3f96340a9252cfaedd9cac66ef9fdd6124",
+      "bytes": 22068,
+      "mastering": {
+        "input_lufs": -26.4,
+        "output_lufs": -16.3,
+        "gain_db": 37.19,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "clicks/mouse-click-2.wav",
+      "path": "clicks/mouse-click-2.wav",
+      "keyClass": "click",
+      "phase": "down",
+      "variant": 2,
+      "source": "click-mouse-2",
+      "sourceUrl": "https://assets.sfx.woven.video/sfx/mouse-click-2.wav",
+      "pageUrl": "https://www.woven.video/sfx/click-sound-effect",
+      "author": "Woven SFX",
+      "license": "CC0 1.0",
+      "sha256": "13f329f4e557e32f592ee7d49786428e93cd844e949ddd571c75c4810ace1c39",
+      "bytes": 17582,
+      "mastering": {
+        "input_lufs": -27.6,
+        "output_lufs": -16.3,
+        "gain_db": 33.92,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "clicks/tick.wav",
+      "path": "clicks/tick.wav",
+      "keyClass": "click",
+      "phase": "down",
+      "variant": 3,
+      "source": "click-tick",
+      "sourceUrl": "https://assets.sfx.woven.video/sfx/tick-sound.wav",
+      "pageUrl": "https://www.woven.video/sfx/click-sound-effect",
+      "author": "Woven SFX",
+      "license": "CC0 1.0",
+      "sha256": "17bfe9f750500eed49d5fbdf1c8108d9368bf46a84a4e1d068e749932f1a7b74",
+      "bytes": 6768,
+      "mastering": {
+        "input_lufs": -33.0,
+        "output_lufs": -16.2,
+        "gain_db": 34.58,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "clicks/snap.wav",
+      "path": "clicks/snap.wav",
+      "keyClass": "click",
+      "phase": "down",
+      "variant": 4,
+      "source": "click-shutter",
+      "sourceUrl": "https://assets.sfx.woven.video/sfx/camera-shutter-1-shot.wav",
+      "pageUrl": "https://www.woven.video/sfx/click-sound-effect",
+      "author": "Woven SFX",
+      "license": "CC0 1.0",
+      "sha256": "40b5d791aa4b89b4dc9e25ca10d637279492fac40118eea76e8ab93e2fb3e6c3",
+      "bytes": 14826,
+      "mastering": {
+        "input_lufs": -20.2,
+        "output_lufs": -16.3,
+        "gain_db": 19.87,
+        "peak_db": -2.05
+      }
+    },
+    {
+      "id": "clicks/analog.wav",
+      "path": "clicks/analog.wav",
+      "keyClass": "click",
+      "phase": "down",
+      "variant": 5,
+      "source": "click-analog",
+      "sourceUrl": "https://assets.sfx.woven.video/sfx/camera-analog.wav",
+      "pageUrl": "https://www.woven.video/sfx/click-sound-effect",
+      "author": "Woven SFX",
+      "license": "CC0 1.0",
+      "sha256": "d5601463cf24c435988040c3c67b885698eefb35ea5a146dc5b4ef69d05f38de",
+      "bytes": 19796,
+      "mastering": {
+        "input_lufs": -18.4,
+        "output_lufs": -16.3,
+        "gain_db": 12.76,
+        "peak_db": -2.05
+      }
+    }
+  ]
+}

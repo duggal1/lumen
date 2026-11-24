@@ -490,9 +490,7 @@ public final class CursorAtlas {
             for (y, row) in rows.enumerated() {
                 for (x, ch) in row.enumerated() where ch == "X" { c.fill(px(x, y)) }
             }
-            // SIMD2<Double>: convert CGFloat explicitly (Swift 6.1 treats
-            // CGFloat and Double as distinct, so `6 + cell / 2` is ambiguous).
-            return SIMD2<Double>(6 + Double(cell) / 2, 6 + Double(cell) / 2)
+            return [6 + cell / 2, 6 + cell / 2]
         }
         if pack == .outline {
             // A hollow arrow: a single 2 pt stroke, no fill. The paper under-

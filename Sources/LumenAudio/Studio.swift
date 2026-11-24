@@ -222,31 +222,37 @@ enum VoiceStudio {
                        denoiser: (any Denoiser)? = nil) -> [Float] {
         let fs = AudioIO.fs
         var voice = plan.micClean ? (denoiser?.process(x) ?? x) : x
-        // ONE fixed Studio chain, always the same shape — no mode or amount
-        // branches. Neural suppression (upstream) -> room/expand -> presence
-        // EQ -> de-ess -> gentle compression -> voice lift -> shared master.
+        let amount = plan.studio.isFinite ? clamp(plan.studio, 0, 1) : 0
+        guard amount > 0 else { return boosted(tone(voice, plan: plan, optimized: false), plan: plan) }
+
+        let optimized = plan.studioMode == .optimized
+        let strength = 0.8 + 0.4 * amount
+
         // 1. Room tone, fan, hum.
         let floor = VoiceLevels.noiseFloor(voice, vad: vad, fs: fs)
         let speech = speechLevelDb(voice, vad: vad, fs: fs) ?? -24
-        voice = VoiceExpander(floorDb: floor, depthDb: 48,
+        voice = VoiceExpander(floorDb: floor,
+                              depthDb: (optimized ? 48 : 30) * strength,
                               speechRefDb: speech)
             .process(voice, vad: vad, fs: fs)
 
-        // 2. Tone: fuller chest, no boxiness, crisp presence and air.
-        voice = tone(voice)
+        // 2. Tone: chest, no boxiness, presence, air.
+        voice = tone(voice, plan: plan, optimized: optimized)
 
         // 3. Sibilance, only where there is any.
         let band = VoiceDeEsser.band(voice, fs: fs)
         if let threshold = VoiceDeEsser.threshold(band: band, vad: vad, fs: fs) {
-            voice = VoiceDeEsser(thresholdDb: threshold, maxReductionDb: 7)
+            voice = VoiceDeEsser(thresholdDb: threshold,
+                                 maxReductionDb: (optimized ? 7 : 6) * strength)
                 .process(voice, band: band, fs: fs)
         }
 
         // 4. Density. makeup 0 so the compressor's gain reduction (not amplification)
         //    keeps the speech-boundary discontinuity below the click threshold.
         let level = speechLevelDb(voice, vad: vad, fs: fs) ?? speech
-        let compressed = VoiceCompressor(thresholdDb: level - 4,
-                                         ratio: 2.2, kneeDb: 8,
+        let density = optimized ? 2.6 : 1.6
+        let compressed = VoiceCompressor(thresholdDb: level - 2 - 2 * amount,
+                                         ratio: 1 + density * amount, kneeDb: 8,
                                          attack: 0.012, release: 0.180,
                                          makeupDb: 0).process(voice, fs: fs)
         return boosted(compressed, plan: plan)
@@ -262,14 +268,16 @@ enum VoiceStudio {
         return voice.map { $0 * gain }
     }
 
-    private static func tone(_ voice: [Float]) -> [Float] {
+    private static func tone(_ voice: [Float], plan: AudioPlan, optimized: Bool) -> [Float] {
+        guard plan.voiceClarity else { return voice }
         let fs = AudioIO.fs
-        // One close-mic curve: fuller chest, less boxiness, crisp presence, air.
+        // Fuller chest, less boxiness, crisper presence and air. The two modes
+        // are deliberately different: Optimized is the podcast/close-mic curve.
         return Cascade.apply(voice, [
-            .lowShelf(110, db: 0.9, fs: fs),
-            .peaking(300, q: 1.05, db: -2.6, fs: fs),
-            .peaking(3_000, q: 0.9, db: 3.4, fs: fs),
-            .highShelf(9_500, db: 2.0, fs: fs)
+            .lowShelf(110, db: optimized ? 0.9 : 0.5, fs: fs),
+            .peaking(300, q: 1.05, db: optimized ? -2.6 : -1.9, fs: fs),
+            .peaking(3_000, q: 0.9, db: optimized ? 3.4 : 2.5, fs: fs),
+            .highShelf(9_500, db: optimized ? 2.0 : 1.5, fs: fs)
         ])
     }
 }

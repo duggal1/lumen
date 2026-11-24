@@ -12,6 +12,10 @@ import LumenProject
 /// as read-only.
 public struct LiveCamera: Sendable {
     public var maxScale = 2.0, hold = 2.6, omegaZoom = 7.5
+    /// Minimum gap between aims. A second press inside this dwell is the same
+    /// intent (double-click / rapid re-trigger) and must not move the camera.
+    /// Pointer movement and scroll never aim, so they cannot reset this clock.
+    public var zoomInDwell = 0.2
     public var cursor = CursorStyle()
     private let src: SIMD2<Double>
     private var t = 0.0, started = false
@@ -19,6 +23,8 @@ public struct LiveCamera: Sendable {
     private var shape: UInt16 = 0
     private var down = false
     private var lastActivity = -1e9, lastMove = -1e9, opacity = 1.0, lzShot = 0.0
+    /// Timestamp of the last successful aim (click or typing-field change).
+    private var lastAim = -Double.infinity
     private var pointer: Spring3, camera: Spring3, press: Spring3
     private var tgt = SIMD2<Double>(0.5, 0.5)
     private var rings: [(t: Double, x: Float, y: Float)] = []
@@ -81,7 +87,12 @@ public struct LiveCamera: Sendable {
         case .down:
             down = true; lastActivity = e.t; typingField = nil
             rings.append((e.t, e.x, e.y))
-            if e.button == 0 { aim(raw, scale: min(max(maxScale, 1), 1.7)) }
+            // Dwell / hysteresis: a rapid second press is the same intent, not a
+            // new subject. Only the first aim in a burst gets to move the lens.
+            if e.button == 0, e.t - lastAim >= zoomInDwell {
+                aim(raw, scale: min(max(maxScale, 1), 1.7))
+                lastAim = e.t
+            }
         case .up: down = false; lastActivity = e.t
         case .keyDown:
             guard e.isTypingKey, e.t >= lastTyping else { return }
@@ -95,6 +106,7 @@ public struct LiveCamera: Sendable {
                 let fit = min(src.x / (rect.width * 1.25), src.y / (rect.height * 1.25))
                 let scale = max(1, min(fit, maxScale))
                 aim(SIMD2(rect.midX, rect.midY), scale: scale)
+                lastAim = e.t
                 typingField = field
             }
             if typingField != nil { lastActivity = e.t }

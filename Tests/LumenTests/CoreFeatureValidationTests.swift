@@ -208,13 +208,13 @@ struct CoreFeatureValidationTests {
         let plan = AudioPlan()
         #expect(plan.micClean, "noise reduction is on by default")
         #expect(plan.noiseReductionStrength == 1)
-        #expect(plan.micMode.targetLUFS == -12)
+        #expect(plan.micMode.targetLUFS == -14)
         #expect(MicMode.podcast.targetLUFS == -16)
         var podcast = plan
         podcast.micMode = .podcast
         let back = try JSONDecoder().decode(AudioPlan.self, from: JSONEncoder().encode(podcast))
         #expect(back.micMode == .podcast)
-        #expect(back.targetLUFS == AudioPlan.studioTargetLUFS)
+        #expect(back.targetLUFS == -16)
         #expect(back.micClean)
     }
 

@@ -105,6 +105,13 @@ enum CameraSolver {
             track.vy[k] = Float(d(track.ny) * r / 2)
             track.ax[k] = Float(dd(track.nx) * r2)
             track.ay[k] = Float(dd(track.ny) * r2)
+            // C1: publish the scale derivatives from the FINAL baked lz, in the
+            // same pass as the position channels. A leg boundary or the tail
+            // rewrite can otherwise leave vz/az stale by one tick, so the
+            // sub-tick Hermite used qhm() would start the next leg with a
+            // velocity step. All six fields now come from the same bake.
+            track.vz[k] = Float(d(track.lz) * r / 2)
+            track.az[k] = Float(dd(track.lz) * r2)
         }
     }
 
@@ -612,6 +619,7 @@ enum CameraSolver {
         var legPanOnly = false
         var legStartTime = 0.0, legRiseT = 0.4, legReaimT = 0.4
         var legV0 = SIMD2<Double>.zero, legA0 = SIMD2<Double>.zero
+        var legScaleV0 = 0.0
         var panAccelPrev = SIMD2<Double>.zero
         // A sub-pixel velocity-offset spring carries the incoming pan velocity
         // across a leg boundary. The pivot relation stays exact apart from this
@@ -625,8 +633,9 @@ enum CameraSolver {
                 activeScene = activeIndex
                 legStartLog = scaleSpring
                 legStartCenter = SIMD2(panX, panY)
-                legV0 = .zero
+                legV0 = SIMD2(velX, velY)
                 legA0 = .zero
+                legScaleV0 = scaleVel
                 panOff = .zero
                 panOffVel = SIMD2(velX, velY)
                 legStartTime = Double(k) / ctx.rate
@@ -637,9 +646,32 @@ enum CameraSolver {
                     // A focus outside the feasible box at the leg's smallest
                     // scale would be clamped mid-move then released when the
                     // box opens — a one-tick pan jerk. Aim only at a centre
-                    // feasible for the entire leg.
-                    legTargetCenter = clampCenter(SIMD2(h.center.x, h.center.y),
-                                                  min(legStartLog, legTargetLog), k, ctx: ctx)
+                    // feasible for the entire leg. The binding constraint is
+                    // the leg's END scale (the tightest box for a zoom-in), so
+                    // clamp there: a centre feasible at the end is feasible at
+                    // every earlier, wider box. Clamping at min() would use the
+                    // start scale instead, whose full-frame box is the single
+                    // point 0.5 — pinning the target to centre and collapsing
+                    // the fixed-pivot relation the whole leg is built on.
+                    let aimAtEnd = clampCenter(SIMD2(h.center.x, h.center.y),
+                                               legTargetLog, k, ctx: ctx)
+                    // Keep a sub-pixel inset from the feasibility boundary.
+                    // A target exactly on the edge makes the release clamp
+                    // switch on in a single tick (a visible jerk); a hair of
+                    // margin keeps the whole leg strictly feasible. The margin
+                    // is capped at 0.3 source px — well below the 0.75 px
+                    // pixel-exact arrival tolerance — so the shot lands on the
+                    // control the click aimed at, not ~3 px short of it.
+                    let inset = min(1.5e-3, 0.3 / max(ctx.src.x, 1))
+                    let zEnd = exp(max(legTargetLog, 0))
+                    let box = ctx.crop(at: k)
+                    let base = CropSpace.baseView(crop: box, aspect: ctx.aspect)
+                    let hw = base.w / zEnd / (2 * box.w), hh = base.h / zEnd / (2 * box.h)
+                    let mx = min(max(hw, 0), 0.5), my = min(max(hh, 0), 0.5)
+                    legTargetCenter = mx + inset < 0.5 - inset
+                        ? SIMD2(clamp(aimAtEnd.x, mx + inset, 1 - mx - inset),
+                                clamp(aimAtEnd.y, my + inset, 1 - my - inset))
+                        : aimAtEnd
                     // Reach the target slightly before the event so there is a
                     // real still window at arrival; 0.92 of the runway.
                     let runway = max(scene.event - legStartTime, 0.2)
@@ -682,14 +714,18 @@ enum CameraSolver {
             if onShot, !legPanOnly, legTargetCenter.x.isFinite, legTargetCenter.y.isFinite {
                 // s(t) = exp(lerp(ln s0, ln s1, E(t))) — bounded quintic ease,
                 // monotone, zero velocity and acceleration at both endpoints.
-                let u = min(max((Double(k) / ctx.rate - legStartTime) / legRiseT, 0), 1)
-                let e = u * u * u * (10 + u * (-15 + 6 * u))
-                let e1 = 30 * u * u * (1 - u) * (1 - u) / legRiseT
-                let e2 = 60 * u * (1 - u) * (1 - 2 * u) / (legRiseT * legRiseT)
-                let delta = legTargetLog - legStartLog
-                scaleSpring = legStartLog + delta * e
-                scaleVel = delta * e1
-                legScaleAccel = delta * e2
+                // Inherit a bounded share of the incoming dolly velocity so the
+                // handoff is C1 rather than restarting from rest (the visible
+                // "stop dead, then move" at a leg boundary), but cap it so the
+                // quintic cannot dip far before turning around.
+                let v0 = min(max(legScaleV0, -0.25), 0.25)
+                let mv = QuinticMove(t0: legStartTime, T: legRiseT,
+                                     x0: legStartLog, v0: v0, a0: 0,
+                                     x1: legTargetLog)
+                let sv = mv.sample(Double(k) / ctx.rate)
+                scaleSpring = sv.x
+                scaleVel = sv.v
+                legScaleAccel = sv.a
                 // Fixed pivot: p = (c1 s1 - c0 s0)/(s1 - s0), held for the
                 // whole leg. c(t) = p - (p - c0) s0 / s(t) — no lateral swim.
                 let s = exp(scaleSpring)
@@ -710,16 +746,20 @@ enum CameraSolver {
             } else {
                 springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
                 if onShot {
-                    // Re-aim with no scale change: carry the incoming velocity
-                    // and acceleration on a C2 quintic, arrive at rest.
+                    // Re-aim the pan on a C2 quintic, arriving at rest.
                     let moveX = QuinticMove(t0: legStartTime, T: legReaimT,
                                             x0: legStartCenter.x, v0: legV0.x, a0: legA0.x,
                                             x1: legTargetCenter.x)
                     let moveY = QuinticMove(t0: legStartTime, T: legReaimT,
                                             x0: legStartCenter.y, v0: legV0.y, a0: legA0.y,
                                             x1: legTargetCenter.y)
-                    let sx = moveX.sample(Double(k) / ctx.rate)
-                    let sy = moveY.sample(Double(k) / ctx.rate)
+                    // Sample at the END of the tick, not its start. A leg begins
+                    // at legStartTime, so at the leg's first tick u = 0 and the
+                    // quintic would hold the pan perfectly still for one tick
+                    // while the previous tick was still moving — a one-tick
+                    // velocity notch that the jerk bound reads as a spike.
+                    let sx = moveX.sample(Double(k) / ctx.rate + ctx.dt)
+                    let sy = moveY.sample(Double(k) / ctx.rate + ctx.dt)
                     panX = sx.x; panY = sy.x
                     velX = sx.v; velY = sy.v
                     panAccelX = sx.a; panAccelY = sy.a
@@ -742,7 +782,9 @@ enum CameraSolver {
                 if abs(scaleSpring - lzTarget) < 5e-4 && abs(scaleVel) < 1e-2 {
                     scaleSpring = lzTarget; scaleVel = 0
                 }
-                if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 { panX = cxTarget; velX = 0; panAccelX = nil }
+                if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 {
+                    panX = cxTarget; velX = 0; panAccelX = nil
+                }
                 if abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0; panAccelY = nil }
             }
             // The clamp can only move the position sideways to the boundary;

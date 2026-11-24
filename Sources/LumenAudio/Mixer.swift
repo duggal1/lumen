@@ -657,74 +657,31 @@ public final class AudioMixer: @unchecked Sendable {
             hasProgram = true
         }
 
-        var prevKeyT: Double?
-        // A pack is only read when this program actually has key cues. Loading
-        // every sample of a 1.4 s-per-pack decode (and resampling it) before
-        // the cue loop made a silent project pay the full cost of a typing
-        // pack it would never use; the first audible window paid it too.
-        var typingBuffersCache: [Int: [Float]]?
-        func typingBuffers() -> [Int: [Float]] {
-            if let cached = typingBuffersCache { return cached }
-            var buffers: [Int: [Float]] = [:]
-            if a.keySounds, let directory = TypingPackLoader.dir(for: a.typingPackId) {
-                for (code, buffer) in TypingPackLoader.buffers(in: directory) {
-                    guard let channel = buffer.floatChannelData?[0] else { continue }
-                    let raw = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
-                    // Mechvibes packs ship at 44.1 kHz; the timeline runs at 48 kHz.
-                    let pcm = AudioIO.resample(raw, from: buffer.format.sampleRate)
-                    let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
-                    guard peak > 1e-4 else { continue }
-                    buffers[code] = pcm.map { $0 / peak }
-                }
+        // Real recorded CC0 one-shots, routed with per-class round-robin and a
+        // bus limiter. Replaces the old single-file-per-key Mechvibes path and
+        // the old click mp3s; key releases carry their own recorded timestamps.
+        let activeCues = d.cues.filter { cue in
+            switch cue.kind {
+            case .key, .keyUp: return a.soundEffectsEnabled && a.keySounds
+            case .click: return a.soundEffectsEnabled && a.clickSounds
+            case .whooshIn, .whooshOut: return false
             }
-            typingBuffersCache = buffers
-            return buffers
         }
-        for cue in d.cues {
-            guard a.soundEffectsEnabled else { continue }
-            // Feed the Focus page's live feedback tape from real rendered cues,
-            // not from the page's own preview taps.
+        for cue in activeCues {
             NotificationCenter.default.post(
                 name: Notification.Name("lumen.focus.feedback.tap"),
                 object: nil,
-                userInfo: ["kind": cue.kind == .key ? "key" : "click"])
-            let buf: [Float]
-            if cue.kind == .key {
-                guard a.keySounds else { continue }
-                // Prefer the pack's exact sample for this key. If the pack does not
-                // define one, pick deterministically among available samples so
-                // different keys don't collapse to the same sound.
-                let pack = typingBuffers()
-                let packCodes = Set(pack.keys)
-                let code = TypingPackLoader.packCode(for: Int(cue.keyCode), definedIn: packCodes)
-                let samples: [Float]
-                if let code, let exact = pack[code] {
-                    samples = exact
-                } else if !pack.isEmpty {
-                    let availableCodes = pack.keys.sorted()
-                    let pick = availableCodes[Int(bitPattern: UInt(bitPattern: Int(cue.keyCode))) % availableCodes.count]
-                    samples = pack[pick] ?? []
-                } else {
-                    samples = bank.render(.key).samples
-                }
-                let gap = prevKeyT.map { cue.t - $0 } ?? 1
-                let gain: Float = gap < 0.05 ? 0.7 : gap < 0.15 ? 0.85 : 1
-                // Typing has its own level; the general sfx gain does not stack on it.
-                let amplitude = Float(pow(10, (a.typingLevelDb + cue.gainDb + 2) / 20)) * gain
-                let source = samples.isEmpty ? bank.render(.key).samples : samples
-                buf = source.map { $0 * amplitude }
-                prevKeyT = cue.t
-            } else {
-                let (b, gain) = bank.render(cue.kind, clickTone: a.clickTone)
-                // SFXBank renders zero samples for stale whoosh cues, so no
-                // whoosh can reach the mix and no whoosh-specific gain is left.
-                let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + gain) / 20))
-                buf = b.map { $0 * amp }
-            }
-            let s0 = Int(cue.t * fs)
-            for (k, v) in buf.enumerated() where s0 + k >= 0 && s0 + k < n {
-                L[s0 + k] += v; R[s0 + k] += v
-            }
+                userInfo: ["kind": cue.kind == .click ? "click" : "key"])
+        }
+        if !activeCues.isEmpty {
+            var settings = KeyMixSettings()
+            settings.keyLevelDb = a.typingLevelDb + 2   // preserve shipped typing level
+            settings.clickLevelDb = a.sfxGainDb
+            settings.clickTone = a.clickTone
+            var router = KeyVariationRouter()
+            let sfx = KeySoundEngine.render(cues: activeCues, library: KeySoundLibraryCache.shared,
+                                            router: &router, settings: settings, frames: n)
+            for i in 0..<n { L[i] += sfx.l[i]; R[i] += sfx.r[i] }
         }
 
         Self.silenceClips(tl, &L, &R, fs: fs)
@@ -745,9 +702,14 @@ public final class AudioMixer: @unchecked Sendable {
         }
         if let derived = tl.derived {
             for cue in derived.cues {
-                let isKey: Int
-                switch cue.kind { case .key: isKey = 1; default: isKey = 0 }
-                hash.update(data: Data("\(cue.t)|\(cue.gainDb)|\(cue.keyCode)|\(isKey)".utf8))
+                let kindTag: Int
+                switch cue.kind {
+                case .key: kindTag = 1
+                case .keyUp: kindTag = 2
+                case .click: kindTag = 3
+                case .whooshIn, .whooshOut: kindTag = 4
+                }
+                hash.update(data: Data("\(cue.t)|\(cue.gainDb)|\(cue.keyCode)|\(kindTag)".utf8))
             }
             // The duck envelope is derived audio: a different envelope means a
             // different music bed, so it belongs in the identity.
