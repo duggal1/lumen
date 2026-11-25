@@ -445,7 +445,9 @@ public final class AudioMixer: @unchecked Sendable {
     /// A bounded render keeps the fade-in and drops the fade-out, so the prefix
     /// of the music bed is the same signal the full mix will have.
     static func fit(_ m: MusicTrack, n: Int, fadeOut: Bool = true) -> ([Float], [Float]) {
-        let fs = AudioIO.fs, xf = Int(0.5 * fs), len = m.l.count
+        let fs = AudioIO.fs, len = m.l.count
+        let xf = min(Int(0.5 * fs), len / 2)
+        guard len > 0, m.r.count == len else { return ([Float](repeating: 0, count: n), [Float](repeating: 0, count: n)) }
         var L = [Float](repeating: 0, count: n), R = L, i = 0
         while i < n {
             let c = min(len, n - i)
@@ -894,6 +896,26 @@ public final class AudioMixer: @unchecked Sendable {
                 let i = output - Int(startFrame)
                 left[i] += (sample(track.left, at: Double(source)) * fade + sample(track.left, at: Double(prev)) * (1 - fade)) * g
                 right[i] += (sample(track.right, at: Double(source)) * fade + sample(track.right, at: Double(prev)) * (1 - fade)) * g
+            }
+        }
+        // Older projects store a single legacy music bed instead of lanes.
+        // Render only the requested overlap using its loop and duck settings.
+        if let mc = loadMusic(a.musicPath), let track = mc.track, !track.l.isEmpty, track.l.count == track.r.count {
+            let length = track.l.count
+            let xf = min(Int(0.5 * fs), length / 2)
+            let period = max(length - xf, 1)
+            let norm = mc.lufs > -60 ? clamp(Self.musicRefLUFS - mc.lufs, -24, 24) : 0
+            let gain = Float(pow(10, (norm + a.musicGainDb) / 20))
+            for k in 0..<count {
+                let output = Int(startFrame) + k
+                let cycle = output / period, phase = output % period
+                let overlap = cycle > 0 && phase < xf
+                let blend = overlap ? Float(phase) / Float(max(xf, 1)) : 1
+                let previous = phase + period
+                let fade = min(1, Float(output) / Float(0.3 * fs), Float(max(Int(total) - output, 0)) / Float(1.5 * fs))
+                let g = gain * fade * MusicBed.duckGain(tl.derived?.duck, atSample: output, fs: fs)
+                left[k] += (sample(track.l, at: Double(phase)) * blend + sample(track.l, at: Double(previous)) * (1 - blend)) * g
+                right[k] += (sample(track.r, at: Double(phase)) * blend + sample(track.r, at: Double(previous)) * (1 - blend)) * g
             }
         }
         if cancelled?() == true { return nil }

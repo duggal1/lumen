@@ -264,3 +264,17 @@ Replace the Studio audio, playback, Director, camera, planner, crop, analysis, c
 200. [ ] Review final diff, PR CI status, migrations and MCP preservation; document all remaining risks.
 201. [ ] Open or update unmerged PR with final evidence and mark complete only if every step is proven.
 
+## Implementation log — 2026-11-25
+
+User explicitly deferred testing and requested direct reconstruction. The 201 original evidence gates remain unchanged; code existence is not proof of successful build or runtime behavior.
+
+- `1c2e38e`: independent physical keyboard down/up cues, deterministic fallback and modifier capture.
+- `91cbfc0`: replacement finite-shot camera solver; removed 541 net lines of old camera implementation; browser reveal during typing enabled by default.
+- `6dd49ba`: restored existing inspector canvas/wallpaper/webcam controls, project-local imported background, removed old upscale passes from active compositor. Standalone legacy upscale interfaces retained for compatibility.
+- `c373516`: independent preview decode/presentation loops, latest-frame bounded queues, seek generations and capped 60 Hz scheduling.
+- `0047d2d`: output-time shortcut events and native-symbol fading/blur overlay shared by renderer.
+- `07a0be9`: bounded arbitrary-position raw audio windows, shared SFX scheduling, key bank cache, conservative voice-chain adjustments.
+- `ea48c7a`: replaced full-mix transport wait and whole-tail PCM allocation with four-second audio queue, cancellable seek windows, generation checks and noninterrupting final-mix takeover.
+- This commit: legacy music compatibility in provisional playback, trimmed keyboard cue filtering, clip/crop replan invalidation and undo/redo handling.
+
+The larger planner/analysis/crop/export rebuild, standalone legacy code retirement, full asset-specific licensing audit, and physical Mac validation are incomplete. The existing offline final mastering path still operates on the whole program; only the preview scheduling and seek path are bounded. Preview raw audio may differ from mastered export until the final program becomes available. No build or tests were executed in this implementation pass, per user request. Main remains unchanged; PR #31 remains draft and unmerged.

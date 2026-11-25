@@ -346,7 +346,7 @@ public enum Director {
                         else { continue }
                     default: continue
                     }
-                    guard event.t.isFinite, !tm.isCut(event.t) else { continue }
+                    guard event.t.isFinite, event.t >= tm.trimStart, event.t < tm.trimEnd, !tm.isCut(event.t) else { continue }
                     cues.append(SFXCue(t: tm.output(atSource: event.t), kind: .key, gainDb: 0,
                                        keyCode: event.keyCode, isKeyRelease: release))
                 }

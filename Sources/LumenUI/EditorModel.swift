@@ -301,11 +301,12 @@ enum TimelineSelection: Equatable {
         if analysisChanged { analyzeInBackground(new) }
         if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap
             || old.audio != new.audio || old.webcam != new.webcam || old.overlays.taps != new.overlays.taps
+            || old.clips != new.clips || old.cropSettings != new.cropSettings || old.smartCrop != new.smartCrop || old.activity != new.activity
             || old.layouts != new.layouts || old.layoutSettings != new.layoutSettings
             || old.captions != new.captions
             || old.style.aspectRatio != new.style.aspectRatio || old.style.padding != new.style.padding
             || old.style.paddingInsets != new.style.paddingInsets {
-            replan(remixAudio: old.audio != new.audio, debounce: coalesce)
+            replan(remixAudio: old.audio != new.audio || old.timeMap != new.timeMap || old.clips != new.clips, debounce: coalesce)
         } else { session.save(new) }
     }
 
@@ -352,7 +353,7 @@ enum TimelineSelection: Equatable {
                     self.finishPrivacy(error: error)
                 }
             })
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled, let self, self.analysisGeneration == generation else { return }
             _ = result
             self.replan()
             self.autoTranscribeIfNeeded()
@@ -374,7 +375,7 @@ enum TimelineSelection: Equatable {
     func setWebcam(_ on: Bool) { edit { $0.webcam = on ? ($0.webcam ?? WebcamLayout()) : nil } }
     func undo() { if let p = undoStack.popLast() { redoStack.append(timeline); restore(p) } }
     func redo() { if let n = redoStack.popLast() { undoStack.append(timeline); restore(n) } }
-    private func restore(_ t: Timeline) { replanTask?.cancel(); timeline = t; box.set(t); session.save(t); remix(); if clock.playing { play() } }
+    private func restore(_ t: Timeline) { replanTask?.cancel(); timeline = t; box.set(t); session.save(t); replan(remixAudio: true) }
 
     func bind<V>(_ kp: WritableKeyPath<Timeline, V>) -> Binding<V> {
         Binding(get: { self.timeline[keyPath: kp] }, set: { v in self.edit(coalesce: true) { $0[keyPath: kp] = v } })
