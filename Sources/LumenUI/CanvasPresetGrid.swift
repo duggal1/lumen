@@ -22,7 +22,7 @@ struct CanvasPresetGrid: View {
                 } label: {
                     VStack(spacing: 6) {
                         CanvasPresetPreview(preset: preset)
-                            .tileSelection(selected)
+                            .overlay(alignment: .topTrailing) { if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(.white).padding(5) } }
                             .aspectRatio(1.6, contentMode: .fit)
                         Text(preset.name)
                             .font(AppType.caption)
@@ -49,9 +49,7 @@ private struct CanvasPresetPreview: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
-            let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
-                .truncatingRemainder(dividingBy: 10_000)
+        let time = 0.0
             Canvas(opaque: true, rendersAsynchronously: true) { context, size in
                 guard size.width > 0, size.height > 0 else { return }
                 let cell: CGFloat = 3
@@ -70,7 +68,6 @@ private struct CanvasPresetPreview: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: Radius.field))
-        }
         .accessibilityHidden(true)
     }
 

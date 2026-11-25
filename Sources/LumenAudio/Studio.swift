@@ -228,7 +228,7 @@ enum VoiceStudio {
         // 1. Room tone, fan, hum.
         let floor = VoiceLevels.noiseFloor(voice, vad: vad, fs: fs)
         let speech = speechLevelDb(voice, vad: vad, fs: fs) ?? -24
-        voice = VoiceExpander(floorDb: floor, depthDb: 48,
+        voice = VoiceExpander(floorDb: floor, depthDb: 18,
                               speechRefDb: speech)
             .process(voice, vad: vad, fs: fs)
 
@@ -268,8 +268,8 @@ enum VoiceStudio {
         return Cascade.apply(voice, [
             .lowShelf(110, db: 0.9, fs: fs),
             .peaking(300, q: 1.05, db: -2.6, fs: fs),
-            .peaking(3_000, q: 0.9, db: 3.4, fs: fs),
-            .highShelf(9_500, db: 2.0, fs: fs)
+            .peaking(3_000, q: 0.9, db: 2.0, fs: fs),
+            .highShelf(9_500, db: 1.0, fs: fs)
         ])
     }
 }

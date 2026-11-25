@@ -77,13 +77,12 @@ struct EditorView: View {
     let model: EditorModel
     @State private var inspectorTab: Inspector.Tab = .studio
     @State private var showsInspector = true
-    @State private var showsCursorSkins = false
 
     var body: some View {
         VStack(spacing: 0) {
             PageBar(title: "Lumen Studio") {
                 HStack(spacing: 8) {
-                    LIconButton(icon: "cursorarrow", label: "Choose cursor skins") { showsCursorSkins = true }
+                    LIconButton(icon: "cursorarrow", label: "Choose cursor skins") { showsInspector = true; inspectorTab = .cursor }
                     LIconButton(icon: "sidebar.right", label: showsInspector ? "Hide inspector" : "Show inspector") {
                         showsInspector.toggle()
                     }
@@ -124,7 +123,7 @@ struct EditorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
                 if showsInspector {
-                    Inspector(model: model, tab: $inspectorTab, width: 320)
+                    Inspector(model: model, tab: $inspectorTab, width: 360)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -133,14 +132,10 @@ struct EditorView: View {
                 .padding(.bottom, 16)
                 .frame(maxWidth: .infinity)
         }
-        .background(Tok.bg)
-        .overlay {
-            if showsCursorSkins {
-                CursorSkinChooser(model: model) { showsCursorSkins = false }
-            }
-        }
+        .background(StudioInk.rail)
+        .onChange(of: model.exportPanelRequest) { _, _ in showsInspector = true; inspectorTab = .export }
         .focusable().focusEffectDisabled()
-        .onKeyPress(.space) { guard !showsCursorSkins else { return .ignored }; model.togglePlay(); return .handled }
+        .onKeyPress(.space) { model.togglePlay(); return .handled }
         .onKeyPress(.delete) {
             if model.pendingCut != nil { model.commitPendingCut() } else { model.deleteSelected() }
             return .handled

@@ -159,12 +159,14 @@ public enum Director {
     public static func planRecordingZoom(events: [InputEvent], ax: [AXFrame],
                                          source: SourceInfo, timeline: Timeline,
                                          markers: [DirectorMarker] = []) -> [ZoomSegment] {
-        guard timeline.camera.autoZoom else { return timeline.zoom }
+        guard timeline.camera.autoZoom else { return timeline.zoom.filter { $0.origin == .manual } }
         let manual = timeline.zoom.filter { $0.origin == .manual }
         let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
-        return (manual + ZoomPlanner.planSegments(events: events, ax: ax, typing: [], activity: [],
-                                                   src: source, p: timeline.camera, tm: timeline.timeMap,
-                                                   avoid: avoid, markers: markers)).sorted { $0.start < $1.start }
+        let suppressed = Set(timeline.suppressedAuto)
+        let automatic = ZoomPlanner.planSegments(events: events, ax: ax, typing: [], activity: [],
+                                                  src: source, p: timeline.camera, tm: timeline.timeMap,
+                                                  avoid: avoid, markers: markers)
+        return (manual + automatic.filter { !suppressed.contains($0.id.uuidString) }).sorted { $0.start < $1.start }
     }
 
     /// Pure and deterministic: same input, same Timeline. Replaces only .auto zoom/ramps; .manual survive.
@@ -253,6 +255,8 @@ public enum Director {
             followPaths = planned.follow.mapValues { path in
                 path.map { (tm.output(atSource: $0.t), $0.p) }
             }
+        } else {
+            t.zoom.removeAll { $0.origin == .auto }
         }
         if cancelled() { return nil }
         let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature,
@@ -318,8 +322,42 @@ public enum Director {
                 cues += clicks.map { SFXCue(t: $0.t, kind: .click, gainDb: t.audio.clickGainDb) }
             }
             if t.audio.keySounds {
-                cues += input.events.filter { $0.kind == .keyDown && !tm.isCut($0.t) }
-                    .map { SFXCue(t: tm.output(atSource: $0.t), kind: .key, gainDb: 0, keyCode: $0.keyCode) }
+                // One physical press/release pair, independent of OS autorepeat.
+                var held = Set<UInt16>()
+                var privateKeys = Set<UInt16>()
+                for event in input.events.sorted(by: { $0.t < $1.t }) {
+                    let release: Bool
+                    switch event.kind {
+                    case .keyDown:
+                        guard held.insert(event.keyCode).inserted else { continue }
+                        if event.axFrameIndex > 0, Int(event.axFrameIndex) <= input.ax.count,
+                           input.ax[Int(event.axFrameIndex) - 1].secure { privateKeys.insert(event.keyCode); continue }
+                        release = false
+                    case .keyUp:
+                        guard held.remove(event.keyCode) != nil else { continue }
+                        if privateKeys.remove(event.keyCode) != nil { continue }
+                        release = true
+                    case .flagsChanged:
+                        // Old recordings did not persist the modifier keycode.
+                        guard [54, 55, 56, 57, 58, 59, 60, 61, 62, 63].contains(Int(event.keyCode)) else { continue }
+                        let mask: UInt16
+                        switch event.keyCode {
+                        case 54, 55: mask = 0x10
+                        case 56, 60: mask = 0x02
+                        case 57: mask = 0x01
+                        case 58, 61: mask = 0x08
+                        case 59, 62: mask = 0x04
+                        default: mask = 0x80
+                        }
+                        if held.remove(event.keyCode) != nil { release = true }
+                        else if event.flags & mask != 0 { held.insert(event.keyCode); release = false }
+                        else { continue }
+                    default: continue
+                    }
+                    guard event.t.isFinite, event.t >= tm.trimStart, event.t < tm.trimEnd, !tm.isCut(event.t) else { continue }
+                    cues.append(SFXCue(t: tm.output(atSource: event.t), kind: .key, gainDb: 0,
+                                       keyCode: event.keyCode, isKeyRelease: release))
+                }
             }
         }
         if t.audio.soundEffectsEnabled && t.audio.whooshes {
@@ -367,7 +405,7 @@ public enum Director {
                                   clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm, camera: cam, layout: t.webcam),
                                   webcamAspect: input.webcamAspect, layout: layout, placement: placement,
                                    captions: captions, autoMasks: autoMasks, personMask: input.personMask, crop: crop,
-                                   viewportCrop: viewport)
+                                   viewportCrop: viewport, shortcuts: ShortcutPlanner.plan(events: input.events, ax: input.ax, tm: tm))
         if ProcessInfo.processInfo.environment["LUMEN_ZOOM_DEBUG"] == "1" {
             let cam = t.derived?.camera
             for event in input.events where event.kind == .down && event.button == 0 {

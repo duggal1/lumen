@@ -503,7 +503,8 @@ public final class InputRecorder: @unchecked Sendable {
         case .keyDown:
             ev.kind = .keyDown; ev.keyCode = UInt16(truncatingIfNeeded: e.getIntegerValueField(.keyboardEventKeycode))   // key codes only, never characters
         case .keyUp: ev.kind = .keyUp; ev.keyCode = UInt16(truncatingIfNeeded: e.getIntegerValueField(.keyboardEventKeycode))
-        case .flagsChanged: ev.kind = .flagsChanged
+        case .flagsChanged:
+            ev.kind = .flagsChanged; ev.keyCode = UInt16(truncatingIfNeeded: e.getIntegerValueField(.keyboardEventKeycode))
         default: return
         }
         if type == .keyDown { ev.axFrameIndex = reserveFocus(event: ev) }

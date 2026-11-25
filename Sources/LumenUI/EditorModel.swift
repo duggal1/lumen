@@ -163,8 +163,11 @@ enum TimelineSelection: Equatable {
     private var hasMixed = false
     private var isMixing = false
     private var needsInitialMix = true
+    private var pendingAudioInvalidation = false
     private var mixGeneration = 0
     private var playbackTask: Task<Void, Never>?
+    private var windowTask: Task<Void, Never>?
+    private var transportGeneration = 0
     private var wantsPlayback = false
     /// True from the moment Play asks for audio until the clock and the audio
     /// start together. The transport shows it in the readout line; the clock
@@ -213,10 +216,6 @@ enum TimelineSelection: Equatable {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.renderer.refreshWallpaperURL(Renderer.resolveWallpaperURL()) }
         }
-        // Prepare the reusable neural result as soon as the editor opens.
-        // The full timeline mix still waits for derived cues.
-        let mixer = session.mixer, audioPlan = timeline.audio
-        Task.detached(priority: .userInitiated) { mixer.prepareVoice(audioPlan) }
         setTranscript(transcript)
         // Pre-start the audio engine off the main thread so the first Play
         // click never pays engine startup inside the transport gap.
@@ -294,6 +293,10 @@ enum TimelineSelection: Equatable {
         if !(coalesce && Date().timeIntervalSince(lastEdit) < 0.6) { undoStack.append(old); if undoStack.count > 100 { undoStack.removeFirst() } }
         lastEdit = Date(); redoStack.removeAll()
         timeline = new; box.set(new)                                    // renderer shows the new look immediately, old derived tracks
+        // A visual-only edit can arrive during an expensive derive. That
+        // worker owns an older complete timeline, not just derived tracks.
+        // Restart against the new snapshot instead of losing the user's edit.
+        let derivePending = replanTask != nil
         let analysisChanged = old.overlays.privacy != new.overlays.privacy || old.captions.enabled != new.captions.enabled
             || old.captions.locale != new.captions.locale || old.captions.vocabulary != new.captions.vocabulary
             || old.layouts != new.layouts
@@ -301,13 +304,14 @@ enum TimelineSelection: Equatable {
             || ((!old.camera.autoZoom || old.camera.preset == .fixed)
                 && new.camera.autoZoom && new.camera.preset != .fixed)
         if analysisChanged { analyzeInBackground(new) }
-        if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap
+        if derivePending || old.overlays.privacy != new.overlays.privacy || old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap
             || old.audio != new.audio || old.webcam != new.webcam || old.overlays.taps != new.overlays.taps
+            || old.clips != new.clips || old.cropSettings != new.cropSettings || old.smartCrop != new.smartCrop || old.activity != new.activity
             || old.layouts != new.layouts || old.layoutSettings != new.layoutSettings
             || old.captions != new.captions
             || old.style.aspectRatio != new.style.aspectRatio || old.style.padding != new.style.padding
             || old.style.paddingInsets != new.style.paddingInsets {
-            replan(remixAudio: old.audio != new.audio, debounce: coalesce)
+            replan(remixAudio: old.audio != new.audio || old.timeMap != new.timeMap || old.clips != new.clips, debounce: coalesce)
         } else { session.save(new) }
     }
 
@@ -354,7 +358,7 @@ enum TimelineSelection: Equatable {
                     self.finishPrivacy(error: error)
                 }
             })
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled, let self, self.analysisGeneration == generation else { return }
             _ = result
             self.replan()
             self.autoTranscribeIfNeeded()
@@ -376,7 +380,7 @@ enum TimelineSelection: Equatable {
     func setWebcam(_ on: Bool) { edit { $0.webcam = on ? ($0.webcam ?? WebcamLayout()) : nil } }
     func undo() { if let p = undoStack.popLast() { redoStack.append(timeline); restore(p) } }
     func redo() { if let n = redoStack.popLast() { undoStack.append(timeline); restore(n) } }
-    private func restore(_ t: Timeline) { replanTask?.cancel(); timeline = t; box.set(t); session.save(t); remix(); if clock.playing { play() } }
+    private func restore(_ t: Timeline) { replanTask?.cancel(); timeline = t; box.set(t); session.save(t); replan(remixAudio: true) }
 
     func bind<V>(_ kp: WritableKeyPath<Timeline, V>) -> Binding<V> {
         Binding(get: { self.timeline[keyPath: kp] }, set: { v in self.edit(coalesce: true) { $0[keyPath: kp] = v } })
@@ -387,23 +391,26 @@ enum TimelineSelection: Equatable {
     /// awaiting task before it can publish a stale timeline.
     private func replan(remixAudio: Bool = false, debounce: Bool = false) {
         replanTask?.cancel()
+        pendingAudioInvalidation = pendingAudioInvalidation || remixAudio
         let snap = timeline, s = session, pl = pipeline; revision += 1; let rev = revision
         replanTask = Task { [weak self] in
+            defer { if let self, self.revision == rev { self.replanTask = nil } }
             if debounce { try? await Task.sleep(for: .milliseconds(60)) }
             else { await Task.yield() }
             guard !Task.isCancelled else { return }
             guard let out = await pl.derive(snap, input: s.input, revision: rev),
-                  !Task.isCancelled, let self else { return }
+                  !Task.isCancelled, let self, self.revision == rev else { return }
             // Visual-only changes must never restart a full-recording audio mix.
-            let audioChanged = remixAudio || snap.audio != out.audio || snap.timeMap != out.timeMap
+            let audioChanged = remixAudio || self.pendingAudioInvalidation || snap.audio != out.audio || snap.timeMap != out.timeMap
                 || snap.clips != out.clips || snap.derived?.cues != out.derived?.cues
                 || snap.derived?.duck != out.derived?.duck
+            self.pendingAudioInvalidation = false
             self.timeline = out; self.box.set(out); s.save(out)
             if self.pendingInitialAnalysis {
                 self.pendingInitialAnalysis = false
                 self.analyzeInBackground(out)
             }
-            if audioChanged, self.hasMixed { self.remix() }
+            if audioChanged, !self.needsInitialMix { self.invalidateAudio(); self.remix() }
             // Warm the preview buffer after derive publishes so a typical
             // Play (seconds after open) has sound instantly. The mix runs
             // off-main and never blocks open; an eager Play already owns
@@ -430,187 +437,180 @@ enum TimelineSelection: Equatable {
         }
     }
 
-    // Background offline mix. The transport never waits on this task: video
-    // starts instantly and audio joins at the current clock position once
-    // the buffer is ready. The play path below is decoupled from this.
+    // MARK: Audio preparation and transport
+
+    private func invalidateAudio() {
+        let resume = wantsPlayback
+        let t = clock.playing ? clock.time(at: HostClock.now()) : playhead
+        cancelWindowRequests()
+        player.stop(); player.load(nil)
+        clock.pause(at: HostClock.now()); clock.seek(t)
+        playhead = t; published = t
+        hasMixed = false; isPlaying = false
+        if resume { startWhenAudioReady(t) }
+    }
+
+    /// Mastering is independent from transport. Cancel obsolete work and
+    /// never publish a mix belonging to a different edit generation.
     private func remix() {
         mixGeneration += 1
-        let gen = mixGeneration
-        let previous = mixTask
+        let gen = mixGeneration, previous = mixTask
         previous?.cancel()
-        let tl = timeline, mixer = session.mixer, player = player
+        let tl = timeline, mixer = session.mixer
         isMixing = true
         mixTask = Task { [weak self] in
-            // A cancelled latest mix must clear the flag or Play never retries.
             defer { if let self, self.mixGeneration == gen { self.isMixing = false } }
             await previous?.value
             guard !Task.isCancelled else { return }
-            let audio = await Task.detached(priority: .userInitiated) { mixer.mix(tl, cancelled: { Task.isCancelled }) }.value
-            guard !Task.isCancelled else { return }
-            if let audio { await Task.detached(priority: .userInitiated) { player.load(audio) }.value }
-            guard !Task.isCancelled else { return }
-            guard let self, self.mixGeneration == gen else { return }
-            self.isMixing = false
-            self.hasMixed = true
-            self.mixStats = audio.map { ($0.lufs, $0.truePeakDb) }
-            // The full program is now exact. If a provisional window is being
-            // heard, replace it at the content position being heard right now
-            // with a short crossfade: no jump in time and no step in level.
-            if self.wantsPlayback, self.clock.playing {
-                let now = HostClock.now()
-                let content = self.clock.time(at: now)
-                if let audio, self.playingProvisional,
-                   self.player.upgrade(to: audio, atContent: content) {
-                    self.playingProvisional = false
-                } else {
-                    // Late join: schedule against the same future host instant
-                    // the clock will be showing, not a position sampled earlier.
-                    let at = now + TransportTiming.lead(outputLatency: self.player.outputLatency)
-                    let from = TransportTiming.content(at: at, t0: self.clock.startedAt, h0: self.clock.anchor)
-                    _ = self.player.play(from: from, atHostSeconds: at)
-                }
-            }
-            // An audio edit that landed while this mix ran makes the buffer
-            // stale. Visual-only edits must never restart a full mix (same
-            // gate as replan), so compare only audio-relevant fields.
+            let worker = Task.detached(priority: .utility) { mixer.mix(tl, cancelled: { Task.isCancelled }) }
+            let audio = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+            guard !Task.isCancelled, let self, self.mixGeneration == gen else { return }
             let cur = self.timeline
-            let audioStale = tl.audio != cur.audio || tl.timeMap != cur.timeMap || tl.clips != cur.clips
-                || tl.derived?.cues != cur.derived?.cues || tl.derived?.duck != cur.derived?.duck
-            if audioStale { self.remix() }
+            guard tl.audio == cur.audio, tl.timeMap == cur.timeMap, tl.clips == cur.clips,
+                  tl.derived?.cues == cur.derived?.cues, tl.derived?.duck == cur.derived?.duck else {
+                self.remix(); return
+            }
+            self.isMixing = false
+            guard let audio else { return }
+            self.hasMixed = true
+            self.mixStats = (audio.lufs, audio.truePeakDb)
+            self.windowTask?.cancel(); self.windowTask = nil
+            self.player.load(audio)
+            // Continue the queue without resetting the clock or replaying
+            // the samples already scheduled by a provisional window.
+            if self.clock.playing, self.player.queuedThrough - self.clock.time(at: HostClock.now()) < 1.75 {
+                _ = self.player.refill()
+            }
+            self.playingProvisional = false
         }
     }
 
-    // MARK: Transport
+    private func cancelWindowRequests() {
+        transportGeneration += 1
+        playbackTask?.cancel(); playbackTask = nil
+        windowTask?.cancel(); windowTask = nil
+        preparingPlayback = false
+    }
 
     func seek(_ t: Double) {
-        playbackTask?.cancel()
-        preparingPlayback = false
-        let c = min(max(t, 0), duration); playhead = c; published = c
+        guard t.isFinite else { return }
+        cancelWindowRequests()
+        let c = min(max(t, 0), duration)
+        clock.pause(at: HostClock.now()); player.stop(); clock.seek(c)
+        playhead = c; published = c; isPlaying = false
         if wantsPlayback {
-            // The first seek and every later seek use the same lead: the
-            // measured device latency, not a hardcoded 80 ms.
             if audioReady(at: c) { startPlayback(c) }
             else { startWhenAudioReady(c) }
-        } else {
-            clock.seek(c)
         }
     }
+
     func play() {
-        // Idempotent while playing: the clock already runs from the true
-        // host position, so re-anchoring from the 12 Hz playhead would
-        // jump video backwards by up to ~83 ms on a second click.
-        if clock.playing { return }
+        if clock.playing || preparingPlayback { return }
         wantsPlayback = true
-        playbackTask?.cancel()
+        cancelWindowRequests()
         let t = playhead >= duration - 0.02 ? 0 : playhead
-        // A silent project must never wait for audio that does not exist.
-        if audioReady(at: t) { startPlayback(t); return }
-        startWhenAudioReady(t)
+        if audioReady(at: t) { startPlayback(t) }
+        else { startWhenAudioReady(t) }
     }
+
     func pause() {
         wantsPlayback = false
-        playbackTask?.cancel()
-        preparingPlayback = false
+        cancelWindowRequests()
         clock.pause(at: HostClock.now()); player.stop()
         playhead = clock.time(at: HostClock.now()); published = playhead
         isPlaying = false
+        if editIssue == "Preparing audio…" { editIssue = nil }
     }
     func togglePlay() { wantsPlayback ? pause() : play() }
 
-    /// Renders the bounded first window off the main thread and queues it, so
-    /// a Play a few seconds after open starts with audio already in place.
-    /// The full program always wins: a prefix is never installed over it.
     private func prepareFirstWindow() {
-        let tl = timeline, mixer = session.mixer, player = player
+        let tl = timeline, mixer = session.mixer, gen = transportGeneration
         guard mixer.hasProgram(tl) else { return }
-        Task { @MainActor [weak self] in
-            let mixed = await Task.detached(priority: .userInitiated) { mixer.mixFirstWindow(tl) }.value
-            guard let self, let mixed, !self.hasMixed, !self.isMixing else { return }
-            player.load(mixed)
+        windowTask?.cancel()
+        windowTask = Task { [weak self] in
+            let worker = Task.detached(priority: .userInitiated) { mixer.previewWindow(tl, at: 0, cancelled: { Task.isCancelled }) }
+            let window = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+            guard !Task.isCancelled, let self, self.transportGeneration == gen else { return }
+            self.windowTask = nil
+            guard let window, !self.hasMixed, !self.wantsPlayback else { return }
+            self.player.loadWindow(window)
         }
     }
 
-    /// True when audio for output time `t` is either unnecessary or already
-    /// queued. Silent, audio-disabled and missing-source projects answer true
-    /// immediately; only a real wait answers false.
     private func audioReady(at t: Double) -> Bool {
-        guard session.mixer.hasProgram(timeline) else { return true }
-        guard player.isLoaded else { return false }
-        return t < player.duration - 0.02
+        !session.mixer.hasProgram(timeline) || player.contains(t)
     }
 
-    /// Clock and audio start together, against one future host instant derived
-    /// from the measured output latency.
     private func startPlayback(_ t: Double) {
-        let now = HostClock.now()
-        let requested = now
-        let hasAudio = session.mixer.hasProgram(timeline)
+        let requested = HostClock.now(), hasAudio = session.mixer.hasProgram(timeline)
         if hasAudio { player.warm() }
-        let audible = TransportTiming.startInstant(outputLatency: player.outputLatency)
-        clock.start(from: t, at: audible, dur: duration)
-        if hasAudio {
-            _ = player.play(from: t, atHostSeconds: audible)
-            playingProvisional = !hasMixed
+        let target = TransportTiming.startInstant(outputLatency: player.outputLatency)
+        let audible = hasAudio ? player.play(from: t, atHostSeconds: target) : target
+        guard !hasAudio || player.hasQueuedAudio else {
+            wantsPlayback = false; preparingPlayback = false; isPlaying = false
+            editIssue = "Audio output is unavailable."
+            return
         }
-        audioQueuedAtStart = hasAudio && player.isLoaded
-        isPlaying = true
-        preparingPlayback = false
+        clock.start(from: t, at: audible, dur: duration)
+        playingProvisional = hasAudio && !hasMixed
+        audioQueuedAtStart = hasAudio && player.hasQueuedAudio
+        isPlaying = true; preparingPlayback = false
         if editIssue == "Preparing audio…" { editIssue = nil }
         lastStartLatency = max(audible - requested, 0)
+        if hasAudio, !hasMixed, !isMixing { remix() }
     }
 
-    /// Play, but only once the audio that belongs to the first played frame
-    /// exists. The clock stays stopped and the readout says so, rather than
-    /// starting silent video and joining audio seconds later.
+    /// Every seek gets its own bounded window. There is no polling for an
+    /// entire recording to finish denoising or mastering.
     private func startWhenAudioReady(_ t: Double) {
-        wantsPlayback = true
-        preparingPlayback = true
+        wantsPlayback = true; preparingPlayback = true; isPlaying = false
         editIssue = "Preparing audio…"
-        let started = HostClock.now()
-        playbackTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            let tl = self.timeline, mixer = self.session.mixer, player = self.player
-            // The bounded window covers the first seconds of the program, and
-            // the click and typing cues inside it.
-            let withinWindow = t < AudioMixer.firstWindowSeconds - 0.1
-            if withinWindow, !self.hasMixed, !self.isMixing {
-                let ready = await Task.detached(priority: .userInitiated) { () -> Bool in
-                    guard let mixed = mixer.mixFirstWindow(tl) else { return false }
-                    player.load(mixed)
-                    return true
-                }.value
-                guard !Task.isCancelled, self.wantsPlayback else { self.preparingPlayback = false; return }
-                if ready, t < player.duration - 0.02 {
-                    self.lastStartLatency = HostClock.now() - started
-                    self.startPlayback(t)
-                    if !self.hasMixed, !self.isMixing { self.remix() }
-                    return
-                }
+        let started = HostClock.now(), gen = transportGeneration
+        let tl = timeline, mixer = session.mixer
+        playbackTask = Task { [weak self] in
+            let worker = Task.detached(priority: .userInitiated) { mixer.previewWindow(tl, at: t, cancelled: { Task.isCancelled }) }
+            let window = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+            guard !Task.isCancelled, let self, self.transportGeneration == gen, self.wantsPlayback else { return }
+            if !self.hasMixed, let window { self.player.loadWindow(window) }
+            guard self.audioReady(at: t) else {
+                self.wantsPlayback = false; self.preparingPlayback = false
+                self.editIssue = "Audio is unavailable, so playback cannot start."; return
             }
-            // Beyond the first window, or the full program is already on its
-            // way: the honest state is to wait for it rather than start video
-            // with nothing to hear.
-            if !self.hasMixed, !self.isMixing { self.remix() }
-            while !Task.isCancelled, self.wantsPlayback, !self.hasMixed {
-                try? await Task.sleep(for: .milliseconds(25))
-            }
-            guard !Task.isCancelled, self.wantsPlayback else { self.preparingPlayback = false; return }
-            guard t < player.duration - 0.02 else {
-                self.preparingPlayback = false
-                self.editIssue = "Audio is unavailable, so playback cannot start."
-                return
-            }
-            self.lastStartLatency = HostClock.now() - started
             self.startPlayback(t)
+            self.lastStartLatency = max(HostClock.now() - started, self.lastStartLatency ?? 0)
+        }
+        if !hasMixed, !isMixing { remix() }
+    }
+
+    private func prepareNextWindow(at t: Double) {
+        guard windowTask == nil, player.queuedThrough < duration - 0.001 else { return }
+        let from = player.queuedThrough
+        guard from - t < 1.75 else { return }
+        if hasMixed { _ = player.refill(); return }
+        let tl = timeline, mixer = session.mixer, gen = transportGeneration
+        windowTask = Task { [weak self] in
+            let worker = Task.detached(priority: .userInitiated) { mixer.previewWindow(tl, at: from, cancelled: { Task.isCancelled }) }
+            let window = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+            guard !Task.isCancelled, let self, self.transportGeneration == gen else { return }
+            self.windowTask = nil
+            guard self.wantsPlayback, self.clock.playing else { return }
+            if self.hasMixed { _ = self.player.refill() }
+            else if let window { _ = self.player.appendWindow(window) }
         }
     }
 
-    /// Publishing the playhead at display rate invalidates the whole editor
-    /// (including the waveform canvas) 60-120 times a second. The preview reads
-    /// the clock directly, so the inspector only needs ~12 Hz.
     func tick(_ t: Double) {
         if abs(t - published) >= 1.0 / 12 { playhead = t; published = t }
-        if clock.playing, t >= duration - 0.001 { pause() }
+        guard clock.playing else { return }
+        if t >= duration - 0.001 { pause(); return }
+        if session.mixer.hasProgram(timeline) {
+            prepareNextWindow(at: t)
+            // An underrun buffers at the exact media position, never runs
+            // the video clock silently ahead of the queued audio.
+            if player.hasQueuedAudio, t >= player.queuedThrough - 0.025 {
+                seek(min(t, duration))
+            }
+        }
     }
 
     func setTranscript(_ t: Transcript?) {
@@ -1117,6 +1117,29 @@ enum TimelineSelection: Equatable {
 
     /// External voice-over sits on an independent OUTPUT-time lane so translated
     /// narration isn't resampled a second time by source-time speed ramps.
+    /// Imported images are owned by the project, not by a temporary download
+    /// or a removable disk. A failed copy leaves the current style untouched.
+    func setCanvasBackground(_ url: URL) {
+        do {
+            let directory = session.bundle.url.appendingPathComponent("assets", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let target = directory.appendingPathComponent("background-" + UUID().uuidString)
+                .appendingPathExtension(url.pathExtension)
+            try FileManager.default.copyItem(at: url, to: target)
+            edit { $0.style.setPhotoBackground(target.path) }
+        } catch {
+            editIssue = "Could not import background: " + error.localizedDescription
+        }
+    }
+
+    func importCanvasBackground() {
+        let picker = NSOpenPanel()
+        picker.allowedContentTypes = [.image]
+        picker.allowsMultipleSelection = false
+        picker.prompt = "Choose background"
+        if picker.runModal() == .OK, let url = picker.url { setCanvasBackground(url) }
+    }
+
     func importWebcamBackground() {
         let picker = NSOpenPanel()
         picker.allowedContentTypes = [.image]
@@ -1263,21 +1286,6 @@ enum TimelineSelection: Equatable {
         let exportID = activeExportID
         let start = HostClock.now()
 
-        // One job per aspect. The primary output keeps the project's own ratio.
-        var jobs: [(url: URL, timeline: Timeline, preset: ExportPreset)] = [(url, tl, preset)]
-        if settings.batchAspects, settings.kind == .video {
-            for (index, aspect) in [CanvasAspect.r1x1, .r9x16].enumerated() {
-                var variant = tl
-                variant.style.customAspect = aspect.ratio
-                let derived = session.derive(variant, revision: (tl.derived?.revision ?? 0) + index + 1)
-                let suffix = aspect == .r1x1 ? "-1x1" : "-9x16"
-                let base = url.deletingPathExtension().lastPathComponent + suffix
-                let extra = url.deletingLastPathComponent().appendingPathComponent(base)
-                    .appendingPathExtension(settings.fileExtension)
-                jobs.append((extra, derived, settings.preset(source: session.meta.source, aspect: aspect.ratio)))
-            }
-        }
-
         exportState = .running(0)
         // SMOOTHNESS: the export renderer is built off the main thread, so the
         // wallpaper URL is resolved here and handed over; otherwise a
@@ -1298,6 +1306,31 @@ enum TimelineSelection: Equatable {
                 }
             }
             do {
+                // Freeze one evidence snapshot and derive every aspect off
+                // the UI actor. Export never consumes stale preview tracks.
+                let input = session.input
+                let worker = Task.detached(priority: .userInitiated) {
+                    () throws -> [(url: URL, timeline: Timeline, preset: ExportPreset)] in
+                    var cache = DeriveCache()
+                    guard let primary = Director.deriveCancellable(tl, input: input, revision: (tl.derived?.revision ?? 0) + 1,
+                                                                    cache: &cache, cancelled: { Task.isCancelled }) else { throw CancellationError() }
+                    var jobs: [(url: URL, timeline: Timeline, preset: ExportPreset)] = [(url, primary, preset)]
+                    if settings.batchAspects, settings.kind == .video {
+                        for (index, aspect) in [CanvasAspect.r1x1, .r9x16].enumerated() {
+                            var variant = tl
+                            variant.style.customAspect = aspect.ratio
+                            guard let derived = Director.deriveCancellable(variant, input: input, revision: (tl.derived?.revision ?? 0) + index + 2,
+                                                                           cache: &cache, cancelled: { Task.isCancelled }) else { throw CancellationError() }
+                            let suffix = aspect == .r1x1 ? "-1x1" : "-9x16"
+                            let base = url.deletingPathExtension().lastPathComponent + suffix
+                            let extra = url.deletingLastPathComponent().appendingPathComponent(base).appendingPathExtension(settings.fileExtension)
+                            jobs.append((extra, derived, settings.preset(source: session.meta.source, aspect: aspect.ratio)))
+                        }
+                    }
+                    return jobs
+                }
+                let jobs = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+                try Task.checkCancellation()
                 var lastURL = url
                 let jobCount = jobs.count
                 for (index, job) in jobs.enumerated() {
