@@ -151,11 +151,10 @@ public final class ProjectSession: @unchecked Sendable {
         inputState.withLock { $0.transcript = transcript }
     }
 
-    @discardableResult
     /// Compare the generation and publish under the same lock ordering.
     /// A superseded worker cannot write its evidence into a newer request.
     @discardableResult
-    private func applyAnalysis(_ sequence: Int, _ body: (inout DirectorInput) -> Void) -> Bool {
+    private func applyAnalysis(_ sequence: Int, _ body: @Sendable (inout DirectorInput) -> Void) -> Bool {
         analysisSequence.withLock { current in
             guard current == sequence else { return false }
             inputState.withLock { body(&$0) }
