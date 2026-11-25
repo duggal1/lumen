@@ -14,6 +14,18 @@ public struct MixedAudio: Sendable {
     }
 }
 
+/// A bounded provisional PCM interval with an exact output-clock origin.
+public struct PreviewAudioWindow: Sendable {
+    public let startFrame: Int64
+    public let audio: MixedAudio
+    public var endFrame: Int64 { startFrame + Int64(audio.l.count) }
+    public var start: Double { Double(startFrame) / AudioIO.fs }
+    public var end: Double { Double(endFrame) / AudioIO.fs }
+    public init(startFrame: Int64, audio: MixedAudio) {
+        self.startFrame = startFrame; self.audio = audio
+    }
+}
+
 /// An isolated, unmastered 32-bit float audio stem for professional editors.
 /// Stems preserve the voice/system gain but do not duplicate effects or the
 /// combined master limiter. Recombining stems needs mastering in the NLE.
@@ -183,6 +195,8 @@ public final class AudioMixer: @unchecked Sendable {
     private var jobs: [String: VoiceJob] = [:]
     private var music: MusicCache?
     private var imported: [String: MusicTrack] = [:]
+    private let keyBankLock = NSLock()
+    private var keyBank: [String: [Int: [Float]]] = [:]
     private var customDenoiser: (any Denoiser)?
 
     public var denoiser: any Denoiser {
@@ -657,71 +671,250 @@ public final class AudioMixer: @unchecked Sendable {
             hasProgram = true
         }
 
-        var prevKeyT: Double?
-        // A pack is only read when this program actually has key cues. Loading
-        // every sample of a 1.4 s-per-pack decode (and resampling it) before
-        // the cue loop made a silent project pay the full cost of a typing
-        // pack it would never use; the first audible window paid it too.
-        var typingBuffersCache: [Bool: [Int: [Float]]] = [:]
-        func typingBuffers(release: Bool) -> [Int: [Float]] {
-            if let cached = typingBuffersCache[release] { return cached }
-            var buffers: [Int: [Float]] = [:]
-            if a.keySounds, let directory = TypingPackLoader.dir(for: a.typingPackId) {
-                let loaded = release ? TypingPackLoader.releaseBuffers(in: directory) : TypingPackLoader.buffers(in: directory)
-                for (code, buffer) in loaded {
-                    guard let channel = buffer.floatChannelData?[0] else { continue }
-                    let raw = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
-                    // Mechvibes packs ship at 44.1 kHz; the timeline runs at 48 kHz.
-                    let pcm = AudioIO.resample(raw, from: buffer.format.sampleRate)
-                    let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
-                    guard peak > 1e-4 else { continue }
-                    buffers[code] = pcm.map { $0 / peak }
-                }
-            }
-            typingBuffersCache[release] = buffers
-            return buffers
+        renderCues(tl, startFrame: 0, left: &L, right: &R, cancelled: cancelled)
+        Self.silenceClips(tl, &L, &R, fs: fs)
+        return AudioMaster.process([L, R], plan: a, hasProgram: hasProgram)
+    }
+
+    /// The same physical keyboard bank feeds provisional playback and export.
+    /// Decode/resample once per selected pack and event edge, not once per mix.
+    private func typingPCM(packID: String, release: Bool) -> [Int: [Float]] {
+        let cacheKey = packID + (release ? ":up" : ":down")
+        keyBankLock.lock()
+        let ready = keyBank[cacheKey]
+        keyBankLock.unlock()
+        if let ready { return ready }
+        guard let directory = TypingPackLoader.dir(for: packID) else { return [:] }
+        let loaded = release ? TypingPackLoader.releaseBuffers(in: directory) : TypingPackLoader.buffers(in: directory)
+        var result: [Int: [Float]] = [:]
+        for (code, buffer) in loaded {
+            guard let channel = buffer.floatChannelData?[0] else { continue }
+            let raw = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+            let samples = AudioIO.resample(raw, from: buffer.format.sampleRate)
+            let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
+            guard peak > 1e-4 else { continue }
+            result[code] = samples.map { $0 / peak }
         }
-        for cue in d.cues {
-            guard a.soundEffectsEnabled else { continue }
-            // Feed the Focus page's live feedback tape from real rendered cues,
-            // not from the page's own preview taps.
-            NotificationCenter.default.post(
-                name: Notification.Name("lumen.focus.feedback.tap"),
-                object: nil,
-                userInfo: ["kind": cue.kind == .key ? "key" : "click"])
-            let buf: [Float]
+        keyBankLock.lock()
+        // Retain only the selected pack's two banks; switching packs cannot
+        // grow the cache indefinitely.
+        keyBank = keyBank.filter { $0.key.hasPrefix(packID + ":") }
+        keyBank[cacheKey] = result
+        keyBankLock.unlock()
+        return result
+    }
+
+    private func renderCues(_ tl: Timeline, startFrame: Int64, left: inout [Float], right: inout [Float],
+                            cancelled: (@Sendable () -> Bool)? = nil) {
+        let a = tl.audio, fs = AudioIO.fs
+        guard a.soundEffectsEnabled, let d = tl.derived, !d.cues.isEmpty else { return }
+        let start = Double(startFrame) / fs
+        let end = start + Double(left.count) / fs
+        // Include an earlier transient whose tail overlaps this PCM window.
+        // The recorded key/click packs contain short one-shot samples.
+        var lo = 0, hi = d.cues.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if d.cues[mid].t < start - 2 { lo = mid + 1 } else { hi = mid }
+        }
+        var previousPress: Double?
+        for cue in d.cues.dropFirst(lo) {
+            if cancelled?() == true { return }
+            if cue.t >= end { break }
+            guard cue.t.isFinite else { continue }
+            let samples: [Float]
+            let gain: Float
+            let pan: Float
             if cue.kind == .key {
                 guard a.keySounds else { continue }
-                let pack = typingBuffers(release: cue.isKeyRelease)
-                let key = Int(cue.keyCode), codes = Set(pack.keys)
+                let pcm = typingPCM(packID: a.typingPackId, release: cue.isKeyRelease)
+                let key = Int(cue.keyCode), codes = Set(pcm.keys)
                 let code = TypingPackLoader.packCode(for: key, definedIn: codes)
                     ?? TypingPackLoader.fallbackCode(for: key, definedIn: codes)
-                let samples: [Float]
-                if let code, let exact = pack[code] { samples = exact }
+                if let code, let exact = pcm[code] { samples = exact }
                 else if cue.isKeyRelease { continue }
                 else { samples = bank.render(.key).samples }
-                guard !samples.isEmpty else { continue }
-                let gap = prevKeyT.map { cue.t - $0 } ?? 1
+                let gap = previousPress.map { cue.t - $0 } ?? 1
                 let cadence: Float = gap < 0.05 ? 0.82 : gap < 0.15 ? 0.92 : 1
-                let releaseLevel: Float = cue.isKeyRelease ? 0.45 : 1
-                let amplitude = Float(pow(10, (a.typingLevelDb + cue.gainDb) / 20)) * cadence * releaseLevel
-                buf = samples.map { $0 * amplitude }
-                if !cue.isKeyRelease { prevKeyT = cue.t }
+                let edge: Float = cue.isKeyRelease ? 0.45 : 1
+                // Stable per-event gain variation; no preview/export RNG drift.
+                let eventSeed = UInt64(bitPattern: Int64((cue.t * fs).rounded())) &* 6364136223846793005 &+ UInt64(cue.keyCode)
+                let variation = 0.975 + Float((eventSeed >> 32) & 255) / 255 * 0.05
+                gain = Float(pow(10, clamp(a.typingLevelDb + cue.gainDb, -60, 12) / 20)) * cadence * edge * variation
+                if !cue.isKeyRelease { previousPress = cue.t }
+                // Mild physical keyboard positioning; modifiers stay near their side.
+                switch key {
+                case 0, 1, 6, 7, 12, 13, 14, 55, 56, 58, 59: pan = -0.12
+                case 30, 31, 33, 35, 36, 37, 40, 41, 42, 44, 47, 51, 54, 60, 61, 62: pan = 0.12
+                default: pan = 0
+                }
             } else {
-                let (b, gain) = bank.render(cue.kind, clickTone: a.clickTone)
-                // SFXBank renders zero samples for stale whoosh cues, so no
-                // whoosh can reach the mix and no whoosh-specific gain is left.
-                let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + gain) / 20))
-                buf = b.map { $0 * amp }
+                let rendered = bank.render(cue.kind, clickTone: a.clickTone)
+                samples = rendered.samples
+                gain = Float(pow(10, clamp(a.sfxGainDb + cue.gainDb + rendered.gainDb, -60, 12) / 20))
+                pan = 0
             }
-            let s0 = Int((cue.t * fs).rounded())
-            for (k, v) in buf.enumerated() where s0 + k >= 0 && s0 + k < n {
-                L[s0 + k] += v; R[s0 + k] += v
+            let offset = Int64((cue.t * fs).rounded()) - startFrame
+            let lower = max(0, Int(-offset)), upper = min(samples.count, left.count - Int(offset))
+            guard lower < upper else { continue }
+            let l = gain * (1 - max(pan, 0)), r = gain * (1 + min(pan, 0))
+            for k in lower..<upper {
+                let i = Int(offset) + k
+                left[i] += samples[k] * l; right[i] += samples[k] * r
+            }
+        }
+    }
+
+    /// Fast, bounded raw program for any seek position, while the canonical
+    /// enhanced mix is produced independently. Every sample is evaluated on
+    /// the same output clock; no decode from the beginning of a long file.
+    public func previewWindow(_ tl: Timeline, at time: Double, seconds: Double = 4,
+                              cancelled: (@Sendable () -> Bool)? = nil) -> PreviewAudioWindow? {
+        let fs = AudioIO.fs
+        guard time.isFinite, seconds.isFinite, seconds > 0, tl.compositionDuration.isFinite else { return nil }
+        let startFrame = Int64((max(time, 0) * fs).rounded())
+        let total = Int64((max(tl.compositionDuration, 0) * fs).rounded(.up)) + 1
+        let count = Int(min(Int64(clamp(seconds, 0.25, 6) * fs), max(total - startFrame, 0)))
+        guard count > 0 else { return nil }
+        let start = Double(startFrame) / fs
+        let tm = tl.timeMap, a = tl.audio
+        var left = [Float](repeating: 0, count: count), right = left
+
+        func sample(_ samples: [Float], at position: Double) -> Float {
+            guard position.isFinite, position >= 0, position < Double(samples.count) else { return 0 }
+            let i = Int(position), next = min(i + 1, samples.count - 1)
+            return samples[i] + (samples[next] - samples[i]) * Float(position - Double(i))
+        }
+
+        // Cut seams split read ranges: a one-hour source cut never requires
+        // loading the skipped hour to play a four-second output window.
+        var boundaries = [0, count]
+        for cut in tm.cuts {
+            let position = Int((tm.output(atSource: cut.end) * fs).rounded()) - Int(startFrame)
+            if position > 0, position < count { boundaries.append(position) }
+        }
+        let block = Int(fs * 0.5)
+        if count > block { boundaries += Array(stride(from: block, to: count, by: block)) }
+        boundaries = Array(Set(boundaries)).sorted()
+
+        func mixRecorded(url: URL?, provided: [Float]?, providedRight: [Float]?, offset: Double,
+                         gainDb: Double, mono: Bool, muteRamps: Bool) {
+            guard url != nil || provided != nil else { return }
+            let gain = Float(pow(10, clamp(gainDb.isFinite ? gainDb : 0, -60, 24) / 20))
+            for segment in 0..<(boundaries.count - 1) {
+                if cancelled?() == true { return }
+                let lo = boundaries[segment], hi = boundaries[segment + 1]
+                let t0 = start + Double(lo) / fs
+                let t1 = start + Double(hi - 1) / fs
+                if t0 >= tm.outputDuration { continue }
+                let s0 = tm.source(atOutput: t0) - offset
+                let s1 = tm.source(atOutput: min(t1, tm.outputDuration)) - offset
+                let sourceLo = max(0, min(s0, s1) - 0.005), sourceHi = max(s0, s1) + 0.005
+                guard sourceHi > sourceLo, sourceHi - sourceLo <= 32 else { continue }
+                let decoded: (left: [Float], right: [Float], origin: Double)
+                if let provided { decoded = (provided, providedRight ?? provided, 0) }
+                else if let url, let data = try? AudioIO.readStereoWindow(url, from: sourceLo, to: sourceHi) { decoded = data }
+                else { continue }
+                let step = 48
+                var i = lo
+                while i < hi {
+                    let j = min(i + step, hi)
+                    let o0 = start + Double(i) / fs
+                    let o1 = start + Double(max(j - 1, i)) / fs
+                    if o0 >= tm.outputDuration { break }
+                    let first = tm.source(atOutput: o0) - offset
+                    let last = tm.source(atOutput: min(o1, tm.outputDuration)) - offset
+                    let speed = j > i + 1 ? (last - first) * fs / Double(j - i - 1) : 1
+                    if !(muteRamps && speed > 1.2) {
+                        for k in i..<j {
+                            let u = Double(k - i) / Double(max(j - i - 1, 1))
+                            let source = (first + (last - first) * u - decoded.origin) * fs
+                            let l = sample(decoded.left, at: source)
+                            let r = sample(decoded.right, at: source)
+                            if mono {
+                                let value = (l + r) * 0.5 * gain
+                                left[k] += value; right[k] += value
+                            } else {
+                                left[k] += l * gain; right[k] += r * gain
+                            }
+                        }
+                    }
+                    i = j
+                }
+            }
+        }
+        if a.micMode != .off {
+            mixRecorded(url: micURL, provided: mic, providedRight: nil, offset: micOffset,
+                        gainDb: a.micGainDb + a.voiceBoostDb, mono: true, muteRamps: a.muteMicInRamps)
+            for index in 0..<extraCount() {
+                let source = extraSource(index)
+                mixRecorded(url: source.url, provided: source.samples, providedRight: nil, offset: source.offset,
+                            gainDb: a.micGainDb + a.voiceBoostDb, mono: true, muteRamps: a.muteMicInRamps)
+            }
+        }
+        mixRecorded(url: systemURL, provided: sys, providedRight: sysRight, offset: sysOffset,
+                    gainDb: a.systemGainDb, mono: false, muteRamps: true)
+
+        // Imported voiceover is on the output clock. Read only its overlap.
+        for lane in a.lanes where lane.role == .voiceover && !lane.mute {
+            if cancelled?() == true { return nil }
+            guard let path = lane.path else { continue }
+            let trim = max(lane.trimStart ?? 0, 0)
+            let lo = max(start, lane.placement)
+            let hi = min(start + Double(count) / fs, lane.placement + (lane.trimDuration ?? tl.compositionDuration))
+            guard hi > lo, let data = try? AudioIO.readStereoWindow(URL(fileURLWithPath: path),
+                 from: lo - lane.placement + trim, to: hi - lane.placement + trim + 0.002) else { continue }
+            let gain = Float(pow(10, clamp(lane.gainDb, -60, 24) / 20))
+            for i in max(0, Int(((lo - start) * fs).rounded()))..<min(count, Int(((hi - start) * fs).rounded())) {
+                let pos = (start + Double(i) / fs - lane.placement + trim - data.origin) * fs
+                left[i] += sample(data.left, at: pos) * gain
+                right[i] += sample(data.right, at: pos) * gain
             }
         }
 
-        Self.silenceClips(tl, &L, &R, fs: fs)
-        return AudioMaster.process([L, R], plan: a, hasProgram: hasProgram)
+        // The existing value-level music plan provides the same loop period,
+        // trim, fade and duck semantics without allocating the entire output.
+        let (beds, tracks) = musicBeds(tl)
+        for bed in beds {
+            guard let track = tracks[bed.id] else { continue }
+            let plan = MusicBed.plan(bed, track: track, outputSamples: Int(total), fs: fs)
+            guard plan.isRenderable else { continue }
+            let period = max(plan.sourceSpan - plan.crossfade, 1)
+            let lo = max(Int(startFrame), plan.start), hi = min(Int(startFrame) + count, plan.start + plan.count)
+            guard hi > lo else { continue }
+            for output in lo..<hi {
+                let local = output - plan.start
+                let phase = plan.loops ? local % period : local
+                let source = plan.sourceStart + phase
+                let prev = source + period
+                let fade = plan.loops && local >= period && phase < plan.crossfade ? Float(phase) / Float(max(plan.crossfade, 1)) : 1
+                let edge = min(plan.fadeIn > 0 ? Float(local) / Float(plan.fadeIn) : 1,
+                               plan.fadeOut > 0 ? Float(plan.count - local) / Float(plan.fadeOut) : 1, 1)
+                let g = plan.gain * max(edge, 0) * MusicBed.duckGain(tl.derived?.duck, atSample: output, fs: fs)
+                let i = output - Int(startFrame)
+                left[i] += (sample(track.left, at: Double(source)) * fade + sample(track.left, at: Double(prev)) * (1 - fade)) * g
+                right[i] += (sample(track.right, at: Double(source)) * fade + sample(track.right, at: Double(prev)) * (1 - fade)) * g
+            }
+        }
+        if cancelled?() == true { return nil }
+        renderCues(tl, startFrame: startFrame, left: &left, right: &right, cancelled: cancelled)
+        for clip in tl.clips {
+            let lo = max(Int((clip.start * fs).rounded()) - Int(startFrame), 0)
+            let hi = min(Int((clip.end * fs).rounded()) - Int(startFrame), count)
+            if hi > lo { for i in lo..<hi { left[i] = 0; right[i] = 0 } }
+        }
+        // No independent loudness normalization per window: it would cause
+        // obvious pumping at the rolling-window boundary. Only a safety limit.
+        let ceiling = Float(pow(10, -1.0 / 20))
+        let gain = Float(pow(10, clamp(a.outputGainDb, -60, 24) / 20))
+        for i in 0..<count {
+            let l = left[i] * gain, r = right[i] * gain
+            let peak = max(abs(l), abs(r))
+            let trim = peak > ceiling ? ceiling / peak : 1
+            left[i] = l.isFinite ? l * trim : 0; right[i] = r.isFinite ? r * trim : 0
+        }
+        return PreviewAudioWindow(startFrame: startFrame,
+                                  audio: MixedAudio(l: left, r: right, lufs: -120, truePeakDb: -1))
     }
 
     // MARK: Mix cache (exact, keyed by media identity + algorithm + settings + time map)
