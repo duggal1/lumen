@@ -1236,6 +1236,17 @@ public final class Renderer: @unchecked Sendable {
                 }
             }
         }
+        if drawingContent, tl.clipSource(atOutput: r.t) == nil,
+           let cues = tl.derived?.shortcuts, !cues.isEmpty {
+            var lo = 0, hi = cues.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if cues[mid].start <= r.t { lo = mid + 1 } else { hi = mid }
+            }
+            if lo > 0, let sprite = textCache.shortcut(cues[lo - 1], time: r.t, canvas: r.canvas, device: device) {
+                sprites.append(sprite)
+            }
+        }
         if !sprites.isEmpty {
             // A caption card needs the scene behind it, and Metal cannot read
             // the texture it is writing. Copy the finished scene once (only

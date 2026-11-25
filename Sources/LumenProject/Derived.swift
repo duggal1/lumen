@@ -166,6 +166,16 @@ public struct DenseCropTrack: Sendable, Equatable {
     }
 }
 
+/// Native-symbol shortcut overlays, derived from verified physical chords.
+public struct ShortcutCue: Sendable, Equatable {
+    public var start: Double
+    public var end: Double
+    public var label: String
+    public init(start: Double, end: Double, label: String) {
+        self.start = start; self.end = end; self.label = label
+    }
+}
+
 public struct DerivedTracks: Sendable, Equatable {
     public var revision: Int
     public var sourceSize: SIMD2<Double>
@@ -174,6 +184,7 @@ public struct DerivedTracks: Sendable, Equatable {
     public var camera: CameraTrack
     public var clicks: [ClickFX]
     public var cues: [SFXCue]
+    public var shortcuts: [ShortcutCue]
     public var duck: [Float]            // 100 Hz, output time
     public var face: [SIMD3<Float>]     // 30 Hz (cx, cy, height), normalized to webcam image
     public var webcamAspect: Float
@@ -190,12 +201,13 @@ public struct DerivedTracks: Sendable, Equatable {
                 clicks: [ClickFX], cues: [SFXCue], duck: [Float], face: [SIMD3<Float>], webcamAspect: Float,
                 layout: LayoutTrack = LayoutTrack(), placement: PlacementTrack = PlacementTrack(), captions: [CaptionChunk] = [],
                 autoMasks: [Mask] = [], personMask: PersonMaskInfo? = nil, crop: CropTrack = CropTrack(),
-                viewportCrop: DenseCropTrack = DenseCropTrack()) {
+                viewportCrop: DenseCropTrack = DenseCropTrack(), shortcuts: [ShortcutCue] = []) {
         self.revision = revision; self.sourceSize = sourceSize; self.outputDuration = outputDuration; self.cursor = cursor
         self.camera = camera; self.clicks = clicks; self.cues = cues; self.duck = duck; self.face = face; self.webcamAspect = webcamAspect
         self.layout = layout; self.placement = placement; self.captions = captions; self.autoMasks = autoMasks; self.personMask = personMask
         self.crop = crop
         self.viewportCrop = viewportCrop
+        self.shortcuts = shortcuts
     }
     public static func == (a: Self, b: Self) -> Bool { a.revision == b.revision }
 }

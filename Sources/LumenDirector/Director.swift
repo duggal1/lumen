@@ -397,7 +397,7 @@ public enum Director {
                                   clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm, camera: cam, layout: t.webcam),
                                   webcamAspect: input.webcamAspect, layout: layout, placement: placement,
                                    captions: captions, autoMasks: autoMasks, personMask: input.personMask, crop: crop,
-                                   viewportCrop: viewport)
+                                   viewportCrop: viewport, shortcuts: ShortcutPlanner.plan(events: input.events, ax: input.ax, tm: tm))
         if ProcessInfo.processInfo.environment["LUMEN_ZOOM_DEBUG"] == "1" {
             let cam = t.derived?.camera
             for event in input.events where event.kind == .down && event.button == 0 {
