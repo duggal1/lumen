@@ -238,7 +238,7 @@ struct Inspector: View {
     }
 
     /// The cursor page: one standard arrow, one pixelated, one different.
-    private static let cursorPacks: [CursorPack] = [.system, .pixel, .ring]
+    private static let cursorPacks = CursorPack.studioSkins
 
     private func cursorTile(_ pack: CursorPack, selected: Bool) -> some View {
         StudioCursorTile(pack: pack, selected: selected, ink: model.timeline.cursor.ink) { model.edit { $0.cursor.pack = pack } }

@@ -449,15 +449,6 @@ public final class CursorAtlas {
             }
             return [16, 16]
         }
-        if pack == .ring {
-            shadowed {
-                c.addEllipse(in: CGRect(x: 7, y: 7, width: 18, height: 18))
-                c.setStrokeColor(paper); c.setLineWidth(3.8); c.strokePath()
-                c.addEllipse(in: CGRect(x: 7, y: 7, width: 18, height: 18))
-                c.setStrokeColor(ink); c.setLineWidth(1.6); c.strokePath()
-            }
-            return [16, 16]
-        }
         if pack == .pixel {
             // A true 1-bit arrow on a 16-unit grid: square cells, no curve,
             // no anti-alias. Drawn at 2 pt per cell with a paper rim so it
@@ -499,15 +490,22 @@ public final class CursorAtlas {
             return SIMD2<Double>(6 + Double(cell) / 2, 6 + Double(cell) / 2)
         }
         if pack == .outline {
-            // A hollow arrow: a single 2 pt stroke, no fill. The paper under-
-            // stroke keeps it readable over dark frames.
-            let p = SVGPath.parse(arrowD)
-            var t = CGAffineTransform(translationX: 3.5 - 3.2 * 1.4, y: 3.5 - 3.2 * 1.4).scaledBy(x: 1.4, y: 1.4)
-            guard let q = p.copy(using: &t) else { return [3.5, 3.5] }
-            c.setLineJoin(.round); c.setLineCap(.round)
-            c.setStrokeColor(paper); c.setLineWidth(4.0); c.addPath(q); c.strokePath()
-            c.setStrokeColor(ink); c.setLineWidth(1.8); c.addPath(q); c.strokePath()
-            return [3.5, 3.5]
+            // A sharp hollow arrow, with a real tip and a distinct tail.
+            // The contrasting outer stroke stays readable on light and dark
+            // footage; selected ink colors affect the inner outline only.
+            let p = CGMutablePath()
+            p.move(to: CGPoint(x: 4, y: 4))
+            p.addLine(to: CGPoint(x: 26, y: 16))
+            p.addLine(to: CGPoint(x: 16, y: 18))
+            p.addLine(to: CGPoint(x: 21, y: 27))
+            p.addLine(to: CGPoint(x: 16.5, y: 29))
+            p.addLine(to: CGPoint(x: 11.5, y: 20))
+            p.addLine(to: CGPoint(x: 4, y: 27))
+            p.closeSubpath()
+            c.setLineJoin(.miter); c.setMiterLimit(2)
+            c.setStrokeColor(paper); c.setLineWidth(3.8); c.addPath(p); c.strokePath()
+            c.setStrokeColor(ink); c.setLineWidth(1.7); c.addPath(p); c.strokePath()
+            return [4, 4]
         }
         return [16, 16]
     }
@@ -515,11 +513,11 @@ public final class CursorAtlas {
 
 extension CursorPack {
     /// Packs that keep the recorded pointer's identity, so every stock shape gets
-    /// its own artwork. The stylized packs (dot, ring, holiday, pixel, outline)
+    /// its own artwork. The stylized packs (dot, holiday, pixel, outline)
     /// are an explicit user override and keep one glyph for every shape.
     public var preservesShape: Bool {
         switch self {
-        case .dot, .ring, .holiday, .pixel, .outline: return false
+        case .dot, .holiday, .pixel, .outline: return false
         default: return true
         }
     }

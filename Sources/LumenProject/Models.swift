@@ -173,10 +173,37 @@ public struct Style: Codable, Equatable, Sendable {
 /// `glove`…`cookie` range is retired now (the Tiny Hand coat is gone), and
 /// the packs render as stock glyphs again.
 public enum CursorPack: String, Codable, CaseIterable, Sendable {
-    case system, minimal, dot, ring, pro, holiday, lavender, coral, sky, mint, lemon, pink, wood, chrome, grass, pixel, outline, ember, mono
+    case system, minimal, dot, pro, holiday, lavender, coral, sky, mint, lemon, pink, wood, chrome, grass, pixel, outline, ember, mono
     case glove, plush, robot, holo, fuzzy, marble, terrazzo, glass, jelly, pastel
     case lowpoly, knit, skeleton, astro, space, monster, water, lava, cactus, choco
     case cloud, mech, neon, leaf, cookie
+
+    /// The Studio exposes only these three actual pointer silhouettes.
+    public static let studioSkins: [Self] = [.system, .pixel, .outline]
+    public var studioTitle: String {
+        switch self {
+        case .system: "Normal"
+        case .pixel: "Pixel"
+        case .outline: "Outline"
+        default: rawValue.capitalized
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let value = try c.decode(String.self)
+        // Retired artwork is never rendered again; old projects keep a
+        // recognizable, pointed pointer and all of their other settings.
+        if value == "ring" { self = .outline; return }
+        guard let pack = Self(rawValue: value) else {
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "Unknown cursor pack: \(value)")
+        }
+        self = pack
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
 }
 public struct CursorStyle: Codable, Equatable, Sendable {
     public var pack: CursorPack = .system

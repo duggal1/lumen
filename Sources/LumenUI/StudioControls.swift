@@ -214,7 +214,7 @@ struct StudioCursorTile: View {
                     if let image { Image(nsImage: image).resizable().interpolation(pack == .pixel ? .none : .high).scaledToFit() }
                     else { Image(systemName: "cursorarrow").font(.system(size: 20)) }
                 }.frame(width: 34, height: 34)
-                Text(pack == .system ? "Normal" : pack == .pixel ? "Pixel" : "Ring").font(.system(size: 11))
+                Text(pack.studioTitle).font(.system(size: 11))
                 StudioDitherMark(tint: selected ? StudioInk.violet : StudioInk.pressed).frame(width: 11, height: 11)
             }.foregroundStyle(selected ? StudioInk.text : StudioInk.secondary).padding(.vertical, 8).frame(maxWidth: .infinity)
         }.buttonStyle(StudioControlStyle(selected: selected))
