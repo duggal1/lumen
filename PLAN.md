@@ -278,3 +278,28 @@ User explicitly deferred testing and requested direct reconstruction. The 201 or
 - This commit: legacy music compatibility in provisional playback, trimmed keyboard cue filtering, clip/crop replan invalidation and undo/redo handling.
 
 The larger planner/analysis/crop/export rebuild, standalone legacy code retirement, full asset-specific licensing audit, and physical Mac validation are incomplete. The existing offline final mastering path still operates on the whole program; only the preview scheduling and seek path are bounded. Preview raw audio may differ from mastered export until the final program becomes available. No build or tests were executed in this implementation pass, per user request. Main remains unchanged; PR #31 remains draft and unmerged.
+
+## Validation re-opened — 2026-11-25
+
+The user requested validation of the entire backend, not another camera-only rewrite. The preceding implementation is partial, and prior evidence requirements are active again. For commit `9bdfce3`, Swift verification run [462](https://github.com/duggal1/lumen/actions/runs/45569056429) reported successful Metal compiler check and debug build; unit/integration tests were still running when inspected. These results do not apply to the subsequent commit.
+
+### Cross-subsystem findings and repair evidence
+
+- Auto-zoom: stop-time planning did not apply suppression; disabling auto zoom retained generated shots. Both entry points now respect suppression and manual-only mode. Added regressions; existing motion/accuracy tests remain authoritative.
+- Editor: a visual edit could be overwritten by an in-flight complete timeline derive; cancelled audio invalidation could be lost. Restart pending derives on changed intent and carry pending audio invalidation across cancellation.
+- Export: primary export could consume stale preview derivations; aspect variants ran synchronously on the UI actor. Export now derives all variants against one frozen input snapshot on a cancellable worker.
+- Privacy: shortcut labels previously accepted unresolved AX slots; now require resolved nonsecure evidence. Known secure key presses and paired releases no longer produce per-key sounds. Raw key metadata and unknown-context privacy still require an explicit audit.
+- Robustness: validate malformed sample slices and time-map input before numeric conversions; dense map remains memory-intensive and the 24-hour safety bound is not a supported performance claim.
+
+### Remaining release gates (in execution order)
+
+1. Run the existing full macOS suite without deleting or weakening failures. Resolve compiler, test, and packaging failures on the exact final SHA.
+2. Auto zoom and crop: validate every existing timing, retarget, focus, manual override, browser typing and crop test. Measure real Chrome/Terminal/VS Code captures. Retain manual edits and deterministic IDs.
+3. Audio: verify exact sample onset and physical edges, mute/gain/duck, cut/ramp and music-loop seams, seek/refill, processed takeover, missing devices, denoiser and whisper quality. Replace whole-program enhanced PCM with disk-backed bounded processing only after parity evidence.
+4. Preview/renderer: verify source frame selection, latest-seek generation, drawable rejection, privacy masks, effects, captions, all canvas/layout controls and preview/export equivalence. Measure 60 Hz/drop/memory on M1 8 GB.
+5. Capture/recovery: prove display/window/area, pause/resume, device clocks, USB and forced-kill recovery using real media; verify originals are intact.
+6. Export: prove cancellation, destination preservation, output frame/audio timestamps, H.264/HEVC/GIF/alpha support, aspect variants and throughput. Inspect real outputs, not only headless tests.
+7. Project/MCP/CLI: test migrations, external revisions, concurrent edits, undo/redo, permissions, all tool contracts and packaged assets/licenses. Delete legacy paths only after equivalent behavior is proven.
+8. Record exact SHA, logs, measurements, real runtime evidence and residual limitations. Keep draft and unmerged until the evidence passes.
+
+No claim of flawless behavior or completion is made. The original 201-step checklist is retained; implementation-only steps are not marked verified.

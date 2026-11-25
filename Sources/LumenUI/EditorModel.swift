@@ -163,6 +163,7 @@ enum TimelineSelection: Equatable {
     private var hasMixed = false
     private var isMixing = false
     private var needsInitialMix = true
+    private var pendingAudioInvalidation = false
     private var mixGeneration = 0
     private var playbackTask: Task<Void, Never>?
     private var windowTask: Task<Void, Never>?
@@ -292,6 +293,10 @@ enum TimelineSelection: Equatable {
         if !(coalesce && Date().timeIntervalSince(lastEdit) < 0.6) { undoStack.append(old); if undoStack.count > 100 { undoStack.removeFirst() } }
         lastEdit = Date(); redoStack.removeAll()
         timeline = new; box.set(new)                                    // renderer shows the new look immediately, old derived tracks
+        // A visual-only edit can arrive during an expensive derive. That
+        // worker owns an older complete timeline, not just derived tracks.
+        // Restart against the new snapshot instead of losing the user's edit.
+        let derivePending = replanTask != nil
         let analysisChanged = old.overlays.privacy != new.overlays.privacy || old.captions.enabled != new.captions.enabled
             || old.captions.locale != new.captions.locale || old.captions.vocabulary != new.captions.vocabulary
             || old.layouts != new.layouts
@@ -299,7 +304,7 @@ enum TimelineSelection: Equatable {
             || ((!old.camera.autoZoom || old.camera.preset == .fixed)
                 && new.camera.autoZoom && new.camera.preset != .fixed)
         if analysisChanged { analyzeInBackground(new) }
-        if old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap
+        if derivePending || old.overlays.privacy != new.overlays.privacy || old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap
             || old.audio != new.audio || old.webcam != new.webcam || old.overlays.taps != new.overlays.taps
             || old.clips != new.clips || old.cropSettings != new.cropSettings || old.smartCrop != new.smartCrop || old.activity != new.activity
             || old.layouts != new.layouts || old.layoutSettings != new.layoutSettings
@@ -386,17 +391,20 @@ enum TimelineSelection: Equatable {
     /// awaiting task before it can publish a stale timeline.
     private func replan(remixAudio: Bool = false, debounce: Bool = false) {
         replanTask?.cancel()
+        pendingAudioInvalidation = pendingAudioInvalidation || remixAudio
         let snap = timeline, s = session, pl = pipeline; revision += 1; let rev = revision
         replanTask = Task { [weak self] in
+            defer { if let self, self.revision == rev { self.replanTask = nil } }
             if debounce { try? await Task.sleep(for: .milliseconds(60)) }
             else { await Task.yield() }
             guard !Task.isCancelled else { return }
             guard let out = await pl.derive(snap, input: s.input, revision: rev),
                   !Task.isCancelled, let self, self.revision == rev else { return }
             // Visual-only changes must never restart a full-recording audio mix.
-            let audioChanged = remixAudio || snap.audio != out.audio || snap.timeMap != out.timeMap
+            let audioChanged = remixAudio || self.pendingAudioInvalidation || snap.audio != out.audio || snap.timeMap != out.timeMap
                 || snap.clips != out.clips || snap.derived?.cues != out.derived?.cues
                 || snap.derived?.duck != out.derived?.duck
+            self.pendingAudioInvalidation = false
             self.timeline = out; self.box.set(out); s.save(out)
             if self.pendingInitialAnalysis {
                 self.pendingInitialAnalysis = false
@@ -1278,21 +1286,6 @@ enum TimelineSelection: Equatable {
         let exportID = activeExportID
         let start = HostClock.now()
 
-        // One job per aspect. The primary output keeps the project's own ratio.
-        var jobs: [(url: URL, timeline: Timeline, preset: ExportPreset)] = [(url, tl, preset)]
-        if settings.batchAspects, settings.kind == .video {
-            for (index, aspect) in [CanvasAspect.r1x1, .r9x16].enumerated() {
-                var variant = tl
-                variant.style.customAspect = aspect.ratio
-                let derived = session.derive(variant, revision: (tl.derived?.revision ?? 0) + index + 1)
-                let suffix = aspect == .r1x1 ? "-1x1" : "-9x16"
-                let base = url.deletingPathExtension().lastPathComponent + suffix
-                let extra = url.deletingLastPathComponent().appendingPathComponent(base)
-                    .appendingPathExtension(settings.fileExtension)
-                jobs.append((extra, derived, settings.preset(source: session.meta.source, aspect: aspect.ratio)))
-            }
-        }
-
         exportState = .running(0)
         // SMOOTHNESS: the export renderer is built off the main thread, so the
         // wallpaper URL is resolved here and handed over; otherwise a
@@ -1313,6 +1306,31 @@ enum TimelineSelection: Equatable {
                 }
             }
             do {
+                // Freeze one evidence snapshot and derive every aspect off
+                // the UI actor. Export never consumes stale preview tracks.
+                let input = session.input
+                let worker = Task.detached(priority: .userInitiated) {
+                    () throws -> [(url: URL, timeline: Timeline, preset: ExportPreset)] in
+                    var cache = DeriveCache()
+                    guard let primary = Director.deriveCancellable(tl, input: input, revision: (tl.derived?.revision ?? 0) + 1,
+                                                                    cache: &cache, cancelled: { Task.isCancelled }) else { throw CancellationError() }
+                    var jobs: [(url: URL, timeline: Timeline, preset: ExportPreset)] = [(url, primary, preset)]
+                    if settings.batchAspects, settings.kind == .video {
+                        for (index, aspect) in [CanvasAspect.r1x1, .r9x16].enumerated() {
+                            var variant = tl
+                            variant.style.customAspect = aspect.ratio
+                            guard let derived = Director.deriveCancellable(variant, input: input, revision: (tl.derived?.revision ?? 0) + index + 2,
+                                                                           cache: &cache, cancelled: { Task.isCancelled }) else { throw CancellationError() }
+                            let suffix = aspect == .r1x1 ? "-1x1" : "-9x16"
+                            let base = url.deletingPathExtension().lastPathComponent + suffix
+                            let extra = url.deletingLastPathComponent().appendingPathComponent(base).appendingPathExtension(settings.fileExtension)
+                            jobs.append((extra, derived, settings.preset(source: session.meta.source, aspect: aspect.ratio)))
+                        }
+                    }
+                    return jobs
+                }
+                let jobs = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+                try Task.checkCancellation()
                 var lastURL = url
                 let jobCount = jobs.count
                 for (index, job) in jobs.enumerated() {

@@ -549,10 +549,15 @@ public struct TimeMap: Codable, Equatable, Sendable {
     }
     private mutating func rebuild() {
         rebuildCount += 1
-        let n = Int((max(trimEnd - trimStart, 0) / Self.ds).rounded(.up))
+        guard trimStart.isFinite, trimEnd.isFinite, trimEnd >= trimStart else { out = [0]; return }
+        let ticks = ((trimEnd - trimStart) / Self.ds).rounded(.up)
+        // Bound hostile decoded project metadata before allocating or converting.
+        // A 24-hour recording is the upper supported dense-map duration.
+        guard ticks.isFinite, ticks <= 24 * 3600 / Self.ds else { out = [0]; return }
+        let n = Int(ticks)
         var o = [Double](repeating: 0, count: n + 1)
-        let rs = ramps.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
-        let cs = cuts.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
+        let rs = ramps.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start && $0.speed.isFinite && $0.speed > 0 }.sorted { $0.start < $1.start }
+        let cs = cuts.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }.sorted { $0.start < $1.start }
         var j = 0, jc = 0
         for i in 0..<n {
             let s = trimStart + (Double(i) + 0.5) * Self.ds
@@ -574,12 +579,12 @@ public struct TimeMap: Codable, Equatable, Sendable {
         guard s.isFinite else { return 0 }
         let f = (s - trimStart) / Self.ds
         guard f.isFinite, f > 0 else { return 0 }
+        guard f < Double(max(out.count - 1, 0)) else { return out.last ?? 0 }
         let i = Int(f)
-        if i >= out.count - 1 { return out.last ?? 0 }
         return out[i] + (out[i + 1] - out[i]) * (f - Double(i))
     }
     public func source(atOutput t: Double) -> Double {
-        guard out.count > 1 else { return trimStart }
+        guard t.isFinite, trimStart.isFinite, out.count > 1 else { return trimStart.isFinite ? trimStart : 0 }
         if t < 0 { return trimStart }
         if t >= out[out.count - 1] { return trimStart + Double(out.count - 1) * Self.ds }
         var lo = 0, hi = out.count - 1

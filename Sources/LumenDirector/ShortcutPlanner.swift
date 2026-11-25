@@ -20,14 +20,15 @@ enum ShortcutPlanner {
     static func plan(events: [InputEvent], ax: [AXFrame], tm: TimeMap) -> [ShortcutCue] {
         var cues: [ShortcutCue] = []
         var down = Set<UInt16>()
-        for e in events {
+        for e in events.sorted(by: { $0.t < $1.t }) {
             if e.kind == .keyUp { down.remove(e.keyCode); continue }
             guard e.kind == .keyDown, down.insert(e.keyCode).inserted,
                   e.t.isFinite, e.t >= tm.trimStart, e.t < tm.trimEnd, !tm.isCut(e.t),
                   e.flags & 0x14 != 0, let key = keys[e.keyCode] else { continue }
             // AX indices are one-based. No verified context means no label.
-            guard e.axFrameIndex > 0, Int(e.axFrameIndex) <= ax.count,
-                  !ax[Int(e.axFrameIndex) - 1].secure else { continue }
+            guard e.axFrameIndex > 0, Int(e.axFrameIndex) <= ax.count else { continue }
+            let context = ax[Int(e.axFrameIndex) - 1]
+            guard context.anchor?.resolved == true, !context.secure else { continue }
             var parts: [String] = []
             if e.flags & 0x04 != 0 { parts.append("⌃") }
             if e.flags & 0x08 != 0 { parts.append("⌥") }

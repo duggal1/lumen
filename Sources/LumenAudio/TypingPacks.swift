@@ -83,11 +83,15 @@ public struct KeyPack: Decodable {
 
 public func sliceBuffer(_ file: AVAudioFile, startMs: Double, durMs: Double) throws -> AVAudioPCMBuffer? {
     let sr = file.processingFormat.sampleRate
-    guard sr.isFinite, sr > 0 else { return nil }
-    let start = AVAudioFramePosition(max(0, startMs / 1000 * sr))
+    guard sr.isFinite, sr > 0, startMs.isFinite, durMs.isFinite, startMs >= 0, durMs > 0 else { return nil }
+    let position = startMs / 1000 * sr
+    guard position.isFinite, position < Double(file.length) else { return nil }
+    let start = AVAudioFramePosition(position.rounded(.down))
     let available = max(0, file.length - start)
-    let requested = AVAudioFrameCount(max(0, durMs / 1000 * sr))
-    let frames = min(requested, AVAudioFrameCount(available))
+    // Clamp before converting to integer; malformed pack metadata must not trap.
+    let requested = min(durMs / 1000 * sr, Double(available), Double(UInt32.max))
+    guard requested.isFinite, requested >= 1 else { return nil }
+    let frames = AVAudioFrameCount(requested.rounded(.down))
     guard frames > 0 else { return nil }
     guard let out = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else { return nil }
     file.framePosition = start

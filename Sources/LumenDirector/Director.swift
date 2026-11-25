@@ -159,12 +159,14 @@ public enum Director {
     public static func planRecordingZoom(events: [InputEvent], ax: [AXFrame],
                                          source: SourceInfo, timeline: Timeline,
                                          markers: [DirectorMarker] = []) -> [ZoomSegment] {
-        guard timeline.camera.autoZoom else { return timeline.zoom }
+        guard timeline.camera.autoZoom else { return timeline.zoom.filter { $0.origin == .manual } }
         let manual = timeline.zoom.filter { $0.origin == .manual }
         let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
-        return (manual + ZoomPlanner.planSegments(events: events, ax: ax, typing: [], activity: [],
-                                                   src: source, p: timeline.camera, tm: timeline.timeMap,
-                                                   avoid: avoid, markers: markers)).sorted { $0.start < $1.start }
+        let suppressed = Set(timeline.suppressedAuto)
+        let automatic = ZoomPlanner.planSegments(events: events, ax: ax, typing: [], activity: [],
+                                                  src: source, p: timeline.camera, tm: timeline.timeMap,
+                                                  avoid: avoid, markers: markers)
+        return (manual + automatic.filter { !suppressed.contains($0.id.uuidString) }).sorted { $0.start < $1.start }
     }
 
     /// Pure and deterministic: same input, same Timeline. Replaces only .auto zoom/ramps; .manual survive.
@@ -253,6 +255,8 @@ public enum Director {
             followPaths = planned.follow.mapValues { path in
                 path.map { (tm.output(atSource: $0.t), $0.p) }
             }
+        } else {
+            t.zoom.removeAll { $0.origin == .auto }
         }
         if cancelled() { return nil }
         let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature,
@@ -320,14 +324,18 @@ public enum Director {
             if t.audio.keySounds {
                 // One physical press/release pair, independent of OS autorepeat.
                 var held = Set<UInt16>()
-                for event in input.events {
+                var privateKeys = Set<UInt16>()
+                for event in input.events.sorted(by: { $0.t < $1.t }) {
                     let release: Bool
                     switch event.kind {
                     case .keyDown:
                         guard held.insert(event.keyCode).inserted else { continue }
+                        if event.axFrameIndex > 0, Int(event.axFrameIndex) <= input.ax.count,
+                           input.ax[Int(event.axFrameIndex) - 1].secure { privateKeys.insert(event.keyCode); continue }
                         release = false
                     case .keyUp:
                         guard held.remove(event.keyCode) != nil else { continue }
+                        if privateKeys.remove(event.keyCode) != nil { continue }
                         release = true
                     case .flagsChanged:
                         // Old recordings did not persist the modifier keycode.
