@@ -155,7 +155,7 @@ public final class CursorAtlas {
     static let arrowD = "M9.80282 4.62973 15.8364 6.99069C19.3164 8.35243 21.0564 9.03329 20.9987 10.1133 20.941 11.1934 19.1251 11.6886 15.4933 12.6791 14.412 12.974 13.8713 13.1215 13.4964 13.4963 13.1215 13.8712 12.9741 14.4119 12.6791 15.4933 11.6887 19.125 11.1934 20.9409 10.1134 20.9986 9.03335 21.0563 8.35249 19.3163 6.99075 15.8363L4.62979 9.80276C3.20411 6.15934 2.49127 4.33764 3.41448 3.41442 4.3377 2.49121 6.15941 3.20405 9.80282 4.62973Z"
     static let handD = "M224,104v50.93c0,46.2-36.85,84.55-83,85.06A83.71,83.71,0,0,1,80.6,215.4C58.79,192.33,34.15,136,34.15,136a16,16,0,0,1,6.53-22.23c7.66-4,17.1-.84,21.4,6.62l21,36.44a6.09,6.09,0,0,0,6,3.09l.12,0A8.19,8.19,0,0,0,96,151.74V32a16,16,0,0,1,16.77-16c8.61.4,15.23,7.82,15.23,16.43V104a8,8,0,0,0,8.53,8,8.17,8.17,0,0,0,7.47-8.25V88a16,16,0,0,1,16.77-16c8.61.4,15.23,7.82,15.23,16.43V112a8,8,0,0,0,8.53,8,8.17,8.17,0,0,0,7.47-8.25v-7.28c0-8.61,6.62-16,15.23-16.43A16,16,0,0,1,224,104Z"
 
-    public init?(device: MTLDevice, queue: MTLCommandQueue, pack: CursorPack, customs: [CustomCursor]) {
+    public init?(device: MTLDevice, queue: MTLCommandQueue, pack: CursorPack, customs: [CustomCursor], ink: RGBA? = nil) {
         let ids = StockCursor.allCases.map(\.rawValue)
         let d = MTLTextureDescriptor()
         d.textureType = .type2DArray; d.pixelFormat = .rgba8Unorm
@@ -166,7 +166,7 @@ public final class CursorAtlas {
         for (i, id) in ids.enumerated() {
             var hot = SIMD2<Double>(3.5, 3.5)
             let bytes = Self.raster { c in
-                if let s = StockCursor(rawValue: id) { hot = Self.art(c, pack, s) }
+                if let s = StockCursor(rawValue: id) { hot = Self.art(c, pack, s, tint: ink) }
             }
             t.replace(region: MTLRegionMake2D(0, 0, Self.px, Self.px), mipmapLevel: 0, slice: i, withBytes: bytes,
                       bytesPerRow: Self.px * 4, bytesPerImage: Self.px * Self.px * 4)
@@ -187,8 +187,8 @@ public final class CursorAtlas {
     }
 
     /// Uses the same rasterizer and arrow artwork as the exported cursor.
-    public static func previewImage(pack: CursorPack) -> NSImage? {
-        let bytes = raster { context in _ = art(context, pack, .arrow) }
+    public static func previewImage(pack: CursorPack, ink: RGBA? = nil) -> NSImage? {
+        let bytes = raster { context in _ = art(context, pack, .arrow, tint: ink) }
         guard let provider = CGDataProvider(data: Data(bytes) as CFData),
               let cg = CGImage(width: px, height: px, bitsPerComponent: 8, bitsPerPixel: 32,
                                bytesPerRow: px * 4, space: CGColorSpace(name: CGColorSpace.displayP3)!,
@@ -242,7 +242,7 @@ public final class CursorAtlas {
     }
 
     /// Returns the hotspot in points.
-    private static func art(_ c: CGContext, _ pack: CursorPack, _ s: StockCursor) -> SIMD2<Double> {
+    private static func art(_ c: CGContext, _ pack: CursorPack, _ s: StockCursor, tint: RGBA? = nil) -> SIMD2<Double> {
         let rgb: (Double, Double, Double)
         switch pack {
         case .lavender: rgb = (0.53, 0.33, 0.95)
@@ -259,7 +259,11 @@ public final class CursorAtlas {
         case .outline: rgb = (0.098, 0.098, 0.098)
         default: rgb = (0.11, 0.098, 0.09)
         }
-        let ink = CGColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
+        func channel(_ value: Float?, _ fallback: Double) -> CGFloat {
+            guard let value, value.isFinite else { return CGFloat(fallback) }
+            return CGFloat(min(max(value, 0), 1))
+        }
+        let ink = CGColor(srgbRed: channel(tint?.r, rgb.0), green: channel(tint?.g, rgb.1), blue: channel(tint?.b, rgb.2), alpha: 1)
         let paper = CGColor(gray: 1, alpha: 1)
         func shadowed(_ body: () -> Void) {
             c.saveGState()

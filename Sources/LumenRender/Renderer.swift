@@ -319,6 +319,7 @@ public final class Renderer: @unchecked Sendable {
     private let screenMip = MipCache(), webMip = MipCache()
     private var atlas: CursorAtlas?
     private var atlasPack: CursorPack?
+    private var atlasInk: RGBA?
     private var customs: [CustomCursor] = []
     private let outCache: CVMetalTextureCache
     public let fxKernels: FXKernels?
@@ -707,8 +708,8 @@ public final class Renderer: @unchecked Sendable {
         } else {
             personMatte = nil
         }
-        if atlas == nil || atlasPack != tl.cursor.pack {
-            atlas = CursorAtlas(device: device, queue: queue, pack: tl.cursor.pack, customs: customs); atlasPack = tl.cursor.pack
+        if atlas == nil || atlasPack != tl.cursor.pack || atlasInk != tl.cursor.ink {
+            atlas = CursorAtlas(device: device, queue: queue, pack: tl.cursor.pack, customs: customs, ink: tl.cursor.ink); atlasPack = tl.cursor.pack; atlasInk = tl.cursor.ink
         }
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y))
 

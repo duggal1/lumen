@@ -180,6 +180,8 @@ public enum CursorPack: String, Codable, CaseIterable, Sendable {
 }
 public struct CursorStyle: Codable, Equatable, Sendable {
     public var pack: CursorPack = .system
+    /// Optional artwork ink; nil preserves the skin's original color.
+    public var ink: RGBA? = nil
     public var size: Double = 1.0
     public var smoothingSigma: Double = 0.035
     public var glide: Double = 0.35
@@ -200,11 +202,11 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     public var constantSize = false                     // true = cursor keeps its on-screen size during zoom
     public var loop: Double?                            // seconds of tail that glides back to the first frame; nil = off
     public var effectiveCompensation: Double { constantSize ? 1 : zoomCompensation }
-    enum CodingKeys: String, CodingKey { case pack, size, smoothingSigma, glide, idleHide, pressScale, clickRing, zoomCompensation, constantSize, loop, clickEffect, clickDuration, clickColor, clickSize, clickIntensity }
+    enum CodingKeys: String, CodingKey { case pack, ink, size, smoothingSigma, glide, idleHide, pressScale, clickRing, zoomCompensation, constantSize, loop, clickEffect, clickDuration, clickColor, clickSize, clickIntensity }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
-        pack = c.opt(.pack, pack); size = c.opt(.size, size); smoothingSigma = c.opt(.smoothingSigma, smoothingSigma); glide = c.opt(.glide, glide)
+        pack = c.opt(.pack, pack); ink = try c.decodeIfPresent(RGBA.self, forKey: .ink); size = c.opt(.size, size); smoothingSigma = c.opt(.smoothingSigma, smoothingSigma); glide = c.opt(.glide, glide)
         idleHide = c.contains(.idleHide) ? ((try? c.decodeIfPresent(Double.self, forKey: .idleHide)) ?? nil) : idleHide
         pressScale = c.opt(.pressScale, pressScale)
         clickEffect = c.opt(.clickEffect, clickEffect); clickDuration = c.opt(.clickDuration, clickDuration); clickColor = c.opt(.clickColor, clickColor)
@@ -215,7 +217,7 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     }
     public func encode(to e: Encoder) throws {      // explicit nulls so "off" survives a round trip
         var c = e.container(keyedBy: CodingKeys.self)
-        try c.encode(pack, forKey: .pack); try c.encode(size, forKey: .size); try c.encode(smoothingSigma, forKey: .smoothingSigma)
+        try c.encode(pack, forKey: .pack); try c.encodeIfPresent(ink, forKey: .ink); try c.encode(size, forKey: .size); try c.encode(smoothingSigma, forKey: .smoothingSigma)
         try c.encode(glide, forKey: .glide); try c.encode(idleHide, forKey: .idleHide); try c.encode(pressScale, forKey: .pressScale)
         try c.encode(clickRing, forKey: .clickRing); try c.encode(zoomCompensation, forKey: .zoomCompensation)
         try c.encode(clickEffect, forKey: .clickEffect); try c.encode(clickDuration, forKey: .clickDuration)

@@ -223,10 +223,15 @@ struct Inspector: View {
                 StudioToggleRow(label: "Loop cursor", on: Binding(get: { m.timeline.cursor.loop != nil },
                     set: { enabled in m.edit { $0.cursor.loop = enabled ? 1 : nil } }))
             }.frame(maxWidth: .infinity, alignment: .leading)
+            StudioSection("Pointer color") {
+                StudioColorSwatches(selected: m.timeline.cursor.ink) { color in m.edit { $0.cursor.ink = color } }
+                StudioButton(title: "Original color", icon: "arrow.counterclockwise", kind: .quiet) { m.edit { $0.cursor.ink = nil } }
+            }
             StudioSection("Click color") {
                 StudioColorSwatches(selected: m.timeline.cursor.clickColor) { color in
                     m.edit { $0.cursor.clickColor = color }
                 }
+                StudioButton(title: "Original ripple", icon: "arrow.counterclockwise", kind: .quiet) { m.edit { $0.cursor.clickColor = RGBA(0xFFFFFF, a: 0) } }
                 StudioSliderRow(label: "Click intensity", v: m.bind(\.cursor.clickIntensity), range: 0...1.5)
             }
         }
@@ -236,7 +241,7 @@ struct Inspector: View {
     private static let cursorPacks: [CursorPack] = [.system, .pixel, .ring]
 
     private func cursorTile(_ pack: CursorPack, selected: Bool) -> some View {
-        StudioCursorTile(pack: pack, selected: selected) { model.edit { $0.cursor.pack = pack } }
+        StudioCursorTile(pack: pack, selected: selected, ink: model.timeline.cursor.ink) { model.edit { $0.cursor.pack = pack } }
     }
 
     // MARK: - Tools

@@ -273,3 +273,11 @@ private func byteHash(_ px: [UInt8]) -> UInt64 {
         #expect(error < 1.5, "scale \(scale) size \(size): hotspot \(error) px from the click point")
     }
 }
+@Test func studioCursorInkPersistsAndPreservesLegacyDefault() throws {
+    var style = CursorStyle()
+    style.ink = RGBA(0x55D3F1)
+    let restored = try JSONDecoder().decode(CursorStyle.self, from: JSONEncoder().encode(style))
+    #expect(restored.ink == style.ink)
+    let legacy = try JSONDecoder().decode(CursorStyle.self, from: Data("{}".utf8))
+    #expect(legacy.ink == nil)
+}

@@ -188,7 +188,7 @@ struct StudioSliderRow: View {
     }
 }
 struct StudioColorSwatches: View {
-    let selected: RGBA; let choose: (RGBA) -> Void
+    let selected: RGBA?; let choose: (RGBA) -> Void
     private let colors: [UInt32] = [0xFFFFFF,0x171717,0x599CFF,0x55D3F1,0x6FDB73,0xFF8E3B,0xF267B0,0xA373FF]
     var body: some View {
         HStack(spacing: 6) {
@@ -202,7 +202,7 @@ struct StudioColorSwatches: View {
     }
 }
 struct StudioCursorTile: View {
-    let pack: CursorPack; let selected: Bool; let action: () -> Void
+    let pack: CursorPack; let selected: Bool; let ink: RGBA?; let action: () -> Void
     @State private var image: NSImage?
     var body: some View {
         Button(action: action) {
@@ -216,7 +216,7 @@ struct StudioCursorTile: View {
             }.foregroundStyle(selected ? StudioInk.text : StudioInk.secondary).padding(.vertical, 8).frame(maxWidth: .infinity)
         }.buttonStyle(StudioControlStyle(selected: selected))
             .accessibilityAddTraits(selected ? .isSelected : [])
-            .task(id: pack) { image = CursorAtlas.previewImage(pack: pack) }
+            .task(id: ink) { image = CursorAtlas.previewImage(pack: pack, ink: ink) }
     }
 }
 struct StudioExportProgress: View {
