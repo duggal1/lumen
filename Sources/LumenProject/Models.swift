@@ -130,7 +130,7 @@ public struct Style: Codable, Equatable, Sendable {
     /// Local photo for `.image`. Absolute path or bundled sentinel
     /// (`serene-lake.jpg` resolves from Resources/Wallpapers). The
     /// renderer loads it once per modification date, never per frame.
-    public var backgroundImagePath: String? = "serene-lake.jpg"
+    public var backgroundImagePath: String? = "paintings/claude-monet/claude-monet_water-lilies-agapanthus_cma-136510.webp"
     public var aspectRatio: Double { customAspect ?? canvas.ratio }
     public var insets: EdgeInsetsN { paddingInsets ?? EdgeInsetsN(all: padding) }
     public var radii: CornerRadii { cornerRadii ?? CornerRadii(all: cornerRadius) }

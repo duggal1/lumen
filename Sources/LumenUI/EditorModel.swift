@@ -1117,6 +1117,29 @@ enum TimelineSelection: Equatable {
 
     /// External voice-over sits on an independent OUTPUT-time lane so translated
     /// narration isn't resampled a second time by source-time speed ramps.
+    /// Imported images are owned by the project, not by a temporary download
+    /// or a removable disk. A failed copy leaves the current style untouched.
+    func setCanvasBackground(_ url: URL) {
+        do {
+            let directory = session.bundle.url.appendingPathComponent("assets", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let target = directory.appendingPathComponent("background-" + UUID().uuidString)
+                .appendingPathExtension(url.pathExtension)
+            try FileManager.default.copyItem(at: url, to: target)
+            edit { $0.style.setPhotoBackground(target.path) }
+        } catch {
+            editIssue = "Could not import background: " + error.localizedDescription
+        }
+    }
+
+    func importCanvasBackground() {
+        let picker = NSOpenPanel()
+        picker.allowedContentTypes = [.image]
+        picker.allowsMultipleSelection = false
+        picker.prompt = "Choose background"
+        if picker.runModal() == .OK, let url = picker.url { setCanvasBackground(url) }
+    }
+
     func importWebcamBackground() {
         let picker = NSOpenPanel()
         picker.allowedContentTypes = [.image]

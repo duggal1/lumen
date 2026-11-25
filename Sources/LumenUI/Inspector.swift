@@ -144,6 +144,28 @@ struct Inspector: View {
                     SliderRow(label: "Weight", v: m.bind(\.style.frameWeight), range: 0...4, fmt: { "\(Int($0)) pt" })
                 }
             }.card(padding: 16)
+            VStack(alignment: .leading, spacing: 12) {
+                Row(label: "Background") {
+                    LDropdown(sel: m.bind(\.style.background), options: [
+                        (.solid, "Solid", "square.fill"), (.gradient, "Gradient", "circle.lefthalf.filled"),
+                        (.canvas, "Canvas", "square.grid.2x2"), (.dither, "Dither", "square.grid.3x3"),
+                        (.wallpaper, "Desktop", "desktopcomputer"), (.image, "Wallpaper / image", "photo")
+                    ]).frame(width: 156)
+                }
+                switch m.timeline.style.background {
+                case .canvas:
+                    CanvasPresetGrid(model: m)
+                    SliderRow(label: "Motion speed", v: m.bind(\.style.canvasSpeed), range: 0...2)
+                case .solid, .gradient, .dither, .mesh:
+                    DitherPaletteGrid(model: m, kind: m.timeline.style.background)
+                case .wallpaper:
+                    SliderRow(label: "Blur", v: m.bind(\.style.wallpaperBlur), range: 0...60)
+                case .image:
+                    wallpaperList
+                    LButton(title: "Import image", icon: "photo.badge.plus", kind: .secondary) { m.importCanvasBackground() }
+                }
+                SliderRow(label: "Shadow", v: m.bind(\.style.shadow), range: 0...1)
+            }.card(padding: 16)
             if !presets.isEmpty {
                 VStack(alignment: .leading, spacing: Space.s2) {
                     Text("Looks").font(AppType.title).foregroundStyle(Tok.text)
@@ -238,11 +260,7 @@ struct Inspector: View {
         let m = model
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
-                Row(label: "Studio mode") {
-                    LDropdown(sel: m.bind(\.audio.studioMode),
-                              options: StudioMode.allCases.map { ($0, $0.title, "waveform") })
-                        .frame(width: 138)
-                }
+                Text("Studio Audio").font(AppType.title).foregroundStyle(Tok.text)
                 SliderRow(label: "Voice level", v: m.bind(\.audio.voiceBoostDb), range: 0...6,
                           fmt: { String(format: "%+.1f dB", $0) })
                 SliderRow(label: "Noise reduction", v: Binding(
@@ -262,14 +280,24 @@ struct Inspector: View {
         let m = model
         return VStack(spacing: 16) {
             VStack(spacing: 0) {
-                Row(label: "Corner") { LDropdown(sel: layoutBinding(.cameraOverlay, \.corner),
+                Row(label: "Layout") {
+                    LDropdown(sel: Binding(get: { currentLayout }, set: { applyLayout($0) }), options: [
+                        (.screenOnly, "Screen only", "display"), (.cameraOverlay, "Camera overlay", "person.crop.circle"),
+                        (.split, "Split screen", "rectangle.split.2x1"), (.cameraFullscreen, "Full camera", "video"),
+                        (.cameraCutout, "Cutout", "person.fill")
+                    ]).frame(width: 156)
+                }
+                Row(label: "Corner") { LDropdown(sel: layoutBinding(currentLayout, \.corner),
                     options: WebcamLayout.Corner.allCases.map { ($0, $0.rawValue, "rectangle.inset.filled") }).frame(width: 130) }
-                SliderRow(label: "Size", v: layoutBinding(.cameraOverlay, \.size), range: 0.1...0.4)
-                Row(label: "Shape") { LSegmented(sel: layoutBinding(.cameraOverlay, \.shape),
+                SliderRow(label: "Size", v: layoutBinding(currentLayout, \.size), range: 0.1...0.4)
+                Row(label: "Shape") { LSegmented(sel: layoutBinding(currentLayout, \.shape),
                                                  items: [(.circle, "Circle"), (.roundRect, "Square")]).frame(width: 130) }
-                ToggleRow(label: "Mirror", on: layoutBinding(.cameraOverlay, \.mirror))
-                ToggleRow(label: "Border", on: layoutBinding(.cameraOverlay, \.border))
-                ToggleRow(label: "Auto framing", on: layoutBinding(.cameraOverlay, \.autoFrame))
+                ToggleRow(label: "Mirror", on: layoutBinding(currentLayout, \.mirror))
+                ToggleRow(label: "Border", on: layoutBinding(currentLayout, \.border))
+                ToggleRow(label: "Auto framing", on: layoutBinding(currentLayout, \.autoFrame))
+                ToggleRow(label: "Avoid cursor", on: layoutBinding(currentLayout, \.avoidCursor))
+                ToggleRow(label: "Hide during silence", on: layoutBinding(currentLayout, \.hideOnSilence))
+                ToggleRow(label: "Shadow", on: layoutBinding(currentLayout, \.shadow))
             }.card(padding: 16)
             VStack(spacing: 0) {
                 Row(label: "Video polish") {
@@ -289,6 +317,25 @@ struct Inspector: View {
                         .frame(width: 168)
                 }
             }.card(padding: 16)
+        }
+    }
+
+    private var currentLayout: LayoutKind {
+        let t = model.timeline.timeMap.source(atOutput: model.playhead)
+        return model.timeline.layouts.last(where: { $0.start <= t && t < $0.end })?.kind ?? .cameraOverlay
+    }
+
+    private func applyLayout(_ kind: LayoutKind) {
+        let tm = model.timeline.timeMap
+        let t = tm.source(atOutput: model.playhead)
+        if var segment = model.timeline.layouts.last(where: { $0.start <= t && t < $0.end }) {
+            segment.kind = kind
+            model.dispatch(.setLayout(segment))
+        } else {
+            let end = model.timeline.layouts.filter { $0.start > t }.map(\.start).min() ?? tm.trimEnd
+            let start = model.timeline.layouts.isEmpty ? tm.trimStart : t
+            guard end > start else { return }
+            model.dispatch(.setLayout(LayoutSegment(start: start, end: end, kind: kind)))
         }
     }
 
@@ -575,7 +622,7 @@ struct Inspector: View {
                        items: WallpaperSource.allCases.map { ($0, $0.rawValue) })
                 .frame(maxWidth: .infinity)
             WallpaperGrid(choices: wallpaperSource == .painting ? choices : macChoices) { choice in
-                model.edit { timeline in timeline.style.setPhotoBackground(choice.url.path) }
+                model.setCanvasBackground(choice.url)
             }
             SliderRow(label: "Blur", v: model.bind(\.style.wallpaperBlur), range: 0...60, fmt: { "\(Int($0))" })
             SliderRow(label: "Opacity", v: model.bind(\.style.imageOpacity), range: 0...1, fmt: { "\(Int($0 * 100))%" })
@@ -599,10 +646,8 @@ struct Inspector: View {
         let currentPath = model.timeline.style.backgroundImagePath
         let choice = choices.first { $0.url.path == currentPath } ?? choices.first
         if model.timeline.style.background == .image, choice?.url.path == currentPath { return }
-        model.edit { style in
-            if let choice { style.style.setPhotoBackground(choice.url.path) }
-            else { style.style.background = .image }
-        }
+        if let choice { model.setCanvasBackground(choice.url) }
+        else if source == .macOS { model.edit { $0.style.background = .wallpaper } }
     }
 
     private struct WallpaperGrid: View {
