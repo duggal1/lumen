@@ -29,7 +29,10 @@ public struct ClickFX: Sendable, Equatable {
 public struct SFXCue: Sendable, Equatable {
     public enum Kind: Sendable { case click, whooshIn, whooshOut, key }
     public var t: Double; public var kind: Kind; public var gainDb: Double; public var keyCode: UInt16
-    public init(t: Double, kind: Kind, gainDb: Double, keyCode: UInt16 = 0) { self.t = t; self.kind = kind; self.gainDb = gainDb; self.keyCode = keyCode }
+    public var isKeyRelease: Bool
+    public init(t: Double, kind: Kind, gainDb: Double, keyCode: UInt16 = 0, isKeyRelease: Bool = false) {
+        self.t = t; self.kind = kind; self.gainDb = gainDb; self.keyCode = keyCode; self.isKeyRelease = isKeyRelease
+    }
 }
 
 /// Canvas-normalized layout (top-left origin). 12 floats packed so one spring drives all of them.

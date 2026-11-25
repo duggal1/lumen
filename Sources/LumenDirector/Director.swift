@@ -318,8 +318,38 @@ public enum Director {
                 cues += clicks.map { SFXCue(t: $0.t, kind: .click, gainDb: t.audio.clickGainDb) }
             }
             if t.audio.keySounds {
-                cues += input.events.filter { $0.kind == .keyDown && !tm.isCut($0.t) }
-                    .map { SFXCue(t: tm.output(atSource: $0.t), kind: .key, gainDb: 0, keyCode: $0.keyCode) }
+                // One physical press/release pair, independent of OS autorepeat.
+                var held = Set<UInt16>()
+                for event in input.events {
+                    let release: Bool
+                    switch event.kind {
+                    case .keyDown:
+                        guard held.insert(event.keyCode).inserted else { continue }
+                        release = false
+                    case .keyUp:
+                        guard held.remove(event.keyCode) != nil else { continue }
+                        release = true
+                    case .flagsChanged:
+                        // Old recordings did not persist the modifier keycode.
+                        guard [54, 55, 56, 57, 58, 59, 60, 61, 62, 63].contains(Int(event.keyCode)) else { continue }
+                        let mask: UInt16
+                        switch event.keyCode {
+                        case 54, 55: mask = 0x10
+                        case 56, 60: mask = 0x02
+                        case 57: mask = 0x01
+                        case 58, 61: mask = 0x08
+                        case 59, 62: mask = 0x04
+                        default: mask = 0x80
+                        }
+                        if held.remove(event.keyCode) != nil { release = true }
+                        else if event.flags & mask != 0 { held.insert(event.keyCode); release = false }
+                        else { continue }
+                    default: continue
+                    }
+                    guard event.t.isFinite, !tm.isCut(event.t) else { continue }
+                    cues.append(SFXCue(t: tm.output(atSource: event.t), kind: .key, gainDb: 0,
+                                       keyCode: event.keyCode, isKeyRelease: release))
+                }
             }
         }
         if t.audio.soundEffectsEnabled && t.audio.whooshes {

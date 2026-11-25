@@ -14,7 +14,7 @@ struct ProcessedVoiceCache {
     /// Full-program mix cache. Keyed by revision + exact settings + time map.
     /// Bumped when key samples were trimmed to their acoustic attack: an older
     /// cached mix still carries the pre-strike silence and must not be reused.
-    static let mixRevision = "mix-v5-attack-aligned"
+    static let mixRevision = "mix-v6-physical-key-edges"
 
     private struct Settings: Encodable {
         let noiseStrength: Double

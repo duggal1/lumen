@@ -662,12 +662,13 @@ public final class AudioMixer: @unchecked Sendable {
         // every sample of a 1.4 s-per-pack decode (and resampling it) before
         // the cue loop made a silent project pay the full cost of a typing
         // pack it would never use; the first audible window paid it too.
-        var typingBuffersCache: [Int: [Float]]?
-        func typingBuffers() -> [Int: [Float]] {
-            if let cached = typingBuffersCache { return cached }
+        var typingBuffersCache: [Bool: [Int: [Float]]] = [:]
+        func typingBuffers(release: Bool) -> [Int: [Float]] {
+            if let cached = typingBuffersCache[release] { return cached }
             var buffers: [Int: [Float]] = [:]
             if a.keySounds, let directory = TypingPackLoader.dir(for: a.typingPackId) {
-                for (code, buffer) in TypingPackLoader.buffers(in: directory) {
+                let loaded = release ? TypingPackLoader.releaseBuffers(in: directory) : TypingPackLoader.buffers(in: directory)
+                for (code, buffer) in loaded {
                     guard let channel = buffer.floatChannelData?[0] else { continue }
                     let raw = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
                     // Mechvibes packs ship at 44.1 kHz; the timeline runs at 48 kHz.
@@ -677,7 +678,7 @@ public final class AudioMixer: @unchecked Sendable {
                     buffers[code] = pcm.map { $0 / peak }
                 }
             }
-            typingBuffersCache = buffers
+            typingBuffersCache[release] = buffers
             return buffers
         }
         for cue in d.cues {
@@ -691,29 +692,21 @@ public final class AudioMixer: @unchecked Sendable {
             let buf: [Float]
             if cue.kind == .key {
                 guard a.keySounds else { continue }
-                // Prefer the pack's exact sample for this key. If the pack does not
-                // define one, pick deterministically among available samples so
-                // different keys don't collapse to the same sound.
-                let pack = typingBuffers()
-                let packCodes = Set(pack.keys)
-                let code = TypingPackLoader.packCode(for: Int(cue.keyCode), definedIn: packCodes)
+                let pack = typingBuffers(release: cue.isKeyRelease)
+                let key = Int(cue.keyCode), codes = Set(pack.keys)
+                let code = TypingPackLoader.packCode(for: key, definedIn: codes)
+                    ?? TypingPackLoader.fallbackCode(for: key, definedIn: codes)
                 let samples: [Float]
-                if let code, let exact = pack[code] {
-                    samples = exact
-                } else if !pack.isEmpty {
-                    let availableCodes = pack.keys.sorted()
-                    let pick = availableCodes[Int(bitPattern: UInt(bitPattern: Int(cue.keyCode))) % availableCodes.count]
-                    samples = pack[pick] ?? []
-                } else {
-                    samples = bank.render(.key).samples
-                }
+                if let code, let exact = pack[code] { samples = exact }
+                else if cue.isKeyRelease { continue }
+                else { samples = bank.render(.key).samples }
+                guard !samples.isEmpty else { continue }
                 let gap = prevKeyT.map { cue.t - $0 } ?? 1
-                let gain: Float = gap < 0.05 ? 0.7 : gap < 0.15 ? 0.85 : 1
-                // Typing has its own level; the general sfx gain does not stack on it.
-                let amplitude = Float(pow(10, (a.typingLevelDb + cue.gainDb + 2) / 20)) * gain
-                let source = samples.isEmpty ? bank.render(.key).samples : samples
-                buf = source.map { $0 * amplitude }
-                prevKeyT = cue.t
+                let cadence: Float = gap < 0.05 ? 0.82 : gap < 0.15 ? 0.92 : 1
+                let releaseLevel: Float = cue.isKeyRelease ? 0.45 : 1
+                let amplitude = Float(pow(10, (a.typingLevelDb + cue.gainDb) / 20)) * cadence * releaseLevel
+                buf = samples.map { $0 * amplitude }
+                if !cue.isKeyRelease { prevKeyT = cue.t }
             } else {
                 let (b, gain) = bank.render(cue.kind, clickTone: a.clickTone)
                 // SFXBank renders zero samples for stale whoosh cues, so no
@@ -721,7 +714,7 @@ public final class AudioMixer: @unchecked Sendable {
                 let amp = Float(pow(10, (a.sfxGainDb + cue.gainDb + gain) / 20))
                 buf = b.map { $0 * amp }
             }
-            let s0 = Int(cue.t * fs)
+            let s0 = Int((cue.t * fs).rounded())
             for (k, v) in buf.enumerated() where s0 + k >= 0 && s0 + k < n {
                 L[s0 + k] += v; R[s0 + k] += v
             }
@@ -747,7 +740,7 @@ public final class AudioMixer: @unchecked Sendable {
             for cue in derived.cues {
                 let isKey: Int
                 switch cue.kind { case .key: isKey = 1; default: isKey = 0 }
-                hash.update(data: Data("\(cue.t)|\(cue.gainDb)|\(cue.keyCode)|\(isKey)".utf8))
+                hash.update(data: Data("\(cue.t)|\(cue.gainDb)|\(cue.keyCode)|\(isKey)|\(cue.isKeyRelease)|\(cue.kind)".utf8))
             }
             // The duck envelope is derived audio: a different envelope means a
             // different music bed, so it belongs in the identity.
