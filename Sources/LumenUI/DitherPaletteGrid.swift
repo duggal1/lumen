@@ -24,7 +24,7 @@ struct DitherPaletteGrid: View {
                                        saturation: model.timeline.style.ditherSaturation)
                             .aspectRatio(1.6, contentMode: .fit)
                             .clipShape(RoundedRectangle(cornerRadius: Radius.field))
-                            .tileSelection(selected)
+                            .overlay(alignment: .topTrailing) { if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(.white).padding(5) } }
                         Text(palette.0)
                             .font(AppType.caption)
                             .foregroundStyle(TileSelection.ink(selected))

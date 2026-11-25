@@ -124,7 +124,7 @@ struct EditorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
                 if showsInspector {
-                    Inspector(model: model, tab: $inspectorTab, width: 320)
+                    Inspector(model: model, tab: $inspectorTab, width: 360)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -133,7 +133,8 @@ struct EditorView: View {
                 .padding(.bottom, 16)
                 .frame(maxWidth: .infinity)
         }
-        .background(Tok.bg)
+        .background(StudioInk.rail)
+        .onChange(of: model.exportPanelRequest) { _, _ in showsInspector = true; inspectorTab = .export }
         .overlay {
             if showsCursorSkins {
                 CursorSkinChooser(model: model) { showsCursorSkins = false }
