@@ -152,6 +152,17 @@ public final class ProjectSession: @unchecked Sendable {
     }
 
     @discardableResult
+    /// Compare the generation and publish under the same lock ordering.
+    /// A superseded worker cannot write its evidence into a newer request.
+    @discardableResult
+    private func applyAnalysis(_ sequence: Int, _ body: (inout DirectorInput) -> Void) -> Bool {
+        analysisSequence.withLock { current in
+            guard current == sequence else { return false }
+            inputState.withLock { body(&$0) }
+            return true
+        }
+    }
+
     public func analyze(_ timeline: Timeline, privacyProgress: @escaping @Sendable (Double) -> Void = { _ in },
                         onTyping: @escaping @Sendable () -> Void = {},
                         onActivity: @escaping @Sendable () -> Void = {},
@@ -179,33 +190,31 @@ public final class ProjectSession: @unchecked Sendable {
         request.sourceDuration = meta.source.duration
         request.privacyProgress = privacyProgress
         let result = await AnalysisService.shared.run(request, onTyping: { [self] result in
-            guard !Task.isCancelled, analysisSequence.withLock({ $0 == sequence }), result.errors["typing"] == nil else { return }
-            inputState.withLock { $0.typing = result.typing }
+            guard !Task.isCancelled, result.errors["typing"] == nil,
+                  applyAnalysis(sequence, { $0.typing = result.typing }) else { return }
             onTyping()
         }, onPrivacy: { [self] result in
             // Privacy fails closed: whatever the scan found is published even
             // when the analysis was cancelled, because a cancelled scan still
             // knows about every secret it detected so far. Only a newer
             // analysis (a higher sequence) may discard it.
-            guard analysisSequence.withLock({ $0 == sequence }) else { return }
-            inputState.withLock { $0.ocr = result.ocr }
+            guard applyAnalysis(sequence, { $0.ocr = result.ocr }) else { return }
             onPrivacy(result.errors["ocr"])
         }, onPrivacyStart: {
             guard self.analysisSequence.withLock({ $0 == sequence }) else { return }
             onPrivacyStart()
         }, onActivity: { [self] result in
-            guard !Task.isCancelled, analysisSequence.withLock({ $0 == sequence }) else { return }
-            inputState.withLock { current in
+            guard !Task.isCancelled, applyAnalysis(sequence, { current in
                 current.activity = result.activity
                 if let grids = result.activityGrids?.grids {
                     current.activityGrids = grids.map { ActivityGrid(t: $0.t, cells: $0.cells) }
                 }
-            }
+            }) else { return }
             onActivity()
         })
         guard !Task.isCancelled else { return result }
         let appliedRequest = request
-        inputState.withLock { current in
+        applyAnalysis(sequence) { current in
             if result.errors["face"] == nil, meta.webcam != nil { current.face = result.face }
             if result.errors["activity"] == nil, appliedRequest.includeActivity { current.activity = result.activity }
             // F2: grids feed auto-zoom even when the legacy includeActivity flag is off.

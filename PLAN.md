@@ -303,3 +303,5 @@ The user requested validation of the entire backend, not another camera-only rew
 8. Record exact SHA, logs, measurements, real runtime evidence and residual limitations. Keep draft and unmerged until the evidence passes.
 
 No claim of flawless behavior or completion is made. The original 201-step checklist is retained; implementation-only steps are not marked verified.
+
+Additional audit repairs: Exporter now propagates cancellation into its mixer, reports reader/encoder failures rather than silently dropping audio, and stages GIF files before replacing the destination. ProjectSession now publishes analysis evidence only while holding the matching generation lock, including the final result. These code changes are not yet validated by the new CI run. Multi-file export sidecar atomicity, real hardware capture/recovery, and long-recording mastering remain open.
