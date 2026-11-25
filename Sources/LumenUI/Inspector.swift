@@ -112,7 +112,7 @@ struct Inspector: View {
         }
         .frame(width: width)
         .frame(maxHeight: .infinity)
-        .preferredColorScheme(.dark)
+        .environment(\.colorScheme, .dark)
         .environment(\.studioHue, Self.hue(tab))
     }
 
@@ -159,14 +159,14 @@ struct Inspector: View {
                 StudioRow(label: "Canvas") {
                     StudioPicker(sel: m.bind(\.style.canvas), options: CanvasAspect.allCases.map { ($0, $0.title, Self.canvasIcon($0)) }).frame(width: 130)
                 }
-                StudioSliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" })
+                StudioSliderRow(label: "Video size", v: m.bind(\.style.contentScale), range: 0.5...2.0, fmt: { "\(Int($0 * 100))%" }, live: true)
                 if m.timeline.style.paddingInsets == nil {
                     StudioSliderRow(label: "Padding", v: m.bind(\.style.padding), range: 0...0.2, fmt: { "\(Int($0 * 100))%" })
                 }
-                StudioSliderRow(label: "Radius", v: m.bind(\.style.cornerRadius), range: 0...40, fmt: { "\(Int($0))" })
+                StudioSliderRow(label: "Radius", v: m.bind(\.style.cornerRadius), range: 0...40, fmt: { "\(Int($0))" }, live: true)
                 StudioToggleRow(label: "Frame", on: m.bind(\.style.innerBorder))
                 if m.timeline.style.innerBorder {
-                    StudioSliderRow(label: "Weight", v: m.bind(\.style.frameWeight), range: 0...4, fmt: { "\(Int($0)) pt" })
+                    StudioSliderRow(label: "Weight", v: m.bind(\.style.frameWeight), range: 0...4, fmt: { "\(Int($0)) pt" }, live: true)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
             StudioSection("Background") {
@@ -180,16 +180,16 @@ struct Inspector: View {
                 switch m.timeline.style.background {
                 case .canvas:
                     CanvasPresetGrid(model: m)
-                    StudioSliderRow(label: "Motion speed", v: m.bind(\.style.canvasSpeed), range: 0...2)
+                    StudioSliderRow(label: "Motion speed", v: m.bind(\.style.canvasSpeed), range: 0...2, live: true)
                 case .solid, .gradient, .dither, .mesh:
                     DitherPaletteGrid(model: m, kind: m.timeline.style.background)
                 case .wallpaper:
-                    StudioSliderRow(label: "Blur", v: m.bind(\.style.wallpaperBlur), range: 0...60)
+                    StudioSliderRow(label: "Blur", v: m.bind(\.style.wallpaperBlur), range: 0...60, live: true)
                 case .image:
                     wallpaperList
                     StudioButton(title: "Import image", icon: "photo.badge.plus", kind: .secondary) { m.importCanvasBackground() }
                 }
-                StudioSliderRow(label: "Shadow", v: m.bind(\.style.shadow), range: 0...1)
+                StudioSliderRow(label: "Shadow", v: m.bind(\.style.shadow), range: 0...1, live: true)
             }.frame(maxWidth: .infinity, alignment: .leading)
             if !presets.isEmpty {
                 VStack(alignment: .leading, spacing: Space.s2) {
@@ -655,10 +655,10 @@ struct Inspector: View {
             WallpaperGrid(choices: wallpaperSource == .painting ? choices : macChoices) { choice in
                 model.setCanvasBackground(choice.url)
             }
-            StudioSliderRow(label: "Blur", v: model.bind(\.style.wallpaperBlur), range: 0...60, fmt: { "\(Int($0))" })
-            StudioSliderRow(label: "Opacity", v: model.bind(\.style.imageOpacity), range: 0...1, fmt: { "\(Int($0 * 100))%" })
-            StudioSliderRow(label: "Contrast", v: model.bind(\.style.imageContrast), range: 0...2, fmt: { "\(Int($0 * 100))%" })
-            StudioSliderRow(label: "Brightness", v: model.bind(\.style.imageBrightness), range: 0...2, fmt: { "\(Int($0 * 100))%" })
+            StudioSliderRow(label: "Blur", v: model.bind(\.style.wallpaperBlur), range: 0...60, fmt: { "\(Int($0))" }, live: true)
+            StudioSliderRow(label: "Opacity", v: model.bind(\.style.imageOpacity), range: 0...1, fmt: { "\(Int($0 * 100))%" }, live: true)
+            StudioSliderRow(label: "Contrast", v: model.bind(\.style.imageContrast), range: 0...2, fmt: { "\(Int($0 * 100))%" }, live: true)
+            StudioSliderRow(label: "Brightness", v: model.bind(\.style.imageBrightness), range: 0...2, fmt: { "\(Int($0 * 100))%" }, live: true)
         }
         .padding(.top, 8)
     }

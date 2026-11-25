@@ -113,9 +113,9 @@ struct TimelineDitherTests {
             #expect(strip.contains(overlay), "\(overlay) survives the dither theme")
         }
         let host = try String(contentsOf: root.appendingPathComponent("Sources/LumenUI/TimelineDitherView.swift"), encoding: .utf8)
-        #expect(host.contains("settled >= 2"), "the display loop stops at rest")
+        #expect(host.contains("guard snapshot != lastDrawn else { stop(); return }"), "unchanged snapshots stop immediately")
         #expect(host.contains("accessibilityDisplayShouldReduceMotion") == false)
         #expect(host.contains("frame.reduced") == false)
-        #expect(host.contains("snapshot.reduced"))
+        #expect(host.contains("next.dt = 0; next.t = 0"), "wall time does not invalidate static cells")
     }
 }

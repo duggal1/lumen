@@ -52,3 +52,10 @@ At 960×640, 1280×820, 1440×900 and Retina: no clipped control values, no hori
 
 ### 11. Evidence policy
 Record exact commit and CI run. Distinguish implemented, compiled, tested, physically observed, and merged. Do not call UI pixel-perfect without native screenshots. No assertion that old backend reconstruction is complete. No fake assets or unsupported claims.
+
+### 12. Implemented evidence and pending checks
+- 9995b4d: deleted particle simulation and glow allocations, invalidation-based raster, fixed existing duplicate attribute and Sendable compiler diagnostics.
+- e97ea24: scoped Precision Rail, flat native controls, static canvas thumbnails, lazy thumbnail cache, export progress.
+- 9326203: persisted pointer ink with legacy default and shared atlas support; adapted old tests that explicitly required particles to assert deterministic cells instead.
+- Follow-up: finer symmetric voice grid, migrated music page controls, routed cursor toolbar into the rail, live cheap visual slider bindings and updated display scheduling tests.
+- Remaining: real macOS build, runtime inspection, frame timing, actual export, asset selection fidelity and full regression suite. Current CI must be read against exact HEAD. No claim of physical validation.

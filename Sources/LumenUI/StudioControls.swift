@@ -99,7 +99,7 @@ struct StudioButton: View {
                 Text(title).font(AppType.label).lineLimit(1)
             }.foregroundStyle(kind == .primary ? StudioInk.rail : StudioInk.text)
                 .padding(.horizontal, 9).frame(minHeight: height)
-        }.buttonStyle(StudioControlStyle(primary: kind == .primary)).clickable().help(title)
+        }.buttonStyle(StudioControlStyle(primary: kind == .primary)).clickable().focusRing().help(title)
     }
 }
 struct StudioPicker<T: Hashable>: View {
@@ -115,7 +115,7 @@ struct StudioPicker<T: Hashable>: View {
                 Spacer(minLength: 2)
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(StudioInk.secondary)
             }.font(AppType.body).foregroundStyle(StudioInk.text).padding(.horizontal, 8).frame(height: 29)
-        }.buttonStyle(StudioControlStyle()).clickable()
+        }.buttonStyle(StudioControlStyle()).clickable().focusRing()
         .background(GeometryReader { g in
             Color.clear.onAppear { anchor = g.frame(in: .named("root")) }.onChange(of: g.frame(in: .named("root"))) { _, v in anchor = v }
         })
@@ -156,6 +156,7 @@ struct StudioToggleRow: View {
 struct StudioSliderRow: View {
     let label: String; @Binding var v: Double; let range: ClosedRange<Double>
     var fmt: (Double) -> String = { String(format: "%.2f", $0) }
+    var live = false
     @GestureState private var drag: Double?
     @Environment(\.studioHue) private var hue
     var body: some View {
@@ -180,6 +181,8 @@ struct StudioSliderRow: View {
                 }.contentShape(Rectangle())
                     .gesture(DragGesture(minimumDistance: 0).updating($drag) { event, state, _ in
                         state = range.lowerBound + Double(min(max(event.location.x / max(g.size.width, 1), 0), 1)) * (range.upperBound-range.lowerBound)
+                    }.onChanged { event in
+                        if live { v = range.lowerBound + Double(min(max(event.location.x / max(g.size.width, 1), 0), 1)) * (range.upperBound-range.lowerBound) }
                     }.onEnded { event in
                         v = range.lowerBound + Double(min(max(event.location.x / max(g.size.width, 1), 0), 1)) * (range.upperBound-range.lowerBound)
                     })

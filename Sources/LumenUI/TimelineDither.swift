@@ -109,7 +109,7 @@ final class TimelineDitherRenderer {
 
     deinit { cells.deallocate() }
 
-    /// Rasterizes one frame into the three compositing layers.
+    /// Rasterizes one frame into deterministic cell and seam layers.
     @_optimize(speed)
     func draw(_ f: Frame) -> Output {
         let insetF = Float(Self.inset), topF = Float(Self.top), laneF = Float(Self.laneHeight)
@@ -137,17 +137,37 @@ final class TimelineDitherRenderer {
 
         for lane in 0..<Self.lanes {
             let owners = resolved[lane]
+            if lane == 3 {
+                // Preserve the lane's 40 pt height and 4 pt time lattice.
+                // A finer vertical amplitude grid makes the real waveform
+                // readable even at quiet levels, without inventing signal.
+                let cell = max(1, Int((1.5 * s).rounded()))
+                let gap = max(1, Int((2 * s).rounded()))
+                let middle = Int((topF + Float(lane) * laneF + laneF / 2) * s)
+                let maxSteps = max(1, Int((laneF / 2 - 2) * s) / gap)
+                let c = colors[4]
+                for col in 0..<cols {
+                    guard owners[col] >= 0, col < f.peaks.count, f.peaks[col].isFinite else { continue }
+                    let peak = min(max(f.peaks[col], 0), 1)
+                    let x = Int((insetF + Float(col) * pitch) * s) + dimOff
+                    let steps = Int((peak * Float(maxSteps)).rounded(.up))
+                    guard peak > 0.005, steps > 0 else {
+                        put(x, middle, cell, empty.r, empty.g, empty.b, 40)
+                        continue
+                    }
+                    for step in 0..<steps {
+                        let fraction = Float(step) / Float(max(maxSteps - 1, 1))
+                        let alpha: Float = 255 - 36 * fraction
+                        put(x, middle - (step + 1) * gap, cell, c.r, c.g, c.b, alpha)
+                        put(x, middle + step * gap, cell, c.r, c.g, c.b, alpha)
+                    }
+                }
+                continue
+            }
             for r in 0..<Self.rowsPerLane {
                 for col in 0..<cols {
                     var want = owners[col]
                     var base: Float = 1
-                    // Voice is a mirrored peak tape rather than a flat run.
-                    if lane == 3, want >= 0, col < f.peaks.count {
-                        let peak = f.peaks[col]
-                        let fromMid = abs(Float(r) - 4.5) / 4.5
-                        want = peak > 0.02 && fromMid <= peak ? want : -1
-                        base = 0.7 + 0.3 * peak
-                    }
                     // Clicks are one tall violet slat in the events band.
                     if lane == 2, f.clicks.contains(col) { want = 3; base = 1 }
 
@@ -165,7 +185,7 @@ final class TimelineDitherRenderer {
                     // Bright, mirrored audio amplitude; the other lanes keep
                     // their existing Bayer identity and media-role hues.
                     let threshold = Self.bayer[(r & 3) * 4 + (col & 3)]
-                    let level: Float = lane == 3 ? 0.96 : 0.64 + 0.22 * base
+                    let level: Float = 0.64 + 0.22 * base
                     if level > threshold || (f.playing && col == f.head) {
                         put(x0 + litOff, y0 + litOff, lit, c.r, c.g, c.b, 250)
                     } else {
@@ -174,7 +194,7 @@ final class TimelineDitherRenderer {
                 }
             }
         }
-        // The cell context are backed by the raw buffers above.
+        // The cell context is backed by the raw buffers above.
         // `makeImage()` is copy-on-write, so handing those images to the view
         // would leave CoreAnimation reading memory this renderer owns and
         // frees on replacement. Copy into contexts that own their storage:
