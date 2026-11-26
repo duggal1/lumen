@@ -159,12 +159,14 @@ public enum Director {
     public static func planRecordingZoom(events: [InputEvent], ax: [AXFrame],
                                          source: SourceInfo, timeline: Timeline,
                                          markers: [DirectorMarker] = []) -> [ZoomSegment] {
-        guard timeline.camera.autoZoom else { return timeline.zoom }
+        guard timeline.camera.autoZoom else { return timeline.zoom.filter { $0.origin == .manual } }
         let manual = timeline.zoom.filter { $0.origin == .manual }
         let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
-        return (manual + ZoomPlanner.planSegments(events: events, ax: ax, typing: [], activity: [],
-                                                   src: source, p: timeline.camera, tm: timeline.timeMap,
-                                                   avoid: avoid, markers: markers)).sorted { $0.start < $1.start }
+        let suppressed = Set(timeline.suppressedAuto)
+        let automatic = ZoomPlanner.planSegments(events: events, ax: ax, typing: [], activity: [],
+                                                  src: source, p: timeline.camera, tm: timeline.timeMap,
+                                                  avoid: avoid, markers: markers)
+        return (manual + automatic.filter { !suppressed.contains($0.id.uuidString) }).sorted { $0.start < $1.start }
     }
 
     /// Pure and deterministic: same input, same Timeline. Replaces only .auto zoom/ramps; .manual survive.
@@ -253,6 +255,8 @@ public enum Director {
             followPaths = planned.follow.mapValues { path in
                 path.map { (tm.output(atSource: $0.t), $0.p) }
             }
+        } else {
+            t.zoom.removeAll { $0.origin == .auto }
         }
         if cancelled() { return nil }
         let key = DeriveCache.CursorKey(style: t.cursor, taps: t.overlays.taps, timeMap: tm.signature,
@@ -597,7 +601,7 @@ extension Timeline {
         let cs = CursorSample(position: pos, velocity: vel, opacity: cf(cr(u.opacity, f), 0, 1), press: cr(u.press, f),
                               shape: u.shape[min(Int(f.rounded()), u.shape.count - 1)])
         var rings: [ClickRing] = []
-        if cursor.clickRing != nil, cursor.clickEffect != .none, !d.clicks.isEmpty {
+        if cursor.clickEffect != .none, !d.clicks.isEmpty {
             let dur = max(cursor.clickDuration, 0.05)
             // A click whose time is the frame time must exist on that frame.
             // Source→output time conversion leaves a few 1e-14 of error, so an
@@ -610,7 +614,7 @@ extension Timeline {
             // every frame; the ring list is the one array that grows there.
             rings.reserveCapacity(8)
             while i < d.clicks.count, d.clicks[i].t <= t + eps {
-                rings.append(ClickRing(position: SIMD2(d.clicks[i].x, d.clicks[i].y), progress: Float((t - d.clicks[i].t) / dur)))
+                rings.append(ClickRing(position: SIMD2(d.clicks[i].x, d.clicks[i].y), progress: Float(clamp((t - d.clicks[i].t) / dur, 0, 1))))
                 i += 1
             }
             // Cap alive ripples: rapid clicking cannot fan out past 8 feeds.

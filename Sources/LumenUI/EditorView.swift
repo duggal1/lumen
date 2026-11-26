@@ -15,8 +15,7 @@ public struct EditorRoot: View {
                 if let model { EditorView(model: model) }
                 else if failure != nil {
                     VStack(spacing: Space.s4) {
-                        Image(systemName: "exclamationmark.circle")
-                            .font(.system(size: 32)).foregroundStyle(Tok.text2)
+                        PixelSymbol("exclamationmark.circle", size: 32).foregroundStyle(Tok.text2)
                         Text("This recording can’t be opened")
                             .font(AppType.title).foregroundStyle(Tok.text)
                         Text("The video file wasn’t finished writing, so it can’t be played.")
@@ -77,13 +76,12 @@ struct EditorView: View {
     let model: EditorModel
     @State private var inspectorTab: Inspector.Tab = .studio
     @State private var showsInspector = true
-    @State private var showsCursorSkins = false
 
     var body: some View {
         VStack(spacing: 0) {
             PageBar(title: "Lumen Studio") {
                 HStack(spacing: 8) {
-                    LIconButton(icon: "cursorarrow", label: "Choose cursor skins") { showsCursorSkins = true }
+                    LIconButton(icon: "cursorarrow", label: "Choose cursor skins") { showsInspector = true; inspectorTab = .cursor }
                     LIconButton(icon: "sidebar.right", label: showsInspector ? "Hide inspector" : "Show inspector") {
                         showsInspector.toggle()
                     }
@@ -95,8 +93,7 @@ struct EditorView: View {
             // A recording without an event sidecar can never produce an
             // automatic zoom. Say so instead of showing an empty timeline.
             if model.session.input.events.isEmpty {
-                Label("No input events were recorded. Automatic zoom cannot be generated for this clip.",
-                      systemImage: "exclamationmark.triangle")
+                PixelSymbolLabel("No input events were recorded. Automatic zoom cannot be generated for this clip.", symbol: "exclamationmark.triangle")
                     .font(AppType.caption).foregroundStyle(Tok.accentText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16).padding(.vertical, 6)
@@ -124,7 +121,7 @@ struct EditorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
                 if showsInspector {
-                    Inspector(model: model, tab: $inspectorTab, width: 320)
+                    Inspector(model: model, tab: $inspectorTab, width: 360)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -133,14 +130,10 @@ struct EditorView: View {
                 .padding(.bottom, 16)
                 .frame(maxWidth: .infinity)
         }
-        .background(Tok.bg)
-        .overlay {
-            if showsCursorSkins {
-                CursorSkinChooser(model: model) { showsCursorSkins = false }
-            }
-        }
+        .background(StudioInk.rail)
+        .onChange(of: model.exportPanelRequest) { _, _ in showsInspector = true; inspectorTab = .export }
         .focusable().focusEffectDisabled()
-        .onKeyPress(.space) { guard !showsCursorSkins else { return .ignored }; model.togglePlay(); return .handled }
+        .onKeyPress(.space) { model.togglePlay(); return .handled }
         .onKeyPress(.delete) {
             if model.pendingCut != nil { model.commitPendingCut() } else { model.deleteSelected() }
             return .handled
@@ -242,6 +235,7 @@ struct EditorView: View {
             return "Cut \(fmt(p.start)) to \(fmt(p.end)) — \(String(format: "%.1fs", p.length)). Release to cut, Backspace cuts now, Esc discards."
         }
         if let issue = model.editIssue { return issue }
+        if model.isProvisionalAudio { return "Preview audio · Studio processing not yet ready" }
         if let id = model.selection {
             if let z = model.timeline.zoom.first(where: { $0.id == id }) {
                 return "Zoom \(String(format: "%.1f×", z.scale)) selected. Drag edges or body. Delete removes."

@@ -126,6 +126,23 @@ final class TextOverlayCache {
                                  opacity: frame.opacity)
     }
 
+    func shortcut(_ cue: ShortcutCue, time: Double, canvas: SIMD2<Int>, device: any MTLDevice) -> TextOverlaySprite? {
+        guard time >= cue.start, time < cue.end else { return nil }
+        let age = time - cue.start
+        let remaining = cue.end - time
+        let enter = min(max(age / 0.18, 0), 1)
+        let exit = min(max(remaining / 0.6, 0), 1)
+        let progress = min(enter * enter * (3 - 2 * enter), exit * exit * (3 - 2 * exit))
+        let fontSize = CGFloat(max(18, Double(min(canvas.x, canvas.y)) * 0.048))
+        guard let raster = texture(lines: [[TextPart(value: cue.label, color: RGBA(0xFFFFFF))]],
+                                   fontSize: fontSize, canvas: canvas, device: device) else { return nil }
+        return TextOverlaySprite(texture: raster.texture,
+                                 center: SIMD2(Float(canvas.x) * 0.5, Float(canvas.y) * 0.23),
+                                 opacity: Float(progress), scale: Float(0.97 + 0.03 * progress),
+                                 blur: Float((1 - progress) * 7),
+                                 card: TextCard(radius: Float(raster.padding), tint: SIMD4(0.025, 0.025, 0.025, 0.86)))
+    }
+
     private func mix(_ a: RGBA, _ b: RGBA, _ t: Double) -> RGBA {
         let f = Float(t)
         return RGBA(r: a.r + (b.r - a.r) * f, g: a.g + (b.g - a.g) * f,

@@ -46,7 +46,13 @@ public struct KeyPack: Decodable {
 
         /// Exact slice of the source recording that belongs to keyDown.
         public var downSlice: (start: Double, duration: Double)? {
-            guard let t = timing.first, t.count == 2, t[1] > t[0] else { return nil }
+            slice(at: 0)
+        }
+        public var upSlice: (start: Double, duration: Double)? { slice(at: 1) }
+        private func slice(at index: Int) -> (start: Double, duration: Double)? {
+            guard timing.indices.contains(index) else { return nil }
+            let t = timing[index]
+            guard t.count == 2, t[0].isFinite, t[1].isFinite, t[0] >= 0, t[1] > t[0] else { return nil }
             return (t[0], t[1] - t[0])
         }
     }
@@ -77,11 +83,15 @@ public struct KeyPack: Decodable {
 
 public func sliceBuffer(_ file: AVAudioFile, startMs: Double, durMs: Double) throws -> AVAudioPCMBuffer? {
     let sr = file.processingFormat.sampleRate
-    guard sr.isFinite, sr > 0 else { return nil }
-    let start = AVAudioFramePosition(max(0, startMs / 1000 * sr))
+    guard sr.isFinite, sr > 0, startMs.isFinite, durMs.isFinite, startMs >= 0, durMs > 0 else { return nil }
+    let position = startMs / 1000 * sr
+    guard position.isFinite, position < Double(file.length) else { return nil }
+    let start = AVAudioFramePosition(position.rounded(.down))
     let available = max(0, file.length - start)
-    let requested = AVAudioFrameCount(max(0, durMs / 1000 * sr))
-    let frames = min(requested, AVAudioFrameCount(available))
+    // Clamp before converting to integer; malformed pack metadata must not trap.
+    let requested = min(durMs / 1000 * sr, Double(available), Double(UInt32.max))
+    guard requested.isFinite, requested >= 1 else { return nil }
+    let frames = AVAudioFrameCount(requested.rounded(.down))
     guard frames > 0 else { return nil }
     guard let out = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else { return nil }
     file.framePosition = start
@@ -136,12 +146,19 @@ public enum TypingPackLoader {
         return v1Buffers(pack, in: packDir)
     }
 
-    private static func v2Buffers(_ pack: KeyPack, in packDir: URL) -> [Int: AVAudioPCMBuffer] {
+    /// Legacy packs have no independent release samples; never replay a press as a release.
+    public static func releaseBuffers(in packDir: URL) -> [Int: AVAudioPCMBuffer] {
+        guard let data = try? Data(contentsOf: packDir.appendingPathComponent("config.json")),
+              let pack = try? JSONDecoder().decode(KeyPack.self, from: data), pack.isV2 else { return [:] }
+        return v2Buffers(pack, in: packDir, release: true)
+    }
+
+    private static func v2Buffers(_ pack: KeyPack, in packDir: URL, release: Bool = false) -> [Int: AVAudioPCMBuffer] {
         guard let name = pack.audio_file else { return [:] }
         guard let f = try? AVAudioFile(forReading: packDir.appendingPathComponent(name)) else { return [:] }
         var out: [Int: AVAudioPCMBuffer] = [:]
         for (keyName, value) in pack.definitions {
-            guard let def = value, let slice = def.downSlice, let mac = mechvibesToMac[keyName] else { continue }
+            guard let def = value, let slice = release ? def.upSlice : def.downSlice, let mac = mechvibesToMac[keyName] else { continue }
             if let buf = try? sliceBuffer(f, startMs: slice.start, durMs: slice.duration) { out[mac] = trimmedToAttack(buf) }
         }
         // Fn (mac 63) has no W3C code upstream. Give it a real recorded modifier sound
@@ -275,6 +292,23 @@ public enum TypingPackLoader {
     /// Canonical pack code for a macOS keycode. When the pack defines the key the code is
     /// the keycode itself, giving every key — modifiers included — its own exact sample.
     /// `nil` means the pack has no sample; callers use one deterministic fallback, never silence.
+    /// Explicit physical-key families, never a random unrelated sound.
+    public static func fallbackCode(for key: Int, definedIn codes: Set<Int>) -> Int? {
+        let candidates: [Int]
+        switch key {
+        case 54, 55, 63: candidates = [55, 54]
+        case 56, 60: candidates = [56, 60]
+        case 58, 61: candidates = [58, 61]
+        case 59, 62: candidates = [59, 62]
+        case 36, 76: candidates = [36, 76]
+        case 49: candidates = [49]
+        case 51, 117: candidates = [51, 117]
+        case 123...126: candidates = [123, 124, 125, 126]
+        default: candidates = [0, 1, 2, 3]
+        }
+        return candidates.first { codes.contains($0) }
+    }
+
     public static func packCode(for macKeyCode: Int, definedIn codes: Set<Int>) -> Int? {
         guard codes.contains(macKeyCode) else { return nil }
         return macKeyCode

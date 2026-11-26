@@ -53,6 +53,7 @@ public enum Command: Codable, Sendable {
     case updateLoupe(Loupe)
     case addTapAtPlayhead(x: Double, y: Double), deleteTap(UUID), moveTap(tap: UUID, x: Double, y: Double, atSource: Double?)
     case addText(TextBlock), editText(UUID, String), deleteText(UUID)
+    case addAudioLane(AudioLane), updateAudioLane(UUID, AudioClipPatch), splitAudioLane(UUID, atOutput: Double, newID: UUID)
     case deleteAudioLane(UUID)
     case addClip(TimelineClip), deleteClip(UUID), moveClip(UUID, start: Double), trimClip(UUID, inPoint: Double, duration: Double)
     case splitClip(atOutput: Double), rippleDeleteClip(id: UUID), joinClips(ids: [UUID]),
@@ -192,7 +193,7 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         guard doubles.allSatisfy(\.isFinite) else { throw CommandError.invalid("non-finite activity settings") }
         t.activity = p.applying(to: t.activity)
         return [.zoom, .camera, .timeMap]
-    case .setAudio(let s): t.audio = s; return [.timeMap, .audio, .zoom, .camera]
+    case .setAudio(let s): t.audio = s.studioPolicy(); return [.timeMap, .audio, .zoom, .camera]
     case .setWebcam(let w): t.webcam = w; return [.webcam, .layout]
     case .setCaptions(let p): t.captions = p; return [.captions]
     case .setPrivacy(let p): t.overlays.privacy = p; return .masks
@@ -400,6 +401,21 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         guard let i = t.overlays.texts.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
         t.overlays.texts[i].text = String(value.prefix(500)); return .captions
     case .deleteText(let id): t.overlays.texts.removeAll { $0.id == id }; return .captions
+    case .addAudioLane(let lane):
+        guard !t.audio.lanes.contains(where: { $0.id == lane.id }) else { throw CommandError.invalid("duplicate audio clip id") }
+        try AudioClipEditing.validate(lane, duration: t.compositionDuration)
+        t.audio.lanes.append(lane); return .audio
+    case .updateAudioLane(let id, let patch):
+        guard let i = t.audio.lanes.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        var lane = t.audio.lanes[i]
+        patch.apply(to: &lane)
+        try AudioClipEditing.validate(lane, duration: t.compositionDuration)
+        t.audio.lanes[i] = lane; return .audio
+    case .splitAudioLane(let id, let at, let newID):
+        guard let i = t.audio.lanes.firstIndex(where: { $0.id == id }) else { throw CommandError.notFound(id) }
+        guard !t.audio.lanes.contains(where: { $0.id == newID }) else { throw CommandError.invalid("duplicate audio clip id") }
+        let pair = try AudioClipEditing.split(t.audio.lanes[i], at: at, newID: newID, projectDuration: t.compositionDuration)
+        t.audio.lanes.replaceSubrange(i...i, with: [pair.0, pair.1]); return .audio
     case .deleteAudioLane(let id): t.audio.lanes.removeAll { $0.id == id }; return .audio
 
     case .applyAutoTidy(let cuts):

@@ -14,6 +14,18 @@ public struct MixedAudio: Sendable {
     }
 }
 
+/// A bounded provisional PCM interval with an exact output-clock origin.
+public struct PreviewAudioWindow: Sendable {
+    public let startFrame: Int64
+    public let audio: MixedAudio
+    public var endFrame: Int64 { startFrame + Int64(audio.l.count) }
+    public var start: Double { Double(startFrame) / AudioIO.fs }
+    public var end: Double { Double(endFrame) / AudioIO.fs }
+    public init(startFrame: Int64, audio: MixedAudio) {
+        self.startFrame = startFrame; self.audio = audio
+    }
+}
+
 /// An isolated, unmastered 32-bit float audio stem for professional editors.
 /// Stems preserve the voice/system gain but do not duplicate effects or the
 /// combined master limiter. Recombining stems needs mastering in the NLE.
@@ -183,6 +195,11 @@ public final class AudioMixer: @unchecked Sendable {
     private var jobs: [String: VoiceJob] = [:]
     private var music: MusicCache?
     private var imported: [String: MusicTrack] = [:]
+    private var importOrder: [String] = []
+    private var importBytes = 0
+    private let importBudget = 48 * 1024 * 1024
+    private let keyBankLock = NSLock()
+    private var keyBank: [String: [Int: [Float]]] = [:]
     private var customDenoiser: (any Denoiser)?
 
     public var denoiser: any Denoiser {
@@ -414,13 +431,28 @@ public final class AudioMixer: @unchecked Sendable {
     private func importTrack(_ path: String) -> MusicTrack? {
         state.lock()
         let cached = imported[path]
+        if cached != nil { importOrder.removeAll { $0 == path }; importOrder.append(path) }
         state.unlock()
         if let cached { return cached }
         guard let (l, r) = try? AudioIO.readStereo(URL(fileURLWithPath: path)),
               !l.isEmpty, l.count == r.count else { return nil }
         let result = MusicTrack(l: l, r: r)
         state.lock()
-        imported[path] = result
+        let cost = (l.count + r.count) * MemoryLayout<Float>.stride
+        if cost <= importBudget {
+            if let previous = imported.removeValue(forKey: path) {
+                importBytes -= (previous.l.count + previous.r.count) * MemoryLayout<Float>.stride
+            }
+            importOrder.removeAll { $0 == path }
+            while importBytes > importBudget - cost, !importOrder.isEmpty {
+                let evicted = importOrder.removeFirst()
+                if let track = imported.removeValue(forKey: evicted) {
+                    importBytes -= (track.l.count + track.r.count) * MemoryLayout<Float>.stride
+                }
+            }
+            imported[path] = result
+            importOrder.append(path); importBytes += cost
+        }
         state.unlock()
         return result
     }
@@ -431,7 +463,9 @@ public final class AudioMixer: @unchecked Sendable {
     /// A bounded render keeps the fade-in and drops the fade-out, so the prefix
     /// of the music bed is the same signal the full mix will have.
     static func fit(_ m: MusicTrack, n: Int, fadeOut: Bool = true) -> ([Float], [Float]) {
-        let fs = AudioIO.fs, xf = Int(0.5 * fs), len = m.l.count
+        let fs = AudioIO.fs, len = m.l.count
+        let xf = min(Int(0.5 * fs), len / 2)
+        guard len > 0, m.r.count == len else { return ([Float](repeating: 0, count: n), [Float](repeating: 0, count: n)) }
         var L = [Float](repeating: 0, count: n), R = L, i = 0
         while i < n {
             let c = min(len, n - i)
@@ -505,21 +539,25 @@ public final class AudioMixer: @unchecked Sendable {
         }
 
         var voiceIndex = 0
-        for lane in a.lanes where lane.role == .voiceover && !lane.mute {
+        for lane in a.lanes where (lane.role == .voiceover || lane.role == .sfx) && !lane.mute {
             guard let path = lane.path, let track = importTrack(path) else { continue }
             voiceIndex += 1
             var left = [Float](repeating: 0, count: n), right = left
-            let start = max(0, Int(lane.placement * fs))
-            guard start < n else { continue }
-            let count = min(track.l.count, n - start)
+            guard lane.placement.isFinite, lane.placement >= 0, lane.placement < Double(n) / fs else { continue }
+            let start = Int(lane.placement * fs)
+            let available = min(track.l.count, track.r.count)
+            let trim = lane.trimStart.flatMap { $0.isFinite ? max($0, 0) : nil } ?? 0
+            let source = Int(min(trim * fs, Double(available)))
+            let length = lane.trimDuration.flatMap { $0.isFinite ? max($0, 0) : nil }
+            let count = min(n - start, length.map { Int(min($0 * fs, Double(available - source))) } ?? available - source)
             let gain = Float(pow(10, clamp(lane.gainDb, -60, 24) / 20))
             let fade = min(Int(fs * 0.01), count / 2)
             for i in 0..<count {
                 let edge = fade > 0 ? min(1, Float(min(i, count - i - 1)) / Float(fade)) : 1
-                left[start + i] = track.l[i] * gain * edge
-                right[start + i] = track.r[i] * gain * edge
+                left[start + i] = track.l[source + i] * gain * edge
+                right[start + i] = track.r[source + i] * gain * edge
             }
-            result.append(AudioStem(name: "voiceover-\(voiceIndex)", left: left, right: right))
+            result.append(AudioStem(name: "\(lane.role.rawValue)-\(voiceIndex)", left: left, right: right))
         }
         let (beds, bedTracks) = musicBeds(tl)
         if !beds.isEmpty {
@@ -566,7 +604,7 @@ public final class AudioMixer: @unchecked Sendable {
         if a.micMode != .off, micURL != nil || mic != nil || extraCount() > 0 { return true }
         if sys != nil || systemURL != nil { return true }
         if a.musicPath != nil { return true }
-        if a.lanes.contains(where: { !$0.mute && $0.path != nil && ($0.role == .voiceover || $0.role == .music) }) { return true }
+        if a.lanes.contains(where: { !$0.mute && $0.path != nil && ($0.role == .voiceover || $0.role == .music || $0.role == .sfx) }) { return true }
         if a.soundEffectsEnabled, let cues = tl.derived?.cues, !cues.isEmpty { return true }
         return false
     }
@@ -611,10 +649,10 @@ public final class AudioMixer: @unchecked Sendable {
             for i in 0..<n { L[i] += l[i] * gain; R[i] += r[i] * gain }
             hasProgram = true
         }
-        for lane in a.lanes where !lane.mute && lane.role == .voiceover {
+        for lane in a.lanes where !lane.mute && (lane.role == .voiceover || lane.role == .sfx) {
             guard let path = lane.path, let track = importTrack(path) else { continue }
-            let offset = Int(max(0, lane.placement) * fs)
-            guard offset < n else { continue }
+            guard lane.placement.isFinite, lane.placement >= 0, lane.placement < Double(n) / fs else { continue }
+            let offset = Int(lane.placement * fs)
             let sourceCount = min(track.l.count, track.r.count)
             let trimStart = lane.trimStart.flatMap { $0.isFinite ? max($0, 0) : nil } ?? 0
             let sourceOffset = Int(min(trimStart * fs, Double(sourceCount)))
@@ -683,9 +721,170 @@ public final class AudioMixer: @unchecked Sendable {
                                             router: &router, settings: settings, frames: n)
             for i in 0..<n { L[i] += sfx.l[i]; R[i] += sfx.r[i] }
         }
+    }
 
-        Self.silenceClips(tl, &L, &R, fs: fs)
-        return AudioMaster.process([L, R], plan: a, hasProgram: hasProgram)
+    /// Fast, bounded raw program for any seek position, while the canonical
+    /// enhanced mix is produced independently. Every sample is evaluated on
+    /// the same output clock; no decode from the beginning of a long file.
+    public func previewWindow(_ tl: Timeline, at time: Double, seconds: Double = 4,
+                              cancelled: (@Sendable () -> Bool)? = nil) -> PreviewAudioWindow? {
+        let fs = AudioIO.fs
+        guard time.isFinite, seconds.isFinite, seconds > 0, tl.compositionDuration.isFinite else { return nil }
+        let startFrame = Int64((max(time, 0) * fs).rounded())
+        let total = Int64((max(tl.compositionDuration, 0) * fs).rounded(.up)) + 1
+        let count = Int(min(Int64(clamp(seconds, 0.25, 6) * fs), max(total - startFrame, 0)))
+        guard count > 0 else { return nil }
+        let start = Double(startFrame) / fs
+        let tm = tl.timeMap, a = tl.audio
+        var left = [Float](repeating: 0, count: count), right = left
+
+        func sample(_ samples: [Float], at position: Double) -> Float {
+            guard position.isFinite, position >= 0, position < Double(samples.count) else { return 0 }
+            let i = Int(position), next = min(i + 1, samples.count - 1)
+            return samples[i] + (samples[next] - samples[i]) * Float(position - Double(i))
+        }
+
+        // Cut seams split read ranges: a one-hour source cut never requires
+        // loading the skipped hour to play a four-second output window.
+        var boundaries = [0, count]
+        for cut in tm.cuts {
+            let position = Int((tm.output(atSource: cut.end) * fs).rounded()) - Int(startFrame)
+            if position > 0, position < count { boundaries.append(position) }
+        }
+        let block = Int(fs * 0.5)
+        if count > block { boundaries += Array(stride(from: block, to: count, by: block)) }
+        boundaries = Array(Set(boundaries)).sorted()
+
+        func mixRecorded(url: URL?, provided: [Float]?, providedRight: [Float]?, offset: Double,
+                         gainDb: Double, mono: Bool, muteRamps: Bool) {
+            guard url != nil || provided != nil else { return }
+            let gain = Float(pow(10, clamp(gainDb.isFinite ? gainDb : 0, -60, 24) / 20))
+            for segment in 0..<(boundaries.count - 1) {
+                if cancelled?() == true { return }
+                let lo = boundaries[segment], hi = boundaries[segment + 1]
+                let t0 = start + Double(lo) / fs
+                let t1 = start + Double(hi - 1) / fs
+                if t0 >= tm.outputDuration { continue }
+                let s0 = tm.source(atOutput: t0) - offset
+                let s1 = tm.source(atOutput: min(t1, tm.outputDuration)) - offset
+                let sourceLo = max(0, min(s0, s1) - 0.005), sourceHi = max(s0, s1) + 0.005
+                guard sourceHi > sourceLo, sourceHi - sourceLo <= 32 else { continue }
+                let decoded: (left: [Float], right: [Float], origin: Double)
+                if let provided { decoded = (provided, providedRight ?? provided, 0) }
+                else if let url, let data = try? AudioIO.readStereoWindow(url, from: sourceLo, to: sourceHi) { decoded = data }
+                else { continue }
+                let step = 48
+                var i = lo
+                while i < hi {
+                    let j = min(i + step, hi)
+                    let o0 = start + Double(i) / fs
+                    let o1 = start + Double(max(j - 1, i)) / fs
+                    if o0 >= tm.outputDuration { break }
+                    let first = tm.source(atOutput: o0) - offset
+                    let last = tm.source(atOutput: min(o1, tm.outputDuration)) - offset
+                    let speed = j > i + 1 ? (last - first) * fs / Double(j - i - 1) : 1
+                    if !(muteRamps && speed > 1.2) {
+                        for k in i..<j {
+                            let u = Double(k - i) / Double(max(j - i - 1, 1))
+                            let source = (first + (last - first) * u - decoded.origin) * fs
+                            let l = sample(decoded.left, at: source)
+                            let r = sample(decoded.right, at: source)
+                            if mono {
+                                let value = (l + r) * 0.5 * gain
+                                left[k] += value; right[k] += value
+                            } else {
+                                left[k] += l * gain; right[k] += r * gain
+                            }
+                        }
+                    }
+                    i = j
+                }
+            }
+        }
+        if a.micMode != .off {
+            mixRecorded(url: micURL, provided: mic, providedRight: nil, offset: micOffset,
+                        gainDb: a.micGainDb + a.voiceBoostDb, mono: true, muteRamps: a.muteMicInRamps)
+            for index in 0..<extraCount() {
+                let source = extraSource(index)
+                mixRecorded(url: source.url, provided: source.samples, providedRight: nil, offset: source.offset,
+                            gainDb: a.micGainDb + a.voiceBoostDb, mono: true, muteRamps: a.muteMicInRamps)
+            }
+        }
+        mixRecorded(url: systemURL, provided: sys, providedRight: sysRight, offset: sysOffset,
+                    gainDb: a.systemGainDb, mono: false, muteRamps: true)
+
+        // Imported voiceover is on the output clock. Read only its overlap.
+        for lane in a.lanes where (lane.role == .voiceover || lane.role == .sfx) && !lane.mute {
+            if cancelled?() == true { return nil }
+            guard let path = lane.path else { continue }
+            let trim = max(lane.trimStart ?? 0, 0)
+            let lo = max(start, lane.placement)
+            let hi = min(start + Double(count) / fs, lane.placement + (lane.trimDuration ?? tl.compositionDuration))
+            guard hi > lo, let data = try? AudioIO.readStereoWindow(URL(fileURLWithPath: path),
+                 from: lo - lane.placement + trim, to: hi - lane.placement + trim + 0.002) else { continue }
+            let gain = Float(pow(10, clamp(lane.gainDb, -60, 24) / 20))
+            for i in max(0, Int(((lo - start) * fs).rounded()))..<min(count, Int(((hi - start) * fs).rounded())) {
+                let pos = (start + Double(i) / fs - lane.placement + trim - data.origin) * fs
+                left[i] += sample(data.left, at: pos) * gain
+                right[i] += sample(data.right, at: pos) * gain
+            }
+        }
+
+        // The existing value-level music plan provides the same loop period,
+        // trim, fade and duck semantics without allocating the entire output.
+        let (beds, tracks) = musicBeds(tl)
+        for bed in beds {
+            guard let track = tracks[bed.id] else { continue }
+            let plan = MusicBed.plan(bed, track: track, outputSamples: Int(total), fs: fs)
+            guard plan.isRenderable else { continue }
+            let lo = max(Int(startFrame), plan.start), hi = min(Int(startFrame) + count, plan.start + plan.count)
+            guard hi > lo else { continue }
+            for output in lo..<hi {
+                let value = MusicBed.sample(plan, track: track, duck: tl.derived?.duck, at: output, fs: fs)
+                let i = output - Int(startFrame)
+                left[i] += value.left
+                right[i] += value.right
+            }
+        }
+        // Older projects store a single legacy music bed instead of lanes.
+        // Render only the requested overlap using its loop and duck settings.
+        if let mc = loadMusic(a.musicPath), let track = mc.track, !track.l.isEmpty, track.l.count == track.r.count {
+            let length = track.l.count
+            let xf = min(Int(0.5 * fs), length / 2)
+            let period = max(length - xf, 1)
+            let norm = mc.lufs > -60 ? clamp(Self.musicRefLUFS - mc.lufs, -24, 24) : 0
+            let gain = Float(pow(10, (norm + a.musicGainDb) / 20))
+            for k in 0..<count {
+                let output = Int(startFrame) + k
+                let cycle = output / period, phase = output % period
+                let overlap = cycle > 0 && phase < xf
+                let blend = overlap ? Float(phase) / Float(max(xf, 1)) : 1
+                let previous = phase + period
+                let fade = min(1, Float(output) / Float(0.3 * fs), Float(max(Int(total) - output, 0)) / Float(1.5 * fs))
+                let g = gain * fade * MusicBed.duckGain(tl.derived?.duck, atSample: output, fs: fs)
+                left[k] += (sample(track.l, at: Double(phase)) * blend + sample(track.l, at: Double(previous)) * (1 - blend)) * g
+                right[k] += (sample(track.r, at: Double(phase)) * blend + sample(track.r, at: Double(previous)) * (1 - blend)) * g
+            }
+        }
+        if cancelled?() == true { return nil }
+        renderCues(tl, startFrame: startFrame, left: &left, right: &right, cancelled: cancelled)
+        for clip in tl.clips {
+            let lo = max(Int((clip.start * fs).rounded()) - Int(startFrame), 0)
+            let hi = min(Int((clip.end * fs).rounded()) - Int(startFrame), count)
+            if hi > lo { for i in lo..<hi { left[i] = 0; right[i] = 0 } }
+        }
+        // No independent loudness normalization per window: it would cause
+        // obvious pumping at the rolling-window boundary. Only a safety limit.
+        let ceiling = Float(pow(10, -1.0 / 20))
+        let gain = Float(pow(10, clamp(a.outputGainDb, -60, 24) / 20))
+        for i in 0..<count {
+            let l = left[i] * gain, r = right[i] * gain
+            let peak = max(abs(l), abs(r))
+            let trim = peak > ceiling ? ceiling / peak : 1
+            left[i] = l.isFinite ? l * trim : 0; right[i] = r.isFinite ? r * trim : 0
+        }
+        return PreviewAudioWindow(startFrame: startFrame,
+                                  audio: MixedAudio(l: left, r: right, lufs: -120, truePeakDb: -1))
     }
 
     // MARK: Mix cache (exact, keyed by media identity + algorithm + settings + time map)
@@ -758,12 +957,24 @@ public final class AudioMixer: @unchecked Sendable {
     }
 }
 
-/// Preview playback of a pre-mixed buffer, started in lock-step with the host clock. `load` is safe from any thread.
+/// Bounded audio scheduling on the output timeline. Source preparation and
+/// playback are independent: a seek allocates at most four seconds of PCM,
+/// regardless of recording length. Queued buffers are never interrupted just
+/// because the processed mix became available.
 public final class PreviewAudioPlayer: @unchecked Sendable {
     private let engine = AVAudioEngine(), node = AVAudioPlayerNode(), previewNode = AVAudioPlayerNode()
-    private struct Buffer: @unchecked Sendable { let value: AVAudioPCMBuffer }
-    private let mixed = OSAllocatedUnfairLock<(audio: MixedAudio?, buffer: Buffer?)>(initialState: (nil, nil))
     private let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 2, interleaved: false)!
+    private struct State: Sendable {
+        var program: PreviewAudioWindow?
+        var queuedEnd: Int64 = 0
+        var queued = false
+        var lastL: Float = 0
+        var lastR: Float = 0
+        var bridgeNext = false
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private static let rate = 48000.0
+    private static let chunkFrames = 192000
 
     public init() {
         engine.attach(node); engine.attach(previewNode)
@@ -771,30 +982,30 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
         engine.connect(previewNode, to: engine.mainMixerNode, format: fmt)
     }
 
-    /// Hardware output latency (Bluetooth sinks are large). Used to schedule
-    /// audio so it is HEARD on the same host instant as the video frame.
     public var outputLatency: Double { engine.isRunning ? engine.outputNode.presentationLatency : 0 }
+    public var isLoaded: Bool { state.withLock { !($0.program?.audio.l.isEmpty ?? true) } }
+    public var duration: Double { state.withLock { $0.program?.end ?? 0 } }
+    public var queuedThrough: Double { state.withLock { Double($0.queuedEnd) / Self.rate } }
+    public var hasQueuedAudio: Bool { state.withLock { $0.queued } }
 
-    /// True once `load` has installed a non-empty mixed buffer. Transport
-    /// reads this to decide whether audio can start locked to video now,
-    /// or video must wait in a truthful preparing state.
-    public var isLoaded: Bool { mixed.withLock { $0.audio != nil && !($0.audio!.l.isEmpty) } }
-
-    /// Length of the loaded program in seconds.
-    public var duration: Double { mixed.withLock { $0.buffer.map { Double($0.value.frameLength) / 48000 } ?? 0 } }
-
-    /// Starts the engine early so a cold first click does not pay engine
-    /// startup latency inside the transport gap. Safe to call repeatedly.
+    public func contains(_ t: Double) -> Bool {
+        guard t.isFinite else { return false }
+        let f = Int64((max(t, 0) * Self.rate).rounded())
+        return state.withLock { guard let p = $0.program else { return false }; return f >= p.startFrame && f < p.endFrame }
+    }
     public func warm() { if !engine.isRunning { try? engine.start() } }
 
     /// Plays the selected click at the current click level without touching
     /// the timeline playback node, so the preview never desyncs transport.
+    public func stopClickPreview() { previewNode.stop() }
+
     public func previewClick(_ plan: AudioPlan) {
         guard plan.soundEffectsEnabled, plan.clickSounds else { return }
         let (samples, bankGain) = SFXBank().render(.click, clickTone: plan.clickTone)
         guard !samples.isEmpty,
               let buffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
-        let amp = Float(pow(10, (plan.sfxGainDb + plan.clickGainDb + bankGain) / 20))
+        let db = plan.sfxGainDb + plan.clickGainDb + bankGain
+        let amp = Float(pow(10, clamp(db.isFinite ? db : -9, -60, 0) / 20))
         buffer.frameLength = AVAudioFrameCount(samples.count)
         for i in samples.indices {
             buffer.floatChannelData![0][i] = samples[i] * amp
@@ -806,77 +1017,95 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
         previewNode.play()
     }
 
+
+    /// Installs an immutable final program without copying its entire PCM into
+    /// an AVAudioPCMBuffer. Existing queued raw audio plays to its boundary.
     public func load(_ m: MixedAudio?) {
-        var prepared: Buffer?
-        if let m, !m.l.isEmpty, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(m.l.count)) {
-            b.frameLength = AVAudioFrameCount(m.l.count)
-            m.l.withUnsafeBufferPointer { b.floatChannelData![0].update(from: $0.baseAddress!, count: m.l.count) }
-            m.r.withUnsafeBufferPointer { b.floatChannelData![1].update(from: $0.baseAddress!, count: m.r.count) }
-            prepared = Buffer(value: b)
+        state.withLock { s in
+            if s.queued { s.bridgeNext = true }
+            s.program = m.map { PreviewAudioWindow(startFrame: 0, audio: $0) }
         }
-        let ready = prepared
-        mixed.withLock { $0 = (m, ready) }
     }
 
-    private func buffer(from m: MixedAudio, start s: Int) -> AVAudioPCMBuffer? {
-        let count = m.l.count - s
-        guard count > 0, let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(count)) else { return nil }
-        b.frameLength = AVAudioFrameCount(count)
-        m.l.withUnsafeBufferPointer { b.floatChannelData![0].update(from: $0.baseAddress! + s, count: count) }
-        m.r.withUnsafeBufferPointer { b.floatChannelData![1].update(from: $0.baseAddress! + s, count: count) }
-        return b
+    public func loadWindow(_ window: PreviewAudioWindow) {
+        state.withLock { $0.program = window }
     }
 
-    /// Starts playback of output-time `t` at `atHostSeconds` (HostClock seconds).
+    private func makeBuffer(_ p: PreviewAudioWindow, start: Int64, bridge: (Float, Float)?) -> AVAudioPCMBuffer? {
+        let offset = Int(start - p.startFrame)
+        guard offset >= 0, offset < p.audio.l.count, p.audio.r.count == p.audio.l.count else { return nil }
+        let count = min(Self.chunkFrames, p.audio.l.count - offset)
+        guard count > 0, let buffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(count)),
+              let channels = buffer.floatChannelData else { return nil }
+        buffer.frameLength = AVAudioFrameCount(count)
+        p.audio.l.withUnsafeBufferPointer { channels[0].update(from: $0.baseAddress! + offset, count: count) }
+        p.audio.r.withUnsafeBufferPointer { channels[1].update(from: $0.baseAddress! + offset, count: count) }
+        if let bridge {
+            // Smooth the raw-to-master boundary; this is a short de-click
+            // bridge, not a time shift or overlapping duplicated content.
+            let fade = min(480, count)
+            for i in 0..<fade {
+                let w = Float(i + 1) / Float(fade)
+                channels[0][i] = bridge.0 * (1 - w) + channels[0][i] * w
+                channels[1][i] = bridge.1 * (1 - w) + channels[1][i] * w
+            }
+        }
+        return buffer
+    }
+
+    @discardableResult private func enqueue(start: Int64) -> Bool {
+        let snap = state.withLock { $0 }
+        guard let p = snap.program,
+              let buffer = makeBuffer(p, start: start, bridge: snap.bridgeNext ? (snap.lastL, snap.lastR) : nil),
+              let c = buffer.floatChannelData else { return false }
+        node.scheduleBuffer(buffer, at: nil, options: [], completionHandler: nil)
+        let count = Int(buffer.frameLength)
+        let l = c[0][count - 1], r = c[1][count - 1]
+        state.withLock {
+            $0.queuedEnd = start + Int64(count); $0.queued = true
+            $0.lastL = l; $0.lastR = r; $0.bridgeNext = false
+        }
+        return true
+    }
+
+    /// Appends exactly the next output interval. No duplicated/omitted samples
+    /// at a seek-window boundary. A superseded request cannot append.
+    @discardableResult public func appendWindow(_ window: PreviewAudioWindow) -> Bool {
+        let accepted = state.withLock { s -> Bool in
+            guard s.queued, s.queuedEnd == window.startFrame else { return false }
+            s.program = window
+            return true
+        }
+        return accepted && enqueue(start: window.startFrame)
+    }
+
+    @discardableResult public func refill() -> Bool {
+        let s = state.withLock { $0 }
+        guard s.queued else { return false }
+        return enqueue(start: s.queuedEnd)
+    }
+
     @discardableResult public func play(from t: Double, atHostSeconds h: Double) -> Double {
-        node.stop()
-        let snapshot = mixed.withLock { $0 }
-        guard let m = snapshot.audio else { return max(h, HostClock.now() + 0.03) }
-        let s = min(max(Int(t * 48000), 0), m.l.count), cnt = m.l.count - s
-        guard cnt > 0 else { return max(h, HostClock.now() + 0.03) }
-        let b: AVAudioPCMBuffer
-        if s == 0, let prepared = snapshot.buffer {
-            b = prepared.value
-        } else if let tail = buffer(from: m, start: s) {
-            b = tail
-        } else { return max(h, HostClock.now() + 0.03) }
-        if !engine.isRunning { do { try engine.start() } catch { return max(h, HostClock.now() + 0.03) } }
-        node.scheduleBuffer(b, at: nil, options: .interrupts, completionHandler: nil)
+        stop()
+        guard t.isFinite else { return h }
+        let startFrame = Int64((max(t, 0) * Self.rate).rounded())
+        if !engine.isRunning { do { try engine.start() } catch { return h } }
+        guard enqueue(start: startFrame) else { return h }
         let latency = outputLatency
         let start = max(h - latency, HostClock.now() + 0.005)
         node.play(at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: start)))
         return max(h, start + latency)
     }
 
-    /// Replaces the program with an exact mix at the content position that is
-    /// being heard right now, crossfading the head so the join has no step in
-    /// time or level. The video clock is never touched, so playback stays
-    /// continuous while the provisional window becomes the final program.
+    /// Compatibility entry point: the new program takes over the next
+    /// unscheduled sample, not the playhead from an earlier host instant.
     @discardableResult public func upgrade(to m: MixedAudio, atContent t: Double, crossfade: Double = 0.03) -> Bool {
-        let snapshot = mixed.withLock { $0 }
-        guard let old = snapshot.audio else { load(m); return false }
-        let s = min(max(Int(t * 48000), 0), min(old.l.count, m.l.count) - 1)
-        guard s >= 0, m.l.count > s else { load(m); return false }
-        guard let tail = buffer(from: m, start: s), let previous = buffer(from: old, start: s) else { load(m); return false }
-        let count = min(tail.frameLength, previous.frameLength)
-        let fade = min(Int(crossfade * 48000), Int(count))
-        if fade > 0 {
-            for ch in 0..<2 {
-                guard let a = tail.floatChannelData?[ch], let b = previous.floatChannelData?[ch] else { continue }
-                for i in 0..<fade {
-                    let w = Float(i) / Float(fade)
-                    a[i] = a[i] * w + b[i] * (1 - w)
-                }
-            }
-        }
-        tail.frameLength = count
-        if !engine.isRunning { try? engine.start() }
-        node.stop()
-        node.scheduleBuffer(tail, at: nil, options: .interrupts)
-        node.play(at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: HostClock.now() + 0.005)))
-        mixed.withLock { $0 = (m, nil) }
-        return true
+        load(m)
+        return refill()
     }
 
-    public func stop() { node.stop() }
+    public func stop() {
+        node.stop()
+        state.withLock { $0.queued = false; $0.queuedEnd = 0; $0.bridgeNext = false }
+    }
 }

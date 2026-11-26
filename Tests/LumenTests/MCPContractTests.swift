@@ -402,3 +402,20 @@ private func rpc(_ object: [String: Any]) throws -> String {
                                 context: context)
     #expect(runtime.lastOptions?.fps == 24, "a 20 fps request must be clamped to the effective floor")
 }
+
+@Test func mcpSkillResourcesAreReadableOverJsonRpc() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let list = try #require(await fixture.server.handle(try rpc(["jsonrpc": "2.0", "id": 1, "method": "resources/list"])))
+    let listObject = try #require(JSONSerialization.jsonObject(with: Data(list.utf8)) as? [String: Any])
+    let result = try #require(listObject["result"] as? [String: Any])
+    let resources = try #require(result["resources"] as? [[String: Any]])
+    #expect(resources.contains { $0["uri"] as? String == "lumen://skills/audio-edit" })
+    let read = try #require(await fixture.server.handle(try rpc(["jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": ["uri": "lumen://skills/audio-edit"]])))
+    let readObject = try #require(JSONSerialization.jsonObject(with: Data(read.utf8)) as? [String: Any])
+    let readResult = try #require(readObject["result"] as? [String: Any])
+    let contents = try #require(readResult["contents"] as? [[String: Any]])
+    let content = try #require(contents.first)
+    #expect(content["mimeType"] as? String == "text/markdown")
+    #expect((content["text"] as? String)?.contains("audio_edit_v2") == true)
+}

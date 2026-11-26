@@ -78,14 +78,30 @@ public enum FrameImage {
 }
 
 private final class AudioFeeder: @unchecked Sendable {
-    let reader: AVAssetReader, out: AVAssetReaderTrackOutput, input: AVAssetWriterInput, done = Latch()
+    let reader: AVAssetReader, out: AVAssetReaderTrackOutput, input: AVAssetWriterInput
+    private let state = OSAllocatedUnfairLock<(finished: Bool, failure: String?)>(initialState: (false, nil))
+    var result: (finished: Bool, failure: String?) { state.withLock { $0 } }
     init(_ r: AVAssetReader, _ o: AVAssetReaderTrackOutput, _ i: AVAssetWriterInput) { reader = r; out = o; input = i }
     func start(on q: DispatchQueue) {
         input.requestMediaDataWhenReady(on: q) { [self] in
-            while input.isReadyForMoreMediaData {
-                if let sb = out.copyNextSampleBuffer() { input.append(sb) } else { input.markAsFinished(); done.fire(); return }
+            while input.isReadyForMoreMediaData, !result.finished {
+                if let sb = out.copyNextSampleBuffer() {
+                    guard input.append(sb) else {
+                        state.withLock { $0 = (true, "Audio encoder rejected a sample.") }
+                        return
+                    }
+                } else {
+                    let failure = reader.status == .completed ? nil : (reader.error?.localizedDescription ?? "Audio reader stopped before completion.")
+                    if failure == nil { input.markAsFinished() }
+                    state.withLock { $0 = (true, failure) }
+                    return
+                }
             }
         }
+    }
+    func cancel() {
+        state.withLock { if !$0.finished { $0 = (true, "Audio export cancelled.") } }
+        if reader.status == .reading { reader.cancelReading() }
     }
 }
 
@@ -402,16 +418,21 @@ public enum Exporter {
         let w = 800, h = (Int((Double(w) / tl.style.aspectRatio).rounded()) + 1) & ~1, fps = 15
         let total = max(Int(ceil(tl.compositionDuration * Double(fps) - 1e-8)), 1)
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
-        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, total, nil) else { throw ExportError.writer("gif") }
+        let staged = url.deletingLastPathComponent().appendingPathComponent(".lumen-gif-\(UUID().uuidString).gif")
+        defer { try? FileManager.default.removeItem(at: staged) }
+        guard let dest = CGImageDestinationCreateWithURL(staged as CFURL, UTType.gif.identifier as CFString, total, nil) else { throw ExportError.writer("gif") }
         CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
         for i in 0..<total {
             try Task.checkCancellation()
             let pb = try await FrameImage.render(renderer: renderer, session: session, timeline: tl, t: Double(i) / Double(fps), canvas: SIMD2(w, h), fps: Double(fps))
-            if let img = FrameImage.cgImage(pb) {
-                CGImageDestinationAddImage(dest, img, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(fps)]] as CFDictionary)
-            }
+            guard let img = FrameImage.cgImage(pb) else { throw ExportError.render }
+            CGImageDestinationAddImage(dest, img, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(fps)]] as CFDictionary)
             progress(ExportProgress(frame: i + 1, total: total, notice: nil))
         }
         guard CGImageDestinationFinalize(dest) else { throw ExportError.writer("gif finalize failed") }
+        try Task.checkCancellation()
+        if FileManager.default.fileExists(atPath: url.path) {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: staged)
+        } else { try FileManager.default.moveItem(at: staged, to: url) }
     }
 }

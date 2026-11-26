@@ -119,9 +119,11 @@ struct CoreFeatureValidationTests {
         let busy = TranscriptEdits.cleanupCuts(transcript: Transcript(words: w, locale: "en-US"),
                                                events: [InputEvent(t: 1.6, kind: .keyDown)])
         #expect(busy.isEmpty)
-        // Very long gaps (a break, not a pause) are never auto-removed.
+        // Long quiet gaps follow the same breath-preserving cleanup rule.
         let longGap = words([("one", 1, 1.2), ("two", 4, 4.2)])
-        #expect(TranscriptEdits.cleanupCuts(transcript: Transcript(words: longGap, locale: "en-US")).isEmpty)
+        let longCuts = TranscriptEdits.cleanupCuts(transcript: Transcript(words: longGap, locale: "en-US"))
+        #expect(longCuts.count == 1)
+        #expect(abs((longCuts.first?.end ?? 0) - (longCuts.first?.start ?? 0) - 2.55) < 0.001)
     }
 
     @Test func hostileWordTimesAndIndicesAreIgnored() throws {

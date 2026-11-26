@@ -23,7 +23,7 @@ struct MusicPicker: View {
     private var addedPaths: Set<String> { Set(model.timeline.audio.lanes.compactMap { $0.path }) }
     private var addedTracks: [AudioLane] { model.timeline.audio.lanes.filter { $0.role == .music } }
 
-    private let columns = [GridItem(.adaptive(minimum: 132), spacing: 8)]
+    private let columns = [GridItem(.flexible(), spacing: 8)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -33,9 +33,9 @@ struct MusicPicker: View {
                 if playing != nil {
                     LIconButton(icon: "stop.fill", label: "Stop preview") { stop() }
                 }
-                LButton(title: "Import…", icon: "plus", kind: .quiet) { importMusic() }
+                StudioButton(title: "Import…", icon: "plus", kind: .quiet) { importMusic() }
             }
-            LSegmented(sel: $category, items: Self.moods.map { ($0, $0.capitalized) })
+            StudioPicker(sel: $category, options: Self.moods.map { ($0, $0.capitalized, "music.note") })
                 .frame(maxWidth: .infinity)
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(filtered, id: \.url) { track in
@@ -84,7 +84,7 @@ struct MusicPicker: View {
                 .buttonStyle(.plain).clickable()
                 .accessibilityLabel("\(track.title), \(track.category) music. \(playing ? "Playing, tap to stop" : "Tap to preview")")
                 Button(action: added ? onRemove : onAdd) {
-                    Image(systemName: added ? "check" : "plus")
+                    PixelSymbol(added ? "check" : "plus", size: 14)
                         .font(AppType.glyph).foregroundStyle(added ? Tok.text2 : Tok.text)
                         .frame(width: 24, height: 24)
                         .background(Circle().fill(added ? Tok.control : hue.opacity(0.22)))
@@ -92,7 +92,7 @@ struct MusicPicker: View {
                 .buttonStyle(.plain).clickable().padding(.trailing, 8)
                 .accessibilityLabel(added ? "Remove \(track.title) from the timeline" : "Add \(track.title) to the timeline")
             }
-            .background(RoundedRectangle(cornerRadius: Radius.field).fill(playing ? Tok.accentSoft : Tok.well))
+            .background(RoundedRectangle(cornerRadius: Radius.field).fill(playing ? StudioInk.pink.opacity(0.16) : StudioInk.well))
             .task(id: track.url.path) { peaks = await WaveformStore.shared.peaks(for: track.url) }
         }
     }
@@ -117,14 +117,14 @@ struct MusicPicker: View {
                 Spacer(minLength: 8)
                 LIconButton(icon: "trash", label: "Remove \(name)") { model.removeMusicLane(lane.id) }
             }
-            SliderRow(label: "Start", v: laneValue(lane.id, \.placement),
+            StudioSliderRow(label: "Start", v: laneValue(lane.id, \.placement),
                       range: 0...max(model.timeline.compositionDuration, 0.01),
                       fmt: { String(format: "%.1f s", $0) })
-            SliderRow(label: "Volume", v: laneValue(lane.id, \.gainDb), range: -60...0,
+            StudioSliderRow(label: "Volume", v: laneValue(lane.id, \.gainDb), range: -60...0,
                       fmt: { "\(Int($0)) dB" })
-            SliderRow(label: "Trim start", v: optionalLaneValue(lane.id, \.trimStart, default: 0),
+            StudioSliderRow(label: "Trim start", v: optionalLaneValue(lane.id, \.trimStart, default: 0),
                       range: 0...(duration - 0.01), fmt: { String(format: "%.1f s", $0) })
-            SliderRow(label: "Length", v: optionalLaneValue(lane.id, \.trimDuration,
+            StudioSliderRow(label: "Length", v: optionalLaneValue(lane.id, \.trimDuration,
                       default: max(duration - (lane.trimStart ?? 0), 0.01)),
                       range: 0.01...duration, fmt: { String(format: "%.1f s", $0) })
         }

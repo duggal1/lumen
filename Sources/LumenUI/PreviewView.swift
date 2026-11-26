@@ -11,6 +11,8 @@ private struct Unsafe<T>: @unchecked Sendable { let v: T }
 /// One render request. Latest wins: the stream keeps only the newest value,
 /// so a slow GPU skips frames by time instead of building a queue.
 private struct Tick: Sendable {
+    var generation: UInt64
+    var key: FrameKey
     var timeline: Timeline
     var t: Double
     var size: SIMD2<Int>
@@ -22,9 +24,43 @@ private struct Tick: Sendable {
     var maskDirectory: URL?
 }
 
-private struct FrameKey: Equatable {
+private struct FrameKey: Equatable, Sendable {
     var version: Int, t: Double, width: Int, height: Int, phase: Int
     var px: Int, py: Int, pz: Int
+}
+
+/// One decoded frame pair, retained until the render worker accepts it.
+private struct DecodedTick: Sendable {
+    let tick: Tick
+    let screen: SourceFrame
+    let webcam: SourceFrame?
+}
+
+/// A seek or edit changes generation. Decoders and presenters may finish
+/// independently, but neither can publish a frame from an obsolete generation.
+private final class PreviewMailbox: @unchecked Sendable {
+    private struct State {
+        var generation: UInt64 = 0
+        var key: FrameKey?
+        var presented: FrameKey?
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    func update(_ key: FrameKey, discontinuity: Bool) -> UInt64 {
+        state.withLock {
+            if discontinuity { $0.generation &+= 1; $0.presented = nil }
+            $0.key = key
+            return $0.generation
+        }
+    }
+    func isCurrent(_ tick: Tick) -> Bool {
+        state.withLock { $0.generation == tick.generation }
+    }
+    func hasPresented(_ key: FrameKey) -> Bool {
+        state.withLock { $0.presented == key }
+    }
+    func acknowledge(_ tick: Tick) {
+        state.withLock { if $0.generation == tick.generation { $0.presented = tick.key } }
+    }
 }
 
 /// The vsync grid, republished on every display-link callback. The render loop
@@ -69,15 +105,18 @@ private final class PreviewDriver: NSObject, @unchecked Sendable {
     private let maskDirectory: URL
     private let t0 = CACurrentMediaTime()
     private let feed: AsyncStream<Tick>.Continuation
+    private let mailbox: PreviewMailbox
+    private var lastRequestTime = 0.0
+    private var lastPlaying = false
     // Only the display-link thread touches these.
     private var pointer = SIMD3<Double>(0.5, 0.5, 0)
     private var lastPointerTime = 0.0
     private var lastKey = FrameKey(version: -1, t: -1, width: 0, height: 0, phase: 0, px: 0, py: 0, pz: 0)
 
     init(shared: PreviewShared, vsync: VsyncClock, clock: PlaybackClock, box: TimelineBox,
-         backingScale: Double, maskDirectory: URL, feed: AsyncStream<Tick>.Continuation) {
+         backingScale: Double, maskDirectory: URL, feed: AsyncStream<Tick>.Continuation, mailbox: PreviewMailbox) {
         self.shared = shared; self.vsync = vsync; self.clock = clock; self.box = box
-        self.backingScale = backingScale; self.maskDirectory = maskDirectory; self.feed = feed
+        self.backingScale = backingScale; self.maskDirectory = maskDirectory; self.feed = feed; self.mailbox = mailbox
         super.init()
     }
 
@@ -102,7 +141,7 @@ private final class PreviewDriver: NSObject, @unchecked Sendable {
         let uiTime = animated ? (playing ? t : now - t0) : 0
         // SMOOTHNESS: a paused animated backdrop uses 60 Hz phase; 240 Hz
         // re-renders an otherwise static frame every tick.
-        let phase = animated ? Int(uiTime * (playing ? 240 : 60)) : 0
+        let phase = animated ? Int(uiTime * 60) : 0
         // SMOOTHNESS: the pointer only reaches the Dither shader,
         // so it must not invalidate the frame key (and re-render) otherwise.
         let dither = animated && tl.style.background == .dither
@@ -110,9 +149,17 @@ private final class PreviewDriver: NSObject, @unchecked Sendable {
                            px: dither ? Int(pointer.x * 1000) : 0,
                            py: dither ? Int(pointer.y * 1000) : 0,
                            pz: dither ? Int(pointer.z * 1000) : 0)
-        guard key != lastKey, ds.width > 2 else { return }
-        lastKey = key
-        feed.yield(Tick(timeline: tl, t: t, size: SIMD2(Int(ds.width), Int(ds.height)), present: present,
+        guard ds.width > 2, ds.height > 2 else { return }
+        if key == lastKey {
+            // A rejected drawable or failed decode must not leave a paused
+            // Studio permanently frozen. Retry only unpresented requests.
+            guard !mailbox.hasPresented(key), now - lastRequestTime >= 0.05 else { return }
+        }
+        let discontinuity = key.version != lastKey.version || playing != lastPlaying
+            || abs(t - lastKey.t) > max(0.15, interval * 4)
+        let generation = mailbox.update(key, discontinuity: discontinuity)
+        lastKey = key; lastPlaying = playing; lastRequestTime = now
+        feed.yield(Tick(generation: generation, key: key, timeline: tl, t: t, size: SIMD2(Int(ds.width), Int(ds.height)), present: present,
                         fps: 1 / interval, uiTime: uiTime,
                         pointer: dither ? SIMD4(Float(pointer.x), Float(pointer.y), Float(pointer.z), 0) : .zero,
                         backingScale: backingScale, maskDirectory: maskDirectory))
@@ -168,7 +215,9 @@ struct PreviewView: NSViewRepresentable {
         waveform.snapshot(columns: WaveformPlaybackState.tapeColumns)
     }
     private let feed: AsyncStream<Tick>.Continuation
-    private let loop: Task<Void, Never>
+    private let readyFeed: AsyncStream<DecodedTick>.Continuation
+    private let decodeLoop: Task<Void, Never>
+    private let renderLoop: Task<Void, Never>
 
     init(model: EditorModel) {
         self.model = model
@@ -179,29 +228,47 @@ struct PreviewView: NSViewRepresentable {
         shared = sh; vsync = vc
         let (stream, continuation) = AsyncStream<Tick>.makeStream(bufferingPolicy: .bufferingNewest(1))
         feed = continuation
+        let (readyStream, readyContinuation) = AsyncStream<DecodedTick>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        readyFeed = readyContinuation
+        let mailbox = PreviewMailbox()
         let renderer = model.renderer, session = model.session, metalLayer = Unsafe(v: ml)
         let clock = model.clock, box = model.box
         let backingScale = session.meta.source.backingScale
         let maskDirectory = session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true)
         driver = PreviewDriver(shared: sh, vsync: vc, clock: clock, box: box,
-                               backingScale: backingScale, maskDirectory: maskDirectory, feed: continuation)
-        loop = Task.detached(priority: .userInitiated) {
+                               backingScale: backingScale, maskDirectory: maskDirectory, feed: continuation, mailbox: mailbox)
+        decodeLoop = Task.detached(priority: .userInitiated) {
             for await tick in stream {
                 if Task.isCancelled { break }
-                let frames: (screen: SourceFrame, webcam: SourceFrame?)
-                do { frames = try await session.frames(atOutput: tick.t, timeline: tick.timeline) } catch { continue }
-                let now = CACurrentMediaTime()
-                var present = tick.present
-                if present <= now {
-                    guard now - present < 1 / tick.fps else { continue }
-                    present = vc.firstVsync(after: now)
+                guard mailbox.isCurrent(tick) else { continue }
+                do {
+                    let frames = try await session.frames(atOutput: tick.t, timeline: tick.timeline)
+                    guard !Task.isCancelled, mailbox.isCurrent(tick) else { continue }
+                    readyContinuation.yield(DecodedTick(tick: tick, screen: frames.screen, webcam: frames.webcam))
+                } catch {
+                    // The next request can recover a transient decode error.
+                    continue
                 }
-                let request = RenderRequest(timeline: tick.timeline, t: tick.t, screen: frames.screen, webcam: frames.webcam,
+            }
+            readyContinuation.finish()
+        }
+        renderLoop = Task.detached(priority: .userInitiated) {
+            for await ready in readyStream {
+                if Task.isCancelled { break }
+                let tick = ready.tick
+                guard mailbox.isCurrent(tick), !sh.frozen, !sh.exportRunning else { continue }
+                let now = CACurrentMediaTime()
+                // A late decoded frame remains useful. Never discard every
+                // frame simply because decoding missed its original vsync.
+                // A newer decode can replace it without waiting for Metal.
+                let present = tick.present > now ? tick.present : vc.firstVsync(after: now + 0.001)
+                let request = RenderRequest(timeline: tick.timeline, t: tick.t, screen: ready.screen, webcam: ready.webcam,
                                             canvas: tick.size, fps: tick.fps, backingScale: tick.backingScale,
                                             quality: .preview, uiTime: tick.uiTime, pointer: tick.pointer,
                                             personMaskDirectory: tick.maskDirectory)
-                // false → drop; a newer tick is already queued (bufferingNewest(1)).
-                _ = renderer.draw(request, to: metalLayer.v, presentAt: present)
+                if renderer.draw(request, to: metalLayer.v, presentAt: present) {
+                    mailbox.acknowledge(tick)
+                }
             }
         }
         super.init(frame: .zero)
@@ -227,7 +294,8 @@ struct PreviewView: NSViewRepresentable {
         if let screen = window?.screen {
             let maximum = Float(screen.maximumFramesPerSecond)
             if maximum > 0 {
-                l.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, maximum), maximum: maximum, preferred: maximum)
+                let target = min(60, maximum)
+                l.preferredFrameRateRange = CAFrameRateRange(minimum: target, maximum: target, preferred: target)
             }
         }
         let box = Unsafe(v: l)
@@ -320,7 +388,9 @@ struct PreviewView: NSViewRepresentable {
 
     deinit {
         feed.finish()
-        loop.cancel()
+        readyFeed.finish()
+        decodeLoop.cancel()
+        renderLoop.cancel()
         // AppKit tears views down on the main thread; the guard keeps a
         // non-main release from trapping in assumeIsolated.
         if Thread.isMainThread { MainActor.assumeIsolated { link?.invalidate(); playheadTimer?.invalidate() } }

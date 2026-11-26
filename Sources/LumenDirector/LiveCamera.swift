@@ -156,7 +156,7 @@ public struct LiveCamera: Sendable {
         var fx: [ClickRing] = []
         // Mirror the offline gate: no rings when the effect is off, and the
         // window follows clickDuration (not a hardcoded 0.8 s).
-        if cursor.clickRing != nil, cursor.clickEffect != .none {
+        if cursor.clickEffect != .none {
             let dur = max(cursor.clickDuration, 0.05)
             fx = rings.filter { now >= $0.t && now - $0.t <= dur }
                 .map { ClickRing(position: SIMD2($0.x, $0.y), progress: Float((now - $0.t) / dur)) }

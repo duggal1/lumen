@@ -9,12 +9,12 @@ enum ExportResolution: String, Codable, CaseIterable, Sendable {
     case source = "Source", ultraHD8K = "8K", ultraHD = "4K", p1440 = "1440p", p1080 = "1080p", p720 = "720p", custom = "Custom"
 }
 enum ExportRate: String, Codable, CaseIterable, Sendable {
-    case source = "Source", f24 = "24", f30 = "30", f60 = "60", f120 = "120", f144 = "144", f240 = "240"
+    case source = "Source", f24 = "24", f30 = "30", f60 = "60", f90 = "90", f120 = "120", f144 = "144", f240 = "240"
     func fps(source: Double) -> Int {
         switch self {
-        case .source: max(1, Int(source.rounded()))
+        case .source: source.isFinite && source > 0 && source < Double(Int32.max) ? max(1, Int(source.rounded())) : 60
         case .f24: 24; case .f30: 30; case .f60: 60
-        case .f120: 120; case .f144: 144; case .f240: 240
+        case .f90: 90; case .f120: 120; case .f144: 144; case .f240: 240
         }
     }
 }

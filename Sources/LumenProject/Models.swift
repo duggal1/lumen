@@ -130,7 +130,7 @@ public struct Style: Codable, Equatable, Sendable {
     /// Local photo for `.image`. Absolute path or bundled sentinel
     /// (`serene-lake.jpg` resolves from Resources/Wallpapers). The
     /// renderer loads it once per modification date, never per frame.
-    public var backgroundImagePath: String? = "serene-lake.jpg"
+    public var backgroundImagePath: String? = "paintings/claude-monet/claude-monet_water-lilies-agapanthus_cma-136510.webp"
     public var aspectRatio: Double { customAspect ?? canvas.ratio }
     public var insets: EdgeInsetsN { paddingInsets ?? EdgeInsetsN(all: padding) }
     public var radii: CornerRadii { cornerRadii ?? CornerRadii(all: cornerRadius) }
@@ -173,19 +173,48 @@ public struct Style: Codable, Equatable, Sendable {
 /// `glove`…`cookie` range is retired now (the Tiny Hand coat is gone), and
 /// the packs render as stock glyphs again.
 public enum CursorPack: String, Codable, CaseIterable, Sendable {
-    case system, minimal, dot, ring, pro, holiday, lavender, coral, sky, mint, lemon, pink, wood, chrome, grass, pixel, outline, ember, mono
+    case system, minimal, dot, pro, holiday, lavender, coral, sky, mint, lemon, pink, wood, chrome, grass, pixel, outline, ember, mono
     case glove, plush, robot, holo, fuzzy, marble, terrazzo, glass, jelly, pastel
     case lowpoly, knit, skeleton, astro, space, monster, water, lava, cactus, choco
     case cloud, mech, neon, leaf, cookie
+
+    /// The Studio exposes only these three actual pointer silhouettes.
+    public static let studioSkins: [Self] = [.system, .pixel, .outline]
+    public var studioTitle: String {
+        switch self {
+        case .system: "Normal"
+        case .pixel: "Pixelated"
+        case .outline: "Outline"
+        default: rawValue.capitalized
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let value = try c.decode(String.self)
+        // Retired artwork is never rendered again; old projects keep a
+        // recognizable, pointed pointer and all of their other settings.
+        if value == "ring" { self = .outline; return }
+        guard let pack = Self(rawValue: value) else {
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "Unknown cursor pack: \(value)")
+        }
+        self = pack
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
 }
 public struct CursorStyle: Codable, Equatable, Sendable {
     public var pack: CursorPack = .system
+    /// Optional artwork ink; nil preserves the skin's original color.
+    public var ink: RGBA? = nil
     public var size: Double = 1.0
     public var smoothingSigma: Double = 0.035
     public var glide: Double = 0.35
     public var idleHide: Double? = 2.0
     public var pressScale: Double = 0.86
-    public var clickEffect: ClickEffect = .ripple
+    public var clickEffect: ClickEffect = .none
     /// Apple-glass bloom expands on release and settles in about half a second.
     public var clickDuration: Double = 0.55
     /// Tint off by default (transparent white): the ripple refracts the
@@ -195,16 +224,16 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     public var clickSize: Double = 1.0
     /// Multiplies ring alpha (0...1.5). Renderer consumes it.
     public var clickIntensity: Double = 1.0
-    public var clickRing: Double? = 0.45
+    public var clickRing: Double? = nil
     public var zoomCompensation: Double = 0.5
     public var constantSize = false                     // true = cursor keeps its on-screen size during zoom
     public var loop: Double?                            // seconds of tail that glides back to the first frame; nil = off
     public var effectiveCompensation: Double { constantSize ? 1 : zoomCompensation }
-    enum CodingKeys: String, CodingKey { case pack, size, smoothingSigma, glide, idleHide, pressScale, clickRing, zoomCompensation, constantSize, loop, clickEffect, clickDuration, clickColor, clickSize, clickIntensity }
+    enum CodingKeys: String, CodingKey { case pack, ink, size, smoothingSigma, glide, idleHide, pressScale, clickRing, zoomCompensation, constantSize, loop, clickEffect, clickDuration, clickColor, clickSize, clickIntensity }
     public init() {}
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
-        pack = c.opt(.pack, pack); size = c.opt(.size, size); smoothingSigma = c.opt(.smoothingSigma, smoothingSigma); glide = c.opt(.glide, glide)
+        pack = c.opt(.pack, pack); ink = try c.decodeIfPresent(RGBA.self, forKey: .ink); size = c.opt(.size, size); smoothingSigma = c.opt(.smoothingSigma, smoothingSigma); glide = c.opt(.glide, glide)
         idleHide = c.contains(.idleHide) ? ((try? c.decodeIfPresent(Double.self, forKey: .idleHide)) ?? nil) : idleHide
         pressScale = c.opt(.pressScale, pressScale)
         clickEffect = c.opt(.clickEffect, clickEffect); clickDuration = c.opt(.clickDuration, clickDuration); clickColor = c.opt(.clickColor, clickColor)
@@ -215,7 +244,7 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     }
     public func encode(to e: Encoder) throws {      // explicit nulls so "off" survives a round trip
         var c = e.container(keyedBy: CodingKeys.self)
-        try c.encode(pack, forKey: .pack); try c.encode(size, forKey: .size); try c.encode(smoothingSigma, forKey: .smoothingSigma)
+        try c.encode(pack, forKey: .pack); try c.encodeIfPresent(ink, forKey: .ink); try c.encode(size, forKey: .size); try c.encode(smoothingSigma, forKey: .smoothingSigma)
         try c.encode(glide, forKey: .glide); try c.encode(idleHide, forKey: .idleHide); try c.encode(pressScale, forKey: .pressScale)
         try c.encode(clickRing, forKey: .clickRing); try c.encode(zoomCompensation, forKey: .zoomCompensation)
         try c.encode(clickEffect, forKey: .clickEffect); try c.encode(clickDuration, forKey: .clickDuration)
@@ -317,6 +346,8 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
     public var variant: String?                         // "EN", "ES"
     public var trimStart: Double? = nil
     public var trimDuration: Double? = nil
+    /// nil preserves legacy music-bed behavior; false is a finite editable clip.
+    public var loops: Bool? = nil
     public init(id: UUID = UUID(), role: Role, path: String? = nil, placement: Double = 0, gainDb: Double = 0, mute: Bool = false,
                 separateTrack: Bool = false, variant: String? = nil) {
         self.id = id; self.role = role; self.path = path; self.placement = placement; self.gainDb = gainDb; self.mute = mute
@@ -329,6 +360,44 @@ public enum ClickSound: String, Codable, CaseIterable, Sendable {
     case click1, click2, click3, click4, click5
     case select1, select2, select3, select4, select5, select6, select7, select8
     case switch1, switch2, switch3, switch4, switch5, switch6, switch7
+    case studioCrisp, studioSoft, studioMechanical, studioRelease
+    case studioSnap, studioTick, studioLight, studioTap
+
+    public static let studioCollection: [Self] = [
+        .studioCrisp, .studioSoft, .studioMechanical, .studioRelease,
+        .studioSnap, .studioTick, .studioLight, .studioTap
+    ]
+
+    public var assetPath: String {
+        switch self {
+        case .mouse: "mouse-click.mp3"
+        case .subtle: "Subtle-ui-tap-interactions.mp3"
+        case .fresh: "new-click.mp3"
+        case .studioCrisp: "cursor-clicks/crisp.wav"
+        case .studioSoft: "cursor-clicks/soft.wav"
+        case .studioMechanical: "cursor-clicks/mechanical.wav"
+        case .studioRelease: "cursor-clicks/release.wav"
+        case .studioSnap: "cursor-clicks/snap.wav"
+        case .studioTick: "cursor-clicks/tick.wav"
+        case .studioLight: "cursor-clicks/light.wav"
+        case .studioTap: "cursor-clicks/tap.wav"
+        default: "touches/\(rawValue).wav"
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .studioCrisp: "Crisp"
+        case .studioSoft: "Soft"
+        case .studioMechanical: "Mechanical"
+        case .studioRelease: "Release"
+        case .studioSnap: "Snap"
+        case .studioTick: "Tick"
+        case .studioLight: "Light"
+        case .studioTap: "Tap"
+        default: rawValue.capitalized
+        }
+    }
 }
 
 public enum StudioMode: String, Codable, CaseIterable, Sendable {
@@ -390,6 +459,26 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
     public init() {}
+
+    /// Product boundary: a single studio processing policy. Legacy fields stay
+    /// decodable for old projects and low-level DSP tests; editing gain and
+    /// muting are routing controls, not alternate voice profiles.
+    public func studioPolicy() -> AudioPlan {
+        var result = self
+        result.micMode = micMode == .off ? .off : .standard
+        result.micClean = true
+        result.noiseReductionStrength = 1
+        result.voiceClarity = true
+        result.studio = 0.25
+        result.studioMode = .standard
+        result.dereverb = 0.5
+        result.declick = true
+        result.declickDepthDb = -12
+        result.normalize = true
+        result.targetLUFSOverride = nil
+        return result
+    }
+
     public static func migrateLUFS(override: Double?, legacy: Double?, mode: MicMode) -> Double? {
         if let o = override { return o }
         guard let l = legacy else { return nil }
@@ -544,10 +633,15 @@ public struct TimeMap: Codable, Equatable, Sendable {
     }
     private mutating func rebuild() {
         rebuildCount += 1
-        let n = Int((max(trimEnd - trimStart, 0) / Self.ds).rounded(.up))
+        guard trimStart.isFinite, trimEnd.isFinite, trimEnd >= trimStart else { out = [0]; return }
+        let ticks = ((trimEnd - trimStart) / Self.ds).rounded(.up)
+        // Bound hostile decoded project metadata before allocating or converting.
+        // A 24-hour recording is the upper supported dense-map duration.
+        guard ticks.isFinite, ticks <= 24 * 3600 / Self.ds else { out = [0]; return }
+        let n = Int(ticks)
         var o = [Double](repeating: 0, count: n + 1)
-        let rs = ramps.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
-        let cs = cuts.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
+        let rs = ramps.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start && $0.speed.isFinite && $0.speed > 0 }.sorted { $0.start < $1.start }
+        let cs = cuts.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }.sorted { $0.start < $1.start }
         var j = 0, jc = 0
         for i in 0..<n {
             let s = trimStart + (Double(i) + 0.5) * Self.ds
@@ -569,12 +663,12 @@ public struct TimeMap: Codable, Equatable, Sendable {
         guard s.isFinite else { return 0 }
         let f = (s - trimStart) / Self.ds
         guard f.isFinite, f > 0 else { return 0 }
+        guard f < Double(max(out.count - 1, 0)) else { return out.last ?? 0 }
         let i = Int(f)
-        if i >= out.count - 1 { return out.last ?? 0 }
         return out[i] + (out[i + 1] - out[i]) * (f - Double(i))
     }
     public func source(atOutput t: Double) -> Double {
-        guard out.count > 1 else { return trimStart }
+        guard t.isFinite, trimStart.isFinite, out.count > 1 else { return trimStart.isFinite ? trimStart : 0 }
         if t < 0 { return trimStart }
         if t >= out[out.count - 1] { return trimStart + Double(out.count - 1) * Self.ds }
         var lo = 0, hi = out.count - 1
@@ -681,7 +775,7 @@ public struct Timeline: Sendable, Codable, Equatable {
             // v3 -> v4: legacy Loudness key targetLUFS is handled inside AudioPlan decode.
         }
          style = c.opt(.style, style); cursor = c.opt(.cursor, cursor); camera = c.opt(.camera, camera)
-        audio = c.opt(.audio, audio); webcam = try? c.decodeIfPresent(WebcamLayout.self, forKey: .webcam)
+        audio = c.opt(.audio, audio).studioPolicy(); webcam = try? c.decodeIfPresent(WebcamLayout.self, forKey: .webcam)
         overlays = c.opt(.overlays, overlays); layouts = c.opt(.layouts, layouts); layoutSettings = c.opt(.layoutSettings, layoutSettings)
         captions = c.opt(.captions, captions)
         shortcutOverlay = c.opt(.shortcutOverlay, shortcutOverlay)

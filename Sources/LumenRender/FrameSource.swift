@@ -44,6 +44,7 @@ public actor ReaderFrameSource: FrameSource {
     private final class Entry {
         let id: UInt64, pts: Double, pb: CVPixelBuffer
         var end = Double.infinity
+        var cachedFrame: SourceFrame?
         init(pts: Double, pb: CVPixelBuffer) { id = idCounter.withLock { $0 += 1; return $0 }; self.pts = pts; self.pb = pb }
     }
     private let asset: AVURLAsset
@@ -52,10 +53,6 @@ public actor ReaderFrameSource: FrameSource {
     private var reader: AVAssetReader?
     private var out: AVAssetReaderTrackOutput?
     private var cur: Entry?, peek: Entry?
-    /// SMOOTHNESS: decoded look-ahead. The decoder stays a few frames ahead of
-    /// the playhead, so a slow decode is absorbed instead of stalling the frame.
-    private var pending: [Entry] = []
-    private let lookahead = 3
     private var lru: [Entry] = []
 
     public init(url: URL, device: SendableMetalDevice) async throws {
@@ -68,6 +65,7 @@ public actor ReaderFrameSource: FrameSource {
     }
 
     public func frame(atSource t0: Double) async throws -> SourceFrame {
+        guard t0.isFinite, !Task.isCancelled else { throw CancellationError() }
         let t = max(t0, 0)
         // The held frame is returned without decoding: no reader, no await.
         if let e = lru.last(where: { $0.pts <= t && t < $0.end }) { return try make(e) }
@@ -81,37 +79,36 @@ public actor ReaderFrameSource: FrameSource {
         if reader == nil || cur == nil || backward || farForward {
             // One restart per call, 1 s early: the screen recording has a
             // 0.5 s maximum keyframe interval, so the frame at `t` is inside.
-            try restart(at: max(0, t - 1.0))
-            advance(to: t)
-            if cur == nil, t > 1.0 {
-                // The keyframe was further back than 1 s: rewind once, further.
-                try restart(at: max(0, t - 4.0))
-                advance(to: t)
+            var rewind = 1.0
+            while true {
+                if Task.isCancelled { throw CancellationError() }
+                let start = max(0, t - rewind)
+                try restart(at: start)
+                try advance(to: t)
+                if cur != nil || start == 0 { break }
+                rewind *= 4
             }
         } else {
-            advance(to: t)
+            try advance(to: t)
         }
         guard let c = cur ?? peek else { throw FrameSourceError.read("no frames") }
         return try make(c)
     }
 
     /// Consumes frames while the next one is still <= t, then pins `cur.end` to the next frame's pts (or infinity at EOF).
-    private func advance(to t: Double) {
+    private func advance(to t: Double) throws {
         while true {
-            if peek == nil {
-                if pending.isEmpty { peek = readNext() } else { peek = pending.removeFirst() }
-            }
+            if Task.isCancelled { throw CancellationError() }
+            if peek == nil { peek = readNext() }
             guard let p = peek, p.pts <= t else { break }
             cur?.end = p.pts
             cur = p; peek = nil
             lru.append(p); if lru.count > 8 { lru.removeFirst() }
         }
-        if let c = cur { c.end = peek?.pts ?? .infinity }
-        // Keep the decoder warm: decode ahead so the next frame is ready.
-        while pending.count < lookahead {
-            guard let n = readNext() else { break }
-            pending.append(n)
+        if reader?.status == .failed {
+            throw FrameSourceError.read(reader?.error?.localizedDescription ?? "decode failed")
         }
+        if let c = cur { c.end = peek?.pts ?? .infinity }
     }
 
     private func restart(at start: Double) throws {
@@ -125,7 +122,7 @@ public actor ReaderFrameSource: FrameSource {
         r.add(o)
         r.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600), duration: .positiveInfinity)
         guard r.startReading() else { throw FrameSourceError.read(r.error?.localizedDescription ?? "startReading failed") }
-        reader = r; out = o; cur = nil; peek = nil; pending.removeAll()
+        reader = r; out = o; cur = nil; peek = nil
     }
 
     private func readNext() -> Entry? {
@@ -134,10 +131,13 @@ public actor ReaderFrameSource: FrameSource {
     }
 
     private func make(_ e: Entry) throws -> SourceFrame {
+        if let ready = e.cachedFrame { return ready }
         var cv: CVMetalTexture?
         let w = CVPixelBufferGetWidth(e.pb), h = CVPixelBufferGetHeight(e.pb)
         guard CVMetalTextureCacheCreateTextureFromImage(nil, cache, e.pb, nil, .bgra8Unorm, w, h, 0, &cv) == kCVReturnSuccess,
               let cv, let tex = CVMetalTextureGetTexture(cv) else { throw FrameSourceError.read("texture") }
-        return SourceFrame(id: e.id, pts: e.pts, pixelBuffer: e.pb, texture: tex, cv: cv)
+        let frame = SourceFrame(id: e.id, pts: e.pts, pixelBuffer: e.pb, texture: tex, cv: cv)
+        e.cachedFrame = frame
+        return frame
     }
 }

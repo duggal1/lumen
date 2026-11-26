@@ -424,8 +424,20 @@ extension TimelineStrip {
             }
             drawBase(c, size, lat, dust: !lanes.isEmpty, holes: runs.map(\.hole))
             if lanes.isEmpty { drawEmpty(c, "No music. Add a track in the Studio tab.") }
-            for r in runs where !r.selected { drawRun(c, lat, r) }
-            for r in runs where r.selected { drawRun(c, lat, r) }
+            // The waveform owns the center of the lane; put its label in a
+            // reserved strip above it instead of drawing text over amplitude.
+            for r in runs.sorted(by: { !$0.selected && $1.selected }) {
+                if let label = r.label {
+                    let x = max(lat.x(col: r.c0 + r.caps + 1), lat.x0 + 6)
+                    c.draw(Text(label).font(TimelineStrip.Face.label).foregroundStyle(Tok.text),
+                           at: CGPoint(x: x, y: 7), anchor: .leading)
+                }
+                if r.selected {
+                    let x = max(lat.x(col: r.c0), lat.x0)
+                    let right = lat.x(col: r.c1 - 1) + TimelineStrip.Lattice.cell
+                    c.drawBrackets(around: CGRect(x: x, y: 13, width: max(1, right - x), height: 24), color: Tok.accent)
+                }
+            }
         }
         .frame(height: TimelineStrip.Lanes.lane)
         .accessibilityLabel(musicAccessibility())

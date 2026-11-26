@@ -26,6 +26,19 @@ jobs:
           xcrun -sdk macosx metal --version
       - name: Build debug
         run: swift build
+      - name: Provision reproducible integration fixtures
+        run: |
+          set -euo pipefail
+          model="$HOME/Library/Application Support/Lumen/Models/moonshine-streaming-medium"
+          mkdir -p "$model" .proof/visual
+          base="https://download.moonshine.ai/model/medium-streaming-en/quantized_26_08_21"
+          for file in adapter.ort cross_kv.ort decoder_kv.ort encoder.ort frontend.model.ort frontend.weights.ort streaming_config.json tokenizer.bin; do
+            curl --fail --location --retry 3 --silent --show-error "$base/$file" -o "$model/$file"
+            test -s "$model/$file"
+          done
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i 'testsrc2=size=480x270:rate=60:duration=1' -frames:v 60 -c:v libx264 -pix_fmt yuv420p .proof/visual/sequence.mp4
+          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=nb_frames -of default=noprint_wrappers=1:nokey=1 .proof/visual/sequence.mp4)" = 60
       - name: Run unit and integration tests
         run: swift test --no-parallel
       - name: Build release and package app
@@ -34,5 +47,7 @@ jobs:
         run: |
           codesign --verify --strict .build/Lumen.app
           test -f .build/Lumen.app/Contents/Resources/Audio/mouse-click.mp3
-          test -f .build/Lumen.app/Contents/Resources/Audio/zoom-in-whoosh.mp3
+          for sound in crisp soft mechanical release snap tick light tap; do
+            test -f ".build/Lumen.app/Contents/Resources/Audio/cursor-clicks/$sound.wav"
+          done
           test -f .build/Lumen.app/Contents/Resources/Audio/music/credits.csv

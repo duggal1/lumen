@@ -29,7 +29,10 @@ public struct ClickFX: Sendable, Equatable {
 public struct SFXCue: Sendable, Equatable {
     public enum Kind: Sendable { case click, whooshIn, whooshOut, key, keyUp }
     public var t: Double; public var kind: Kind; public var gainDb: Double; public var keyCode: UInt16
-    public init(t: Double, kind: Kind, gainDb: Double, keyCode: UInt16 = 0) { self.t = t; self.kind = kind; self.gainDb = gainDb; self.keyCode = keyCode }
+    public var isKeyRelease: Bool
+    public init(t: Double, kind: Kind, gainDb: Double, keyCode: UInt16 = 0, isKeyRelease: Bool = false) {
+        self.t = t; self.kind = kind; self.gainDb = gainDb; self.keyCode = keyCode; self.isKeyRelease = isKeyRelease
+    }
 }
 
 /// Canvas-normalized layout (top-left origin). 12 floats packed so one spring drives all of them.
@@ -163,6 +166,16 @@ public struct DenseCropTrack: Sendable, Equatable {
     }
 }
 
+/// Native-symbol shortcut overlays, derived from verified physical chords.
+public struct ShortcutCue: Sendable, Equatable {
+    public var start: Double
+    public var end: Double
+    public var label: String
+    public init(start: Double, end: Double, label: String) {
+        self.start = start; self.end = end; self.label = label
+    }
+}
+
 public struct DerivedTracks: Sendable, Equatable {
     public var revision: Int
     public var sourceSize: SIMD2<Double>
@@ -171,6 +184,7 @@ public struct DerivedTracks: Sendable, Equatable {
     public var camera: CameraTrack
     public var clicks: [ClickFX]
     public var cues: [SFXCue]
+    public var shortcuts: [ShortcutCue]
     public var duck: [Float]            // 100 Hz, output time
     public var face: [SIMD3<Float>]     // 30 Hz (cx, cy, height), normalized to webcam image
     public var webcamAspect: Float
@@ -196,6 +210,7 @@ public struct DerivedTracks: Sendable, Equatable {
         self.shortcutPills = shortcutPills
         self.crop = crop
         self.viewportCrop = viewportCrop
+        self.shortcuts = shortcuts
     }
     public static func == (a: Self, b: Self) -> Bool { a.revision == b.revision }
 }

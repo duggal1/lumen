@@ -26,11 +26,12 @@ enum TimelineGeometry {
         return Double(w) <= Double(width)
     }
     static func columnPeak(wave: [Float], srcStart: Double, srcEnd: Double) -> Float {
-        guard !wave.isEmpty, srcEnd > srcStart else { return 0 }
-        let i0 = min(max(Int(srcStart * 100), 0), wave.count - 1)
-        let i1 = min(max(Int(srcEnd * 100), i0 + 1), wave.count)
+        guard !wave.isEmpty, srcStart.isFinite, srcEnd.isFinite,
+              srcEnd > srcStart, srcEnd > 0, srcStart < Double(wave.count) / 100 else { return 0 }
+        let i0 = Int(min(max((srcStart * 100).rounded(.down), 0), Double(wave.count - 1)))
+        let i1 = Int(min(max((srcEnd * 100).rounded(.up), Double(i0 + 1)), Double(wave.count)))
         var peak: Float = 0
-        for i in i0..<i1 { peak = max(peak, abs(wave[i])) }
+        for i in i0..<i1 where wave[i].isFinite { peak = max(peak, abs(wave[i])) }
         return peak
     }
     static func bursts(times: [Double], gap: Double) -> [(start: Double, end: Double)] {
