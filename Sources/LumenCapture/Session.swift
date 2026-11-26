@@ -140,6 +140,9 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 public struct CaptureStats: Sendable {
     public var elapsed: Double, micLevel: Float, systemLevel: Float
     public var dropped: Int, thermal: Int
+    public var written: Int = 0
+    public var width: Int = 0, height: Int = 0
+    public var configuredFPS: Double = 0
 }
 
 /// Recording lifecycle states. Every transition is logged + signposted.
@@ -443,7 +446,9 @@ public actor RecordingSession {
     public func stats() -> CaptureStats {
         CaptureStats(elapsed: engine?.elapsed ?? 0, micLevel: engine?.mic?.level.withLock { $0 } ?? 0,
                      systemLevel: engine?.system?.level.withLock { $0 } ?? 0,
-                     dropped: engine?.droppedFrames ?? 0, thermal: ProcessInfo.processInfo.thermalState.rawValue)
+                     dropped: engine?.droppedFrames ?? 0, thermal: ProcessInfo.processInfo.thermalState.rawValue,
+                     written: engine?.writtenFrames ?? 0, width: engine?.info?.width ?? 0,
+                     height: engine?.info?.height ?? 0, configuredFPS: engine?.info?.fps ?? 0)
     }
 
     /// Fast stop: stops capture, drains, ends session, finishes audio writers.

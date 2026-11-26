@@ -116,6 +116,11 @@ struct FloatingBarView: View {
                     .animation(.smooth(duration: 0.2), value: Int(app.stats?.elapsed ?? 0))
             }
             LevelTape(meter: app.recordingMeter, paused: app.paused)
+            if let notice = app.captureQualityNotice {
+                PixelSymbol("exclamationmark.triangle", size: 13)
+                    .foregroundStyle(Tok.text2).help(notice)
+                    .accessibilityHidden(false).accessibilityLabel(notice)
+            }
             RecorderAction(title: app.paused ? "Resume" : "Pause",
                            icon: app.paused ? "play.fill" : "pause.fill",
                            accessibilityLabel: app.paused ? "Resume recording" : "Pause recording",
