@@ -361,6 +361,44 @@ public enum ClickSound: String, Codable, CaseIterable, Sendable {
     case click1, click2, click3, click4, click5
     case select1, select2, select3, select4, select5, select6, select7, select8
     case switch1, switch2, switch3, switch4, switch5, switch6, switch7
+    case studioCrisp, studioSoft, studioMechanical, studioRelease
+    case studioSnap, studioTick, studioLight, studioTap
+
+    public static let studioCollection: [Self] = [
+        .studioCrisp, .studioSoft, .studioMechanical, .studioRelease,
+        .studioSnap, .studioTick, .studioLight, .studioTap
+    ]
+
+    public var assetPath: String {
+        switch self {
+        case .mouse: "mouse-click.mp3"
+        case .subtle: "Subtle-ui-tap-interactions.mp3"
+        case .fresh: "new-click.mp3"
+        case .studioCrisp: "cursor-clicks/crisp.wav"
+        case .studioSoft: "cursor-clicks/soft.wav"
+        case .studioMechanical: "cursor-clicks/mechanical.wav"
+        case .studioRelease: "cursor-clicks/release.wav"
+        case .studioSnap: "cursor-clicks/snap.wav"
+        case .studioTick: "cursor-clicks/tick.wav"
+        case .studioLight: "cursor-clicks/light.wav"
+        case .studioTap: "cursor-clicks/tap.wav"
+        default: "touches/\(rawValue).wav"
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .studioCrisp: "Crisp"
+        case .studioSoft: "Soft"
+        case .studioMechanical: "Mechanical"
+        case .studioRelease: "Release"
+        case .studioSnap: "Snap"
+        case .studioTick: "Tick"
+        case .studioLight: "Light"
+        case .studioTap: "Tap"
+        default: rawValue.capitalized
+        }
+    }
 }
 
 public enum StudioMode: String, Codable, CaseIterable, Sendable {

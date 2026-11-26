@@ -52,6 +52,7 @@ done
 ditto App/public/assets/music "$app/Contents/Resources/Audio/music"
 ditto App/public/assets/typing "$app/Contents/Resources/Audio/typing"
 ditto App/public/assets/touches "$app/Contents/Resources/Audio/touches"
+ditto App/public/assets/cursor-clicks "$app/Contents/Resources/Audio/cursor-clicks"
 mkdir -p "$app/Contents/Resources/Wallpapers"
 if [ -d App/public/assets/wallpapers ]; then
     ditto App/public/assets/wallpapers "$app/Contents/Resources/Wallpapers"

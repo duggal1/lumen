@@ -1123,6 +1123,8 @@ enum TimelineSelection: Equatable {
 
     /// Clicking a sound tile both selects that click and auditions it, so the
     /// grid never needs a separate preview button or a dropdown.
+    func stopClickPreview() { player.stopClickPreview() }
+
     func chooseClick(_ sound: ClickSound) {
         edit { $0.audio.clickTone = sound; $0.audio.clickSounds = true; $0.audio.soundEffectsEnabled = true }
         var plan = timeline.audio

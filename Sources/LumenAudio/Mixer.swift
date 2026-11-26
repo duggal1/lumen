@@ -1058,12 +1058,15 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
 
     /// Plays the selected click at the current click level without touching
     /// the timeline playback node, so the preview never desyncs transport.
+    public func stopClickPreview() { previewNode.stop() }
+
     public func previewClick(_ plan: AudioPlan) {
         guard plan.soundEffectsEnabled, plan.clickSounds else { return }
         let (samples, bankGain) = SFXBank().render(.click, clickTone: plan.clickTone)
         guard !samples.isEmpty,
               let buffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
-        let amp = Float(pow(10, (plan.sfxGainDb + plan.clickGainDb + bankGain) / 20))
+        let db = plan.sfxGainDb + plan.clickGainDb + bankGain
+        let amp = Float(pow(10, clamp(db.isFinite ? db : -9, -60, 0) / 20))
         buffer.frameLength = AVAudioFrameCount(samples.count)
         for i in samples.indices {
             buffer.floatChannelData![0][i] = samples[i] * amp
