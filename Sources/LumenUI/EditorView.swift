@@ -235,6 +235,7 @@ struct EditorView: View {
             return "Cut \(fmt(p.start)) to \(fmt(p.end)) — \(String(format: "%.1fs", p.length)). Release to cut, Backspace cuts now, Esc discards."
         }
         if let issue = model.editIssue { return issue }
+        if model.isProvisionalAudio { return "Preview audio · Studio processing not yet ready" }
         if let id = model.selection {
             if let z = model.timeline.zoom.first(where: { $0.id == id }) {
                 return "Zoom \(String(format: "%.1f×", z.scale)) selected. Drag edges or body. Delete removes."

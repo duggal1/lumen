@@ -183,6 +183,7 @@ public final class ProjectSession: @unchecked Sendable {
                         onTyping: @escaping @Sendable () -> Void = {},
                         onActivity: @escaping @Sendable () -> Void = {},
                         onPrivacy: @escaping @Sendable (String?) -> Void = { _ in },
+                        onPrivacyPartial: @escaping @Sendable () -> Void = {},
                         onPrivacyStart: @escaping @Sendable () -> Void = {}) async -> AnalysisResult {
         let sequence = analysisSequence.withLock { value in value += 1; return value }
         let origin = meta.clock.originHostSeconds
@@ -205,6 +206,7 @@ public final class ProjectSession: @unchecked Sendable {
         request.ax = snapshot.ax
         request.sourceDuration = meta.source.duration
         request.privacyProgress = privacyProgress
+        let privacyFinal = OSAllocatedUnfairLock(initialState: false)
         let result = await AnalysisService.shared.run(request, onTyping: { [self] result in
             guard !Task.isCancelled, result.errors["typing"] == nil,
                   applyAnalysis(sequence, { $0.typing = result.typing }) else { return }
@@ -214,8 +216,18 @@ public final class ProjectSession: @unchecked Sendable {
             // when the analysis was cancelled, because a cancelled scan still
             // knows about every secret it detected so far. Only a newer
             // analysis (a higher sequence) may discard it.
-            guard applyAnalysis(sequence, { $0.ocr = result.ocr }) else { return }
-            onPrivacy(result.errors["ocr"])
+            let applied = privacyFinal.withLock { finished -> Bool in
+                finished = true
+                return applyAnalysis(sequence, { $0.ocr = result.ocr })
+            }
+            guard applied else { return }
+            onPrivacy(result.errors["ocr"] ?? result.errors["cancelled"])
+        }, onPrivacyPartial: { [self] result in
+            let applied = privacyFinal.withLock { finished -> Bool in
+                guard !finished else { return false }
+                return applyAnalysis(sequence, { $0.ocr = result.ocr })
+            }
+            if applied { onPrivacyPartial() }
         }, onPrivacyStart: {
             guard self.analysisSequence.withLock({ $0 == sequence }) else { return }
             onPrivacyStart()

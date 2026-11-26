@@ -178,6 +178,7 @@ enum TimelineSelection: Equatable {
     /// True while the player holds the bounded first window rather than the
     /// full program. The full mix replaces it at the content being heard.
     private var playingProvisional = false
+    var isProvisionalAudio: Bool { playingProvisional && isPlaying }
     /// Measured Play→A/V start, for diagnostics. Seconds, or nil when the last
     /// start has not completed.
     private(set) var lastStartLatency: Double?
@@ -360,9 +361,16 @@ enum TimelineSelection: Equatable {
                     guard let self, self.analysisGeneration == generation else { return }
                     self.finishPrivacy(error: error)
                 }
+            }, onPrivacyPartial: { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self, self.analysisGeneration == generation else { return }
+                    self.replan()
+                }
             })
             guard !Task.isCancelled, let self, self.analysisGeneration == generation else { return }
-            _ = result
+            if scansPrivacy, !self.privacyAnalysisComplete {
+                self.finishPrivacy(error: result.errors["ocr"] ?? result.errors["cancelled"] ?? "Privacy scan did not report completion.")
+            }
             self.replan()
             self.autoTranscribeIfNeeded()
         }
@@ -1318,6 +1326,7 @@ enum TimelineSelection: Equatable {
         exportETA = nil
         exportTask?.cancel()
         pause()
+        yieldMasterToTransport()
         activeExportID = UUID()
         let exportID = activeExportID
         let start = HostClock.now()
