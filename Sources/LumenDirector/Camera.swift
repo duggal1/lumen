@@ -52,7 +52,7 @@ enum CameraSolver {
         let ctx = Context(rate: cameraRate, n: max(Int(outDur * cameraRate) + 1, 2), src: src,
                           cropAtTick: denseCropTicks(crop, tm: tm, rate: cameraRate, outDur: outDur, src: src),
                           aspect: aspect, p: p)
-        let scenes = buildScenes(zoom: zoom, tm: tm, ctx: ctx, follow: follow)
+        let scenes = buildScenes(zoom: zoom, tm: tm, ctx: ctx, kinds: kinds, follow: follow)
         if scenes.isEmpty, p.tilt != .reveal { return CameraTrack(count: 2, rate: cameraRate) }
         return solveScenes(scenes, context: ctx, cursor: cursor, params: p, loop: loop,
                            kinds: kinds, cancelled: cancelled)
@@ -81,7 +81,7 @@ enum CameraSolver {
             // teleport. Start at the earlier of the shot end and (end - tail);
             // a shot that runs off the edge is simply cut short by the return.
             let start = min(last.off, Double(end) / track.rate - duration)
-            finishAutomaticZoom(&track, startingAt: start, duration: duration)
+            finishAutomaticZoom(&track, startingAt: start, duration: duration, ctx: ctx)
         }
         blendLoop(&track, duration: loop)
         applyTilt(&track, params: params)
@@ -139,7 +139,7 @@ enum CameraSolver {
     }
 
     private static func finishAutomaticZoom(_ track: inout CameraTrack, startingAt time: Double,
-                                            duration requestedDuration: Double) {
+                                            duration requestedDuration: Double, ctx: Context) {
         let last = track.lz.count - 1
         let start = min(max(Int((time * track.rate).rounded(.up)), 0), last - 1)
         let end = min(start + Int((requestedDuration * track.rate).rounded(.up)), last)
@@ -148,22 +148,29 @@ enum CameraSolver {
         let initialLog = Double(track.lz[start])
         let neutral = SIMD2<Double>(repeating: 0.5)
         let initialCenter = SIMD2(Double(track.nx[start]), Double(track.ny[start]))
-        // Fixed-pivot release: the subject stays pinned on screen while the
-        // plate returns to full frame. Guard the pivot for a near-full-frame
-        // shot, where expm1(logScale) would blow it far outside the frame.
-        let pivot = initialLog > 1e-3
-            ? initialCenter + (initialCenter - neutral) / expm1(initialLog)
-            : neutral
-        let pivotC = SIMD2(clamp(pivot.x, -1, 2), clamp(pivot.y, -1, 2))
+        // Compute the fixed-pivot relation as a ratio, not a distant pivot
+        // coordinate. At tiny log scales or when a fill crop permits an
+        // off-centre 1x view, an arbitrary pivot clamp teleported the first
+        // release tick. This form starts at the exact existing position,
+        // stays numerically stable near 1x, and lands exactly at neutral.
+        let denominator = -expm1(-initialLog)
+        let displacement = initialCenter - neutral
         for i in start...last {
             let u = min(Double(i - start) / span, 1)
             let remaining = 1 - u
-            let logScale = initialLog * remaining * remaining * remaining * (1 + 3 * u + 6 * u * u)
-            let speed = -30 * initialLog * u * u * remaining * remaining / duration
-            let acceleration = -60 * initialLog * u * remaining * (1 - 2 * u) / (duration * duration)
-            let center = neutral + (pivotC - neutral) * -expm1(-logScale)
-            let velocity = (pivotC - center) * speed
-            let centerAcceleration = (pivotC - center) * (acceleration - speed * speed)
+            let envelope = remaining * remaining * remaining * (1 + 3 * u + 6 * u * u)
+            let logScale = initialLog * envelope
+            let eV = -30 * u * u * remaining * remaining / duration
+            let eA = -60 * u * remaining * (1 - 2 * u) / (duration * duration)
+            let speed = initialLog * eV
+            let acceleration = initialLog * eA
+            let optical = denominator > 1e-6
+            let ratio = optical ? -expm1(-logScale) / denominator : envelope
+            let ratioV = optical ? exp(-logScale) * speed / denominator : eV
+            let ratioA = optical ? exp(-logScale) * (acceleration - speed * speed) / denominator : eA
+            let center = clampCenter(neutral + displacement * ratio, logScale, i, ctx: ctx)
+            let velocity = displacement * ratioV
+            let centerAcceleration = displacement * ratioA
             track.lz[i] = Float(logScale)
             track.nx[i] = Float(center.x)
             track.ny[i] = Float(center.y)
@@ -324,12 +331,33 @@ enum CameraSolver {
                      clamp(c.y, min(hh, 0.5), max(1 - hh, 0.5)))
     }
 
+    /// Default cinematic anticipation for a resolved, isolated automatic
+    /// action. A larger optical move deserves more runway. Explicit easing,
+    /// manual segments and closely spaced actions retain their existing
+    /// timing contracts rather than stealing time from the previous subject.
+    static func automaticRunway(logScale: Double, center: SIMD2<Double>, base: Double) -> Double {
+        let amplitude = clamp(logScale / log(2), 0, 1.6)
+        let travel = clamp(hypot(center.x - 0.5, center.y - 0.5), 0, 0.75)
+        return max(base, clamp(0.44 + 0.20 * amplitude + 0.23 * travel, 0.44, 0.85))
+    }
+
     private static func buildScenes(zoom: [ZoomSegment], tm: TimeMap, ctx: Context,
+                                    kinds: [UUID: ZoomPlanner.IntentKind],
                                     follow: [UUID: [(t: Double, c: SIMD2<Double>)]]) -> [Scene] {
         func leadFor(_ ease: Double) -> Double { clamp(ctx.leadBase / max(ease, 0.55), 0.20, 1.6) }
         func manualRise(_ ease: Double) -> Double { clamp(0.9 / max(ease, 0.3), 0.25, 2.0) }
         // NaN/infinite times would trap in TimeMap.output — drop them.
         let finiteZoom = zoom.filter { $0.start.isFinite && $0.end.isFinite }
+        // Use action intervals, not padded camera intervals, to determine
+        // whether a longer anticipation has room. Also protects manual edits.
+        var previousEnds = [Double](repeating: tm.trimStart, count: finiteZoom.count)
+        var previousEnd = tm.trimStart
+        for (index, z) in finiteZoom.enumerated().sorted(by: {
+            ($0.element.start, $0.offset) < ($1.element.start, $1.offset)
+        }) {
+            previousEnds[index] = previousEnd
+            previousEnd = max(previousEnd, z.end)
+        }
         // Total (on, lz, offset) order keeps the bake bit-for-bit stable.
         return finiteZoom.enumerated().compactMap { offset, z -> (Int, Scene)? in
             let a = tm.output(atSource: z.start), b = tm.output(atSource: z.end)
@@ -355,7 +383,13 @@ enum CameraSolver {
             case .follow:
                 center = path.first?.c ?? SIMD2(0.5, 0.5)
             }
-            let lead = leadFor(ease)
+            var lead = leadFor(ease)
+            let gap = a - tm.output(atSource: previousEnds[offset])
+            if z.origin == .auto, kinds[z.id] != nil, z.easing == nil, gap >= 1.3 {
+                let desired = automaticRunway(logScale: lz, center: center, base: lead)
+                // Keep room for the preceding release and the arrival settle.
+                lead = max(lead, min(desired, gap - 0.30))
+            }
             let settle = z.origin == .auto ? min(clamp(0.11 / max(ease, 0.6), 0.06, 0.18), 0.35 * lead) : 0
             let on = z.origin == .auto ? max(a - lead - settle, 0) : a
             let omega = clamp(min(clamp(ctx.omegaZoomBase * ease, 2, 40), safeZoomOmega(lz, rate: ctx.rate)), 2, 40)
@@ -434,7 +468,7 @@ enum CameraSolver {
         let a = tickIndex(s.on, rate: ctx.rate, n: ctx.n)
         let b = min(max(Int((s.off * ctx.rate).rounded()), a), ctx.n - 1)
         guard b > a else { return nil }
-        let scale = exp(s.lz), lean = 0.12 / scale
+        let scale = exp(s.lz)
         var xs: [Double] = [], ys: [Double] = []
         xs.reserveCapacity(b - a + 1); ys.reserveCapacity(b - a + 1)
         var j = 0
@@ -448,7 +482,7 @@ enum CameraSolver {
             }
             // Waypoints stay attached to their source pixels as the crop moves.
             let box = ctx.crop(at: k)
-            xs.append((c.x * ctx.src.x - box.x) / box.w + lean)
+            xs.append((c.x * ctx.src.x - box.x) / box.w)
             ys.append((c.y * ctx.src.y - box.y) / box.h)
         }
         xs = causalSpring(centredPlay(xs, halfZone: 0.04 / scale), omega: ctx.followOmega, dt: ctx.dt)
@@ -604,8 +638,11 @@ enum CameraSolver {
         // single declared pivot keeps the Studio contract exact without letting
         // the handoff spring or release drift move the subject sideways.
         let exactFixedWindow: (pivot: SIMD2<Double>, from: Int, to: Int)? = {
-            guard baked.count == 1, case let .fixed(fx, fy) = baked[0].segment.focus else { return nil }
-            let scale = max(baked[0].segment.scale, 1.0001)
+            // The analytic full-source pivot is not a crop-space pivot.
+            // Use the normal crop-aware leg for cropped recordings.
+            guard ctx.cropAtTick.isEmpty, baked.count == 1,
+                  case let .fixed(fx, fy) = baked[0].segment.focus else { return nil }
+            let scale = max(exp(baked[0].lz), 1.0001)
             let pivot = SIMD2((fx * scale - 0.5) / (scale - 1),
                               (fy * scale - 0.5) / (scale - 1))
             let from = max(0, Int(baked[0].on * ctx.rate))
@@ -730,7 +767,28 @@ enum CameraSolver {
             let onShot = activeIndex >= 0 && !bridging
             var panAccelX: Double? = nil, panAccelY: Double? = nil
             var legScaleAccel: Double? = nil
-            if onShot, !legPanOnly, legTargetCenter.x.isFinite, legTargetCenter.y.isFinite {
+            // A recorded follow path is a continuing subject, not merely an
+            // opening aim. Blend into its moving target only after the initial
+            // optical leg settles; the quintic gate has zero first and second
+            // derivatives at both ends. Fixed and typing shots never follow
+            // the cursor. Keep the spring's existing position and velocity.
+            let followU: Double = {
+                guard onShot, activeIndex < baked.count,
+                      case .follow = baked[activeIndex].segment.focus,
+                      baked[activeIndex].path.count >= 2 else { return 0 }
+                let arrival = legStartTime + (legPanOnly ? legReaimT : legRiseT)
+                return clamp((Double(k) / ctx.rate - arrival) / 0.32, 0, 1)
+            }()
+            if followU > 0 {
+                let w = QuinticMove.envelope(followU)
+                let c = legTargetCenter + (SIMD2(cxTarget, cyTarget) - legTargetCenter) * w
+                let followOmega = clamp(ctx.followOmega, 3, 8)
+                springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
+                springStep(&panX, &velX, target: c.x, omega: followOmega, dt: ctx.dt)
+                springStep(&panY, &velY, target: c.y, omega: followOmega, dt: ctx.dt)
+                panAccelX = followOmega * followOmega * (c.x - panX) - 2 * followOmega * velX
+                panAccelY = followOmega * followOmega * (c.y - panY) - 2 * followOmega * velY
+            } else if onShot, !legPanOnly, legTargetCenter.x.isFinite, legTargetCenter.y.isFinite {
                 // s(t) = exp(lerp(ln s0, ln s1, E(t))) — bounded quintic ease,
                 // monotone, zero velocity and acceleration at both endpoints.
                 // Inherit a bounded share of the incoming dolly velocity so the
@@ -802,7 +860,7 @@ enum CameraSolver {
             // Land exactly on target early enough to leave a real still window
             // before the event, even for a fast (snappy) ease whose spring is
             // still moving ~0.08/s at that point.
-            let pivotLeg = onShot && !legPanOnly
+            let pivotLeg = onShot && !legPanOnly && followU == 0
             if !pivotLeg {
                 if abs(scaleSpring - lzTarget) < 5e-4 && abs(scaleVel) < 1e-2 {
                     scaleSpring = lzTarget; scaleVel = 0
@@ -816,6 +874,7 @@ enum CameraSolver {
             // the spring keeps its state so there is never a velocity step.
             let clamped = clampCenter(SIMD2(panX, panY), max(scaleSpring, 0), k, ctx: ctx)
             panX = clamped.x; panY = clamped.y
+            if followU > 0 { lastCenter = clamped }
             // A fixed focus is an optical zoom about `legPivot`. Re-derive the
             // centre from that invariant at every tick so accumulated spring
             // and clamp drift cannot break the Studio fixed-pivot contract.

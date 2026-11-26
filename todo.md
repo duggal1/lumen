@@ -18,7 +18,7 @@ At audit: PR open, mergeable, not merged; [macOS verification](https://github.co
 | Part | Scope | State |
 |---|---|---|
 | 1 | Attention evidence, hover, typing | Implemented in PR #42; verification pending |
-| 2 | Camera motion, zoom, framing, cursor, blur | Not started in this overhaul |
+| 2 | Camera motion, zoom, framing, cursor, blur | Implementation branch; tests and recording proof pending |
 | 3 | SFX replacement and studio audio | Not started |
 | 4 | Adaptive glass, layout, recording, editing | Not started |
 | 5 | Preview/export performance and release proof | Not started |
@@ -58,7 +58,19 @@ Relevant files: `Sources/LumenDirector/Activity/ActivityTypes.swift`, `ActivityS
 
 ## Part 2 — Cinematic motion and precise framing
 
-Start only after Part 1 is signed off. Relevant files: `LumenDirector/Planner.swift`, `Camera.swift`, `LiveCamera.swift`, `Cursor.swift`, `TypingFocus.swift`, crop/layout planners, `LumenRender/ZoomTransform.swift`, `Renderer.swift`, Metal shaders.
+Part 1's latest implementation passed debug, Metal and unit/integration tests before this branch was created; release/package verification was still running. Part 2 is stacked on Part 1 and must not merge ahead of it. Real-recording signoff is still pending.
+
+### Implemented in Part 2 branch
+
+- [x] Distance/scale-aware anticipation for isolated, resolved automatic actions, preserving explicit easing/manual and dense action timing.
+- [x] Smooth continuation of recorded follow paths after the opening optical leg, without a hard-coded horizontal bias.
+- [x] Numerically stable fixed-pivot release that starts at the actual previous center and clamps to crop bounds.
+- [x] Use capped scale for exact fixed pivot and avoid applying a full-source pivot in crop space.
+- [x] Integrate live camera to the event timestamp; handle slow display callbacks without losing elapsed time.
+- [x] Only explicit actions may reveal live smart crop; stale zoom targets cannot be reopened by navigation.
+- [ ] Confirm latest Part 2 macOS checks and inspect real motion footage.
+
+ Relevant files: `LumenDirector/Planner.swift`, `Camera.swift`, `LiveCamera.swift`, `Cursor.swift`, `TypingFocus.swift`, crop/layout planners, `LumenRender/ZoomTransform.swift`, `Renderer.swift`, Metal shaders.
 
 - [ ] Reproduce excessively fast zoom-ins, forced scale jumps, unnatural hold/release, rapid retargeting and stale zoom-out using real footage.
 - [ ] Establish one shot lifecycle and one camera subject at any instant. Do not open a new shot just because another event arrived.

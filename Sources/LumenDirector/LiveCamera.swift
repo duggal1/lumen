@@ -21,8 +21,9 @@ public struct LiveCamera: Sendable {
     private var t = 0.0, started = false
     private var raw: SIMD2<Double>, rawT = 0.0
     private var shape: UInt16 = 0
-    private var down = false
+    private var down = false, primaryDown = false
     private var lastActivity = -1e9, lastMove = -1e9, opacity = 1.0, lzShot = 0.0
+    private var lastShotActivity = -Double.infinity
     /// Timestamp of the last successful aim (click or typing-field change).
     private var lastAim = -Double.infinity
     private var pointer: Spring3, camera: Spring3, press: Spring3
@@ -59,11 +60,21 @@ public struct LiveCamera: Sendable {
         lzShot = log(scale)
     }
     public mutating func ingest(_ e: InputEvent, focus: AXFrame? = nil) {
-        if let config = cropConfig {
+        guard e.t.isFinite else { return }
+        // Integrate the previous target up to the input timestamp before
+        // changing it. Late AX replies may update the current target, but
+        // must never rewind the physical simulation.
+        integrate(to: e.t)
+        let explicit = (e.kind == .down && e.button == 0) || (e.kind == .keyDown && e.isTypingKey)
+        if let config = cropConfig, explicit {
             var rect: CGRect?
-            if let f = focus, f.anchor?.resolved == true, f.w > 0, f.h > 0 {
+            if e.kind == .keyDown, let f = focus,
+               let field = TypingFocus.field(f, at: e.t, bounds: CGRect(x: 0, y: 0, width: src.x, height: src.y), backing: 1) {
+                rect = field.rect
+            } else if e.kind == .down, let f = focus, f.anchor?.resolved == true,
+                      f.x.isFinite, f.y.isFinite, f.w.isFinite, f.h.isFinite, f.w > 0, f.h > 0 {
                 rect = CGRect(x: f.x, y: f.y, width: f.w, height: f.h)
-            } else if e.kind == .down, e.hasPosition {
+            } else if e.kind == .down, e.hasPosition, e.x.isFinite, e.y.isFinite {
                 let p = SIMD2(Double(e.x), Double(e.y))
                 if p.x < roiPx.minX || p.x > roiPx.maxX || p.y < roiPx.minY || p.y > roiPx.maxY {
                     rect = CGRect(x: p.x - 100, y: p.y - 20, width: 200, height: 40)
@@ -77,7 +88,7 @@ public struct LiveCamera: Sendable {
                 cropUntil = e.t + max(config.returnSeconds, 0.05)
             }
         }
-        if e.hasPosition {
+        if e.hasPosition, e.x.isFinite, e.y.isFinite {
             let p = SIMD2(Double(e.x), Double(e.y))
             if rawT == 0 { pointer.x = SIMD3(p.x, p.y, 0) }
             raw = p; rawT = e.t; shape = e.cursorShape
@@ -85,15 +96,24 @@ public struct LiveCamera: Sendable {
         }
         switch e.kind {
         case .down:
-            down = true; lastActivity = e.t; typingField = nil
-            rings.append((e.t, e.x, e.y))
+            down = true; lastActivity = e.t
+            if e.button == 0 { primaryDown = true; typingField = nil }
+            if e.x.isFinite, e.y.isFinite { rings.append((e.t, e.x, e.y)) }
             // Dwell / hysteresis: a rapid second press is the same intent, not a
             // new subject. Only the first aim in a burst gets to move the lens.
-            if e.button == 0, e.t - lastAim >= zoomInDwell {
-                aim(raw, scale: min(max(maxScale, 1), 1.7))
-                lastAim = e.t
+            if e.button == 0, e.hasPosition, e.x.isFinite, e.y.isFinite {
+                if e.t - lastAim >= zoomInDwell {
+                    aim(raw, scale: min(max(maxScale.isFinite ? maxScale : 2, 1), 1.7))
+                    lastAim = e.t
+                }
+                if lzShot > 0 { lastShotActivity = max(lastShotActivity, e.t) }
             }
-        case .up: down = false; lastActivity = e.t
+        case .up:
+            down = false; lastActivity = e.t
+            if e.button == 0 {
+                primaryDown = false
+                if lzShot > 0 { lastShotActivity = max(lastShotActivity, e.t) }
+            }
         case .keyDown:
             guard e.isTypingKey, e.t >= lastTyping else { return }
             let sameRun = e.t - lastTyping <= 1.5
@@ -104,21 +124,41 @@ public struct LiveCamera: Sendable {
                typingField?.matches(field, backing: 1) != true {
                 let rect = field.rect
                 let fit = min(src.x / (rect.width * 1.25), src.y / (rect.height * 1.25))
-                let scale = max(1, min(fit, maxScale))
+                let scale = max(1, min(fit, maxScale.isFinite ? maxScale : 2))
                 aim(SIMD2(rect.midX, rect.midY), scale: scale)
                 lastAim = e.t
                 typingField = field
             }
-            if typingField != nil { lastActivity = e.t }
-        case .drag, .scroll: lastActivity = e.t
+            lastActivity = e.t
+            if typingField != nil, lzShot > 0 { lastShotActivity = max(lastShotActivity, e.t) }
+        case .drag, .scroll:
+            lastActivity = e.t
+            // Navigation can sustain an existing shot, never resurrect an
+            // expired subject from a previous click.
+            if lzShot > 0, primaryDown || e.t - lastShotActivity <= hold {
+                lastShotActivity = max(lastShotActivity, e.t)
+            }
         default: break
         }
     }
     public mutating func step(to now: Double) -> FrameState {
+        integrate(to: now)
+        return state(at: t)
+    }
+
+    private mutating func integrate(to now: Double) {
+        guard now.isFinite else { return }
         if !started { t = now; started = true }
-        if now - t > 0.25 { t = now - 0.25 }
-        while t < now - 1e-9 { let dt = min(1.0 / 240, now - t); t += dt; advance(dt) }
-        return state(at: now)
+        guard now > t else { return }
+        // A slow display callback must not turn 0.5 real seconds into 0.25
+        // simulation seconds. Bound only extreme suspension gaps, where an
+        // eight-second integration is more than enough for the live lens.
+        if now - t > 8 { t = now - 8 }
+        while t < now - 1e-9 {
+            let dt = min(1.0 / 240, now - t)
+            t += dt
+            advance(dt)
+        }
     }
     private mutating func advance(_ dt: Double) {
         let tt = t
@@ -128,9 +168,11 @@ public struct LiveCamera: Sendable {
         if let idle = cursor.idleHide, tt - max(lastMove, lastActivity) >= idle { on = 0 }
         opacity += clamp(on - opacity, -dt / 0.4, dt / 0.15)
         rings.removeAll { tt - $0.t > max(cursor.clickDuration, 0.05) }
-        let active = down || tt - lastActivity <= hold
+        let active = lzShot > 0 && (primaryDown || tt - lastShotActivity <= hold)
+        if !active { lzShot = 0; typingField = nil }
         let target = active ? SIMD3(tgt.x, tgt.y, lzShot) : SIMD3(0.5, 0.5, 0)
-        camera.step(target: target, omega: SIMD3(repeating: omegaZoom), dt: dt)
+        let omega = clamp(omegaZoom.isFinite ? omegaZoom : 7.5, 2, 16)
+        camera.step(target: target, omega: SIMD3(repeating: active ? omega : min(omega, 6.5)), dt: dt)
         if cropConfig != nil {
             let targetCrop = tt > cropUntil ? roiPx : cropTarget
             let a = 1 - exp(-dt / 0.12)

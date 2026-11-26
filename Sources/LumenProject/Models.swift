@@ -276,7 +276,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
     public var hold = 0.9
     public var cameraModel = 5
     public var centerOffsetX = 0.0, centerOffsetY = 0.0         // view-normalized bias of where the cursor sits in the zoomed view
-    public var sensitivity = 0.5                                // 0 = only clicks, 1 = purposeful hovers count too
+    public var sensitivity = 0.5                                // scales explicit/visual attention sensitivity; hover is not an intent
     public var shutter = 0.5
     public var maxSamples = 12
     /// User setting for the real-time upscaler cap (2...10, ladder
