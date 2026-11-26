@@ -60,7 +60,7 @@
   };
   const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch { toast("Storage unavailable. Export your data."); } };
 
-  const state = { view: "overview", selected: seed.issues[0] && seed.issues[0].id, query: "", filter: "All", ci: null, prs: null, activity: null, syncTime: null, syncing: false, issues: null, issuesError: null };
+  const state = { view: "overview", selected: seed.issues[0] && seed.issues[0].id, query: "", filter: "All", ci: null, prs: null, activity: null, syncTime: null, syncing: false, lastSyncAt: 0, issues: null, issuesError: null };
   const auth = { token: null, user: null, key: null };
   const ui = { modal: null, busy: false, draft: { title: "", body: "" }, ctx: null, originId: null, published: null, backTo: null, hint: "" };
 
@@ -385,37 +385,44 @@
     $("sync-label").textContent = on ? "Checking" : "Sync GitHub";
   }
 
-  async function sync() {
-    if (state.syncing) return;
+  const LIVE_SYNC_MS = 5 * 60_000;
+  async function sync(force = false) {
+    const now = Date.now();
+    if (state.syncing || (!force && now - state.lastSyncAt < LIVE_SYNC_MS)) return;
+    state.lastSyncAt = now;
     setSync(true);
     refreshIssues();
     try {
       const get = async p => {
-        const r = await fetch(API + p, { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" });
+        const headers = { Accept: "application/vnd.github+json" };
+        if (auth.token) headers.Authorization = "Bearer " + auth.token;
+        const r = await fetch(API + p, { headers, cache: "no-store" });
         if (!r.ok) throw Error("GitHub HTTP " + r.status);
         return r.json();
       };
-      const [prs, openPrs, head, commits, runs] = await Promise.all([
-        get("/pulls?state=all&per_page=100"), get("/pulls?state=open&per_page=100"), get("/commits/main"),
-        get("/commits?sha=main&per_page=8"), get("/actions/runs?branch=main&event=push&per_page=100")
+      const [prs, commits, runs] = await Promise.all([
+        get("/pulls?state=all&per_page=100"), get("/commits?sha=main&per_page=8"),
+        get("/actions/runs?branch=main&event=push&per_page=100")
       ]);
+      const head = commits[0];
+      if (!head) throw Error("GitHub main has no commits");
       const map = {};
-      for (const p of [...prs, ...openPrs]) map[p.number] = { state: p.state, merged_at: p.merged_at };
+      for (const p of prs) map[p.number] = { state: p.state, merged_at: p.merged_at };
       state.prs = map;
       const latest = (runs.workflow_runs || []).find(x => x.name === "Swift verification" && x.head_branch === "main" && x.event === "push" && x.head_sha === head.sha);
       state.ci = latest
         ? { status: latest.conclusion || latest.status || "unknown", stage: "Swift verification", sha: head.sha, run: latest.id }
         : { status: "unknown", stage: "No verification run for this commit", sha: head.sha };
-      state.activity = { head: head.sha, commits: commits.map(c => ({ sha: c.sha, message: (c.commit?.message || "").split("\n")[0], date: c.commit?.committer?.date })), openPulls: openPrs.map(p => ({ number: p.number, title: p.title })) };
+      state.activity = { head: head.sha, commits: commits.map(c => ({ sha: c.sha, message: (c.commit?.message || "").split("\n")[0], date: c.commit?.committer?.date })), openPulls: prs.filter(p => p.state === "open").map(p => ({ number: p.number, title: p.title })) };
       state.syncTime = new Date().toISOString();
       state.syncing = false; render();
-      toast("GitHub metadata refreshed");
+      if (force) toast("GitHub metadata refreshed");
     } catch {
       state.ci = { status: "unknown", stage: "GitHub sync failed" };
       state.prs = null; state.activity = null;
       state.syncing = false;
       render();
-      toast("GitHub sync failed. Current status is unavailable.");
+      if (force) toast("GitHub sync failed. Current status is unavailable.");
     }
   }
 
@@ -677,7 +684,7 @@
     agent: el => { state.selected = el.dataset.id; setView("agent"); },
     regress: el => { state.selected = el.dataset.id; setView("regressions"); },
     filter: el => { state.filter = el.dataset.filter; render(); },
-    sync,
+    sync: () => sync(true),
     refresh: () => { state.issues = null; state.issuesError = null; if (state.view === "overview") render(); refreshIssues(); },
     export: exportData,
     import: () => $("import-file") && $("import-file").click(),
@@ -769,9 +776,7 @@
 
   render();
   sync();
-  // Refresh while the dashboard is visible. Never overlap requests or keep
-  // polling a background tab; refresh immediately when the user returns.
-  const LIVE_SYNC_MS = 30_000;
+  // Refresh while visible without exhausting GitHub's anonymous API quota.
   setInterval(() => {
     if (document.visibilityState === "visible" && !state.syncing) sync();
   }, LIVE_SYNC_MS);
