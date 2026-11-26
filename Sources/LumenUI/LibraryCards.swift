@@ -31,7 +31,7 @@ struct LedgerCard: View {
             ForEach(metrics, id: \.label) { m in
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: Space.s2) {
-                        Image(systemName: m.icon).font(.system(size: 14)).frame(width: 16)
+                        PixelSymbol(m.icon, size: 14).frame(width: 16)
                         Text(m.label).font(AppType.caption).tracking(0)
                     }.foregroundStyle(Tok.text2)
                     Text(m.value).font(AppType.metric).tracking(-0.6).foregroundStyle(Tok.text)
@@ -149,7 +149,7 @@ private struct RecordingRow: View {
     var body: some View {
         if row.unreadable {
             HStack(spacing: Space.s3) {
-                Image(systemName: "exclamationmark.circle").font(.system(size: 14)).foregroundStyle(Tok.statusBad)
+                PixelSymbol("exclamationmark.circle", size: 14).foregroundStyle(Tok.statusBad)
                     .frame(width: 24, height: 24)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.name).font(AppType.label).tracking(-0.1).foregroundStyle(Tok.text)

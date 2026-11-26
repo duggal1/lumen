@@ -21,7 +21,6 @@ import LumenCapture
     init(_ app: AppModel, screen: NSScreen?) {
         self.app = app
         FloatingBarController.current = self
-        bar.appearance = NSAppearance(named: .aqua)
         bar.title = "Lumen recording controls"
         bar.isMovableByWindowBackground = true
         bar.setAccessibilityLabel("Lumen recording controls")
@@ -40,7 +39,8 @@ import LumenCapture
                         onStop: { [weak self] in self?.app.toggle() },
                         onPause: { [weak self] in self?.app.togglePause() },
                         onDiscard: { [weak self] in self?.app.discard() },
-                        onCancel: { [weak self] in self?.app.cancelStart() })
+                        onCancel: { [weak self] in self?.app.cancelStart() },
+                        onHide: { [weak self] in self?.app.hideFloatingBar() })
     }
 
     // MARK: Lifecycle
@@ -161,7 +161,6 @@ import LumenCapture
         default: content = AnyView(CaptureSettingsPanelView(app: app))
         }
         let panel = GlassPanel(radius: 16, level: .statusBar)
-        panel.appearance = NSAppearance(named: .aqua)
         let size = panel.install(content)
         // Centre under the trigger, below the bar, clamped to the screen.
         let screen = NSScreen.screens.first(where: { $0.frame.contains(bar.frame.origin) }) ?? NSScreen.main

@@ -16,12 +16,34 @@ private func cellFill(_ c: inout GraphicsContext, _ r: CGRect, _ color: Color) {
 }
 struct PixelBitmap: View {
     let rows: [String]; var cell: CGFloat = 2; var color: Color = Tok.text
+    /// Legacy semantic marks use Apple symbols rather than handwritten icons.
+    private var symbol: String? {
+        switch rows {
+        case Bitmap.check: "checkmark"
+        case Bitmap.disc: "circle.fill"
+        case Bitmap.arrowRight: "arrow.right"
+        case Bitmap.failed: "xmark"
+        case Bitmap.mic: "mic.fill"
+        case Bitmap.bang: "exclamationmark"
+        case Bitmap.lens: "camera.aperture"
+        default: nil
+        }
+    }
     var body: some View {
-        Canvas { c, _ in
-            for (y, r) in rows.enumerated() { for (x, ch) in r.enumerated() where ch == "#" || ch == "W" {
-                cellFill(&c, CGRect(x: CGFloat(x) * cell, y: CGFloat(y) * cell, width: cell, height: cell), ch == "W" ? Tok.text : color)
-            } }
-        }.frame(width: CGFloat(rows[0].count) * cell, height: CGFloat(rows.count) * cell)
+        let width = CGFloat(rows.first?.count ?? 0) * cell
+        let height = CGFloat(rows.count) * cell
+        Group {
+            if let symbol {
+                PixelSymbol(symbol, size: max(width, height)).foregroundStyle(color)
+            } else {
+                // Preserve non-icon decorative pixel fields.
+                Canvas { c, _ in
+                    for (y, r) in rows.enumerated() { for (x, ch) in r.enumerated() where ch == "#" || ch == "W" {
+                        cellFill(&c, CGRect(x: CGFloat(x) * cell, y: CGFloat(y) * cell, width: cell, height: cell), ch == "W" ? Tok.text : color)
+                    } }
+                }
+            }
+        }.frame(width: width, height: height)
     }
 }
 
