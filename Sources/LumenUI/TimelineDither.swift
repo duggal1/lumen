@@ -47,11 +47,11 @@ final class TimelineDitherRenderer {
     static let lanes = 5
     static let glowPad = 6
     private static let rowsPerLane = Int(laneHeight / pitch) // 10
-    private static let space = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    private static let space = CGColorSpace(name: CGColorSpace.displayP3) ?? CGColorSpaceCreateDeviceRGB()
     /// Bayer 4×4, in the same order as Clove.
     private static let bayer: [Float] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map { (Float($0) + 0.5) / 16 }
 
-    /// Clove's `StorageHue` set, expressed in the sRGB space the
+    /// Clove's `StorageHue` set, expressed in the same Display P3 space the
     /// pasted renderer draws into. Media roles keep their identity: clips
     /// blue, imports green, zoom orange, clicks violet, voice cyan, music pink,
     /// cuts rose, system grey.
@@ -67,9 +67,9 @@ final class TimelineDitherRenderer {
     ]
     /// Deeper on paper so dithered cells keep contrast outside graphite chrome.
     static let lightHues: [(Double, Double, Double)] = [
-        (29/255, 78/255, 216/255), (21/255, 128/255, 61/255), (194/255, 65/255, 12/255),
-        (109/255, 40/255, 217/255), (14/255, 116/255, 144/255), (190/255, 24/255, 93/255),
-        (190/255, 18/255, 60/255), (71/255, 85/255, 105/255),
+        (0.012, 0.471, 0.906), (0.000, 0.639, 0.227), (0.910, 0.404, 0.000),
+        (0.533, 0.282, 0.882), (0.000, 0.627, 0.729), (0.878, 0.212, 0.580),
+        (0.886, 0.208, 0.196), (0.557, 0.557, 0.573),
     ]
 
     let width: CGFloat, height: CGFloat, scale: CGFloat
@@ -93,7 +93,7 @@ final class TimelineDitherRenderer {
         let palette = isDark ? Self.hues : Self.lightHues
         colors = palette.map { RGB(r: Float($0.0 * 255), g: Float($0.1 * 255), b: Float($0.2 * 255)) }
         empty = isDark ? RGB(r: 255, g: 255, b: 255) : RGB(r: 0, g: 0, b: 0)
-        emptyAlpha = isDark ? 18 : 16
+        emptyAlpha = isDark ? 18 : 24
         seam = isDark ? CGColor(gray: 1, alpha: 0.6) : CGColor(gray: 0, alpha: 0.22)
         cellsWidth = Int((self.width * self.scale).rounded())
         cellsHeight = Int((height * self.scale).rounded())
@@ -161,7 +161,7 @@ final class TimelineDitherRenderer {
                     }
                     for step in 0..<steps {
                         let fraction = Float(step) / Float(max(maxSteps - 1, 1))
-                        let alpha: Float = 255 - (isDark ? 36 : 16) * fraction
+                        let alpha: Float = 255 - 36 * fraction
                         put(x, middle - (step + 1) * gap, cell, c.r, c.g, c.b, alpha)
                         put(x, middle + step * gap, cell, c.r, c.g, c.b, alpha)
                     }
@@ -189,11 +189,11 @@ final class TimelineDitherRenderer {
                     // Bright, mirrored audio amplitude; the other lanes keep
                     // their existing Bayer identity and media-role hues.
                     let threshold = Self.bayer[(r & 3) * 4 + (col & 3)]
-                    let level: Float = isDark ? 0.64 + 0.22 * base : 0.76 + 0.22 * base
+                    let level: Float = 0.64 + 0.22 * base
                     if level > threshold || (f.playing && col == f.head) {
                         put(x0 + litOff, y0 + litOff, lit, c.r, c.g, c.b, 250)
                     } else {
-                        put(x0 + dimOff, y0 + dimOff, dim, c.r, c.g, c.b, isDark ? 90 : 160)
+                        put(x0 + dimOff, y0 + dimOff, dim, c.r, c.g, c.b, 90)
                     }
                 }
             }

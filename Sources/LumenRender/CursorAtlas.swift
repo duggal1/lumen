@@ -323,12 +323,7 @@ public final class CursorAtlas {
         // hand is not an open hand, and text selection is not an arrow.
         switch s {
         case .arrow:
-            if pack == .system {
-                // Familiar arrow silhouette with a defined stem and true tip.
-                let p = SVGPath.parse("M4 3 L4 26 L11 19 L17 30 L21 28 L15 17 L26 17 Z")
-                fillMark(p, rim: 1)
-                return [4, 3]
-            }
+            // 24-unit arrow at 1.4x (about 25 pt tall), tip is the hotspot
             return glyph(arrowD, tip: CGPoint(x: 3.2, y: 3.2), hot: CGPoint(x: 3.5, y: 3.5), scale: 1.4, stroke: 2.1)
         case .iBeam:
             let beam = CGPath(roundedRect: CGRect(x: 14.4, y: 7.4, width: 3.2, height: 17.2), cornerWidth: 0.6, cornerHeight: 0.6, transform: nil)
