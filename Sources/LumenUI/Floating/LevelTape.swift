@@ -13,7 +13,9 @@ struct LevelTape: View {
     let meter: RecordingMeter
     let paused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var levels: [Double] = []
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var levels = Array(repeating: 0.0, count: 24)
+    @State private var next = 0
     @State private var smoothedLevel = 0.0
 
     private let columns = 24
@@ -24,8 +26,7 @@ struct LevelTape: View {
     var body: some View {
         Canvas { context, size in
             for column in 0..<columns {
-                let index = levels.count - columns + column
-                let value = index >= 0 && index < levels.count ? levels[index] : 0
+                let value = levels[(next + column) % columns]
                 let x = CGFloat(column) * pitch
                 let magnitude = Int((value * 3).rounded(.up))
                 for row in 0..<rows {
@@ -33,7 +34,7 @@ struct LevelTape: View {
                     let active = magnitude > 0 && distance < magnitude * 2 - 1
                     let rect = CGRect(x: x, y: CGFloat(row) * pitch, width: cell, height: cell)
                     if active {
-                        context.fill(Path(rect), with: .color(Tok.accent), style: FillStyle(antialiased: false))
+                        context.fill(Path(rect), with: .color(colorScheme == .dark ? .white : .black), style: FillStyle(antialiased: false))
                     }
                 }
             }
@@ -50,8 +51,8 @@ struct LevelTape: View {
                 let target = Self.normalize(meter.level)
                 let rate = target > smoothedLevel ? 26.0 : 10.0
                 smoothedLevel += (target - smoothedLevel) * (1 - exp(-seconds * rate))
-                levels.append(smoothedLevel)
-                if levels.count > columns { levels.removeFirst(levels.count - columns) }
+                levels[next] = smoothedLevel
+                next = (next + 1) % columns
                 try? await Task.sleep(for: reduceMotion ? .milliseconds(100) : .microseconds(16_667))
             }
         }

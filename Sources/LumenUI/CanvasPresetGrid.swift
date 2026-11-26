@@ -22,7 +22,7 @@ struct CanvasPresetGrid: View {
                 } label: {
                     VStack(spacing: 6) {
                         CanvasPresetPreview(preset: preset)
-                            .overlay(alignment: .topTrailing) { if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(.white).padding(5) } }
+                            .overlay(alignment: .topTrailing) { if selected { PixelSymbol("checkmark.circle.fill", size: 14).foregroundStyle(.white).padding(5) } }
                             .aspectRatio(1.6, contentMode: .fit)
                         Text(preset.name)
                             .font(AppType.caption)

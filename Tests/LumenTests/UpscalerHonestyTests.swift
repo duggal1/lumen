@@ -211,3 +211,13 @@ private enum Honesty {
     #expect(sixty < 1.0 / 60.0, "60fps work took \(sixty * 1000)ms")
     #expect(worst < 1.0 / 30.0, "worst-rung work took \(worst * 1000)ms")
 }
+
+@Test func upscaleBudgetSelectsOnlyRealAllocatableRungs() {
+    let roi = SIMD4<Int32>(0, 0, 240, 135)
+    #expect(Upscaler.boundedFactor(forMagnification: 10, maxFactor: 10, region: roi, pixelLimit: 4_000_000) == 10)
+    #expect(Upscaler.boundedFactor(forMagnification: 10, maxFactor: 10, region: roi, pixelLimit: 1_000_000) == 5)
+    #expect(Upscaler.boundedFactor(forMagnification: 10, maxFactor: 10, region: roi, pixelLimit: 100) == nil)
+    #expect(Upscaler.boundedFactor(forMagnification: 2, maxFactor: 10, region: SIMD4(0, 0, .max, .max), pixelLimit: 12_000_000) == nil)
+    let region = Upscaler.region(center: .zero, view: SIMD2(.nan, .infinity), source: SIMD2(1920, 1080), margin: .nan)
+    #expect(region.z > 0 && region.w > 0)
+}

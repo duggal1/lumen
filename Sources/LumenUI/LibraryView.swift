@@ -132,7 +132,7 @@ struct LibrarySurface: View {
 
     private func notice(_ text: String, action: @escaping () -> Void) -> some View {
         HStack(spacing: Space.s3) {
-            Image(systemName: "exclamationmark.triangle").font(.system(size: 14)).foregroundStyle(Tok.text2)
+            PixelSymbol("exclamationmark.triangle", size: 14).foregroundStyle(Tok.text2)
             Text(text).font(AppType.label).foregroundStyle(Tok.text)
             Spacer(minLength: Space.s4)
             LButton(title: "Open Settings", kind: .primary, height: 24, action: action)
@@ -146,7 +146,7 @@ struct LibrarySurface: View {
     /// the frames on disk; recovery rebuilds the timeline around them.
     private func recovery(_ bundle: ProjectBundle) -> some View {
         HStack(spacing: Space.s3) {
-            Image(systemName: "clock.arrow.circlepath").font(.system(size: 14)).foregroundStyle(Tok.activity)
+            PixelSymbol("clock.arrow.circlepath", size: 14).foregroundStyle(Tok.activity)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Unfinished recording").font(AppType.label).foregroundStyle(Tok.text)
                 Text(bundle.url.deletingPathExtension().lastPathComponent)
@@ -184,7 +184,7 @@ struct LibrarySurface: View {
                 VStack(alignment: .leading, spacing: 0) {
                     // Header
                     HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "record.circle").font(.system(size: 18)).foregroundStyle(Tok.accent).padding(.top, 2)
+                        PixelSymbol("record.circle", size: 18).foregroundStyle(Tok.accent).padding(.top, 2)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("New recording").font(AppType.title).tracking(-0.2).foregroundStyle(Tok.text)
                             Text("Choose what to capture.").font(AppType.caption).foregroundStyle(Tok.text2)
@@ -388,7 +388,7 @@ struct LibrarySurface: View {
             compactToggle("Webcam", icon: "video", Bindable(app).webcam)
             if app.webcam {
                 HStack(spacing: Space.s4) {
-                    Label("Webcam quality", systemImage: "camera.aperture")
+                    PixelSymbolLabel("Webcam quality", symbol: "camera.aperture")
                         .font(AppType.label).foregroundStyle(Tok.text)
                     Spacer(minLength: Space.s4)
                     LSegmented(sel: Bindable(app).webcamQuality, items: WebcamQuality.allCases.map { ($0, $0.title) },
@@ -404,7 +404,7 @@ struct LibrarySurface: View {
 
     private func compactToggle(_ label: String, icon: String, _ on: Binding<Bool>) -> some View {
         HStack(spacing: Space.s4) {
-            Label(label, systemImage: icon).font(AppType.label).foregroundStyle(Tok.text)
+            PixelSymbolLabel(label, symbol: icon).font(AppType.label).foregroundStyle(Tok.text)
             Spacer(minLength: Space.s4)
             LToggle(on: on, label: label)
         }
@@ -413,7 +413,7 @@ struct LibrarySurface: View {
 
     private func field<C: View>(_ label: String, icon: String, @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: Space.s2) {
-            Label(label, systemImage: icon).font(AppType.caption).foregroundStyle(Tok.text2)
+            PixelSymbolLabel(label, symbol: icon).font(AppType.caption).foregroundStyle(Tok.text2)
             content()
         }
     }

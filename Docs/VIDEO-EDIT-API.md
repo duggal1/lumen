@@ -84,7 +84,7 @@ non-mutating tool and for the six mutating tools where repeating an identical ca
 `add_music`, `remove_music`, `reorder_clips`, `set_speed`, `set_zoom`, `trim_clip`. Every other
 mutating tool is `false`.
 
-**One catalog, 49 tools.** There is exactly one canonical verb per operation. The typed edit verbs
+**One catalog, 50 tools.** The v2 audio transaction is the preferred clip-editing surface; legacy music-bed verbs remain compatibility adapters. The typed edit verbs
 (`cut_span`, `split_clip`, `trim_clip`, `reorder_clips`, `set_speed`, `add_music`, `remove_music`,
 `add_caption`, `set_zoom`, `get_edit`, `render_preview`, `export_final`) are the only editing
 vocabulary. The older overlapping verbs they replaced (`cut_range`, `speed_ramp_set`, `zoom_add`,
@@ -97,6 +97,7 @@ failure.
 ```text
 add_caption | edit | edit | project_id,text | yes | no | no | no | yes | yes | -
 add_music | edit | edit | path,project_id | yes | yes | no | no | yes | yes | -
+audio_edit_v2 | edit | edit | ops,project_id,revision | yes | no | yes | no | yes | no | -
 audio_mix_set | edit | edit | project_id | yes | no | no | no | no | no | -
 background_list | read | - | - | no | yes | no | no | no | no | -
 background_set | edit | edit | project_id | yes | no | no | no | no | no | -
@@ -337,3 +338,6 @@ resource `lumen://project/<id>/markers` reveals its host time. `cut_span` takes 
 seconds; `get_edit` reads the current time basis back so the span lands on the marked sentence.
 `timeline_patch` `cut_add` is the batch equivalent. `add_music` anchors by `at` (output seconds) —
 reading the marker time from `get_edit` first, because a marker host time is a different clock.
+
+## Revisioned audio editing (v2)
+Read `get_edit.audio_lanes` and `revision`. `audio_edit_v2` takes an ordered batch of up to 64 add/update/split/remove operations. Source trims are in asset seconds; placement and split are in output seconds. New finite clips default to non-looping, with stable client-supplied UUIDs; legacy beds keep looping. The server probes audio assets before adding. The same batch validator is used for dry run. Trim updates may shrink the selected source excerpt; full asset relinking and durable retry receipts are future work. See `lumen://skills/audio-edit`.

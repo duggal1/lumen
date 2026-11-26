@@ -20,9 +20,9 @@ public struct FrameBudget: Sendable, Equatable {
     public var allowedOverBudgetFraction: Double
 
     public init(fps: Double = 60, latencyAllowance: Double = 1.05, allowedOverBudgetFraction: Double = 0.02) {
-        self.fps = max(fps, 1)
-        self.latencyAllowance = max(latencyAllowance, 1)
-        self.allowedOverBudgetFraction = min(max(allowedOverBudgetFraction, 0), 1)
+        self.fps = fps.isFinite ? max(fps, 1) : 60
+        self.latencyAllowance = latencyAllowance.isFinite ? max(latencyAllowance, 1) : 1.05
+        self.allowedOverBudgetFraction = allowedOverBudgetFraction.isFinite ? min(max(allowedOverBudgetFraction, 0), 1) : 0.02
     }
 
     public var budgetMilliseconds: Double { 1000 / fps }
@@ -41,7 +41,7 @@ public struct FrameBudget: Sendable, Equatable {
         let deadline = clickScenario ? budgetMilliseconds : budgetMilliseconds * latencyAllowance
         let over = samples.filter { $0 > deadline }.count
         let passes = clickScenario
-            ? p99 < 16.6 && worst <= 33 && over == 0
+            ? p99 < budgetMilliseconds * 0.996 && worst <= budgetMilliseconds * 2 && over == 0
             : p99 <= deadline && Double(over) / Double(n) <= allowedOverBudgetFraction
         let summary = String(format: "%d frames · avg %.2f ms · p95 %.2f · p99 %.2f · worst %.2f · over %d/%d · %@",
                              n, average, p95, p99, worst, over, n, passes ? "pass" : "FAIL")

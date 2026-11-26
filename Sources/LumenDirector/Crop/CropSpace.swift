@@ -21,23 +21,28 @@ public enum CropSpace {
     public static func visible(crop: PxRect, aspect: Double?, u: Double, v: Double, logZ: Double) -> PxRect {
         guard crop.isValid else { return crop }
         let base = baseView(crop: crop, aspect: aspect)
-        let z = max(1.0, exp(logZ))
+        let z = exp(min(max(logZ.isFinite ? logZ : 0, 0), log(10_000.0)))
         let vw = base.w / z, vh = base.h / z
-        let cx = min(max(crop.x + u * crop.w, crop.x + vw / 2), crop.maxX - vw / 2)
-        let cy = min(max(crop.y + v * crop.h, crop.y + vh / 2), crop.maxY - vh / 2)
+        let nx = min(max(u.isFinite ? u : 0.5, 0), 1)
+        let ny = min(max(v.isFinite ? v : 0.5, 0), 1)
+        let cx = min(max(crop.x + nx * crop.w, crop.x + vw / 2), crop.maxX - vw / 2)
+        let cy = min(max(crop.y + ny * crop.h, crop.y + vh / 2), crop.maxY - vh / 2)
         return PxRect(x: cx - vw / 2, y: cy - vh / 2, w: vw, h: vh)
     }
 
     /// Converts a source-pixel target to crop-normalised coordinates AT THE
     /// TARGET'S OWN TIME, so a moving crop never shifts a settled camera shot.
     public static func normalise(_ px: Double, _ py: Double, crop: PxRect) -> (u: Double, v: Double) {
-        ((px - crop.x) / crop.w, (py - crop.y) / crop.h)
+        guard crop.isValid else { return (0.5, 0.5) }
+        return (px.isFinite ? (px - crop.x) / crop.w : 0.5,
+                py.isFinite ? (py - crop.y) / crop.h : 0.5)
     }
 
     /// Largest rect of `aspect` inside `box`, centred. Evaluated per tick
     /// OUTSIDE the layout spring so view aspect always equals frame aspect.
     public static func fit(aspect: Double, in box: PxRect) -> PxRect {
-        aspect > box.aspect
+        guard aspect.isFinite, aspect > 0, box.isValid else { return box }
+        return aspect > box.aspect
             ? box.centered(w: box.w, h: box.w / aspect)
             : box.centered(w: box.h * aspect, h: box.h)
     }
@@ -45,6 +50,8 @@ public enum CropSpace {
     /// 1 inside the crop, smoothly 0 within `feather` source px outside it.
     /// Multiply the cursor's opacity by this so the pointer never leaves frame.
     public static func cursorVisibility(x: Double, y: Double, crop: PxRect, feather: Double = 24) -> Double {
+        guard crop.isValid, x.isFinite, y.isFinite else { return 0 }
+        if !feather.isFinite || feather <= 0 { return crop.contains(x, y) ? 1 : 0 }
         let d = hypot(max(crop.x - x, 0, x - crop.maxX), max(crop.y - y, 0, y - crop.maxY))
         let t = min(max(1 - d / feather, 0), 1)
         return t * t * (3 - 2 * t)

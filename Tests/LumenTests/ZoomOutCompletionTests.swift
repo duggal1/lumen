@@ -140,7 +140,12 @@ private enum ZoomOutProbe {
     timeline.zoom = [ZoomSegment(start: 2, end: 3, scale: 2,
                                  focus: .fixed(x: 0.35, y: 0.6), origin: .auto)]
     let input = DirectorInput(events: [], source: source)
-    let derived = Director.derive(timeline, input: input, revision: 1)
+    var derived = Director.derive(timeline, input: input, revision: 1)
+    let camera = CameraSolver.solve(zoom: timeline.zoom, tm: timeline.timeMap,
+                                    cursor: CursorTrack(count: Int(source.duration * gridRate) + 1),
+                                    p: timeline.camera, src: SIMD2(1920, 1080),
+                                    outDur: source.duration, loop: nil)
+    derived.derived?.camera = camera
     let first = derived.evaluate(at: 3)
     let last = derived.evaluate(at: 3.7)
     let span = first.cameraScale - last.cameraScale

@@ -436,3 +436,16 @@ private enum RV {
         #expect(note.contains("maxDelta"))
     }
 }
+
+@Test func compositedZoomActuallyUsesEnabledUpscaler() throws {
+    let (renderer, source) = try RV.setup()
+    var tl = RV.staticTimeline(shutter: 0, fps: 90)
+    let state = RV.liveState(crop: nil, center: SIMD2(240, 135), scale: 4)
+    tl.camera.upscaleEnabled = false
+    let direct = try RV.render(renderer, tl, source, t: 0.5, fps: 90, live: state)
+    tl.camera.upscaleEnabled = true
+    let enhanced = try RV.render(renderer, tl, source, t: 0.5, fps: 90, live: state)
+    let repeated = try RV.render(renderer, tl, source, t: 0.5, fps: 90, live: state)
+    #expect(RV.diff(direct.pixels, enhanced.pixels) > 0, "upscaler toggle did not reach composition")
+    #expect(enhanced.pixels == repeated.pixels, "static upscale must not shimmer")
+}

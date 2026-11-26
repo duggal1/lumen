@@ -79,7 +79,7 @@ public struct ExportPreset: Codable, Hashable, Sendable, Identifiable {
 
 public enum ExportPresets {
     static let heights = [1080, 1440, 1620, 2160, 4320]
-    static let rates = [24, 30, 60, 120, 144, 240]
+    static let rates = [24, 30, 60, 90, 120, 144, 240]
 
     public static let all: [ExportPreset] = {
         var out: [ExportPreset] = []
@@ -152,7 +152,7 @@ public final class ExportCapabilityMatrix: @unchecked Sendable {
     /// Returns a user-visible notice when it falls back.
     public func resolve(_ p: ExportPreset, aspect: Double = 16.0 / 9) -> (ExportPreset, String?) {
         if supports(p, aspect: aspect) { return (p, nil) }
-        let fpsSteps = [p.fps] + [240, 144, 120, 60, 30, 24].filter { $0 < p.fps }
+        let fpsSteps = [p.fps] + [240, 144, 120, 90, 60, 30, 24].filter { $0 < p.fps }
         let heights = [p.height] + [4320, 2160, 1620, 1440, 1080].filter { $0 < p.height }
         // Alpha is a delivery promise: never fall back to a codec that cannot
         // carry it. Resolution and frame rate may still come down.

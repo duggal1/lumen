@@ -322,14 +322,20 @@ public enum Director {
                 cues += clicks.map { SFXCue(t: $0.t, kind: .click, gainDb: t.audio.clickGainDb) }
             }
             if t.audio.keySounds {
-                // One physical press/release pair, independent of OS autorepeat.
+                // Explicit OS autorepeat is never a new physical press. Legacy
+                // down-only streams have no reliable release state, so retain
+                // their events instead of silencing all subsequent presses.
+                let paired = Set(input.events.lazy.filter { $0.kind == .keyUp }.map(\.keyCode))
                 var held = Set<UInt16>()
                 var privateKeys = Set<UInt16>()
                 for event in input.events.sorted(by: { $0.t < $1.t }) {
                     let release: Bool
                     switch event.kind {
                     case .keyDown:
-                        guard held.insert(event.keyCode).inserted else { continue }
+                        guard !event.isKeyRepeat else { continue }
+                        if paired.contains(event.keyCode) {
+                            guard held.insert(event.keyCode).inserted else { continue }
+                        }
                         if event.axFrameIndex > 0, Int(event.axFrameIndex) <= input.ax.count,
                            input.ax[Int(event.axFrameIndex) - 1].secure { privateKeys.insert(event.keyCode); continue }
                         release = false
@@ -616,7 +622,7 @@ extension Timeline {
         let cs = CursorSample(position: pos, velocity: vel, opacity: cf(cr(u.opacity, f), 0, 1), press: cr(u.press, f),
                               shape: u.shape[min(Int(f.rounded()), u.shape.count - 1)])
         var rings: [ClickRing] = []
-        if cursor.clickRing != nil, cursor.clickEffect != .none, !d.clicks.isEmpty {
+        if cursor.clickEffect != .none, !d.clicks.isEmpty {
             let dur = max(cursor.clickDuration, 0.05)
             // A click whose time is the frame time must exist on that frame.
             // Source→output time conversion leaves a few 1e-14 of error, so an
@@ -629,7 +635,7 @@ extension Timeline {
             // every frame; the ring list is the one array that grows there.
             rings.reserveCapacity(8)
             while i < d.clicks.count, d.clicks[i].t <= t + eps {
-                rings.append(ClickRing(position: SIMD2(d.clicks[i].x, d.clicks[i].y), progress: Float((t - d.clicks[i].t) / dur)))
+                rings.append(ClickRing(position: SIMD2(d.clicks[i].x, d.clicks[i].y), progress: Float(clamp((t - d.clicks[i].t) / dur, 0, 1))))
                 i += 1
             }
             // Cap alive ripples: rapid clicking cannot fan out past 8 feeds.

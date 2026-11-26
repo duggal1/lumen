@@ -84,7 +84,7 @@ struct MusicPicker: View {
                 .buttonStyle(.plain).clickable()
                 .accessibilityLabel("\(track.title), \(track.category) music. \(playing ? "Playing, tap to stop" : "Tap to preview")")
                 Button(action: added ? onRemove : onAdd) {
-                    Image(systemName: added ? "check" : "plus")
+                    PixelSymbol(added ? "check" : "plus", size: 14)
                         .font(AppType.glyph).foregroundStyle(added ? Tok.text2 : Tok.text)
                         .frame(width: 24, height: 24)
                         .background(Circle().fill(added ? Tok.control : hue.opacity(0.22)))

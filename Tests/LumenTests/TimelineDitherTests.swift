@@ -119,3 +119,15 @@ struct TimelineDitherTests {
         #expect(host.contains("next.dt = 0; next.t = 0"), "wall time does not invalidate static cells")
     }
 }
+
+@Test func ditherMusicCellsReflectRealAmplitude() throws {
+    let renderer = try #require(TimelineDitherRenderer(width: 400, height: 224, scale: 1, isDark: true))
+    let spans: [[TimelineDitherRenderer.Span]] = [[], [], [], [], [.init(0, 80, 5)]]
+    let quiet = TimelineDitherRenderer.Frame(spans: spans, peaks: [], musicPeaks: Array(repeating: 0, count: 80),
+        clicks: [], head: -1, playing: false, reduced: true, dt: 0, t: 0)
+    var loud = quiet
+    loud.musicPeaks = Array(repeating: 0.8, count: 80)
+    let quietImage = try #require(renderer.draw(quiet).cells?.dataProvider?.data as? Data)
+    let loudImage = try #require(renderer.draw(loud).cells?.dataProvider?.data as? Data)
+    #expect(quietImage != loudImage)
+}
