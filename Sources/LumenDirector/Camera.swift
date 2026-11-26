@@ -146,7 +146,8 @@ enum CameraSolver {
                               logScale: clamp(log(z.scale), 0, maxLog))
             guard target.logScale > 1e-6 else { continue }
             let begin = manual ? a : max(a - rise, 0)
-            let arrive = manual ? min(a + rise, a + (b - a) * 0.45) : max(a, begin + 1 / cameraRate)
+            let settle = min(0.06, max(0, (a - begin) * 0.25))
+            let arrive = manual ? min(a + rise, a + (b - a) * 0.45) : max(a - settle, begin + 1 / cameraRate)
             let releaseEnd = fixed ? outDur : (manual ? b : min(b + tail, outDur))
             let holdEnd = fixed ? outDur : max(arrive, min(b, releaseEnd - min(tail, (releaseEnd - begin) * 0.4)))
             shots.append(Shot(start: begin, arrive: min(arrive, outDur), holdEnd: holdEnd,
@@ -157,7 +158,7 @@ enum CameraSolver {
             if a.manual != b.manual { return !a.manual }
             return a.arrive < b.arrive
         }
-        guard !shots.isEmpty else { return CameraTrack(count: 2, rate: cameraRate) }
+        guard !shots.isEmpty || p.tilt == .reveal else { return CameraTrack(count: 2, rate: cameraRate) }
 
         // The last leg before t is authoritative. Cutting an in-flight leg
         // evaluates its boundary state first, preserving C2 at the handoff.
@@ -208,7 +209,7 @@ enum CameraSolver {
             track.nx[i] = Float(x); track.ny[i] = Float(y); track.lz[i] = Float(lz)
             // 3D reveal is intentional, finite and opt-in; no idle float.
             if p.tilt == .reveal, time < 0.6 {
-                track.yaw[i] = Float(clamp(p.maxYaw.isFinite ? p.maxYaw : 8, 0, 8) * (1 - QuinticMove.envelope(time / 0.6)))
+                track.yaw[i] = Float(12 * (1 - QuinticMove.envelope(time / 0.6)))
             }
         }
         let rate = cameraRate
@@ -224,9 +225,11 @@ enum CameraSolver {
         derivatives(track.ny, velocity: &track.vy, acceleration: &track.ay)
         derivatives(track.lz, velocity: &track.vz, acceleration: &track.az)
         if p.tilt == .lean {
+            let yawLimit = clamp(p.maxYaw.isFinite ? p.maxYaw : 8, 0, 8)
+            let pitchLimit = clamp(p.maxPitch.isFinite ? p.maxPitch : 6, 0, 6)
             for i in track.lz.indices {
-                track.yaw[i] = Float(clamp(Double(track.vx[i]) * 4, -8, 8))
-                track.pitch[i] = Float(clamp(-Double(track.vy[i]) * 3, -6, 6))
+                track.yaw[i] = Float(clamp(Double(track.vx[i]) * 4, -yawLimit, yawLimit))
+                track.pitch[i] = Float(clamp(-Double(track.vy[i]) * 3, -pitchLimit, pitchLimit))
             }
         }
         return track

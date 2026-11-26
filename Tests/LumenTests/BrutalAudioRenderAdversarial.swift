@@ -59,17 +59,21 @@ private let advSource = SourceInfo(width: 1920, height: 1080, fps: 60, duration:
 /// or change the mix on a second run (deterministic export requirement).
 @Test func brutalThousandKeyStormMixesFiniteAndDeterministic() throws {
     var events: [InputEvent] = []
-    events.reserveCapacity(1000)
+    events.reserveCapacity(2000)
     for i in 0..<1000 {
         let code = UInt16((i * 37 + 11) % 128)
         let t = 0.01 + Double(i) * 0.0059
         events.append(InputEvent(t: t, kind: .keyDown, keyCode: code))
+        events.append(InputEvent(t: t + 0.002, kind: .keyUp, keyCode: code))
     }
     var tl = Timeline(duration: 6)
     tl.audio.speedRampsAuto = false
     let derived = Director.derive(tl, input: DirectorInput(events: events, source: advSource), revision: 1)
     let keys = (derived.derived?.cues ?? []).filter { $0.kind == .key }
-    #expect(keys.count == 1000, "expected 1000 key cues, got \(keys.count)")
+    let presses = keys.filter { !$0.isKeyRelease }
+    let releases = keys.filter { $0.isKeyRelease }
+    #expect(presses.count == 1000, "expected 1000 physical press cues")
+    #expect(releases.count == 1000, "expected 1000 physical release cues")
 
     let mic = [Float](repeating: 0, count: 6 * 48_000)
     let mixer = AudioMixer(mic: mic, micOffset: 0, system: nil, systemOffset: 0)
