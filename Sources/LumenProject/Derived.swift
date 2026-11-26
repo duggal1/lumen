@@ -203,7 +203,8 @@ public struct DerivedTracks: Sendable, Equatable {
                 clicks: [ClickFX], cues: [SFXCue], duck: [Float], face: [SIMD3<Float>], webcamAspect: Float,
                 layout: LayoutTrack = LayoutTrack(), placement: PlacementTrack = PlacementTrack(), captions: [CaptionChunk] = [],
                 autoMasks: [Mask] = [], personMask: PersonMaskInfo? = nil, crop: CropTrack = CropTrack(),
-                viewportCrop: DenseCropTrack = DenseCropTrack(), shortcutPills: [ShortcutDisplay] = []) {
+                viewportCrop: DenseCropTrack = DenseCropTrack(), shortcutPills: [ShortcutDisplay] = [],
+                shortcuts: [ShortcutCue] = []) {
         self.revision = revision; self.sourceSize = sourceSize; self.outputDuration = outputDuration; self.cursor = cursor
         self.camera = camera; self.clicks = clicks; self.cues = cues; self.duck = duck; self.face = face; self.webcamAspect = webcamAspect
         self.layout = layout; self.placement = placement; self.captions = captions; self.autoMasks = autoMasks; self.personMask = personMask

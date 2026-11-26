@@ -203,7 +203,7 @@ public enum WindowContent {
             // frame, then prefer the one whose title matches the captured one.
             let distance = abs(rect.minX - frame.minX) + abs(rect.minY - frame.minY)
                 + abs(rect.width - frame.width) + abs(rect.height - frame.height)
-            var score = distance
+            var score = Double(distance)
             if let title, let own = attribute(element, kAXTitleAttribute) as? String, !title.isEmpty, own == title {
                 score -= 400
             }
@@ -331,8 +331,9 @@ public enum WindowContent {
         for window in windows {
             AXUIElementSetMessagingTimeout(window, 0.05)
             guard let rect = axFrame(window) else { continue }
-            var score = abs(rect.minX - frame.minX) + abs(rect.minY - frame.minY)
+            let distance = abs(rect.minX - frame.minX) + abs(rect.minY - frame.minY)
                 + abs(rect.width - frame.width) + abs(rect.height - frame.height)
+            var score = Double(distance)
             if let title, let own = attribute(window, kAXTitleAttribute) as? String, own == title { score -= 400 }
             if best == nil || score < best!.1 { best = (window, score) }
         }

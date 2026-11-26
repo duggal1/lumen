@@ -476,7 +476,7 @@ public final class CursorAtlas {
             func px(_ x: Int, _ y: Int) -> CGRect {
                 CGRect(x: 4 + CGFloat(x) * cell, y: 2 + CGFloat(y) * cell, width: cell, height: cell)
             }
-            return [6 + cell / 2, 6 + cell / 2]
+            return SIMD2<Double>(6 + Double(cell) / 2, 6 + Double(cell) / 2)
         }
         if pack == .outline {
             // A sharp hollow arrow, with a real tip and a distinct tail.

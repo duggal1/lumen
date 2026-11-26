@@ -721,6 +721,30 @@ public final class AudioMixer: @unchecked Sendable {
                                             router: &router, settings: settings, frames: n)
             for i in 0..<n { L[i] += sfx.l[i]; R[i] += sfx.r[i] }
         }
+        Self.silenceClips(tl, &L, &R, fs: fs)
+        return AudioMaster.process([L, R], plan: a, hasProgram: hasProgram)
+    }
+
+    private func renderCues(_ tl: Timeline, startFrame: Int64, left: inout [Float], right: inout [Float],
+                            cancelled: (@Sendable () -> Bool)? = nil) {
+        let a = tl.audio
+        guard a.soundEffectsEnabled, cancelled?() != true, let cues = tl.derived?.cues else { return }
+        let active = cues.filter { cue in
+            guard cue.t.isFinite else { return false }
+            switch cue.kind {
+            case .key, .keyUp: return a.keySounds
+            case .click: return a.clickSounds
+            case .whooshIn, .whooshOut: return false
+            }
+        }
+        var settings = KeyMixSettings()
+        settings.keyLevelDb = a.typingLevelDb + 2
+        settings.clickLevelDb = a.sfxGainDb
+        settings.clickTone = a.clickTone
+        var router = KeyVariationRouter()
+        let sfx = KeySoundEngine.render(cues: active, library: KeySoundLibraryCache.shared,
+                                        router: &router, settings: settings, frames: left.count, startFrame: startFrame)
+        for i in left.indices { left[i] += sfx.l[i]; right[i] += sfx.r[i] }
     }
 
     /// Fast, bounded raw program for any seek position, while the canonical

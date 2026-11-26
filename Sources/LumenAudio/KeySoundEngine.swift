@@ -253,14 +253,14 @@ public enum KeySoundLibraryCache {
 public enum KeySoundEngine {
     public static func render(cues: [SFXCue], library: KeySoundLibrary,
                               router: inout KeyVariationRouter, settings: KeyMixSettings,
-                              frames: Int) -> StereoBuffer {
+                              frames: Int, startFrame: Int64 = 0) -> StereoBuffer {
         var left = [Float](repeating: 0, count: frames)
         var right = [Float](repeating: 0, count: frames)
         guard !library.isEmpty else { return StereoBuffer(l: left, r: right) }
         let keyAmp = Float(pow(10, settings.keyLevelDb / 20))
 
         func add(_ take: [Float], at t: Double, amplitude: Float) {
-            let start = Int((t * AudioIO.fs).rounded())
+            let start = Int((t * AudioIO.fs).rounded()) - Int(startFrame)
             guard start >= -take.count, start < frames else { return }
             for (k, sample) in take.enumerated() {
                 let i = start + k

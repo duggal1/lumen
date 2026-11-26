@@ -2,8 +2,10 @@ import Foundation
 import Metal
 import CoreVideo
 import QuartzCore
+import os
 import LumenCore
 import LumenProject
+import LumenDirector
 
 // MARK: - Budget
 
@@ -168,7 +170,8 @@ public struct RenderBenchmarkResult: Sendable, Equatable {
 /// Run manually from `lumen-cli bench`.
 public enum RenderBenchmark {
     public static func run(frames: Int = 120, width: Int = 1920, height: Int = 1080,
-                           fps: Double = 60, motionBlur: Bool = false,
+                           fps: Double = 60, motionBlur: Bool = false, clicks: Bool = false,
+                           upscale: Bool = true, blur: Bool = true,
                            quality: RenderQuality = .preview) throws -> RenderBenchmarkResult {
         let count = max(frames, 1)
         let w = max(width, 16), h = max(height, 16)
@@ -176,7 +179,19 @@ public enum RenderBenchmark {
 
         var timeline = Timeline(duration: Double(count) / max(fps, 1) + 1)
         timeline.audio.speedRampsAuto = false
+        timeline.camera.upscaleEnabled = upscale
+        if !blur { timeline.camera.shutter = 0 }
         if motionBlur { timeline.camera.maxSamples = max(timeline.camera.maxSamples, 4) }
+        if clicks {
+            let events = stride(from: 60, to: count, by: 120).enumerated().map { index, frame in
+                InputEvent(t: Double(frame) / fps, kind: .down,
+                           x: Float(w) * (index.isMultiple(of: 2) ? 0.28 : 0.72),
+                           y: Float(h) * (index.isMultiple(of: 2) ? 0.35 : 0.65), button: 0)
+            }
+            let source = SourceInfo(width: w, height: h, fps: fps, duration: timeline.compositionDuration,
+                                    backingScale: 1, originX: 0, originY: 0)
+            timeline = Director.derive(timeline, input: DirectorInput(events: events, source: source), revision: 1)
+        }
 
         guard let device = MTLCreateSystemDefaultDevice() else { throw RenderError.noDevice }
         let screen = try syntheticFrame(device: device, width: w, height: h)
@@ -186,23 +201,39 @@ public enum RenderBenchmark {
         var samples: [Double] = []
         samples.reserveCapacity(count)
 
-        // Warm up the pipeline, caches and GPU scheduler. One frame is not
-        // enough: the first few 4K resolves can incur lazy texture allocation,
-        // which is startup cost, not steady-state frame latency.
-        for k in 0..<min(8, count) {
+        // Warm every part of the timeline so first-use texture allocation does
+        // not land inside the measured click or zoom frames.
+        var warmTimes = (0..<24).map { min(Double($0) / 24 * timeline.compositionDuration,
+                                           timeline.compositionDuration) }
+        if clicks {
+            for frame in stride(from: 60, to: count, by: 120) {
+                for offset in [-0.10, -0.04, 0.0, 0.06, 0.16, 0.32, 0.6, 1.0] {
+                    let time = Double(frame) / max(fps, 1) + offset
+                    if time >= 0, time <= timeline.compositionDuration { warmTimes.append(time) }
+                }
+            }
+        }
+        for time in warmTimes {
             _ = try render(renderer: renderer, timeline: timeline, screen: screen, output: output,
-                           t: 0, canvas: SIMD2(w, h), fps: fps, quality: quality)
+                           t: time, canvas: SIMD2(w, h), fps: fps, quality: quality)
         }
 
+        let log = OSLog(subsystem: "com.lumen.studio", category: "render-benchmark")
+        var worstFrame = -1
+        var worstMs = -1.0
         for i in 0..<count {
+            if clicks, i % 120 == 60 { os_signpost(.event, log: log, name: "Click", "%d", i) }
             let start = CACurrentMediaTime()
             _ = try render(renderer: renderer, timeline: timeline, screen: screen, output: output,
                            t: min(Double(i) / max(fps, 1), timeline.compositionDuration),
                            canvas: SIMD2(w, h), fps: fps, quality: quality)
-            samples.append((CACurrentMediaTime() - start) * 1000)
+            let ms = (CACurrentMediaTime() - start) * 1000
+            if ms > worstMs { worstMs = ms; worstFrame = i }
+            samples.append(ms)
         }
+        if clicks { print("BENCH-WORST frame=\(worstFrame) ms=\(String(format: "%.2f", worstMs)) sinceClick=\(worstFrame % 120)") }
         return RenderBenchmarkResult(width: w, height: h, frames: count, fps: fps,
-                                     report: budget.evaluate(samples))
+                                     report: budget.evaluate(samples, clickScenario: clicks))
     }
 
     private static func render(renderer: Renderer, timeline: Timeline, screen: SourceFrame,

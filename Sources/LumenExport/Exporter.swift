@@ -278,9 +278,15 @@ public enum Exporter {
                         AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false])
                     r.add(o)
                     let feeder = AudioFeeder(r, o, ai)
-                    r.startReading()
+                    guard r.startReading() else { throw ExportError.writer(r.error?.localizedDescription ?? "Audio reader failed to start.") }
+                    defer { feeder.cancel() }
                     feeder.start(on: DispatchQueue(label: "lumen.export.audio"))
-                    await feeder.done.wait()
+                    while !feeder.result.finished {
+                        try Task.checkCancellation()
+                        guard writer.status == .writing else { throw ExportError.writer(writer.error?.localizedDescription ?? "Audio encoder stopped.") }
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                    if let failure = feeder.result.failure { throw ExportError.writer(failure) }
                 } else { ai.markAsFinished() }
             } else { audioInput?.markAsFinished() }
         }
