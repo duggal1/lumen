@@ -24,12 +24,12 @@ extension Color {
 }
 
 enum AppKitToken {
-    /// The same signal orange as `Tok.accent`, for the few AppKit `draw(_:)`
+    /// The same blue accent as `Tok.accent`, for the few AppKit `draw(_:)`
     /// paths (area brackets) that cannot use a SwiftUI `Color`.
     static let accent = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 255 / 255, green: 106 / 255, blue: 0 / 255, alpha: 1)
-            : NSColor(srgbRed: 240 / 255, green: 90 / 255, blue: 0 / 255, alpha: 1)
+            ? NSColor(srgbRed: 70 / 255, green: 164 / 255, blue: 255 / 255, alpha: 1)
+            : NSColor(srgbRed: 0 / 255, green: 103 / 255, blue: 213 / 255, alpha: 1)
     }
 }
 
@@ -52,26 +52,26 @@ enum Tok {
     static let text2 = Color(light: 0x666666, dark: 0xA3A3A3)
     static let textAction = Color(light: 0x2E2E2E, dark: 0xE5E5E5)
     static let floatingText = Color(light: 0x000000, dark: 0x000000)
-    // Orange is reserved for recording activity and export actions. All
-    // selection surfaces remain neutral and translucent.
-    static let action = Color(light: 0xF05A00, dark: 0xFF6A00)
-    static let accent = Color(light: 0xF05A00, dark: 0xFF6A00)
-    static let selection = Color(light: 0x7C3AED, dark: 0x8B5CF6)
-    static let accentHover = Color(light: 0xE25400, dark: 0xFF8533)
-    static let accentPressed = Color(light: 0xD65000, dark: 0xE55C00)
-    static let accentText = Color(light: 0xBF3F00, dark: 0xFF8A3D)
-    static let accentSoft = Color(light: 0xFFEDD5, dark: 0xFF6A00, darkAlpha: 0.17)
-    static let accentFill = Color(light: 0xFFEDD5, dark: 0xFF6A00, darkAlpha: 0.50)
-    static let activity = Color(hex: 0xEA580C)
-    static let onAccent = Color(hex: 0x0A0A0A)     // near-black: white on orange fails contrast
+    // Blue accents identify actions and selection on neutral surfaces.
+    static let action = Color(light: 0x0067D5, dark: 0x46A4FF)
+    static let accent = Color(light: 0x0067D5, dark: 0x46A4FF)
+    static let timelineAccent = Color(light: 0xF05A00, dark: 0xFF6A00)
+    static let selection = Color(light: 0x0067D5, dark: 0x46A4FF)
+    static let accentHover = Color(light: 0x0055B5, dark: 0x80C4FF)
+    static let accentPressed = Color(light: 0x004B9E, dark: 0x1688FF)
+    static let accentText = Color(light: 0x0057B8, dark: 0xA7DFFF)
+    static let accentSoft = Color(light: 0xE3F2FF, dark: 0x1688FF, darkAlpha: 0.17)
+    static let accentFill = Color(light: 0xC7E7FF, dark: 0x1688FF, darkAlpha: 0.50)
+    static let activity = Color(hex: 0x1688FF)
+    static let onAccent = Color(hex: 0x0A0A0A)     // near-black against the bright accent
     // Timeline lanes. One hue only: auto zoom, manual taps and click ticks
     // are steps of the same orange ramp, never violet, fuchsia or blue.
-    static let zoom = accent
-    static let zoomSoft = accentSoft
-    static let zoomText = accentText
-    static let tap = Ramp.o[4]
-    static let tapSoft = accentFill
-    static let tapText = Ramp.o[4]
+    static let zoom = timelineAccent
+    static let zoomSoft = Color(light: 0xFFEDD5, dark: 0xFF6A00, darkAlpha: 0.17)
+    static let zoomText = Color(light: 0xBF3F00, dark: 0xFF8A3D)
+    static let tap = Ramp.orange[4]
+    static let tapSoft = Color(light: 0xFFEDD5, dark: 0xFF6A00, darkAlpha: 0.50)
+    static let tapText = Ramp.orange[4]
     // status, diff
     static let statusOK = Color(light: 0x16A34A, dark: 0x4ADE80)
     static let statusBad = Color(light: 0xE11D48, dark: 0xFB7185)   // rose, never red
@@ -97,9 +97,13 @@ enum Ramp {   // rest, dust, quiet, body, tip
         Color(light: 0x9A3412, dark: 0xFFA14D)]
     /// Recording activity. Zero activity is a gap, never a colour.
     static let heat: [Color] = [
-        Color(light: 0xF05A00, dark: 0xFF6A00), Color(light: 0xF9781F, dark: 0xFF8533),
-        Color(light: 0xFF903B, dark: 0xFFA14D), Color(light: 0xFFAD6B, dark: 0xFFC185)]
-    static let o = orange
+        Color(light: 0x0067D5, dark: 0x1688FF), Color(light: 0x1688FF, dark: 0x46A4FF),
+        Color(light: 0x46A4FF, dark: 0x80C4FF), Color(light: 0x80C4FF, dark: 0xA7DFFF)]
+    static let blue: [Color] = [
+        Color(light: 0xE9E9E9, dark: 0x101010), Color(light: 0xE3F2FF, dark: 0x10365A),
+        Color(light: 0xA7DFFF, dark: 0x1765A4), Color(light: 0x0067D5, dark: 0x46A4FF),
+        Color(light: 0x004B9E, dark: 0xA7DFFF)]
+    static let o = blue
 }
 
 /// One UI face, two weights. Tracking belongs at the call site so text stays selectable.

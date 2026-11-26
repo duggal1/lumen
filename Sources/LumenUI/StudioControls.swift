@@ -9,9 +9,8 @@ enum StudioInk {
     static let rail = Color(hex: 0x090909), panel = Color(hex: 0x0C0C0C), well = Color(hex: 0x121212)
     static let hover = Color(hex: 0x181818), selected = Color(hex: 0x202020), pressed = Color(hex: 0x262626)
     static let text = Color(hex: 0xF5F5F5), secondary = Color(hex: 0xA3A3A3)
-    static let blue = Color(hex: 0x599CFF), orange = Color(hex: 0xFF8E3B), violet = Color(hex: 0xA373FF)
-    static let cyan = Color(hex: 0x55D3F1), pink = Color(hex: 0xF267B0), green = Color(hex: 0x6FDB73), rose = Color(hex: 0xF05448)
-    static let spectrum = [blue, cyan, green, orange, pink, violet]
+    static let blue = Color(hex: 0x1688FF), orange = Color(hex: 0x1688FF), violet = Color(hex: 0xA7DFFF)
+    static let cyan = Color(hex: 0xA7DFFF), pink = Color(hex: 0xA7DFFF), green = Color(hex: 0x1688FF), rose = Color(hex: 0xA7DFFF)
     static func ease(_ duration: Double) -> Animation { .timingCurve(0.2, 0.8, 0.2, 1, duration: duration) }
 }
 private struct StudioHueKey: EnvironmentKey { static let defaultValue = StudioInk.orange }
@@ -229,9 +228,9 @@ struct StudioExportProgress: View {
             let cols = max(1, Int(size.width / 4)), rows = max(1, Int(size.height / 4))
             let n = Int(min(max(value.isFinite ? value : 0, 0), 1) * Double(cols))
             for x in 0..<cols { for y in 0..<rows {
-                let hue = StudioInk.spectrum[min(StudioInk.spectrum.count-1, x * StudioInk.spectrum.count / cols)]
+                let hue = (x + y).isMultiple(of: 2) ? StudioInk.blue : StudioInk.cyan
                 let filled = x < n
-                c.fill(Path(CGRect(x: x*4, y: y*4, width: 3, height: 3)), with: .color(filled ? hue.opacity((x+y)%2 == 0 ? 1 : 0.75) : StudioInk.pressed), style: FillStyle(antialiased: false))
+                c.fill(Path(CGRect(x: x*4, y: y*4, width: 3, height: 3)), with: .color(filled ? hue : StudioInk.pressed), style: FillStyle(antialiased: false))
             }}
         }.frame(height: 20)
     }
