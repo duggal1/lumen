@@ -14,11 +14,11 @@ struct TimelineDitherTests {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let src = try String(contentsOf: root.appendingPathComponent("Sources/LumenUI/TimelineDither.swift"), encoding: .utf8)
         #expect(src.contains("[0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]"))
-        #expect(src.contains("vImageBoxConvolve_ARGB8888"), "glow is the Clove SIMD blur")
-        #expect(src.contains("exp(-f.dt / 0.42)"), "heat cools on the Clove time constant")
+        #expect(!src.contains("vImageBoxConvolve_ARGB8888"), "no viewport glow pass")
+        #expect(!src.contains("Float.random"), "no particle randomness")
     }
 
-    @Test func rendererProducesCellsGlowAndOverlay() throws {
+    @Test func rendererProducesCellsAndSeamsWithoutGlow() throws {
         let r = try #require(TimelineDitherRenderer(width: 600, height: 224, scale: 2, isDark: true))
         let f = TimelineDitherRenderer.Frame(
             spans: [
@@ -34,11 +34,11 @@ struct TimelineDitherTests {
         let cells = try #require(out.cells)
         #expect(cells.width == 1200)
         #expect(cells.height == 448)
-        #expect(out.glow != nil)
+        #expect(out.glow == nil)
         #expect(out.overlay != nil)
     }
 
-    @Test func clearingASpanShedsMotesAndLeavesWarmCells() throws {
+    @Test func clearingASpanImmediatelyMatchesFreshViewport() throws {
         let r = try #require(TimelineDitherRenderer(width: 400, height: 224, scale: 1, isDark: true))
         let full = TimelineDitherRenderer.Span(0, 90, 0)
         let first = TimelineDitherRenderer.Frame(spans: [[full], [], [], [], []], peaks: [],
@@ -47,7 +47,15 @@ struct TimelineDitherTests {
         let cleared = TimelineDitherRenderer.Frame(spans: [Array(repeating: TimelineDitherRenderer.Span(0, 0, 0), count: 0), [], [], [], []],
             peaks: [], clicks: [], head: -1, playing: false, reduced: false, dt: 1.0 / 60, t: 0.02)
         let out = r.draw(cleared)
-        #expect(out.isWarm, "cells cooling and rising motes keep the frame loop alive")
+        #expect(!out.isWarm, "pan or deletion cannot keep a particle loop alive")
+        let fresh = try #require(TimelineDitherRenderer(width: 400, height: 224, scale: 1, isDark: true))
+        let clean = fresh.draw(cleared)
+        let oldPixels = try #require(out.cells?.dataProvider?.data as? Data)
+        let newPixels = try #require(clean.cells?.dataProvider?.data as? Data)
+        #expect(oldPixels == newPixels, "visible cells depend only on viewport, not previous ownership")
+        let oldSeams = try #require(out.overlay?.dataProvider?.data as? Data)
+        let newSeams = try #require(clean.overlay?.dataProvider?.data as? Data)
+        #expect(oldSeams == newSeams, "no detached pixels can survive in the overlay")
     }
 
     @Test func paperPaletteUsesDeeperHues() {
@@ -86,12 +94,13 @@ struct TimelineDitherTests {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let host = try String(contentsOf: root.appendingPathComponent("Sources/LumenUI/TimelineDitherView.swift"), encoding: .utf8)
         #expect(host.contains("func releaseRenderer()"))
-        #expect(host.contains("glowLayer.contents = nil"))
+        #expect(host.contains("cellsLayer.contents = nil"))
+        #expect(!host.contains("glowLayer"))
         #expect(host.contains("renderer = nil"))
         #expect(!host.contains("fatalError"))
         let renderer = try String(contentsOf: root.appendingPathComponent("Sources/LumenUI/TimelineDither.swift"), encoding: .utf8)
         #expect(renderer.contains("ownedImage(cellsContext"))
-        #expect(renderer.contains("ownedImage(glowContext"))
+        #expect(!renderer.contains("glowContext"))
         #expect(renderer.contains("while resolved.count < Self.lanes"))
     }
 
@@ -104,9 +113,21 @@ struct TimelineDitherTests {
             #expect(strip.contains(overlay), "\(overlay) survives the dither theme")
         }
         let host = try String(contentsOf: root.appendingPathComponent("Sources/LumenUI/TimelineDitherView.swift"), encoding: .utf8)
-        #expect(host.contains("settled >= 2"), "the display loop stops at rest")
+        #expect(host.contains("guard snapshot != lastDrawn else { stop(); return }"), "unchanged snapshots stop immediately")
         #expect(host.contains("accessibilityDisplayShouldReduceMotion") == false)
         #expect(host.contains("frame.reduced") == false)
-        #expect(host.contains("snapshot.reduced"))
+        #expect(host.contains("next.dt = 0; next.t = 0"), "wall time does not invalidate static cells")
     }
+}
+
+@Test func ditherMusicCellsReflectRealAmplitude() throws {
+    let renderer = try #require(TimelineDitherRenderer(width: 400, height: 224, scale: 1, isDark: true))
+    let spans: [[TimelineDitherRenderer.Span]] = [[], [], [], [], [.init(0, 80, 5)]]
+    let quiet = TimelineDitherRenderer.Frame(spans: spans, peaks: [], musicPeaks: Array(repeating: 0, count: 80),
+        clicks: [], head: -1, playing: false, reduced: true, dt: 0, t: 0)
+    var loud = quiet
+    loud.musicPeaks = Array(repeating: 0.8, count: 80)
+    let quietImage = try #require(renderer.draw(quiet).cells?.dataProvider?.data as? Data)
+    let loudImage = try #require(renderer.draw(loud).cells?.dataProvider?.data as? Data)
+    #expect(quietImage != loudImage)
 }

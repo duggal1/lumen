@@ -175,6 +175,9 @@ public struct InputEvent: Sendable, Equatable {
     public var hasPosition: Bool {
         switch kind { case .move, .down, .up, .drag, .scroll: true; default: false }
     }
+    /// High bit is reserved for explicit keyboard autorepeat metadata.
+    public static let keyRepeatFlag: UInt16 = 0x8000
+    public var isKeyRepeat: Bool { kind == .keyDown && (flags & Self.keyRepeatFlag) != 0 }
     public var isTypingKey: Bool {
         kind == .keyDown && flags & 0x14 == 0 && keyCode < 53 &&
             keyCode != 36 && keyCode != 48 && keyCode != 51

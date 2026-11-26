@@ -260,17 +260,19 @@ public extension ToolRegistry {
             })
 
         register(ToolDefinition<AudioMixSetInput>(name: "audio_mix_set",
-            description: "Sets the mix: target loudness, music gain, microphone gain, output gain and how deep music ducks under speech.",
+            description: "Sets track gains and music ducking. Studio loudness and enhancement are fixed.",
             capability: .edit, required: ["project_id"], mutating: true) { input, ctx in
                 let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
                                                       describe: "mix settings") { timeline in
                     var audio = timeline.audio
-                    if let value = input.targetLUFS { audio.targetLUFSOverride = try Self.validated(value, name: "target_lufs", range: -24 ... -10) }
+                    if let value = input.targetLUFS, value != AudioPlan.studioTargetLUFS {
+                        throw CommandError.invalid("Studio loudness is fixed at -12 LUFS")
+                    }
                     if let value = input.musicGainDb { audio.musicGainDb = try Self.validated(value, name: "music_gain_db", range: -60 ... 12) }
                     if let value = input.micGainDb { audio.micGainDb = try Self.validated(value, name: "mic_gain_db", range: -60 ... 12) }
                     if let value = input.outputGainDb { audio.outputGainDb = try Self.validated(value, name: "output_gain_db", range: -60 ... 12) }
                     if let value = input.duckDepthDb { audio.duckDepthDb = try Self.validated(value, name: "duck_depth_db", range: 0 ... 36) }
-                    if let normalize = input.normalize { audio.normalize = normalize }
+                    if input.normalize == false { throw CommandError.invalid("Studio normalization is always enabled") }
                     try applyCommand(.setAudio(audio), to: &timeline)
                 }
                 return .object(result)

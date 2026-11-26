@@ -169,7 +169,7 @@ private func byteHash(_ px: [UInt8]) -> UInt64 {
 }
 
 @Test func stylizedPacksKeepOneGlyphForEveryShape() throws {
-    for pack in [CursorPack.dot, CursorPack.ring, CursorPack.holiday] {
+    for pack in [CursorPack.dot, CursorPack.outline, CursorPack.holiday] {
         let (atlas, _) = try stockAtlas(pack)
         var hashes: Set<UInt64> = []
         for shape in StockCursor.allCases {
@@ -272,4 +272,40 @@ private func byteHash(_ px: [UInt8]) -> UInt64 {
         let error = hypot(centroid.x - expected.x, centroid.y - expected.y)
         #expect(error < 1.5, "scale \(scale) size \(size): hotspot \(error) px from the click point")
     }
+}
+@Test func studioCursorInkPersistsAndPreservesLegacyDefault() throws {
+    var style = CursorStyle()
+    style.ink = RGBA(0x55D3F1)
+    let restored = try JSONDecoder().decode(CursorStyle.self, from: JSONEncoder().encode(style))
+    #expect(restored.ink == style.ink)
+    let legacy = try JSONDecoder().decode(CursorStyle.self, from: Data("{}".utf8))
+    #expect(legacy.ink == nil)
+}
+
+@Test func retiredRingMigratesToOutlineAndIsNeverEncodedAgain() throws {
+    let old = Data("\"ring\"".utf8)
+    #expect(try JSONDecoder().decode(CursorPack.self, from: old) == .outline)
+    let style = try JSONDecoder().decode(CursorStyle.self, from: Data("{\"pack\":\"ring\",\"size\":1.5}".utf8))
+    #expect(style.pack == .outline)
+    #expect(style.size == 1.5)
+    let encoded = try JSONEncoder().encode(style)
+    let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    #expect(object["pack"] as? String == "outline")
+    #expect(!CursorPack.allCases.contains { $0.rawValue == "ring" })
+}
+
+@Test func studioSkinsHaveDistinctActualArtworkAndOutlineTip() throws {
+    #expect(CursorPack.studioSkins == [.system, .pixel, .outline])
+    var hashes = Set<UInt64>()
+    for pack in CursorPack.studioSkins {
+        let (atlas, _) = try stockAtlas(pack)
+        let entry = try #require(atlas.entry(StockCursor.arrow.rawValue))
+        let pixels = layerPixels(atlas, layer: entry.layer)
+        hashes.insert(byteHash(pixels))
+        if pack == .outline {
+            #expect(abs(entry.hot.x - 0.125) < 0.001)
+            #expect(abs(entry.hot.y - 0.125) < 0.001)
+        }
+    }
+    #expect(hashes.count == 3)
 }

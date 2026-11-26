@@ -73,14 +73,30 @@ public enum FrameImage {
 }
 
 private final class AudioFeeder: @unchecked Sendable {
-    let reader: AVAssetReader, out: AVAssetReaderTrackOutput, input: AVAssetWriterInput, done = Latch()
+    let reader: AVAssetReader, out: AVAssetReaderTrackOutput, input: AVAssetWriterInput
+    private let state = OSAllocatedUnfairLock<(finished: Bool, failure: String?)>(initialState: (false, nil))
+    var result: (finished: Bool, failure: String?) { state.withLock { $0 } }
     init(_ r: AVAssetReader, _ o: AVAssetReaderTrackOutput, _ i: AVAssetWriterInput) { reader = r; out = o; input = i }
     func start(on q: DispatchQueue) {
         input.requestMediaDataWhenReady(on: q) { [self] in
-            while input.isReadyForMoreMediaData {
-                if let sb = out.copyNextSampleBuffer() { input.append(sb) } else { input.markAsFinished(); done.fire(); return }
+            while input.isReadyForMoreMediaData, !result.finished {
+                if let sb = out.copyNextSampleBuffer() {
+                    guard input.append(sb) else {
+                        state.withLock { $0 = (true, "Audio encoder rejected a sample.") }
+                        return
+                    }
+                } else {
+                    let failure = reader.status == .completed ? nil : (reader.error?.localizedDescription ?? "Audio reader stopped before completion.")
+                    if failure == nil { input.markAsFinished() }
+                    state.withLock { $0 = (true, failure) }
+                    return
+                }
             }
         }
+    }
+    func cancel() {
+        state.withLock { if !$0.finished { $0 = (true, "Audio export cancelled.") } }
+        if reader.status == .reading { reader.cancelReading() }
     }
 }
 
@@ -114,10 +130,18 @@ public enum Exporter {
 
         // Export audio runs at .utility so recording stays smooth on the same Mac
         // (complaint #1: "my MacBook is unusable while a file renders").
-        let mixed = includeAudio ? await Task.detached(priority: .utility) { session.mixer.mix(tl) }.value : nil
+        let mixed: MixedAudio?
+        if includeAudio {
+            let worker = Task.detached(priority: .utility) { session.mixer.mix(tl, cancelled: { Task.isCancelled }) }
+            mixed = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+        } else { mixed = nil }
+        try Task.checkCancellation()
+        if includeAudio, session.mixer.hasProgram(tl), mixed == nil {
+            throw ExportError.writer("Audio mix could not be prepared.")
+        }
         let caf = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".caf")
-        if let m = mixed { try AudioIO.writeCAF(m.l, m.r, to: caf) }
         defer { try? FileManager.default.removeItem(at: caf) }
+        if let m = mixed { try AudioIO.writeCAF(m.l, m.r, to: caf) }
 
         // Render into the destination directory and publish only after success.
         // Cancellation or an encoder error must not erase the previous export.
@@ -157,17 +181,22 @@ public enum Exporter {
         writer.add(vi)
 
         var feeder: AudioFeeder?
+        defer { feeder?.cancel() }
         if mixed != nil {
             let a = AVURLAsset(url: caf)
-            if let tr = try await a.loadTracks(withMediaType: .audio).first, let r = try? AVAssetReader(asset: a) {
-                let o = AVAssetReaderTrackOutput(track: tr, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMBitDepthKey: 32,
-                    AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false])
-                r.add(o)
-                let ai = AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48000,
-                                                                                  AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: max(64_000, min(audioBitrate, 320_000))])
-                ai.expectsMediaDataInRealTime = false
-                if writer.canAdd(ai) { writer.add(ai); feeder = AudioFeeder(r, o, ai); r.startReading() }
-            }
+            guard let tr = try await a.loadTracks(withMediaType: .audio).first else { throw ExportError.writer("Mixed audio has no track.") }
+            let r = try AVAssetReader(asset: a)
+            let o = AVAssetReaderTrackOutput(track: tr, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false])
+            guard r.canAdd(o) else { throw ExportError.writer("Cannot read mixed audio.") }
+            r.add(o)
+            let ai = AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48000,
+                                                                              AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: max(64_000, min(audioBitrate, 320_000))])
+            ai.expectsMediaDataInRealTime = false
+            guard writer.canAdd(ai) else { throw ExportError.writer("Cannot add audio encoder.") }
+            writer.add(ai)
+            guard r.startReading() else { throw ExportError.writer(r.error?.localizedDescription ?? "Cannot start audio reader.") }
+            feeder = AudioFeeder(r, o, ai)
         }
         guard writer.startWriting() else { throw ExportError.writer(writer.error?.localizedDescription ?? "startWriting failed") }
         writer.startSession(atSourceTime: .zero)
@@ -217,7 +246,15 @@ public enum Exporter {
         }
         for item in pending { try await flush(item) }
         vi.markAsFinished()
-        await feeder?.done.wait()
+        if let feeder {
+            while !feeder.result.finished {
+                try Task.checkCancellation()
+                guard writer.status == .writing else { throw ExportError.writer(writer.error?.localizedDescription ?? "Audio encoder stopped.") }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            if let failure = feeder.result.failure { throw ExportError.writer(failure) }
+        }
+        try Task.checkCancellation()
         await writer.finishWriting()
         if writer.status != .completed { throw ExportError.writer(writer.error?.localizedDescription ?? "export failed") }
         try Task.checkCancellation()
@@ -349,16 +386,21 @@ public enum Exporter {
         let w = 800, h = (Int((Double(w) / tl.style.aspectRatio).rounded()) + 1) & ~1, fps = 15
         let total = max(Int(ceil(tl.compositionDuration * Double(fps) - 1e-8)), 1)
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
-        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, total, nil) else { throw ExportError.writer("gif") }
+        let staged = url.deletingLastPathComponent().appendingPathComponent(".lumen-gif-\(UUID().uuidString).gif")
+        defer { try? FileManager.default.removeItem(at: staged) }
+        guard let dest = CGImageDestinationCreateWithURL(staged as CFURL, UTType.gif.identifier as CFString, total, nil) else { throw ExportError.writer("gif") }
         CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
         for i in 0..<total {
             try Task.checkCancellation()
             let pb = try await FrameImage.render(renderer: renderer, session: session, timeline: tl, t: Double(i) / Double(fps), canvas: SIMD2(w, h), fps: Double(fps))
-            if let img = FrameImage.cgImage(pb) {
-                CGImageDestinationAddImage(dest, img, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(fps)]] as CFDictionary)
-            }
+            guard let img = FrameImage.cgImage(pb) else { throw ExportError.render }
+            CGImageDestinationAddImage(dest, img, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(fps)]] as CFDictionary)
             progress(ExportProgress(frame: i + 1, total: total, notice: nil))
         }
         guard CGImageDestinationFinalize(dest) else { throw ExportError.writer("gif finalize failed") }
+        try Task.checkCancellation()
+        if FileManager.default.fileExists(atPath: url.path) {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: staged)
+        } else { try FileManager.default.moveItem(at: staged, to: url) }
     }
 }

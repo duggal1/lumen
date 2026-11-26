@@ -36,7 +36,7 @@ public struct CropOverride: Codable, Sendable, Equatable, Identifiable {
 /// pixels. Ownership: persisted intent. Threading: value type, `Sendable`.
 public struct CropSettings: Codable, Sendable, Equatable {
     public var enabled = true
-    public var uncrop: UncropPolicy = .chromeTyping
+    public var uncrop: UncropPolicy = .anyTyping
     /// Hides the 1 px divider and AX rounding at the page edge.
     public var insetPx = 2.0
     public var minWebWidthPx = 480.0

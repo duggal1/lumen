@@ -399,6 +399,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private var pendingVideo: (buffer: CVPixelBuffer, pts: CMTime)?
     private var meta: FrameMetaWriter?
     private let dropped = OSAllocatedUnfairLock(initialState: 0)
+    private let written = OSAllocatedUnfairLock(initialState: 0)
     private let ptsRange = OSAllocatedUnfairLock(initialState: PTSRange())
     private let paused = OSAllocatedUnfairLock(initialState: false)
     private let pauseMark = OSAllocatedUnfairLock<Double?>(initialState: nil)
@@ -415,6 +416,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
 
     public init(bundle: ProjectBundle) { self.bundle = bundle }
     public var droppedFrames: Int { dropped.withLock { $0 } }
+    public var writtenFrames: Int { written.withLock { $0 } }
     public var firstPTS: Double? { ptsRange.withLock { $0.first } }
     /// Spans that were deliberately not recorded, in engine seconds.
     public var pauseIntervals: [PauseInterval] { pauseLog.withLock { $0 } }
@@ -722,6 +724,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         if adaptor?.append(pending.buffer, withPresentationTime: pending.pts) == true {
             let seconds = pending.pts.seconds
             ptsRange.withLock { $0.last = seconds }
+            written.withLock { $0 += 1 }
             liveFrameHook.withLock { $0 }?(pending.buffer)
         } else { dropped.withLock { $0 += 1 } }
     }

@@ -137,6 +137,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
     var windows: [(id: CGWindowID, name: String, appID: String, appName: String)] = []
     var error: String?
     var stats: CaptureStats?
+    var captureQualityNotice: String?
     /// Cached TCC state. Views read this; nothing in a view body may call
     /// `Permissions.*`, because those are blocking IPC into tccd and the
     /// redraw that Stop triggers landed on the main thread mid-teardown.
@@ -269,6 +270,12 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         let hidden = FloatingBarVisibility.toggle()
         if hidden { bar?.hide() }
         else { presentBar(on: NSScreen.main) }
+        FloatingBarMenuBarToggle.shared.syncAccessibility()
+    }
+
+    public func hideFloatingBar() {
+        FloatingBarVisibility.hide()
+        bar?.hide()
         FloatingBarMenuBarToggle.shared.syncAccessibility()
     }
 
@@ -698,6 +705,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         cancelRequested = false
         recordingMeter.level = 0
         stats = nil
+        captureQualityNotice = nil
         defer { if phase == .preparing { phase = .idle } }
         error = nil
         // One read, off main. The start gate must never block the main thread
@@ -707,11 +715,12 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         guard perms.screen else { Permissions.requestScreen(); error = "Screen Recording is off. Grant it, then relaunch Lumen."; return }
         guard perms.input else { Permissions.requestInput(); error = "Input Monitoring is off. Grant it, then relaunch Lumen."; return }
         if !perms.accessibility { Permissions.requestAccessibility() }
-        if mic || webcam {
+        if (mic && !perms.mic) || (webcam && !perms.camera) {
             await Permissions.requestMedia()
             perms = await Task.detached(priority: .userInitiated) { PermissionSnapshot.read() }.value
             permissions = perms
         }
+        guard !cancelRequested else { return }
         var cfg: RecordingConfig
         switch kind {
         case .display: cfg = RecordingConfig(source: .display(displayID))
@@ -766,6 +775,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             // AGENT: the option existed but was never copied, so auto-mask did nothing.
             cfg.privacyAutoMask = options.privacyAutoMask
         }
+        guard !cancelRequested else { return }
         let sourceDisplay: CGDirectDisplayID?
         switch cfg.source {
         case .display(let id), .region(let id, _): sourceDisplay = id
@@ -822,6 +832,8 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             poll = Task {
                 var nextStatus = ContinuousClock.now
                 var lastLevel: Float = -1
+                var quality = CaptureQualityGuard()
+                var shedPreview = false
                 while !Task.isCancelled {
                     let sample = await session.stats()
                     // The meter drives a SwiftUI repaint on the floating
@@ -836,6 +848,19 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                     let now = ContinuousClock.now
                     if now >= nextStatus {
                         stats = sample
+                        switch quality.observe(sample, paused: paused) {
+                        case .nominal: break
+                        case .belowRequestedFormat:
+                            captureQualityNotice = "Source or recording setting is below 3K / 50 fps. Native format retained."
+                        case .shedOptionalWork:
+                            if !shedPreview {
+                                shedPreview = true
+                                await session.setLiveHooks(frame: nil, event: nil, focus: nil)
+                                livePreviewController?.close()
+                                livePreviewController = nil
+                            }
+                            captureQualityNotice = "Capture pressure detected. Optional live preview disabled; recording format retained."
+                        }
                         nextStatus = now.advanced(by: .milliseconds(250))
                     }
                     try? await Task.sleep(for: .milliseconds(50))

@@ -77,3 +77,13 @@ import LumenExport
     #expect(options.fileExtension == "gif")
     #expect(options.destinationURL()?.lastPathComponent == "loop.gif")
 }
+
+@Test func explicitNinetyFpsReachesEncoderPreset() {
+    let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 5,
+                            backingScale: 1, originX: 0, originY: 0)
+    var options = ExportSettings()
+    options.frameRate = .f90
+    #expect(options.preset(source: source, aspect: 16.0 / 9).fps == 90)
+    #expect(ExportPresets.parse("1080p90-hevc")?.fps == 90)
+    #expect(ExportRate.source.fps(source: .nan) == 60)
+}

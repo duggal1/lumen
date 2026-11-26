@@ -248,7 +248,17 @@ public actor Engine {
 
     /// Ensures a project is open, opening it from the library when needed.
     private func requireHandle(_ projectID: String) async throws -> Handle {
-        if let h = handles[projectID] {
+        if var h = handles[projectID] {
+            let persisted = try h.bundle.load()
+            let revision = persisted.revision ?? 0
+            if revision != h.revision {
+                // A UI or other daemon committed a newer revision. Never serve
+                // the stale draft or undo history as the authoritative state.
+                h.timeline = persisted.timeline; h.revision = revision
+                h.undoStack.removeAll(); h.redoStack.removeAll()
+                h.privacy = .notScanned
+                handles[projectID] = h
+            }
             handleOrder.removeAll { $0 == projectID }
             handleOrder.append(projectID)
             return h
@@ -265,11 +275,8 @@ public actor Engine {
     // MARK: Timeline reads
 
     public func timelineValue(projectID: String) async throws -> JSONValue {
-        var h = try await requireHandle(projectID)
-        if let session = h.session {
-            h.timeline = await derivationLane.derive(session, timeline: h.timeline, revision: h.revision)
-        }
-        handles[projectID] = h
+        let h = try await requireHandle(projectID)
+        // Reads must not overwrite a newer handle after an await.
         return encode(timeline: h.timeline, revision: h.revision)
     }
 
@@ -385,7 +392,10 @@ public actor Engine {
                     .object(["id": .string(l.id.uuidString), "role": .string(l.role.rawValue),
                              "path": l.path.map { .string($0) } ?? .null,
                              "placement": .number(l.placement), "gain_db": .number(l.gainDb),
-                             "mute": .bool(l.mute)])
+                             "mute": .bool(l.mute),
+                             "trim_start": l.trimStart.map { .number($0) } ?? .null,
+                             "trim_duration": l.trimDuration.map { .number($0) } ?? .null,
+                             "loops": .bool(l.loops ?? (l.role == .music))])
                 }),
             ]),
             "captions": .object([

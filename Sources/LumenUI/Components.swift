@@ -56,7 +56,7 @@ struct LButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if let icon { Image(systemName: icon).font(.system(size: 12)) }
+                if let icon { PixelSymbol(icon, size: 12) }
                 Text(title).lineLimit(1).fixedSize(horizontal: true, vertical: false)
             }
         }.buttonStyle(LButtonStyle(kind: kind, height: height)).accessibilityLabel(title)
@@ -68,7 +68,7 @@ struct LIconButton: View {
     @State private var hover = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        Button(action: action) { Image(systemName: icon).font(.system(size: 12)).frame(width: 28, height: 28)
+        Button(action: action) { PixelSymbol(icon, size: 12).frame(width: 28, height: 28)
             .background(RoundedRectangle(cornerRadius: 8).fill(hover ? Tok.controlHover : .clear)) }
             .buttonStyle(.plain).foregroundStyle(Tok.text).onHover { hover = $0 }
             .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
@@ -275,10 +275,10 @@ struct MenuLayer: View {
                 let col = it.destructive ? Tok.statusBad : Tok.text
                 Button { host.close(); it.action() } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: IconSymbols.resolve(it.icon)).font(.system(size: 14)).frame(width: 20)
+                        PixelSymbol(IconSymbols.resolve(it.icon), size: 14).frame(width: 20)
                         Text(it.title).font(AppType.label).lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         Spacer(minLength: 16)
-                        Image(systemName: "checkmark").font(.system(size: 12)).foregroundStyle(Tok.accentText).frame(width: 20).opacity(it.checked ? 1 : 0)
+                        PixelSymbol("checkmark", size: 12).foregroundStyle(Tok.accentText).frame(width: 20).opacity(it.checked ? 1 : 0)
                     }.padding(.horizontal, 12).frame(width: w - 8, height: 32).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundStyle(col).opacity(it.disabled ? 0.4 : 1).disabled(it.disabled)
@@ -320,7 +320,7 @@ struct LDropdown<T: Hashable>: View {
             HStack(spacing: 8) {
                 Text(options.first { $0.value == sel }?.title ?? "").font(AppType.body).foregroundStyle(Tok.text).lineLimit(1)
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9)).foregroundStyle(Tok.text2)
+                PixelSymbol("chevron.up.chevron.down", size: 9).foregroundStyle(Tok.text2)
             }.padding(.horizontal, 12).frame(height: 28).background(Capsule().fill(host.isOpen ? Tok.controlPressed : Tok.control))
         }
         .buttonStyle(.plain).pointerStyle(.link)
@@ -336,7 +336,7 @@ struct Row<C: View>: View {
     let label: String; var icon: String?; @ViewBuilder var control: C
     var body: some View {
         HStack(spacing: 12) {
-            if let icon { Image(systemName: icon).font(.system(size: 14)).foregroundStyle(Tok.text2).frame(width: 20) }
+            if let icon { PixelSymbol(icon, size: 14).foregroundStyle(Tok.text2).frame(width: 20) }
             Text(label).font(AppType.label).foregroundStyle(Tok.text).lineLimit(1).truncationMode(.tail)
                 .layoutPriority(0)
             Spacer(minLength: 8)
@@ -373,7 +373,7 @@ struct LActionMenuButton: View {
         Button {
             host.show(items, anchor: frame, minWidth: 200)
         } label: {
-            Image(systemName: "ellipsis").font(.system(size: 12)).frame(width: 28, height: 28)
+            PixelSymbol("ellipsis", size: 12).frame(width: 28, height: 28)
                 .background(RoundedRectangle(cornerRadius: Radius.field).fill(hover || host.isOpen ? Tok.controlHover : .clear))
         }
         .buttonStyle(.plain)

@@ -502,8 +502,10 @@ public final class InputRecorder: @unchecked Sendable {
             ev.scrollDelta = lines != 0 ? Float(lines) : Float(fixed) / 16.0
         case .keyDown:
             ev.kind = .keyDown; ev.keyCode = UInt16(truncatingIfNeeded: e.getIntegerValueField(.keyboardEventKeycode))   // key codes only, never characters
+            if e.getIntegerValueField(.keyboardEventAutorepeat) != 0 { ev.flags |= InputEvent.keyRepeatFlag }
         case .keyUp: ev.kind = .keyUp; ev.keyCode = UInt16(truncatingIfNeeded: e.getIntegerValueField(.keyboardEventKeycode))
-        case .flagsChanged: ev.kind = .flagsChanged
+        case .flagsChanged:
+            ev.kind = .flagsChanged; ev.keyCode = UInt16(truncatingIfNeeded: e.getIntegerValueField(.keyboardEventKeycode))
         default: return
         }
         if type == .keyDown { ev.axFrameIndex = reserveFocus(event: ev) }

@@ -121,6 +121,7 @@ private enum VideoEditSchemas {
         "ramps": J.arr(.object(["type": .string("object")]), "Speed ramps."),
         "zoom": J.arr(.object(["type": .string("object")]), "Zoom segments."),
         "texts": J.arr(.object(["type": .string("object")]), "Caption and title text blocks."),
+        "audio_lanes": J.arr(.object(["type": .string("object")]), "Imported audio clips, source trims and output placement."),
         "music_path": .object(["type": .array([.string("string"), .string("null")])]),
         "music_gain_db": J.num("Music trim in dB."),
         "timeline": .object(["type": .string("object")]),
@@ -223,6 +224,14 @@ private func videoEditFields(_ timeline: Timeline) -> [String: JSONValue] {
             .object(["id": .string($0.id.uuidString), "text": .string($0.text),
                      "start": .number($0.start), "end": .number($0.end)])
         }),
+        "audio_lanes": .array(timeline.audio.lanes.map { lane in
+            .object(["id": .string(lane.id.uuidString), "role": .string(lane.role.rawValue),
+                     "path": lane.path.map { .string($0) } ?? .null, "placement": .number(lane.placement),
+                     "trim_start": lane.trimStart.map { .number($0) } ?? .null,
+                     "trim_duration": lane.trimDuration.map { .number($0) } ?? .null,
+                     "gain_db": .number(lane.gainDb), "mute": .bool(lane.mute),
+                     "loops": .bool(lane.loops ?? (lane.role == .music))])
+        }),
         "music_path": timeline.audio.musicPath.map { JSONValue.string($0) } ?? .null,
         "music_gain_db": .number(timeline.audio.musicGainDb),
     ]
@@ -281,6 +290,7 @@ public extension ToolRegistry {
     func registerVideoEditTools() {
         registerVideoEditTimelineTools()
         registerVideoEditMediaTools()
+        registerAgentAudioTransactions()
         registerVideoEditOutputTools()
     }
 
@@ -561,7 +571,7 @@ public extension ToolRegistry {
             var payload = videoEditFields(file.timeline)
             payload["project_id"] = .string(input.projectID)
             payload["revision"] = .int(file.revision ?? 0)
-            payload["timeline"] = try await ctx.engine.timelineValue(projectID: input.projectID)
+            payload["timeline"] = await ctx.engine.encode(timeline: file.timeline, revision: file.revision ?? 0)
             return .object(payload)
         })
 

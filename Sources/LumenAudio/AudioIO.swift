@@ -33,6 +33,34 @@ public enum AudioIO {
         return downmix(first, second: ch.count > 1 ? ch[1] : nil, rate: rate)
     }
 
+    /// Read an arbitrary bounded interval directly from a file. The returned
+    /// origin is the actual first native sample's source time, not the request.
+    public static func readStereoWindow(_ url: URL, from start: Double, to end: Double) throws
+        -> (left: [Float], right: [Float], origin: Double) {
+        guard start.isFinite, end.isFinite, end > start else { return ([], [], 0) }
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let fmt = file.processingFormat, rate = fmt.sampleRate
+        guard rate.isFinite, rate > 0, fmt.channelCount > 0 else { throw AudioIOError.unreadable("invalid format") }
+        let first = AVAudioFramePosition(min(max((start * rate).rounded(.down), 0), Double(file.length)))
+        let last = AVAudioFramePosition(min(max((end * rate).rounded(.up), Double(first)), Double(file.length)))
+        file.framePosition = first
+        let capacity = AVAudioFrameCount(16384)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: capacity) else { throw AudioIOError.unreadable("window buffer") }
+        var left: [Float] = [], right: [Float] = []
+        left.reserveCapacity(Int(last - first)); right.reserveCapacity(Int(last - first))
+        while file.framePosition < last {
+            if Task.isCancelled { throw CancellationError() }
+            let count = AVAudioFrameCount(min(Int64(capacity), last - file.framePosition))
+            try file.read(into: buffer, frameCount: count)
+            guard buffer.frameLength > 0 else { break }
+            guard let pcm = buffer.floatChannelData else { throw AudioIOError.unreadable("window PCM") }
+            let n = Int(buffer.frameLength)
+            left.append(contentsOf: UnsafeBufferPointer(start: pcm[0], count: n))
+            right.append(contentsOf: UnsafeBufferPointer(start: pcm[fmt.channelCount > 1 ? 1 : 0], count: n))
+        }
+        return (resample(left, from: rate), resample(right, from: rate), Double(first) / rate)
+    }
+
     /// Whole file -> per-channel Float32 at the file's own sample rate.
     static func decode(_ url: URL) throws -> (channels: [[Float]], rate: Double) {
         try decodePrefix(url, seconds: nil)

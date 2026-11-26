@@ -217,7 +217,7 @@ fragment float4 backdropFS(VO in [[stage_in]], constant BackdropU &u [[buffer(0)
 // SMOOTHNESS: the corner taps of the 4x4 kernel carry <2% of the energy and
 // renormalizing after dropping them is visually indistinguishable, so this
 // halves the texture fetches in the preview's hottest shader.
-static float3 catmull5(texture2d<float> t, float2 uv, uint lv) {
+static float3 catmull5Bounded(texture2d<float> t, float2 uv, uint lv, float2 validSize) {
     float2 sz = float2(t.get_width(lv), t.get_height(lv));
     float2 sp = uv * sz;
     float2 tc = floor(sp - 0.5) + 0.5;
@@ -229,6 +229,11 @@ static float3 catmull5(texture2d<float> t, float2 uv, uint lv) {
     float2 w2 = 1.0 - w0 - w1 - w3;
     float2 w12 = w1 + w2;
     float2 p0 = (tc - 1.0) / sz, p3 = (tc + 2.0) / sz, p12 = (tc + w2 / w12) / sz;
+    // Reused upscale buffers can be larger than their written ROI. Clamp
+    // every filter tap to the valid lattice, not just the sample center.
+    float2 lo = 0.5 / sz;
+    float2 hi = (min(max(validSize, 1.0), sz) - 0.5) / sz;
+    p0 = clamp(p0, lo, hi); p3 = clamp(p3, lo, hi); p12 = clamp(p12, lo, hi);
     float L = float(lv);
     float3 r = t.sample(linClamp, float2(p12.x, p0.y),  level(L)).rgb * (w12.x * w0.y)
              + t.sample(linClamp, float2(p0.x,  p12.y), level(L)).rgb * (w0.x  * w12.y)
@@ -237,6 +242,9 @@ static float3 catmull5(texture2d<float> t, float2 uv, uint lv) {
              + t.sample(linClamp, float2(p12.x, p3.y),  level(L)).rgb * (w12.x * w3.y);
     float sum = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
     return r / max(sum, 1e-4);
+}
+static float3 catmull5(texture2d<float> t, float2 uv, uint lv) {
+    return catmull5Bounded(t, uv, lv, float2(t.get_width(lv), t.get_height(lv)));
 }
 static float3 sampleMip(texture2d<float> t, float2 uv, float minif) {
     float maxL = float(t.get_num_mip_levels() - 1);
@@ -301,7 +309,7 @@ fragment float4 contentFS(VO in [[stage_in]], constant ContentU &u [[buffer(0)]]
         // Same source-pixel position, sampled from the upscaled lattice.
         float2 q = (sp - u.upRegion.xy) * u.upFactor;
         q = clamp(q, float2(0.5), u.upRegion.zw * u.upFactor - 0.5);
-        rgb = mix(rgb, catmull5(up, q / u.upTexSize, 0u), u.upBlend);
+        rgb = mix(rgb, catmull5Bounded(up, q / u.upTexSize, 0u, u.upRegion.zw * u.upFactor), u.upBlend);
     }
     if (u.border > 0.5) rgb = mix(rgb, float3(1.0), 0.08 * clamp(0.5 + (d + 1.0) / w, 0.0, 1.0));
     a *= u.opacity;

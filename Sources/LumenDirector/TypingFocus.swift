@@ -110,13 +110,16 @@ enum TypingFocus {
             }
             let index = Int(event.axFrameIndex) - 1
             var observed = ax.indices.contains(index) ? field(ax[index], at: event.t, bounds: bounds, backing: b) : nil
-            if let current = run, let active = current.field {
-                // Nested containers are the same field for a typing run: a
-                // later key can hint the inner frame while the caret still
-                // sits in the outer one. Keep the field the run locked onto.
-                if let candidate = observed,
-                   active.rect.contains(CGPoint(x: candidate.rect.midX, y: candidate.rect.midY)) ||
-                   candidate.rect.contains(CGPoint(x: active.rect.midX, y: active.rect.midY)) {
+            // AX may report a nested child while the same field is focused.
+            // Keep the original shot only when the containers really nest and
+            // the available window/epoch identity has not changed.
+            if let active = run?.field, let candidate = observed {
+                let identityCompatible: Bool
+                if let a = active.anchor, let c = candidate.anchor {
+                    identityCompatible = a.windowID == c.windowID && a.appName == c.appName &&
+                        (a.epoch == 0 || c.epoch == 0 || a.epoch == c.epoch)
+                } else { identityCompatible = true }
+                if identityCompatible && (active.rect.contains(candidate.rect) || candidate.rect.contains(active.rect)) {
                     observed = active
                 }
             }
