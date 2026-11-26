@@ -32,28 +32,8 @@ enum TranscriptOps {
 
     static func pauseCuts(_ transcript: Transcript, events: [InputEvent], maxPause: Double = 0.6,
                           keepPause: Double = 0.25) -> [CutRange] {
-        guard maxPause.isFinite, keepPause.isFinite, maxPause >= 0, keepPause >= 0 else { return [] }
-        let words = transcript.words.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
-            .sorted { $0.start < $1.start }
-        guard words.count > 1 else { return [] }
-        // Sorted activity index: long recordings no longer scan every input
-        // event for every word gap. Retain any pause containing interaction.
-        let activity = events.lazy.map(\.t).filter(\.isFinite).sorted()
-        var eventIndex = 0
-        var cuts: [CutRange] = []
-        var spokenThrough = words[0].end
-        for word in words.dropFirst() {
-            let start = spokenThrough, end = word.start, gap = end - start
-            spokenThrough = max(spokenThrough, word.end)
-            while eventIndex < activity.count, activity[eventIndex] <= start { eventIndex += 1 }
-            guard gap > maxPause, end > start,
-                  eventIndex == activity.count || activity[eventIndex] >= end else { continue }
-            let removed = gap - min(keepPause, gap)
-            guard removed > 0 else { continue }
-            let edge = removed / 2
-            cuts.append(CutRange(start: start + edge, end: end - edge, origin: .transcript))
-        }
-        return merge(cuts)
+        TranscriptEdits.pauseCuts(transcript: transcript, events: events,
+                                  maxPause: maxPause, keepPause: keepPause)
     }
 
     /// Sentence segmentation over the sorted word stream. A sentence ends on

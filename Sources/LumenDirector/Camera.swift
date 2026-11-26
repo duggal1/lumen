@@ -212,7 +212,8 @@ enum CameraSolver {
         // Bake only the published compatibility track. The underlying
         // trajectory is evaluated directly, not repeatedly integrated or
         // smoothed. All stationary samples are exact and repeatable.
-        let count = max(Int(ceil(outDur * cameraRate)) + 1, 2)
+        let trackDuration = shots.isEmpty ? min(outDur, 0.6 + 1 / cameraRate) : outDur
+        let count = max(Int(ceil(trackDuration * cameraRate)) + 1, 2)
         var track = CameraTrack(count: count, rate: cameraRate)
         var index = -1
         for i in 0..<count {

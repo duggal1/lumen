@@ -44,3 +44,35 @@ import LumenProject
     #expect(e.keyCode == 12)
     #expect(!InputEvent(t: 1, kind: .keyUp, keyCode: 12, flags: InputEvent.keyRepeatFlag).isKeyRepeat)
 }
+
+
+@Test func longPausesAreRemovedUnlessAnInteractionOccurs() {
+    let transcript = Transcript(words: [
+        WordToken(text: "First", start: 0, end: 0.5),
+        WordToken(text: "overlap", start: 0.3, end: 1),
+        WordToken(text: "Second", start: 5, end: 5.5)
+    ], locale: "en")
+    let cuts = TranscriptEdits.pauseCuts(transcript: transcript)
+    #expect(cuts.count == 1)
+    #expect(abs((cuts.first?.start ?? 0) - 1.125) < 0.00001)
+    #expect(abs((cuts.first?.end ?? 0) - 4.875) < 0.00001)
+    #expect(TranscriptOps.pauseCuts(transcript, events: []).map(\.start) == cuts.map(\.start))
+    let events = [InputEvent(t: 3, kind: .down)]
+    #expect(TranscriptEdits.pauseCuts(transcript: transcript, events: events).isEmpty)
+}
+
+@Test func clickEffectIsExplicitAndDoesNotRequireLegacyRingField() {
+    var tl = Timeline(duration: 3)
+    tl.audio.speedRampsAuto = false
+    tl.cursor.clickEffect = .ripple
+    tl.cursor.clickRing = nil
+    let events = [InputEvent(t: 1, kind: .down, x: 700, y: 400)]
+    let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 3, backingScale: 1, originX: 0, originY: 0)
+    let derived = Director.derive(tl, input: DirectorInput(events: events, source: source), revision: 1)
+    #expect(derived.evaluate(at: 1).clickFX.count == 1)
+    #expect(SyncHarness.measure(derived, events: events).passes)
+    var disabled = derived
+    disabled.cursor.clickEffect = .none
+    #expect(disabled.evaluate(at: 1).clickFX.isEmpty)
+    #expect(SyncHarness.measure(disabled, events: events).passes)
+}

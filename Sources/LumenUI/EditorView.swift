@@ -93,8 +93,7 @@ struct EditorView: View {
             // A recording without an event sidecar can never produce an
             // automatic zoom. Say so instead of showing an empty timeline.
             if model.session.input.events.isEmpty {
-                Label("No input events were recorded. Automatic zoom cannot be generated for this clip.",
-                      systemImage: "exclamationmark.triangle")
+                PixelSymbolLabel("No input events were recorded. Automatic zoom cannot be generated for this clip.", symbol: "exclamationmark.triangle")
                     .font(AppType.caption).foregroundStyle(Tok.accentText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16).padding(.vertical, 6)

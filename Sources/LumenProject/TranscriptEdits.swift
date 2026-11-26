@@ -97,8 +97,16 @@ public enum TranscriptEdits {
     public static func cleanupCuts(transcript: Transcript, events: [InputEvent] = [],
                                    maxPause: Double = 0.6, keepPause: Double = 0.25,
                                    padding: Double = defaultPadding) -> [CutRange] {
-        var cuts = spans(for: transcript.words, at: fillerIndices(in: transcript), padding: padding)
-        guard maxPause.isFinite, keepPause.isFinite, maxPause >= 0, keepPause >= 0 else { return cuts }
+        let fillers = spans(for: transcript.words, at: fillerIndices(in: transcript), padding: padding)
+        return merge(fillers + pauseCuts(transcript: transcript, events: events,
+                                        maxPause: maxPause, keepPause: keepPause))
+    }
+
+    /// One indexed implementation used by both the director and editor.
+    public static func pauseCuts(transcript: Transcript, events: [InputEvent] = [],
+                                 maxPause: Double = 0.6, keepPause: Double = 0.25) -> [CutRange] {
+        guard maxPause.isFinite, keepPause.isFinite, maxPause >= 0, keepPause >= 0 else { return [] }
+        var cuts: [CutRange] = []
         let ordered = transcript.words.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
             .sorted { $0.start < $1.start }
         let activity = events.lazy.filter { $0.t.isFinite && $0.kind != .move && $0.kind != .flagsChanged }
@@ -108,7 +116,7 @@ public enum TranscriptEdits {
         for word in ordered.dropFirst() {
             let start = speechEnd, end = word.start, gap = end - start
             speechEnd = max(speechEnd, word.end)
-            guard gap > max(maxPause, keepPause), gap < 2 else { continue }
+            guard gap > max(maxPause, keepPause) else { continue }
             while activityIndex < activity.count, activity[activityIndex] <= start { activityIndex += 1 }
             guard activityIndex == activity.count || activity[activityIndex] >= end else { continue }
             cuts.append(CutRange(start: start + keepPause / 2, end: end - keepPause / 2, origin: .transcript))

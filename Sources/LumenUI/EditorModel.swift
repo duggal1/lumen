@@ -161,6 +161,7 @@ enum TimelineSelection: Equatable {
     private var activeExportID = UUID()
     private var mixTask: Task<Void, Never>?
     private var masterDelayTask: Task<Void, Never>?
+    private var audioPreparationTask: Task<Void, Never>?
     private var hasMixed = false
     private var isMixing = false
     private var needsInitialMix = true
@@ -260,7 +261,7 @@ enum TimelineSelection: Equatable {
             // the recorded tracks still on disk. The session prepares them in
             // the background, so the window paints instead of waiting for
             // audio decode, VAD, the waveform envelope and the neural pass.
-            let (session, timeline) = try await ProjectSession.openEditor(ProjectBundle(url: url), device: renderer.device)
+            let (session, timeline) = try await ProjectSession.openEditor(ProjectBundle(url: url), device: renderer.device, prepareAudio: false)
             let settings = ExportSettings.load(defaultName: AppModel.displayName(session.meta.name))
             let transcript = session.transcriptFile?.transcript.shifted(by: session.micOffset)
             return (renderer, session, timeline, settings, transcript)
@@ -456,16 +457,26 @@ enum TimelineSelection: Equatable {
     /// Whole-program mastering is admitted while transport is idle.
     private func scheduleIdleMaster() {
         masterDelayTask?.cancel()
-        guard !wantsPlayback, !hasMixed else { return }
+        guard !wantsPlayback else { return }
         masterDelayTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(900))
-            guard !Task.isCancelled, let self, !self.wantsPlayback, !self.hasMixed, !self.isMixing else { return }
-            self.remix()
+            guard !Task.isCancelled, let self, !self.wantsPlayback else { return }
+            if self.session.audioPreparation != .ready {
+                self.audioPreparationTask?.cancel()
+                let session = self.session
+                self.audioPreparationTask = Task { [weak self] in
+                    let ready = await session.prepareAudio()
+                    guard ready, !Task.isCancelled, let self, !self.wantsPlayback else { return }
+                    self.replan(remixAudio: true)
+                }
+            } else if !self.hasMixed, !self.isMixing { self.remix() }
         }
     }
 
     private func yieldMasterToTransport() {
         masterDelayTask?.cancel(); masterDelayTask = nil
+        audioPreparationTask?.cancel(); audioPreparationTask = nil
+        session.cancelAudioPreparation()
         // Keep the previous task as a cancellation barrier for the next master.
         if isMixing { mixGeneration += 1; mixTask?.cancel(); isMixing = false }
     }
@@ -1276,7 +1287,7 @@ enum TimelineSelection: Equatable {
 
     private func startExport(settings: ExportSettings, clipboard: Bool) {
         if timeline.overlays.privacy.enabled && timeline.overlays.privacy.autoDetect {
-            if privacyScanning {
+            if privacyScanning || !privacyAnalysisComplete {
                 exportState = .failed("Sensitive-data scanning is still running. Wait for it to finish or turn off automatic detection.")
                 return
             }
