@@ -87,7 +87,7 @@ extension TimelineStrip {
         }
         if r.selected && r.brackets {
             let left = lat.x(col: r.c0), right = lat.x(col: r.c1 - 1) + TimelineStrip.Lattice.cell
-            c.drawBrackets(around: CGRect(x: left, y: yb, width: right - left, height: r.bodyH), color: Tok.accent)
+            c.drawBrackets(around: CGRect(x: left, y: yb, width: right - left, height: r.bodyH), color: Tok.timelineAccent)
         }
     }
 
@@ -435,7 +435,7 @@ extension TimelineStrip {
                 if r.selected {
                     let x = max(lat.x(col: r.c0), lat.x0)
                     let right = lat.x(col: r.c1 - 1) + TimelineStrip.Lattice.cell
-                    c.drawBrackets(around: CGRect(x: x, y: 13, width: max(1, right - x), height: 24), color: Tok.accent)
+                    c.drawBrackets(around: CGRect(x: x, y: 13, width: max(1, right - x), height: 24), color: Tok.timelineAccent)
                 }
             }
         }

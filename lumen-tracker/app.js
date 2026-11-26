@@ -10,7 +10,7 @@
 
   const AREAS = ["All", "Build", "Recording", "Transcription", "Paste", "Recovery", "Audio", "Zoom", "Motion", "Framing", "Export"];
   const RANK = { P0: 0, P1: 1, P2: 2, P3: 3 };
-  const PRIORITY_COLOR = { P0: "orange", P1: "orange", P2: "neutral", P3: "neutral" };
+  const PRIORITY_COLOR = { P0: "accent", P1: "accent", P2: "neutral", P3: "neutral" };
   const TITLES = { overview: "Reliability", issues: "Issue map", agent: "Agent workspace", regressions: "Regression log" };
   const SUBS = {
     overview: "What ships, what breaks, and what is still a hypothesis.",
@@ -60,7 +60,7 @@
   };
   const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch { toast("Storage unavailable. Export your data."); } };
 
-  const state = { view: "overview", selected: seed.issues[0] && seed.issues[0].id, query: "", filter: "All", ci: null, prs: null, syncTime: null, syncing: false, issues: null, issuesError: null };
+  const state = { view: "overview", selected: seed.issues[0] && seed.issues[0].id, query: "", filter: "All", ci: null, prs: null, activity: null, syncTime: null, syncing: false, issues: null, issuesError: null };
   const auth = { token: null, user: null, key: null };
   const ui = { modal: null, busy: false, draft: { title: "", body: "" }, ctx: null, originId: null, published: null, backTo: null, hint: "" };
 
@@ -73,24 +73,24 @@
     const p = i.pr != null && state.prs && state.prs[i.pr];
     if (p) return p.merged_at
       ? { label: "Merged (live)", color: "neutral", merged: true, source: "GitHub live" }
-      : { label: p.state === "open" ? "PR open" : "Closed unmerged", color: p.state === "open" ? "neutral" : "orange", merged: false, source: "GitHub live" };
+      : { label: p.state === "open" ? "PR open" : "Closed unmerged", color: p.state === "open" ? "neutral" : "bad", merged: false, source: "GitHub live" };
     if (i.pr != null && i.code === "merged") return { label: "Merged (snapshot)", color: "neutral", merged: true, source: "GitHub snapshot" };
     if (i.code === "merged" && i.commit) return { label: "On main (snapshot)", color: "neutral", merged: true, source: "Git history snapshot" };
     if (i.code === "unknown") return { label: "Scope unknown", color: "neutral", merged: false, source: "unverified" };
     return { label: "Plan only", color: "neutral", merged: false, source: "not merged" };
   }
 
-  const causeOf = i => i.confidence === "confirmed" ? ["Cause confirmed", "neutral"] : i.confidence === "tentative" ? ["Cause tentative", "orange"] : ["Cause unknown", "neutral"];
+  const causeOf = i => i.confidence === "confirmed" ? ["Cause confirmed", "neutral"] : i.confidence === "tentative" ? ["Cause tentative", "accent"] : ["Cause unknown", "neutral"];
 
   function ciInfo() {
-    const ci = state.ci || seed.ci, s = ci.status;
+    const ci = state.ci || { status: "unknown", stage: "Waiting for GitHub" }, s = ci.status;
     const kind = s === "success" ? "ok"
       : ["failure", "timed_out", "cancelled", "startup_failure"].includes(s) ? "bad"
       : ["in_progress", "queued", "waiting", "pending", "requested"].includes(s) ? "run" : "unk";
     return { ...ci, kind, word: { ok: "Passed", bad: "Failed", run: "Running", unk: "Unknown" }[kind], foot: { ok: "passing", bad: "failing", run: "running", unk: "unknown" }[kind] };
   }
 
-  const testColor = k => k === "failed" ? "orange" : "neutral";
+  const testColor = k => k === "failed" ? "bad" : "neutral";
 
   function filtered() {
     const q = state.query.trim().toLowerCase();
@@ -208,21 +208,22 @@
       ["Device verified", pad(verified), "Local notes, not release proof", ""]
     ];
     const next = all().slice().sort(cmp).filter(i => !codeStatus(i).merged).slice(0, 3);
-    const activity = seed.activity;
-    const pullRequest = activity.pullRequest;
-    const activityTime = activity.updatedAt.slice(0, 16).replace("T", " ") + " UTC";
-    const activityStates = '<div class="activity-state">' +
-      '<div class="activity-state-row"><div class="activity-state-head"><span>main</span><a class="activity-sha" href="' + GH + '/commit/' + esc(seed.sourceSha) + '" target="_blank" rel="noopener">' + esc(seed.sourceSha.slice(0, 7)) + '</a>' + badge("Build failed", "orange") + '</div><p>SCShareableContent sendability error at Runner.swift:266 <a class="activity-run" href="' + GH + '/actions/runs/' + esc(seed.ci.run) + '" target="_blank" rel="noopener">Workflow</a></p></div>' +
-      '<div class="activity-state-row"><div class="activity-state-head"><a href="' + GH + '/pull/' + pullRequest.number + '" target="_blank" rel="noopener">Draft PR #' + pullRequest.number + '</a><a class="activity-sha" href="' + GH + '/commit/' + esc(pullRequest.headSha) + '" target="_blank" rel="noopener">' + esc(pullRequest.headSha.slice(0, 7)) + '</a>' + badge("Tests failed", "orange") + '</div><p>Agent3Tests expected 4 tools and received 5 <a class="activity-run" href="' + GH + '/actions/runs/' + esc(pullRequest.ci.run) + '" target="_blank" rel="noopener">Workflow</a></p></div>' +
-      '</div>';
-    const activityEntries = activity.groups.map(group => '<li class="activity-entry"><time class="activity-time">' + esc(group.time) + '</time><div class="activity-body"><div class="activity-title-row"><h3>' + esc(group.title) + '</h3><span class="activity-source">' + esc(group.source) + '</span></div><p>' + esc(group.summary) + '</p><div class="activity-links">' + group.commits.map(sha => '<a href="' + GH + '/commit/' + encodeURIComponent(sha) + '" target="_blank" rel="noopener">' + esc(sha) + '</a>').join("") + '</div></div></li>').join("");
+    const activity = state.activity;
+    const activityStates = activity
+      ? '<div class="activity-state"><div class="activity-state-row"><div class="activity-state-head"><span>main</span><a class="activity-sha" href="' + GH + '/commit/' + encodeURIComponent(activity.head) + '" target="_blank" rel="noopener">' + esc(activity.head.slice(0, 7)) + '</a>' + badge(ci.word, ci.kind === "bad" ? "bad" : "neutral") + '</div><p>' + esc(ci.stage) + (ci.run ? ' <a class="activity-run" href="' + GH + '/actions/runs/' + encodeURIComponent(ci.run) + '" target="_blank" rel="noopener">Workflow</a>' : '') + '</p></div></div>'
+      : '<div class="empty">Waiting for current GitHub activity.</div>';
+    const activityEntries = activity ? activity.commits.map(commit => '<li class="activity-entry"><time class="activity-time">' + esc(stamp(commit.date)) + '</time><div class="activity-body"><div class="activity-title-row"><h3>' + esc(commit.message) + '</h3></div><div class="activity-links"><a href="' + GH + '/commit/' + encodeURIComponent(commit.sha) + '" target="_blank" rel="noopener">' + esc(commit.sha.slice(0, 7)) + '</a></div></div></li>').join("") : '';
+    const openPulls = activity ? activity.openPulls.map(pr => '<li class="activity-entry"><div class="activity-body"><a href="' + GH + '/pull/' + encodeURIComponent(pr.number) + '" target="_blank" rel="noopener">#' + esc(pr.number) + ' ' + esc(pr.title) + '</a></div></li>').join("") : '';
+    const activityWindow = activity
+      ? '<span>Head ' + esc(activity.head.slice(0, 7)) + '</span><span>' + activity.commits.length + ' recent commits on main</span><span>' + activity.openPulls.length + ' open pull requests</span>'
+      : '<span>Live GitHub data unavailable</span>';
     return '<div class="ledger">' + stats.map(s => '<div class="stat"><span class="stat-k">' + esc(s[0]) + '</span><strong class="stat-v' + (s[3] === "bad" ? " bad" : s[3] === "run" ? " shimmer" : "") + '">' + esc(s[1]) + '</strong><span class="stat-n">' + esc(s[2]) + "</span></div>").join("") + "</div>" +
       '<section class="block"><div class="block-h"><h2>Next fixes</h2><span class="muted">Ranked by priority</span></div><div class="card list">' +
       (next.length ? next.map(i => '<button class="row" type="button" data-a="open" data-id="' + esc(i.id) + '">' + prio(i) +
         '<span class="row-m"><span class="row-t">' + esc(i.title) + '</span><span class="row-s">' + esc(i.impact) + '</span></span><span class="muted">' + esc(i.id) + "</span></button>").join("") : '<div class="empty">Every issue has a merged implementation.</div>') +
       "</div></section>" +
-      '<section class="block"><div class="block-h"><h2>Recent code activity</h2><span class="muted">Nov 12 evening through Nov 13</span></div><div class="activity-window"><span>' + activity.mainCommitCount + ' commits on main</span><span>' + pullRequest.commitCount + ' commits in open PR #' + pullRequest.number + '</span><span>Snapshot ' + esc(activityTime) + '</span></div><div class="card activity-card">' +
-      activityStates + '<ol class="activity-list">' + activityEntries + '</ol></div></section>' + liveIssues();
+      '<section class="block"><div class="block-h"><h2>Recent code activity</h2><span class="muted">' + (state.syncTime ? 'Updated ' + esc(stamp(state.syncTime)) : 'Not yet synchronized') + '</span></div><div class="activity-window">' + activityWindow + '</div><div class="card activity-card">' +
+      activityStates + '<ol class="activity-list">' + activityEntries + '</ol><div class="block-h"><h3>Open pull requests</h3></div><ol class="activity-list">' + (activity ? (openPulls || '<li class="activity-entry">No open pull requests</li>') : '') + '</ol></div></section>' + liveIssues();
   }
 
   function liveIssues() {
@@ -232,7 +233,7 @@
       : !list.length ? '<div class="empty">No GitHub issues in ' + esc(REPO) + ". Audit findings are tracked separately.</div>"
       : list.slice(0, 5).map(x => '<a class="row" href="' + issueUrl(x.number) + '" target="_blank" rel="noopener">' + GH_MARK + '<span class="row-m"><span class="row-t">#' + esc(x.number) + " " + esc(x.title) + '</span><span class="row-s">@' + esc(x.user || "unknown") + ", " +
         esc(new Date(x.updated_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })) + ", " + esc(x.comments || 0) + " comments</span></span>" + badge(x.state === "open" ? "Open" : "Closed", "neutral") + "</a>").join("");
-    return '<section class="block"><div class="block-h"><h2>GitHub issues' + (list === null && !state.issuesError ? "" : badge(state.issuesError ? "Error" : list.length + " live", state.issuesError ? "orange" : "neutral")) +
+    return '<section class="block"><div class="block-h"><h2>GitHub issues' + (list === null && !state.issuesError ? "" : badge(state.issuesError ? "Error" : list.length + " live", state.issuesError ? "bad" : "neutral")) +
       '</h2><button class="btn sm" data-a="refresh" type="button">Refresh</button></div><div class="card list">' + body + "</div></section>";
   }
 
@@ -345,7 +346,7 @@
   /* ───────── regressions ───────── */
   function regressions() {
     const logs = [...store.logs, ...SYSTEM_LOGS].sort((a, b) => new Date(b.date) - new Date(a.date));
-    const color = r => r === "FAIL" ? "orange" : "neutral";
+    const color = r => r === "FAIL" ? "bad" : r === "PASS" ? "ok" : "neutral";
     return '<div class="split reg"><section class="card form"><div class="p-head"><h2 class="p-title">Log an observation</h2>' + badge("Local only") + "</div>" +
       '<form id="reg-form"><div><span class="lbl">Linked issue</span>' + dd("reg-issue", state.selected, all().map(x => [x.id, x.id + " / " + x.area]), "issue") + "</div>" +
       '<div><span class="lbl">Outcome</span>' + dd("reg-result", "FAIL", [["FAIL", "Failure reproduced"], ["PASS", "Observed pass"], ["INCONCLUSIVE", "Inconclusive"]], "result") + "</div>" +
@@ -394,18 +395,27 @@
         if (!r.ok) throw Error("GitHub HTTP " + r.status);
         return r.json();
       };
-      const [prs, runs] = await Promise.all([get("/pulls?state=all&per_page=100"), get("/actions/runs?per_page=6")]);
+      const [prs, openPrs, head, commits, runs] = await Promise.all([
+        get("/pulls?state=all&per_page=100"), get("/pulls?state=open&per_page=100"), get("/commits/main"),
+        get("/commits?sha=main&per_page=8"), get("/actions/runs?branch=main&event=push&per_page=100")
+      ]);
       const map = {};
-      for (const p of prs) map[p.number] = { state: p.state, merged_at: p.merged_at };
+      for (const p of [...prs, ...openPrs]) map[p.number] = { state: p.state, merged_at: p.merged_at };
       state.prs = map;
-      const latest = (runs.workflow_runs || []).find(x => x.name === "Swift verification") || (runs.workflow_runs || [])[0];
-      if (latest) state.ci = { status: latest.conclusion || latest.status || "unknown", stage: latest.conclusion === "failure" ? "Build or test failure" : "Swift verification", sha: latest.head_sha, run: latest.id };
+      const latest = (runs.workflow_runs || []).find(x => x.name === "Swift verification" && x.head_branch === "main" && x.event === "push" && x.head_sha === head.sha);
+      state.ci = latest
+        ? { status: latest.conclusion || latest.status || "unknown", stage: "Swift verification", sha: head.sha, run: latest.id }
+        : { status: "unknown", stage: "No verification run for this commit", sha: head.sha };
+      state.activity = { head: head.sha, commits: commits.map(c => ({ sha: c.sha, message: (c.commit?.message || "").split("\n")[0], date: c.commit?.committer?.date })), openPulls: openPrs.map(p => ({ number: p.number, title: p.title })) };
       state.syncTime = new Date().toISOString();
       state.syncing = false; render();
       toast("GitHub metadata refreshed");
     } catch {
-      state.syncing = false; render();
-      toast("Sync failed. Showing the snapshot.");
+      state.ci = { status: "unknown", stage: "GitHub sync failed" };
+      state.prs = null; state.activity = null;
+      state.syncing = false;
+      render();
+      toast("GitHub sync failed. Current status is unavailable.");
     }
   }
 
