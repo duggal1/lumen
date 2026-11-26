@@ -28,7 +28,7 @@ public enum ActivityError: Error, LocalizedError, Sendable {
 /// Created per analysis, cancellable, and never touches the UI or event tap.
 public final class ActivityAnalyzer: @unchecked Sendable {
     public static let analyzerID = "activity"
-    public static let analyzerVersion = 1
+    public static let analyzerVersion = 2
 
     static let lumaW = 192, lumaH = 108
     static let gridW = 48, gridH = 27
@@ -57,7 +57,7 @@ public final class ActivityAnalyzer: @unchecked Sendable {
               let textureCache else { throw ActivityError.metal("texture cache") }
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .r8Unorm, width: Self.lumaW, height: Self.lumaH, mipmapped: false)
+            pixelFormat: .rgba8Unorm, width: Self.lumaW, height: Self.lumaH, mipmapped: false)
         descriptor.usage = [.shaderRead, .shaderWrite]
         descriptor.storageMode = .private
         let textures = (0..<5).compactMap { _ in dev.makeTexture(descriptor: descriptor) }
@@ -187,6 +187,7 @@ public final class ActivityAnalyzer: @unchecked Sendable {
         head += 1
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+        guard commandBuffer.status == .completed else { throw ActivityError.metal("activity command buffer failed") }
         let cells = Array(UnsafeBufferPointer(
             start: out.contents().assumingMemoryBound(to: UInt8.self),
             count: Self.gridW * Self.gridH))

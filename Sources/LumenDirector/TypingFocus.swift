@@ -44,12 +44,16 @@ enum TypingFocus {
         var rect: CGRect
         var anchor: FocusAnchor?
 
+        func compatibleContext(_ next: Field) -> Bool {
+            guard let a = anchor, let b = next.anchor else { return true }
+            if a.windowID != b.windowID || a.appName != b.appName || a.host != b.host { return false }
+            return a.epoch == 0 || b.epoch == 0 || a.epoch == b.epoch
+        }
+
         func matches(_ next: Field, backing: Double) -> Bool {
-            if let a = anchor, let b = next.anchor {
-                if a.windowID != b.windowID || a.appName != b.appName { return false }
-                if a.epoch != 0, a.epoch == b.epoch { return true }
-                if a.epoch != 0, b.epoch != 0 { return false }
-            }
+            guard compatibleContext(next) else { return false }
+            if let a = anchor, let b = next.anchor,
+               a.epoch != 0, a.epoch == b.epoch { return true }
             let overlap = rect.intersection(next.rect)
             return !overlap.isNull &&
                 overlap.width * overlap.height >= min(rect.width * rect.height,
@@ -103,15 +107,34 @@ enum TypingFocus {
 
     private static func pixelField(for run: Run, traces: [TypingTrace], bounds: CGRect) -> CGRect? {
         let matches = traces.filter { $0.t0 <= run.end + 0.15 && $0.t1 >= run.start - 0.15 }
-        let ordered = matches.sorted {
-            min($0.t1, run.end) - max($0.t0, run.start) > min($1.t1, run.end) - max($1.t0, run.start)
+        // A held guess, blink, or unrelated animation is not typing
+        // evidence. Require actual ink/caret changes during this run.
+        let ranked = matches.compactMap { trace -> (TypingTrace, [TypingTrace.Sample])? in
+            let samples = trace.samples.filter {
+                $0.t.isFinite && $0.t >= run.start - 0.15 && $0.t <= run.end + 0.15 &&
+                $0.x.isFinite && $0.y.isFinite && $0.confidence.isFinite &&
+                $0.confidence >= 0.65 &&
+                ($0.evidence == .caret || $0.evidence == .lineWrap || $0.evidence == .backspace)
+            }
+            guard samples.count >= 2,
+                  let first = samples.map(\.t).min(), let last = samples.map(\.t).max(),
+                  last - first >= 0.03 else { return nil }
+            return (trace, samples)
+        }.sorted {
+            if $0.1.count != $1.1.count { return $0.1.count > $1.1.count }
+            return $0.0.t0 < $1.0.t0
         }
-        for trace in ordered {
+        for (trace, samples) in ranked {
             for candidate in [trace.line, trace.rect] {
                 guard let rect = candidate, rect.minX.isFinite, rect.minY.isFinite,
                       rect.width.isFinite, rect.height.isFinite else { continue }
                 let clipped = bounds.intersection(rect)
-                if !clipped.isEmpty { return clipped }
+                guard !clipped.isEmpty, clipped.width > 1, clipped.height > 1,
+                      clipped.width <= bounds.width * 0.95, clipped.height <= bounds.height * 0.95 else { continue }
+                let supported = samples.filter {
+                    clipped.insetBy(dx: -24, dy: -24).contains(CGPoint(x: $0.x, y: $0.y))
+                }.count
+                if supported >= 2, supported * 4 >= samples.count * 3 { return clipped }
             }
         }
         return nil
@@ -164,7 +187,7 @@ enum TypingFocus {
             }()
             if let current = run {
                 let same = current.field.flatMap { a in observed.map { a.matches($0, backing: b) } }
-                let nestedField = current.field.flatMap { a in observed.map { Self.nested(a.rect, $0.rect) } }
+                let nestedField = current.field.flatMap { a in observed.map { a.compatibleContext($0) && Self.nested(a.rect, $0.rect) } }
                 let sameSubject = same == true || nestedField == true
                 let gap = sameSubject ? Self.sameFieldIdleTimeout : Self.idleTimeout
                 // A container and the field inside it are one subject. Keep the
@@ -175,7 +198,7 @@ enum TypingFocus {
             if var current = run {
                 current.end = event.t
                 if let observed {
-                    if let existing = current.field, Self.nested(existing.rect, observed.rect),
+                    if let existing = current.field, existing.compatibleContext(observed), Self.nested(existing.rect, observed.rect),
                        observed.rect.width * observed.rect.height < existing.rect.width * existing.rect.height {
                         // The caret's smaller field is the subject; the parent
                         // container is only evidence of which field it was in.

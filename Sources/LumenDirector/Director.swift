@@ -492,23 +492,24 @@ public enum Director {
             h.combine(t.rect?.size.width); h.combine(t.rect?.size.height)
             h.combine(t.line?.origin.x); h.combine(t.line?.origin.y)
             h.combine(t.line?.size.width); h.combine(t.line?.size.height)
-            // Hash what the planner actually reads from a trace: how many
-            // samples are usable, i.e. their time and confidence. The sample
-            // coordinates are NOT hashed any more — typing frames the field
-            // rect (`line`/`rect` above), never the individual caret points, so
-            // hashing x/y would force a full replan on every caret pixel for a
-            // plan that is identical.
-            for s in t.samples { h.combine(s.t); h.combine(s.confidence) }
+            // Pixel fallback now validates actual sample coordinates and provenance.
+            for s in t.samples {
+                h.combine(s.t); h.combine(s.x); h.combine(s.y)
+                h.combine(s.confidence); h.combine(s.evidence.rawValue)
+            }
         }
         for a in input.activity {
             h.combine(a.t); h.combine(a.x); h.combine(a.y); h.combine(a.coverage)
             h.combine(a.region?.minX); h.combine(a.region?.minY)
             h.combine(a.region?.width); h.combine(a.region?.height)
         }
-        // F2/F1: grids and viewport samples arrive once when analysis completes.
+        // Same timestamps/count can carry different evidence after reanalysis.
+        // Hash the small contiguous payload, not merely its time bounds.
         h.combine(input.activityGrids.count)
-        h.combine(input.activityGrids.first?.t)
-        h.combine(input.activityGrids.last?.t)
+        for grid in input.activityGrids {
+            h.combine(grid.t)
+            grid.cells.withUnsafeBytes { h.combine(bytes: $0) }
+        }
         h.combine(input.viewportSamples.count)
         h.combine(input.viewportSamples.first?.t)
         h.combine(input.viewportSamples.last?.t)

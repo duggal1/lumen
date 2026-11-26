@@ -21,6 +21,7 @@ public enum ActivityShotBuilder {
         var energy = 0.0
         var wps: [(t: Double, box: CellBox)] = []
         var capT: Double? = nil
+        var hoverTainted = false
 
         mutating func absorb(_ c: Comp, t: Double, s: ActivitySettings) {
             lastT = t; samples += 1
@@ -43,7 +44,14 @@ public enum ActivityShotBuilder {
     /// with in-shot waypoints, never emitted as two overlapping segments.
     public static func build(grids: [ActivityGrid], source: (w: Double, h: Double),
                              inputs: ActivityInputs, settings s: ActivitySettings) -> ActivityResult {
-        guard s.enabled, grids.count > 3, source.w > 0, source.h > 0 else { return ActivityResult() }
+        guard s.enabled, source.w.isFinite, source.h.isFinite, source.w > 0, source.h > 0 else { return ActivityResult() }
+        // Canonicalize before computing timing; malformed samples must not
+        // poison the entire sequence or enter a binary-search timeline.
+        let grids = grids.filter { $0.t.isFinite && $0.cells.count == ActivityConst.cells }
+            .sorted { $0.t < $1.t }
+        guard grids.count > 3, zip(grids, grids.dropFirst()).allSatisfy({ $0.0.t < $0.1.t }) else {
+            return ActivityResult()
+        }
         let dt = (grids[grids.count - 1].t - grids[0].t) / Double(grids.count - 1)
         guard dt > 0 else { return ActivityResult() }
         let cw = source.w / Double(ActivityConst.gw)
@@ -67,6 +75,14 @@ public enum ActivityShotBuilder {
                     best = tracks.count - 1
                     live.append(best)
                 }
+                // Keep rejected components tracked through settling. Otherwise
+                // a persistent hover animation can re-enter as a new shot
+                // the moment the remote uncertainty window expires.
+                if g.t - tracks[best].firstT <= 0.25,
+                   inputs.hoverAssociated(at: g.t, box: c.box, cw: cw, ch: ch,
+                                          radius: s.hoverRadiusCells) {
+                    tracks[best].hoverTainted = true
+                }
                 tracks[best].absorb(c, t: g.t, s: s)
             }
         }
@@ -76,28 +92,15 @@ public enum ActivityShotBuilder {
         return ActivityResult(shots: chain(made.shots), busy: made.busy)
     }
 
-    /// Explicit input and hover alone never create activity. A pointer-only
-    /// change near the cursor is cleared; typing, scrolling and full-screen
-    /// flashes are cleared outright.
+    /// Clear typing, scrolling and full-screen flashes. Hover is classified
+    /// at the whole-track level so masking cannot leave a false subject.
     static func mask(for g: ActivityGrid, t: Double, inputs: ActivityInputs,
                      settings s: ActivitySettings, cw: Double, ch: Double) -> [Bool] {
-        var active = g.cells.map { $0 >= s.threshold }
+        let active = g.cells.map { $0 >= s.threshold }
         let none = [Bool](repeating: false, count: ActivityConst.cells)
         if inputs.has(inputs.keys, t - s.suppressAfterKey, t + 0.1)
             || inputs.has(inputs.scrolls, t - s.scrollWindow, t + s.scrollWindow) {
             return none
-        }
-        if inputs.has(inputs.moveT, t - 0.5, t),
-           !inputs.has(inputs.clicks, t - 1.2, t),
-           let c = inputs.cursor(at: t) {
-            let r = s.hoverRadiusCells
-            for y in 0..<ActivityConst.gh {
-                for x in 0..<ActivityConst.gw {
-                    let dx = Double(x) + 0.5 - c.x / cw
-                    let dy = Double(y) + 0.5 - c.y / ch
-                    if dx * dx + dy * dy <= r * r { active[y * ActivityConst.gw + x] = false }
-                }
-            }
         }
         let covered = active.reduce(0) { $0 + ($1 ? 1 : 0) }
         return Double(covered) / Double(ActivityConst.cells) > s.maxAreaFraction ? none : active
@@ -108,7 +111,7 @@ public enum ActivityShotBuilder {
                               settings s: ActivitySettings) -> (shots: [VisualShot], busy: [ClosedRange<Double>]) {
         var shots: [VisualShot] = []
         var busy: [ClosedRange<Double>] = []
-        for tr in tracks {
+        for tr in tracks where !tr.hoverTainted {
             let span = tr.lastT - tr.firstT + dt
             let continuity = Double(tr.samples) * dt / span
             let loader = tr.maxCells < s.minCells
