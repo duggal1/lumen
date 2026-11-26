@@ -52,6 +52,7 @@ done
 ditto App/public/assets/music "$app/Contents/Resources/Audio/music"
 ditto App/public/assets/typing "$app/Contents/Resources/Audio/typing"
 ditto App/public/assets/touches "$app/Contents/Resources/Audio/touches"
+ditto App/public/assets/cursor-clicks "$app/Contents/Resources/Audio/cursor-clicks"
 # CC0 one-shot library (typing keys + clicks) produced by scripts/fetch_sounds.py.
 # BundledAudioAssets.sound(named:) resolves it from Contents/Resources/Sounds.
 if [ -d Resources/Sounds ]; then

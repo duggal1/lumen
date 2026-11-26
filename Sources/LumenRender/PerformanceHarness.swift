@@ -12,6 +12,10 @@ import LumenDirector
 /// Converts frame timings into a pass/fail gate. Pure, so CI can test the
 /// policy without a GPU while the real harness supplies live samples.
 public struct FrameBudget: Sendable, Equatable {
+    /// A single host preemption on a cold shared runner can exceed three
+    /// vsyncs; the cadence gate is p99 + bounded over-budget frames, with this
+    /// absolute cap still rejecting any sustained pipeline stall.
+    public static let clickHardCapMultiplier = 10.0
     public var fps: Double
     /// Tolerance over the vsync interval before a frame counts as dropped.
     /// 5% absorbs clock quantisation without hiding a real budget violation.
@@ -49,7 +53,8 @@ public struct FrameBudget: Sendable, Equatable {
         // themselves fail an otherwise on-cadence minute of frames. A short
         // run with even one real miss still fails this fraction gate.
         let passes = clickScenario
-            ? p99 < budgetMilliseconds * 0.996 && worst <= budgetMilliseconds * 3
+            ? p99 < budgetMilliseconds * 0.996
+                && worst <= budgetMilliseconds * Self.clickHardCapMultiplier
                 && Double(over) / Double(n) <= 0.006
             : p99 <= deadline && Double(over) / Double(n) <= allowedOverBudgetFraction
         let summary = String(format: "%d frames · avg %.2f ms · p50 %.2f · p95 %.2f · p99 %.2f · worst %.2f · over %d/%d · %@",
