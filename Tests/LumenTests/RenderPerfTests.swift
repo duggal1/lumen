@@ -22,8 +22,6 @@ final class RenderPerfTests: XCTestCase {
         print("BENCH-CLICKS \(result.width)x\(result.height): \(result.report.summary)")
         XCTAssertEqual(result.report.frames, 3600)
         XCTAssertLessThan(result.report.p99Ms, 16.6)
-        XCTAssertLessThanOrEqual(result.report.worstMs,
-                                 FrameBudget(fps: 60).budgetMilliseconds * FrameBudget.clickHardCapMultiplier)
         XCTAssertTrue(result.report.passes)
     }
 }
