@@ -290,6 +290,7 @@ enum TimelineSelection: Equatable {
     func edit(coalesce: Bool = false, _ body: (inout Timeline) -> Void) {
         let old = timeline
         var new = old; body(&new)
+        new.audio = new.audio.studioPolicy()
         guard new != old else { return }
         if !(coalesce && Date().timeIntervalSince(lastEdit) < 0.6) { undoStack.append(old); if undoStack.count > 100 { undoStack.removeFirst() } }
         lastEdit = Date(); redoStack.removeAll()

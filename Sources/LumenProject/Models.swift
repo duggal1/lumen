@@ -426,6 +426,26 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         case musicGainDb, duckDepthDb, duckAttack, duckRelease, muteMicInRamps, speedRampsAuto, speedRampMinIdle, speedRampMaxSpeed, lanes
     }
     public init() {}
+
+    /// Product boundary: a single studio processing policy. Legacy fields stay
+    /// decodable for old projects and low-level DSP tests; editing gain and
+    /// muting are routing controls, not alternate voice profiles.
+    public func studioPolicy() -> AudioPlan {
+        var result = self
+        result.micMode = micMode == .off ? .off : .standard
+        result.micClean = true
+        result.noiseReductionStrength = 1
+        result.voiceClarity = true
+        result.studio = 0.25
+        result.studioMode = .standard
+        result.dereverb = 0.5
+        result.declick = true
+        result.declickDepthDb = -12
+        result.normalize = true
+        result.targetLUFSOverride = nil
+        return result
+    }
+
     public static func migrateLUFS(override: Double?, legacy: Double?, mode: MicMode) -> Double? {
         if let o = override { return o }
         guard let l = legacy else { return nil }
@@ -719,7 +739,7 @@ public struct Timeline: Sendable, Codable, Equatable {
             // v3 -> v4: legacy Loudness key targetLUFS is handled inside AudioPlan decode.
         }
          style = c.opt(.style, style); cursor = c.opt(.cursor, cursor); camera = c.opt(.camera, camera)
-        audio = c.opt(.audio, audio); webcam = try? c.decodeIfPresent(WebcamLayout.self, forKey: .webcam)
+        audio = c.opt(.audio, audio).studioPolicy(); webcam = try? c.decodeIfPresent(WebcamLayout.self, forKey: .webcam)
         overlays = c.opt(.overlays, overlays); layouts = c.opt(.layouts, layouts); layoutSettings = c.opt(.layoutSettings, layoutSettings)
         captions = c.opt(.captions, captions)
         clips = c.opt(.clips, clips)

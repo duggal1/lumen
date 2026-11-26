@@ -10,11 +10,11 @@ struct ProcessedVoiceCache {
     /// Bump whenever the processing semantics change: every persisted voice
     /// and mix cache below is keyed by it, so an algorithm change can never
     /// be served a result produced by the old one.
-    static let revision = "voice-v17-natural-presence"
+    static let revision = "voice-v18-single-studio-policy"
     /// Full-program mix cache. Keyed by revision + exact settings + time map.
     /// Bumped when key samples were trimmed to their acoustic attack: an older
     /// cached mix still carries the pre-strike silence and must not be reused.
-    static let mixRevision = "mix-v7-shared-window-cues"
+    static let mixRevision = "mix-v8-single-studio-policy"
 
     private struct Settings: Encodable {
         let noiseStrength: Double
@@ -66,7 +66,17 @@ struct ProcessedVoiceCache {
         let temporary = url.deletingLastPathComponent().appendingPathComponent("\(UUID().uuidString).wav")
         defer { try? FileManager.default.removeItem(at: temporary) }
         try AudioIO.writeMonoWAV(samples, sampleRate: rate, to: temporary)
-        try Data(contentsOf: temporary).write(to: url, options: .atomic)
+        // Same-directory atomic replacement avoids loading the entire WAV
+        // into a second in-memory Data buffer just to publish the cache.
+        if FileManager.default.fileExists(atPath: url.path) {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
+        } else {
+            do { try FileManager.default.moveItem(at: temporary, to: url) }
+            catch {
+                guard FileManager.default.fileExists(atPath: url.path) else { throw error }
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
+            }
+        }
     }
 
     /// Shared microphone chain for preview, stems, export and transcription caches.
@@ -154,7 +164,7 @@ public func cleanVoiceURL(for project: ProjectBundle, settings: AudioPlan? = nil
         guard file.meta.mic != nil else { throw CleanVoiceError.missingMicrophone }
         let samples = try AudioIO.readMono(project.micURL)
         guard !samples.isEmpty else { throw CleanVoiceError.missingMicrophone }
-        var plan = settings ?? file.timeline.audio
+        var plan = (settings ?? file.timeline.audio).studioPolicy()
         // Muting playback does not remove the voice source used for transcription.
         if plan.micMode == .off { plan.micMode = .standard }
         plan.micClean = true

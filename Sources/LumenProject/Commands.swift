@@ -193,7 +193,7 @@ public func reduce(_ t: inout Timeline, _ c: Command, ctx: ReduceContext) throws
         guard doubles.allSatisfy(\.isFinite) else { throw CommandError.invalid("non-finite activity settings") }
         t.activity = p.applying(to: t.activity)
         return [.zoom, .camera, .timeMap]
-    case .setAudio(let s): t.audio = s; return [.timeMap, .audio, .zoom, .camera]
+    case .setAudio(let s): t.audio = s.studioPolicy(); return [.timeMap, .audio, .zoom, .camera]
     case .setWebcam(let w): t.webcam = w; return [.webcam, .layout]
     case .setCaptions(let p): t.captions = p; return [.captions]
     case .setPrivacy(let p): t.overlays.privacy = p; return .masks

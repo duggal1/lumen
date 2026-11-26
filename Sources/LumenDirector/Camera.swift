@@ -142,13 +142,31 @@ enum CameraSolver {
                 focus = evidence?.min(by: { abs($0.t - a) < abs($1.t - a) })?.c ?? cursorPoint(a)
             }
             guard focus.x.isFinite, focus.y.isFinite else { continue }
-            let target = Pose(focus: SIMD2(clamp(focus.x, 0, 1), clamp(focus.y, 0, 1)),
-                              logScale: clamp(log(z.scale), 0, maxLog))
-            guard target.logScale > 1e-6 else { continue }
+            let logScale = clamp(log(z.scale), 0, maxLog)
+            guard logScale > 1e-6 else { continue }
             let begin = manual ? a : max(a - rise, 0)
-            let arrive = manual ? min(a + rise, a + (b - a) * 0.45) : max(a, begin + 1 / cameraRate)
+            // Reserve a real stationary interval before the event. At the
+            // beginning of a recording there is no history to anticipate.
+            let settle = min(0.04 + 1 / cameraRate, max(a - begin - 1 / cameraRate, 0))
+            let arrive = manual ? min(a + rise, a + (b - a) * 0.45) : max(a - settle, begin + 1 / cameraRate)
             let releaseEnd = fixed ? outDur : (manual ? b : min(b + tail, outDur))
-            let holdEnd = fixed ? outDur : max(arrive, min(b, releaseEnd - min(tail, (releaseEnd - begin) * 0.4)))
+            let holdEnd = fixed ? outDur : (manual
+                ? max(arrive, b - min(tail, (b - a) * 0.4))
+                : max(arrive, b))
+            // Store the optical pivot, not a second independently eased pan.
+            // At the target scale, project the requested center into the
+            // feasible viewport and solve C(s) = P + (C(1)-P)/s.
+            let box = viewport(min(arrive, outDur))
+            let base = CropSpace.baseView(crop: box, aspect: aspect)
+            let scale = exp(logScale)
+            let q = CropSpace.normalise(clamp(focus.x, 0, 1) * src.x,
+                                        clamp(focus.y, 0, 1) * src.y, crop: box)
+            let halfX = min(base.w / (2 * box.w * scale), 0.5)
+            let halfY = min(base.h / (2 * box.h * scale), 0.5)
+            let center = SIMD2(clamp(q.u - bias.x / scale, halfX, 1 - halfX),
+                               clamp(q.v - bias.y / scale, halfY, 1 - halfY))
+            let pivot = SIMD2<Double>(repeating: 0.5) + (center - SIMD2<Double>(repeating: 0.5)) / (1 - 1 / scale)
+            let target = Pose(focus: pivot, logScale: logScale)
             shots.append(Shot(start: begin, arrive: min(arrive, outDur), holdEnd: holdEnd,
                               releaseEnd: releaseEnd, target: target, manual: manual, fixed: fixed))
         }
@@ -157,7 +175,7 @@ enum CameraSolver {
             if a.manual != b.manual { return !a.manual }
             return a.arrive < b.arrive
         }
-        guard !shots.isEmpty else { return CameraTrack(count: 2, rate: cameraRate) }
+        guard !shots.isEmpty || p.tilt == .reveal else { return CameraTrack(count: 2, rate: cameraRate) }
 
         // The last leg before t is authoritative. Cutting an in-flight leg
         // evaluates its boundary state first, preserving C2 at the handoff.
@@ -165,7 +183,15 @@ enum CameraSolver {
         func insert(at start: Double, end: Double, target: Pose) {
             guard end > start else { return }
             while let last = legs.last, last.start >= start { legs.removeLast() }
-            let sample = legs.last?.at(start) ?? .rest
+            var sample = legs.last?.at(start) ?? .rest
+            // At 1× the pivot is unobservable. Choose the upcoming pivot
+            // while stationary so the first zoom has no sideways drift.
+            if abs(sample.pose.logScale) < 1e-9, abs(sample.velocity.z) < 1e-9,
+               abs(sample.acceleration.z) < 1e-9 {
+                sample.pose.focus = target.focus
+                sample.velocity.x = 0; sample.velocity.y = 0
+                sample.acceleration.x = 0; sample.acceleration.y = 0
+            }
             legs.append(Leg(start: start, end: end, from: sample, to: target))
         }
         var manualUntil = -Double.infinity
@@ -174,11 +200,12 @@ enum CameraSolver {
             if !shot.manual && shot.start < manualUntil { continue }
             if shot.manual { manualUntil = max(manualUntil, shot.releaseEnd) }
             insert(at: shot.start, end: shot.arrive, target: shot.target)
-            if !shot.fixed { insert(at: shot.holdEnd, end: shot.releaseEnd, target: .rest) }
+            if !shot.fixed { insert(at: shot.holdEnd, end: shot.releaseEnd, target: Pose(focus: shot.target.focus, logScale: 0)) }
         }
         if let loop, loop.isFinite, loop > 0 {
             let start = max(0, outDur - min(loop, tail))
-            insert(at: start, end: outDur, target: .rest)
+            let pivot = legs.last(where: { $0.start <= start })?.at(start).pose.focus ?? Pose.rest.focus
+            insert(at: start, end: outDur, target: Pose(focus: pivot, logScale: 0))
         }
         if cancelled() { return nil }
 
@@ -199,16 +226,13 @@ enum CameraSolver {
             let scale = exp(lz)
             let halfX = min(base.w / (2 * box.w * scale), 0.5)
             let halfY = min(base.h / (2 * box.h * scale), 0.5)
-            let q = CropSpace.normalise(state.pose.focus.x * src.x, state.pose.focus.y * src.y, crop: box)
-            // Near full-frame, gradually remove pan freedom. The crop
-            // remains the source of truth; a scale of one is always centered.
-            let blend = QuinticMove.envelope(lz / 0.12)
-            let x = 0.5 + (clamp(q.u - bias.x / scale, halfX, 1 - halfX) - 0.5) * blend
-            let y = 0.5 + (clamp(q.v - bias.y / scale, halfY, 1 - halfY) - 0.5) * blend
+            let travel = 1 - 1 / scale
+            let x = clamp(0.5 + (state.pose.focus.x - 0.5) * travel, halfX, 1 - halfX)
+            let y = clamp(0.5 + (state.pose.focus.y - 0.5) * travel, halfY, 1 - halfY)
             track.nx[i] = Float(x); track.ny[i] = Float(y); track.lz[i] = Float(lz)
             // 3D reveal is intentional, finite and opt-in; no idle float.
             if p.tilt == .reveal, time < 0.6 {
-                track.yaw[i] = Float(clamp(p.maxYaw.isFinite ? p.maxYaw : 8, 0, 8) * (1 - QuinticMove.envelope(time / 0.6)))
+                track.yaw[i] = Float(12 * (1 - QuinticMove.envelope(time / 0.6)))
             }
         }
         let rate = cameraRate
@@ -224,9 +248,11 @@ enum CameraSolver {
         derivatives(track.ny, velocity: &track.vy, acceleration: &track.ay)
         derivatives(track.lz, velocity: &track.vz, acceleration: &track.az)
         if p.tilt == .lean {
+            let yaw = clamp(p.maxYaw.isFinite ? p.maxYaw : 8, 0, 8)
+            let pitch = clamp(p.maxPitch.isFinite ? p.maxPitch : 6, 0, 6)
             for i in track.lz.indices {
-                track.yaw[i] = Float(clamp(Double(track.vx[i]) * 4, -8, 8))
-                track.pitch[i] = Float(clamp(-Double(track.vy[i]) * 3, -6, 6))
+                track.yaw[i] = Float(clamp(Double(track.vx[i]) * 4, -yaw, yaw))
+                track.pitch[i] = Float(clamp(-Double(track.vy[i]) * 3, -pitch, pitch))
             }
         }
         return track
