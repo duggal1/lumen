@@ -31,7 +31,6 @@ import LumenDirector
 @Test func liveCameraReactsToClick() {
     var camera = LiveCamera(source: SIMD2(640, 360))
     camera.cursor.clickEffect = .ripple
-    camera.cursor.clickRing = 1
     _ = camera.step(to: 10)
     camera.ingest(InputEvent(t: 10, kind: .down, x: 500, y: 180))
     let frame = camera.step(to: 10.2)
