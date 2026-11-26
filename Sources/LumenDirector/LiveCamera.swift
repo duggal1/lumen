@@ -61,6 +61,10 @@ public struct LiveCamera: Sendable {
     }
     public mutating func ingest(_ e: InputEvent, focus: AXFrame? = nil) {
         guard e.t.isFinite else { return }
+        // AX replies can arrive after another key or a newer primary click.
+        // Reject before crop handling as well as aiming; neither may reopen
+        // the old field. Equal-time bare and resolved replies remain valid.
+        if e.kind == .keyDown, e.t < max(lastTyping, lastAim) { return }
         // Integrate the previous target up to the input timestamp before
         // changing it. Late AX replies may update the current target, but
         // must never rewind the physical simulation.

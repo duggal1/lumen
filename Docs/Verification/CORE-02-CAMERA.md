@@ -8,6 +8,6 @@ This patch addresses the automatic motion policy and live/offline timing seam wi
 - The full-source exact pivot uses the actual capped magnification and is not imposed on crop-space trajectories.
 - The causal live camera integrates the previous target to each event time and preserves elapsed time between ordinary display callbacks. Only explicit primary clicks/typing can reveal a crop; scroll and secondary clicks cannot reopen a stale shot.
 
-Added six focused regression cases. The entire existing suite remains required, including fixed-pivot, timing, crop, loupe and motion blur tests. No timing assertions were weakened.
+Added eight focused regression cases, including a delayed focus reply after a newer click and fixed-focus crop-space release geometry. The entire existing suite remains required, including fixed-pivot, timing, crop, loupe and motion blur tests. No timing assertions were weakened.
 
 Limitations: the longer anticipation is deliberately restricted to isolated automatic actions; dense handoffs and existing manual controls retain their previous timing. Real macOS recordings and frame-by-frame motion metrics are necessary to determine whether the resulting feel meets the product bar. Cursor skins, loupe rendering, webcam-aware composition and optical-blur quality have not been comprehensively reworked in this patch. See todo.md for remaining validation.

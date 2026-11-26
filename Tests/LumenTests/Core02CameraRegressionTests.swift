@@ -75,6 +75,43 @@ import LumenProject
         #expect(camera.step(to: 10.7).cameraScale > 1.1)
     }
 
+    @Test func lateTypingFocusCannotOverrideNewerClick() {
+        var camera = LiveCamera(source: source)
+        _ = camera.step(to: 10)
+        let key = InputEvent(t: 10.1, kind: .keyDown, keyCode: 7)
+        camera.ingest(key)
+        camera.ingest(InputEvent(t: 10.3, kind: .down, x: 450, y: 400))
+        var reference = camera
+        var field = AXFrame(x: 1420, y: 620, w: 260, h: 50,
+                           anchor: FocusAnchor(epoch: 1, sampledAt: 10.1, resolved: true))
+        field.caret = AXFrame.Rect(x: 1440, y: 630, w: 2, h: 24)
+        camera.ingest(key, focus: field)
+        let a = camera.step(to: 10.9), b = reference.step(to: 10.9)
+        #expect(abs(a.cameraScale - b.cameraScale) < 0.001)
+        #expect(abs(a.cameraCenter.x - b.cameraCenter.x) < 0.1)
+        #expect(abs(a.cameraCenter.y - b.cameraCenter.y) < 0.1)
+    }
+
+    @Test func fixedFocusUsesCropSpaceAndReleasesWithoutTeleport() throws {
+        let z = ZoomSegment(start: 2, end: 4, scale: 2,
+                            focus: .fixed(x: 900.0 / 1920, y: 500.0 / 1080), origin: .auto)
+        let rect = SIMD4<Float>(200, 100, 1200, 800)
+        let crop = DenseCropTrack(hz: 1, rects: [rect, rect])
+        let tr = try #require(CameraSolver.solve(zoom: [z], tm: TimeMap(sourceDuration: 6),
+            cursor: CursorTrack(count: Int(6 * gridRate) + 1), p: CameraParams(),
+            src: source, outDur: 6, loop: nil, crop: crop, follow: [:], cancelled: { false }))
+        let k = Int(3 * tr.rate)
+        #expect(abs(Double(tr.nx[k]) - 700.0 / 1200) < 0.002)
+        #expect(abs(Double(tr.ny[k]) - 0.5) < 0.002)
+        for j in 1..<tr.nx.count {
+            #expect(abs(tr.nx[j] - tr.nx[j - 1]) < 0.02)
+            #expect(abs(tr.ny[j] - tr.ny[j - 1]) < 0.02)
+        }
+        #expect(tr.lz.last == 0)
+        #expect(tr.nx.last == 0.5)
+        #expect(tr.ny.last == 0.5)
+    }
+
     @Test func navigationDoesNotResurrectReleasedZoom() {
         var camera = LiveCamera(source: source)
         camera.hold = 0.5
