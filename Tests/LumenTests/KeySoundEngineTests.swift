@@ -110,6 +110,21 @@ private let library = KeySoundLibrary.load()
     #expect(out.l.contains { abs($0) > 1e-4 })
 }
 
+@Test func selectedStudioClickUsesItsCuratedRecording() throws {
+    for sound in ClickSound.studioCollection {
+        let samples = try #require(library.studioClicks[sound]?.samples)
+        var settings = KeyMixSettings()
+        settings.clickTone = sound
+        settings.clickLevelDb = 0
+        settings.limiterCeiling = 1
+        var router = KeyVariationRouter()
+        let out = KeySoundEngine.render(cues: [SFXCue(t: 0, kind: .click, gainDb: 0)],
+                                        library: library, router: &router, settings: settings,
+                                        frames: samples.count)
+        #expect(out.l == samples, "\(sound) did not render its selected recording")
+    }
+}
+
 @Test func everyShippedFileIsLicensedMasteredAndMeasured() throws {
     let manifestURL = try #require(BundledAudioAssets.sound(named: "manifest.json"))
     let data = try Data(contentsOf: manifestURL)

@@ -59,7 +59,7 @@ private enum A1Smooth {
 @Test func a1NoOvershootFixedPivot() {
     let target = 2.2
     let tl = A1Smooth.manualTimeline(8, zoom: [
-        ZoomSegment(start: 3, end: 4, scale: target, focus: .fixed(x: 0.34, y: 0.66), origin: .auto)
+        ZoomSegment(start: 3, end: 4, scale: target, focus: .fixed(x: 0.34, y: 0.66), origin: .manual)
     ])
     let start = A1Smooth.frame(tl, 2.0), end = A1Smooth.frame(tl, 4.0)
     guard end.s - start.s > 0.5 else { Issue.record("no zoom happened"); return }
@@ -87,7 +87,7 @@ private enum A1Smooth {
 @Test func a1DuringHoldScaleNeverDrops() {
     let target = 2.2
     let tl = A1Smooth.manualTimeline(8, zoom: [
-        ZoomSegment(start: 3, end: 4, scale: target, focus: .fixed(x: 0.34, y: 0.66), origin: .auto)
+        ZoomSegment(start: 3, end: 4, scale: target, focus: .fixed(x: 0.34, y: 0.66), origin: .manual)
     ])
     var settled = 4.0
     for i in 0...400 {

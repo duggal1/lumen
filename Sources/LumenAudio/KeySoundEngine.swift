@@ -51,8 +51,9 @@ public struct KeySoundLibrary: Sendable {
     public var down: [KeyClass: [KeyTake]] = [:]
     public var up: [KeyClass: [KeyTake]] = [:]
     public var clicks: [KeyTake] = []
+    public var studioClicks: [ClickSound: KeyTake] = [:]
 
-    public var isEmpty: Bool { down.isEmpty && clicks.isEmpty }
+    public var isEmpty: Bool { down.isEmpty && clicks.isEmpty && studioClicks.isEmpty }
 
     public init() {}
 
@@ -78,6 +79,14 @@ public struct KeySoundLibrary: Sendable {
         for name in ["mouse-click-1", "mouse-click-2", "tick", "snap", "analog"] {
             guard let url = resolver("clicks/\(name).wav"), let pcm = try? AudioIO.readMono(url), !pcm.isEmpty else { continue }
             lib.clicks.append(KeyTake(id: name, samples: pcm))
+        }
+        for sound in ClickSound.studioCollection {
+            guard let url = BundledAudioAssets.effect(named: sound.assetPath),
+                  let pcm = try? AudioIO.readMono(url), !pcm.isEmpty else { continue }
+            let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
+            guard peak.isFinite, peak > 0 else { continue }
+            let samples = pcm.map { $0 / peak }
+            lib.studioClicks[sound] = KeyTake(id: sound.rawValue, samples: samples)
         }
         return lib
     }
@@ -280,6 +289,12 @@ public enum KeySoundEngine {
             case .whooshIn, .whooshOut: continue // removed feature: always silence
             }
             if cue.kind == .click {
+                if ClickSound.studioCollection.contains(settings.clickTone) {
+                    guard let take = library.studioClicks[settings.clickTone] else { continue }
+                    let gain = Float(pow(10, (cue.gainDb + settings.clickLevelDb) / 20))
+                    add(take.samples, at: cue.t, amplitude: gain)
+                    continue
+                }
                 guard let pair = router.clickPair(library.clicks.count,
                                                   preferred: settings.preferredClickIndex) else { continue }
                 let gain = Float(pow(10, (cue.gainDb + settings.clickLevelDb) / 20))

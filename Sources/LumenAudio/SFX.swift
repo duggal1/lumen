@@ -16,6 +16,9 @@ public struct SFXBank: Sendable {
         case .keyUp:
             return (library.up[.alpha]?.first?.samples ?? [], 0)
         case .click:
+            if ClickSound.studioCollection.contains(clickTone) {
+                return (library.studioClicks[clickTone]?.samples ?? [], 0)
+            }
             var settings = KeyMixSettings()
             settings.clickTone = clickTone
             let index = settings.preferredClickIndex
