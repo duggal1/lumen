@@ -82,7 +82,8 @@ public struct ViewportCropTrack: Sendable {
 
     public func rect(at t: Double) -> PxRect {
         guard !rects.isEmpty else { return PxRect(x: 0, y: 0, w: 0, h: 0) }
-        let f = min(max(t * hz, 0), Double(rects.count - 1))
+        let time = t.isFinite && hz.isFinite && hz > 0 ? t * hz : 0
+        let f = min(max(time, 0), Double(rects.count - 1))
         let i = Int(f), j = min(i + 1, rects.count - 1)
         let v = rects[i] + (rects[j] - rects[i]) * Float(f - Double(i))
         return PxRect(x: Double(v.x), y: Double(v.y), w: Double(v.z), h: Double(v.w))
@@ -113,7 +114,7 @@ public enum CropPlanner {
 
         func at(_ t: Double) -> PxRect {
             guard !data.isEmpty else { return PxRect(x: 0, y: 0, w: 0, h: 0) }
-            let f = min(max(t * CropPlanner.srate, 0), Double(data.count - 1))
+            let f = min(max((t.isFinite ? t : 0) * CropPlanner.srate, 0), Double(data.count - 1))
             let i = Int(f), j = min(i + 1, data.count - 1)
             let v = data[i] + (data[j] - data[i]) * (f - Double(i))
             return PxRect(x: v.x, y: v.y, w: v.z, h: v.w)
@@ -124,7 +125,13 @@ public enum CropPlanner {
                             source: PxRect, settings s: CropSettings) -> ViewportCropPlan {
         os_signpost(.begin, log: signpost, name: "crop.plan")
         defer { os_signpost(.end, log: signpost, name: "crop.plan") }
-        guard s.enabled, samples.count >= 2, duration.isFinite, duration > 0.5 else {
+        // Reject corrupt or out-of-source evidence before building the dense
+        // track. Keep deterministic order for equal timestamps.
+        let samples = samples.enumerated().filter { $0.element.t.isFinite && $0.element.t >= 0 && $0.element.t <= duration }
+            .sorted { a, b in a.element.t == b.element.t ? a.offset < b.offset : a.element.t < b.element.t }
+            .map(\.element)
+        guard s.enabled, samples.count >= 2, source.isValid, duration.isFinite, duration > 0.5,
+              duration * hz <= 10_368_000 else {
             let full = SIMD4<Float>(Float(source.x), Float(source.y), Float(source.w), Float(source.h))
             return ViewportCropPlan(
                 changes: [.init(start: 0, duration: 0, mode: .full)],
@@ -138,11 +145,23 @@ public enum CropPlanner {
         let spans = uncropSpans(samples, inputs, s, duration)
         let changes = changeList(runs, spans, s, duration)
 
+        // Unlike a generic intersection, a camera crop must be nonempty
+        // AND fully contained. Disjoint or subpixel evidence cannot select a
+        // fictitious 1px region outside the recorded display.
+        func contained(_ r: PxRect) -> PxRect {
+            guard r.isValid else { return source }
+            let x = max(r.x, source.x), y = max(r.y, source.y)
+            let right = min(r.maxX, source.maxX), bottom = min(r.maxY, source.maxY)
+            guard right - x >= 1, bottom - y >= 1 else { return source }
+            return PxRect(x: x, y: y, w: right - x, h: bottom - y)
+        }
         func rect(_ m: CropMode, _ t: Double) -> PxRect {
             switch m {
             case .full: return source
-            case .content: return web.at(t).insetBy(s.insetPx).intersection(source)
-            case .window: return win.at(t).intersection(source)
+            case .content:
+                let inset = s.insetPx.isFinite ? max(s.insetPx, 0) : 0
+                return contained(web.at(t).insetBy(inset))
+            case .window: return contained(win.at(t))
             }
         }
         var rects: [SIMD4<Float>] = []
@@ -169,8 +188,13 @@ public enum CropPlanner {
     /// Tracked rect at 20 Hz: Gaussian-smoothed, nearest-held across long gaps.
     static func series(_ samples: [ViewportSample], _ duration: Double, _ source: PxRect, sigma: Double,
                        pick: (ViewportSample) -> PxRect?) -> Smoothed {
-        let pts = samples.compactMap { sm in
-            pick(sm).map { (t: sm.t, v: SIMD4<Double>($0.x, $0.y, $0.w, $0.h)) }
+        let pts: [(t: Double, v: SIMD4<Double>)] = samples.compactMap { sm in
+            pick(sm).flatMap { r in
+                guard r.isValid, r.maxX.isFinite, r.maxY.isFinite,
+                      r.maxX > source.x, r.x < source.maxX,
+                      r.maxY > source.y, r.y < source.maxY else { return nil }
+                return (t: sm.t, v: SIMD4<Double>(r.x, r.y, r.w, r.h))
+            }
         }
         let m = Int((duration * srate).rounded(.up)) + 2
         var raw = [SIMD4<Double>](repeating: SIMD4(source.x, source.y, source.w, source.h), count: m)
@@ -185,8 +209,9 @@ public enum CropPlanner {
                 raw[k] = a.v + (b.v - a.v) * u
             }
         }
-        let sd = max(sigma * srate, 0.01), r = Int((3 * sd).rounded(.up))
-        guard sigma > 0, r >= 1 else { return Smoothed(data: raw) }
+        guard sigma.isFinite, sigma > 0 else { return Smoothed(data: raw) }
+        let sd = max(min(sigma, 2) * srate, 0.01), r = Int((3 * sd).rounded(.up))
+        guard r >= 1 else { return Smoothed(data: raw) }
         var kern = (-r...r).map { exp(-Double($0 * $0) / (2 * sd * sd)) }
         let ks = kern.reduce(0, +)
         kern = kern.map { $0 / ks }

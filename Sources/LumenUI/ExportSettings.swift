@@ -12,7 +12,7 @@ enum ExportRate: String, Codable, CaseIterable, Sendable {
     case source = "Source", f24 = "24", f30 = "30", f60 = "60", f90 = "90", f120 = "120", f144 = "144", f240 = "240"
     func fps(source: Double) -> Int {
         switch self {
-        case .source: source.isFinite && source > 0 ? Int(min(max(source.rounded(), 1), 240)) : 60
+        case .source: source.isFinite && source > 0 && source < Double(Int32.max) ? max(1, Int(source.rounded())) : 60
         case .f24: 24; case .f30: 30; case .f60: 60
         case .f90: 90; case .f120: 120; case .f144: 144; case .f240: 240
         }
