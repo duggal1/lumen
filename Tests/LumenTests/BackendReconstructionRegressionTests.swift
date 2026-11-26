@@ -38,7 +38,8 @@ private let reconstructionSource = SourceInfo(width: 1920, height: 1080, fps: 60
                   InputEvent(t: 1.1, kind: .keyUp, keyCode: 0)]
     let secure = AXFrame(x: 10, y: 10, w: 300, h: 40, secure: true)
     let out = Director.derive(timeline, input: DirectorInput(events: events, source: reconstructionSource, ax: [secure]), revision: 1)
-    #expect((out.derived?.cues ?? []).filter { $0.kind == .key }.isEmpty)
+    let keyCues = (out.derived?.cues ?? []).filter { $0.kind == .key }
+    #expect(keyCues.isEmpty)
 }
 
 @Test func reconstructionMalformedTimeMapDoesNotTrap() {
