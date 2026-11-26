@@ -467,16 +467,27 @@ private func exportAndDecode(_ h: Harness, timeline: Timeline, fps: Int,
     let (reopened, loadedAudio) = try await ProjectSession.open(h.bundle, device: device)
     let derived = reopened.derive(loadedAudio, revision: 13)
     let mixed = try #require(reopened.mixer.mix(derived))
-
     func bursts(_ x: [Float]) -> [Double] {
         let window = fs / 50                              // 20 ms
+        var peakRms = 0.0
+        var scan = 0
+        while scan + window <= x.count {
+            var energy: Float = 0
+            for j in scan..<(scan + window) { energy += x[j] * x[j] }
+            peakRms = max(peakRms, Double(sqrt(energy / Float(window))))
+            scan += window
+        }
+        let threshold = max(0.01, min(0.02, 0.05 * peakRms))
         var peaks: [(Double, Double)] = []
         var i = 0
         while i + window <= x.count {
             var energy: Float = 0
             for j in i..<(i + window) { energy += x[j] * x[j] }
             let rms = Double(sqrt(energy / Float(window)))
-            if rms > 0.05 { peaks.append((Double(i) / Double(fs), rms)) }
+            // The Studio chain may attenuate a later burst relative to the
+            // first; sync is about WHERE the bursts land, so use a floor plus
+            // a fraction of the loudest window instead of a fixed dB cutoff.
+            if rms > threshold { peaks.append((Double(i) / Double(fs), rms)) }
             i += window
         }
         // Cluster peaks into bursts (the burst is a 0.2 s tone, so a 0.05 s

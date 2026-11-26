@@ -2,10 +2,10 @@ import AppKit
 
 /// The Lumen mark as a menu-bar template glyph.
 ///
-/// The status item is a 1-bit surface: the dithered multigradient collapses to
+/// The status item is a 1-bit surface: the pixelated blue mark collapses to
 /// mush at 18 pt, and a template image must be a single ink so the system can
 /// tint it for a light or dark menu bar. So the status item carries the mark's
-/// silhouette only. The full multigradient mark belongs on tiles and icons.
+/// silhouette only. The full-color mark belongs on tiles and icons.
 enum MenuBarMark {
     /// Each run of the staircase in the master artwork's 32-unit grid:
     /// (x, y, width). Every run is one cell tall.

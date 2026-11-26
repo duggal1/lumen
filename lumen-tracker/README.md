@@ -6,7 +6,7 @@ This is the standalone, deployed engineering tracker for [duggal1/lumen](https:/
 
 - **Live GitHub issues** are fetched from the GitHub Issues REST API and shown separately from source-audit findings.
 - **Audit findings** are primarily a Nov 6, 2026 snapshot; LUM-001 and CI status were refreshed on Nov 13. Findings are not fabricated GitHub issue numbers or device test results.
-- **Recent code activity** groups main-branch changes from Nov 12 evening through Nov 13 and links representative commits. Draft PR #22 is tracked separately with its own head and failing workflow; its 60 commits are not counted as merged.
+- **Recent code activity** reads the current main commit, recent commits and open pull requests from GitHub. CI status is tied to the exact current main commit.
 - **Merged**, **CI passed**, and **runtime verified** remain separate states. GitHub metadata is refreshed on demand.
 - The currently inspected native repository uses `Sources/`, not `studio/`. The tracker preserves real paths.
 - "Paste" in Lumen is an unverified feature boundary, not a confirmed bug.
@@ -34,7 +34,7 @@ Without a Reflection key, the manual Markdown template and GitHub publishing sti
 
 ## UI
 
-Only sans-serif text with tight tracking. The Lumen wordmark and icon are copied from `App/public/assets/brand/logo`. The GitHub mark is the official Primer Octicon; navigation uses pinned Phosphor web icons. Dark surfaces, orange translucent badges, green field-focus indication, no card borders.
+Only sans-serif text with tight tracking. The Lumen wordmark and icon match `App/public/assets/brand/logo` and use a flat blue pixel pattern. The GitHub mark is the official Primer Octicon; navigation uses pinned Phosphor web icons. Dark surfaces, orange translucent badges, green field-focus indication, no card borders.
 
 ## Verification
 

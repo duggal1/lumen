@@ -111,7 +111,7 @@ private func rpc(_ object: [String: Any]) throws -> String {
 
 @Test func documentedCatalogMatchesLiveRegistry() throws {
     let rows = block("CONTRACT", in: try docText("VIDEO-EDIT-API.md"))
-    #expect(rows.count == 50, "the API doc must describe all 50 tools")
+    #expect(rows.count == 53, "the API doc must describe all 53 tools")
 
     var documented: [String: [String]] = [:]
     for row in rows {
@@ -121,7 +121,7 @@ private func rpc(_ object: [String: Any]) throws -> String {
     }
 
     let specs = makeRegistry().allSpecs()
-    #expect(specs.count == 50, "registerAllTools must register exactly 50 tools")
+    #expect(specs.count == 53, "registerAllTools must register exactly 53 tools")
     #expect(Set(documented.keys) == Set(specs.map(\.name)), "doc and registry tool names diverged")
 
     for spec in specs {
@@ -146,13 +146,13 @@ private func rpc(_ object: [String: Any]) throws -> String {
 @Test func registryShapeCountsAreLocked() {
     let specs = makeRegistry().allSpecs()
     let capabilities = Dictionary(grouping: specs, by: \.capability).mapValues(\.count)
-    #expect(capabilities == [.read: 13, .record: 5, .actuate: 6, .edit: 23, .network: 1, .export: 2])
-    #expect(specs.filter(\.mutating).count == 35)
+    #expect(capabilities == [.read: 13, .record: 5, .actuate: 6, .edit: 26, .network: 1, .export: 2])
+    #expect(specs.filter(\.mutating).count == 37)
     #expect(specs.filter(\.destructive).count == 9)
     #expect(specs.filter(\.longRunning).count == 4)
-    #expect(specs.filter(\.customDryRun).count == 12)
-    #expect(specs.filter { $0.outputSchema != nil }.count == 17)
-    #expect(specs.filter { $0.additionalCapabilities.isEmpty }.count == 49)
+    #expect(specs.filter(\.customDryRun).count == 14)
+    #expect(specs.filter { $0.outputSchema != nil }.count == 20)
+    #expect(specs.filter { $0.additionalCapabilities.isEmpty }.count == 52)
 }
 
 @Test func exactlyOneVideoEditVocabularyIsRegistered() throws {
@@ -184,7 +184,7 @@ private func rpc(_ object: [String: Any]) throws -> String {
     let json = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
     let result = try #require(json["result"] as? [String: Any])
     let tools = try #require(result["tools"] as? [[String: Any]])
-    #expect(tools.count == 50)
+    #expect(tools.count == 53)
 
     let registry = makeRegistry()
     #expect(Set(tools.compactMap { $0["name"] as? String }) == Set(registry.allSpecs().map(\.name)))

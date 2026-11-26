@@ -27,7 +27,7 @@ public struct ClickFX: Sendable, Equatable {
     public init(t: Double, x: Float, y: Float) { self.t = t; self.x = x; self.y = y }
 }
 public struct SFXCue: Sendable, Equatable {
-    public enum Kind: Sendable { case click, whooshIn, whooshOut, key }
+    public enum Kind: Sendable { case click, whooshIn, whooshOut, key, keyUp }
     public var t: Double; public var kind: Kind; public var gainDb: Double; public var keyCode: UInt16
     public var isKeyRelease: Bool
     public init(t: Double, kind: Kind, gainDb: Double, keyCode: UInt16 = 0, isKeyRelease: Bool = false) {
@@ -191,6 +191,8 @@ public struct DerivedTracks: Sendable, Equatable {
     public var layout: LayoutTrack
     public var placement: PlacementTrack
     public var captions: [CaptionChunk]
+    /// Command-key pills in OUTPUT time, derived from recorded key events.
+    public var shortcutPills: [ShortcutDisplay] = []
     public var autoMasks: [Mask]
     public var personMask: PersonMaskInfo?
     /// Empty keys mean "no smart crop"; FrameState.cropRect is then .zero.
@@ -201,10 +203,12 @@ public struct DerivedTracks: Sendable, Equatable {
                 clicks: [ClickFX], cues: [SFXCue], duck: [Float], face: [SIMD3<Float>], webcamAspect: Float,
                 layout: LayoutTrack = LayoutTrack(), placement: PlacementTrack = PlacementTrack(), captions: [CaptionChunk] = [],
                 autoMasks: [Mask] = [], personMask: PersonMaskInfo? = nil, crop: CropTrack = CropTrack(),
-                viewportCrop: DenseCropTrack = DenseCropTrack(), shortcuts: [ShortcutCue] = []) {
+                viewportCrop: DenseCropTrack = DenseCropTrack(), shortcutPills: [ShortcutDisplay] = [],
+                shortcuts: [ShortcutCue] = []) {
         self.revision = revision; self.sourceSize = sourceSize; self.outputDuration = outputDuration; self.cursor = cursor
         self.camera = camera; self.clicks = clicks; self.cues = cues; self.duck = duck; self.face = face; self.webcamAspect = webcamAspect
         self.layout = layout; self.placement = placement; self.captions = captions; self.autoMasks = autoMasks; self.personMask = personMask
+        self.shortcutPills = shortcutPills
         self.crop = crop
         self.viewportCrop = viewportCrop
         self.shortcuts = shortcuts

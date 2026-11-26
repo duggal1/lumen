@@ -4,10 +4,31 @@ import LumenCore
 import LumenProject
 
 enum TypingFocus {
+    /// No extra tail is baked into a typing shot's end: the critically damped
+    /// camera release owns the zoom-out, so `t1` stays exactly on the last
+    /// keystroke. This keeps the shot's enter/exit tight to keystroke timing
+    /// and avoids a zoom-bounce between bursts.
+    static let exitDebounce = 0.0
+    /// A gap longer than this between keystrokes ends the current burst.
+    static let idleTimeout = 0.9
+    /// Once the field is resolved we tolerate a longer pause in the same field.
+    static let sameFieldIdleTimeout = 1.5
+
+    /// One caret sample, time-stamped at the keystroke that produced it.
+    /// Carried on the shot so the zoom target can be checked against the caret
+    /// path without ever letting the camera chase a jumping insertion point.
+    struct Caret: Sendable, Equatable {
+        var t: Double
+        var rect: CGRect
+    }
+
     struct Shot: Sendable, Equatable {
         var t0: Double
         var t1: Double
         var field: CGRect
+        /// Caret rectangles in source pixels, one per keystroke, ascending in
+        /// time. Empty when AX never reported a caret for this field.
+        var carets: [Caret] = []
 
         func covers(_ t: Double) -> Bool { t >= t0 - 1e-9 && t <= t1 + 1e-9 }
     }
@@ -16,6 +37,7 @@ enum TypingFocus {
         var start: Double
         var end: Double
         var field: Field?
+        var carets: [Caret] = []
     }
 
     struct Field: Sendable {
@@ -55,6 +77,30 @@ enum TypingFocus {
         return Field(rect: rect, anchor: frame.anchor)
     }
 
+    /// Two AX rectangles that contain one another describe the same text
+    /// subject at two granularities: a wide container and the focused field
+    /// inside it. They belong to one typing run, not two shots — the caret
+    /// selects the smaller (more specific) field as the subject.
+    private static func nested(_ a: CGRect, _ b: CGRect) -> Bool {
+        let pad: CGFloat = 2
+        return a.insetBy(dx: -pad, dy: -pad).contains(b) ||
+               b.insetBy(dx: -pad, dy: -pad).contains(a)
+    }
+
+    /// Caret rectangle for one keystroke's AX sample, validated against the
+    /// resolved field so a stale or foreign caret cannot pull the zoom target.
+    private static func caret(for frame: AXFrame, in field: CGRect,
+                              at time: Double, backing: Double) -> Caret? {
+        guard let c = frame.caret, c.x.isFinite, c.y.isFinite, c.w.isFinite, c.h.isFinite,
+              c.w >= 0, c.w <= 80 * backing,
+              c.h >= 6 * backing, c.h <= 120 * backing else { return nil }
+        let rect = CGRect(x: c.x, y: c.y, width: max(c.w, 1), height: c.h)
+        let slack = 24 * backing
+        guard field.insetBy(dx: -slack, dy: -slack).contains(
+            CGPoint(x: rect.midX, y: rect.midY)) else { return nil }
+        return Caret(t: time, rect: rect)
+    }
+
     private static func pixelField(for run: Run, traces: [TypingTrace], bounds: CGRect) -> CGRect? {
         let matches = traces.filter { $0.t0 <= run.end + 0.15 && $0.t1 >= run.start - 0.15 }
         let ordered = matches.sorted {
@@ -91,7 +137,8 @@ enum TypingFocus {
             run = nil
             guard let rect = completed.field?.rect ?? pixelField(for: completed, traces: traces, bounds: bounds)
             else { return }
-            result.append(Shot(t0: completed.start, t1: completed.end, field: rect))
+            result.append(Shot(t0: completed.start, t1: completed.end,
+                               field: rect, carets: completed.carets))
         }
 
         for event in ordered {
@@ -109,30 +156,39 @@ enum TypingFocus {
                 continue
             }
             let index = Int(event.axFrameIndex) - 1
-            var observed = ax.indices.contains(index) ? field(ax[index], at: event.t, bounds: bounds, backing: b) : nil
-            // AX may report a nested child while the same field is focused.
-            // Keep the original shot only when the containers really nest and
-            // the available window/epoch identity has not changed.
-            if let active = run?.field, let candidate = observed {
-                let identityCompatible: Bool
-                if let a = active.anchor, let c = candidate.anchor {
-                    identityCompatible = a.windowID == c.windowID && a.appName == c.appName &&
-                        (a.epoch == 0 || c.epoch == 0 || a.epoch == c.epoch)
-                } else { identityCompatible = true }
-                if identityCompatible && (active.rect.contains(candidate.rect) || candidate.rect.contains(active.rect)) {
-                    observed = active
-                }
-            }
+            let frame = ax.indices.contains(index) ? ax[index] : nil
+            let observed = frame.flatMap { field($0, at: event.t, bounds: bounds, backing: b) }
+            let caretSample: Caret? = {
+                guard let frame, let observed else { return nil }
+                return caret(for: frame, in: observed.rect, at: event.t, backing: b)
+            }()
             if let current = run {
                 let same = current.field.flatMap { a in observed.map { a.matches($0, backing: b) } }
-                if same == false || event.t - current.end > (same == true ? 1.5 : 0.9) { finish() }
+                let nestedField = current.field.flatMap { a in observed.map { Self.nested(a.rect, $0.rect) } }
+                let sameSubject = same == true || nestedField == true
+                let gap = sameSubject ? Self.sameFieldIdleTimeout : Self.idleTimeout
+                // A container and the field inside it are one subject. Keep the
+                // run open so the burst produces a single shot instead of a
+                // short container burst plus a zero-length field burst.
+                if (observed != nil && !sameSubject) || event.t - current.end > gap { finish() }
             }
             if var current = run {
                 current.end = event.t
-                if current.field == nil { current.field = observed }
+                if let observed {
+                    if let existing = current.field, Self.nested(existing.rect, observed.rect),
+                       observed.rect.width * observed.rect.height < existing.rect.width * existing.rect.height {
+                        // The caret's smaller field is the subject; the parent
+                        // container is only evidence of which field it was in.
+                        current.field = observed
+                    } else if current.field == nil {
+                        current.field = observed
+                    }
+                }
+                if let caretSample { current.carets.append(caretSample) }
                 run = current
             } else {
-                run = Run(start: event.t, end: event.t, field: observed)
+                run = Run(start: event.t, end: event.t, field: observed,
+                          carets: caretSample.map { [$0] } ?? [])
             }
         }
         finish()

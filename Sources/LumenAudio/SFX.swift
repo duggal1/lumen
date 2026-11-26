@@ -1,29 +1,30 @@
 import Foundation
 import LumenProject
 
-/// The renderer, waveform and audition use one immutable decoded sample bank.
-/// No network access, generated tones or per-click decoding.
+/// Real recorded effects only. The old mp3 click set and the Mechvibes fallback
+/// are gone: all sfx now come from the CC0 one-shot library built by
+/// `scripts/fetch_sounds.py`. Zoom whooshes remain removed (stale cues render
+/// silence). Key-down and key-up each resolve to their own recorded sample.
 public struct SFXBank: Sendable {
-    private static func load(_ name: String) -> [Float] {
-        guard let url = BundledAudioAssets.effect(named: name),
-              let pcm = try? AudioIO.readMono(url), !pcm.isEmpty,
-              pcm.allSatisfy(\.isFinite) else { return [] }
-        let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
-        return peak > 0.0001 ? pcm.map { $0 / peak } : []
-    }
-
-    private static let clicks: [ClickSound: [Float]] = {
-        Dictionary(uniqueKeysWithValues: ClickSound.allCases.map { ($0, load($0.assetPath)) })
-    }()
-    private static let key = load("typing/mechvibes-default/fallback.mp3")
-
     public init() {}
 
     public func render(_ kind: SFXCue.Kind, clickTone: ClickSound = .mouse) -> (samples: [Float], gainDb: Double) {
+        let library = KeySoundLibraryCache.shared
         switch kind {
-        case .click: (Self.clicks[clickTone] ?? [], 0)
-        case .key: (Self.key, 0)
-        case .whooshIn, .whooshOut: ([], 0)
+        case .key:
+            return (library.down[.alpha]?.first?.samples ?? [], 0)
+        case .keyUp:
+            return (library.up[.alpha]?.first?.samples ?? [], 0)
+        case .click:
+            if ClickSound.studioCollection.contains(clickTone) {
+                return (library.studioClicks[clickTone]?.samples ?? [], 0)
+            }
+            var settings = KeyMixSettings()
+            settings.clickTone = clickTone
+            let index = settings.preferredClickIndex
+            return (library.clicks.indices.contains(index) ? library.clicks[index].samples : [], 0)
+        case .whooshIn, .whooshOut:
+            return ([], 0)
         }
     }
 }

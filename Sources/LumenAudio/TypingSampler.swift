@@ -1,15 +1,30 @@
 import Foundation
 import AVFoundation
+import LumenCore
+import LumenProject
 
 /// Preview-time typing sampler: 16-voice AVAudioEngine pool.
-/// Codes are canonical macOS virtual keycodes, so each key (including every modifier)
-/// keeps its own voice and its own recorded sample. No random pitch or sample choice.
+///
+/// Two sources are supported. `load(packDir:)` keeps the legacy Mechvibes pack
+/// path for old projects and tests. `loadCC0Library()` switches to the new
+/// recorded one-shots and adds per-key round-robin variation, pitch/gain jitter
+/// and separate key-up takes. Playback is sample-accurate when a host time is
+/// supplied by the capture clock.
 public final class TypingSampler {
     private let engine = AVAudioEngine()
     private var voices: [AVAudioPlayerNode] = []
     private var buffers: [Int: AVAudioPCMBuffer] = [:]
     private var voiceForKey: [Int: Int] = [:]
     private var next = 0
+
+    // CC0 library state
+    private var cc0Down: [KeyClass: [AVAudioPCMBuffer]] = [:]
+    private var cc0Up: [KeyClass: [AVAudioPCMBuffer]] = [:]
+    private var cc0Clicks: [AVAudioPCMBuffer] = []
+    private var router = KeyVariationRouter()
+    private var usingCC0 = false
+
+    private static let sampleRate = AudioIO.fs
 
     public init() {
         voices = (0..<16).map { _ in
@@ -21,10 +36,13 @@ public final class TypingSampler {
         engine.prepare()
     }
 
+    // MARK: legacy pack (kept for old projects and compatibility tests)
+
     public func load(packDir: URL) {
         buffers = TypingPackLoader.buffers(in: packDir)
         voiceForKey.removeAll()
         next = 0
+        usingCC0 = false
     }
 
     /// Deterministic sample selection: exact key first, otherwise one stable fallback
@@ -52,6 +70,74 @@ public final class TypingSampler {
     /// capture clock's host time for the keyDown event; no latency is added here.
     public func play(keyCode: Int, gain: Float, hostTime: UInt64) {
         play(packCode: keyCode, gain: gain, at: AVAudioTime(hostTime: hostTime))
+    }
+
+    // MARK: CC0 recorded library with variation
+
+    private func buffer(_ samples: [Float]) -> AVAudioPCMBuffer? {
+        guard !samples.isEmpty,
+              let format = AVAudioFormat(standardFormatWithSampleRate: Self.sampleRate, channels: 1),
+              let result = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else { return nil }
+        result.frameLength = AVAudioFrameCount(samples.count)
+        if let channel = result.floatChannelData {
+            for (i, value) in samples.enumerated() { channel[0][i] = value }
+        }
+        return result
+    }
+
+    /// Load the prepared CC0 library. Missing files degrade to silence; no
+    /// oscillator or procedural sound is ever generated.
+    public func loadCC0Library(_ library: KeySoundLibrary = KeySoundLibraryCache.shared) {
+        for keyClass in KeyClass.allCases where keyClass != .click {
+            cc0Down[keyClass] = library.down[keyClass]?.compactMap { buffer($0.samples) } ?? []
+            cc0Up[keyClass] = library.up[keyClass]?.compactMap { buffer($0.samples) } ?? []
+        }
+        cc0Clicks = library.clicks.compactMap { buffer($0.samples) }
+        router = KeyVariationRouter()
+        usingCC0 = true
+    }
+
+    /// Play a recorded take with round-robin + bounded pitch/gain variation.
+    public func playVaried(keyCode: Int, phase: KeyPhase, gain: Float = 1,
+                           hostTime: UInt64? = nil) {
+        guard usingCC0 else { return }
+        let keyClass = KeyClass.forCode(keyCode)
+        let takes = phase == .down ? cc0Down[keyClass] ?? [] : cc0Up[keyClass] ?? []
+        guard let variation = router.next(keyClass, phase: phase, key: keyCode, variantCount: takes.count),
+              takes.indices.contains(variation.variant) else { return }
+        schedule(takes[variation.variant], gain: gain, variation: variation, hostTime: hostTime)
+    }
+
+    public func playClick(tone: ClickSound = .fresh, gain: Float = 1, hostTime: UInt64? = nil) {
+        var settings = KeyMixSettings(); settings.clickTone = tone
+        guard usingCC0, let pair = router.clickPair(cc0Clicks.count,
+                                                    preferred: settings.preferredClickIndex) else { return }
+        for (index, attenuation) in [(pair.down, Float(1.0)), (pair.up, Float(0.55))] {
+            guard cc0Clicks.indices.contains(index) else { continue }
+            schedule(cc0Clicks[index], gain: gain * attenuation,
+                     variation: KeyVariation(variant: index, pitchCents: 0, gainDb: 0),
+                     hostTime: index == pair.down ? hostTime : nil)
+        }
+    }
+
+    private func schedule(_ source: AVAudioPCMBuffer, gain: Float, variation: KeyVariation,
+                          hostTime: UInt64?) {
+        var chosen = source
+        if abs(variation.pitchCents) > 0.5 {
+            guard let channel = source.floatChannelData else { return }
+            let pcm = Array(UnsafeBufferPointer(start: channel[0], count: Int(source.frameLength)))
+            let shifted = pitchShift(pcm, cents: variation.pitchCents)
+            guard let converted = buffer(shifted) else { return }
+            chosen = converted
+        }
+        let i = next; next = (next + 1) % voices.count
+        let v = voices[i]
+        let jitter = Float(pow(10, variation.gainDb / 20))
+        v.stop()
+        v.volume = min(max(gain * jitter, 0), 1)
+        let when = hostTime.map { AVAudioTime(hostTime: $0) }
+        v.scheduleBuffer(chosen, at: when, options: [], completionHandler: nil)
+        v.play()
     }
 
     public func start() { if !engine.isRunning { try? engine.start() } }

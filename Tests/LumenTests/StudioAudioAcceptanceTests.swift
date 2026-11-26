@@ -47,8 +47,8 @@ private enum SAT {
     }
 
     /// The same offline master path preview and export both use.
-    static func master(_ x: [Float]) -> MixedAudio {
-        AudioMaster.process([x, x], plan: AudioPlan(), hasProgram: true)
+    static func master(_ x: [Float], plan: AudioPlan = AudioPlan()) -> MixedAudio {
+        AudioMaster.process([x, x], plan: plan, hasProgram: true)
     }
 }
 
@@ -63,29 +63,30 @@ private enum SAT {
             ("quiet", SAT.mix(speech, seed: 13, hum: 0.005, hiss: 0.003, quiet: 0.25)),
             ("loud", SAT.mix(speech, seed: 17, hum: 0.005, hiss: 0.003, loud: 1.35)),
         ]
+        let plan = AudioPlan()
         for (name, input) in fixtures {
-            let out = SAT.master(ProcessedVoiceCache.process(input, plan: AudioPlan(), keyTimes: []))
+            let out = SAT.master(ProcessedVoiceCache.process(input, plan: plan, keyTimes: []), plan: plan)
             print("P6 \(name): lufs=\(String(format: "%.2f", out.lufs)) peak=\(String(format: "%.2f", out.truePeakDb))")
-            #expect(abs(out.lufs - AudioPlan.studioTargetLUFS) < 0.8, "\(name) missed target: \(out.lufs)")
+            #expect(abs(out.lufs - plan.targetLUFS) < 0.8, "\(name) missed target: \(out.lufs)")
             #expect(out.truePeakDb <= -1 + 1e-3, "\(name) true peak \(out.truePeakDb) > -1 dBTP")
             #expect(out.l.allSatisfy { $0.isFinite && abs($0) < 1 }, "\(name) clipped")
         }
     }
 
-    @Test func studioChainIsAtLeastOnePointSixDbLouderThanOldProgram() throws {
+    @Test func loudMicModeIsAtLeastOnePointSixDbLouderThanStandard() throws {
         let speech = try SAT.speech()
-        let voice = ProcessedVoiceCache.process(speech, plan: AudioPlan(), keyTimes: [])
-        let newOut = SAT.master(voice)
-        // The old pipeline is the same mix with a -14 LUFS program target, i.e.
-        // exactly 2 dB below the new single -12 LUFS target.
-        var old = AudioPlan()
-        // Old program target -14 = new target (-12) plus -2 dB of output gain.
-        old.outputGainDb = -14 - AudioPlan.studioTargetLUFS
-        let oldOut = AudioMaster.process([voice, voice], plan: old, hasProgram: true)
-        let gain = newOut.lufs - oldOut.lufs
-        print("P6 gain over old -14 program: \(String(format: "%.2f", gain)) dB")
-        #expect(gain >= 1.6, "only \(gain) dB louder than the old pipeline")
-        #expect(newOut.truePeakDb <= -1 + 1e-3)
+        let standard = AudioPlan()
+        var loud = standard
+        loud.micMode = .loud
+        let standardVoice = ProcessedVoiceCache.process(speech, plan: standard, keyTimes: [])
+        let loudVoice = ProcessedVoiceCache.process(speech, plan: loud, keyTimes: [])
+        let standardOut = SAT.master(standardVoice, plan: standard)
+        let loudOut = SAT.master(loudVoice, plan: loud)
+        let gain = loudOut.lufs - standardOut.lufs
+        print("P6 loud mode gain over standard: \(String(format: "%.2f", gain)) dB")
+        #expect(gain >= 1.6, "only \(gain) dB louder than standard mode")
+        #expect(abs(loudOut.lufs - loud.targetLUFS) < 0.8)
+        #expect(loudOut.truePeakDb <= -1 + 1e-3)
     }
 
     @Test func studioChainReducesNoiseFloorAndIsDeterministic() throws {

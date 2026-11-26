@@ -22,6 +22,17 @@ public enum BundledAudioAssets {
         return path
     }
 
+    /// The CC0 one-shot library produced by `scripts/fetch_sounds.py`. Packaged
+    /// apps carry it in Contents/Resources/Sounds; a checkout uses Resources/Sounds.
+    public static var soundsRoot: URL? {
+        AppAssets.directory(bundlePath: "Sounds", sourcePaths: ["Resources/Sounds"])
+    }
+
+    public static func sound(named name: String) -> URL? {
+        guard let path = soundsRoot?.appendingPathComponent(name), FileManager.default.fileExists(atPath: path.path) else { return nil }
+        return path
+    }
+
     /// License/attribution text shipped beside a bundled typing pack. Read-only;
     /// the pack itself is identified by its config.json `id`.
     public static func typingAttribution(for packID: String) -> String? {

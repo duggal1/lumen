@@ -2,10 +2,10 @@ import Foundation
 import Metal
 import LumenProject
 
-/// Reads the real Vision-generated LUMASK1 person matte format. Only two mask
-/// frames per GPU-in-flight slot are resident, not the entire recording.
+/// Reads the real Vision-generated LUMASK1 person matte format. Only a few
+/// matte frames are resident (a rolling buffer), not the entire recording.
 /// The source timestamps in the file already include the webcam track offset.
-final class PersonMatteSequence {
+final class PersonMatteSequence: @unchecked Sendable {
     struct Pair {
         let previous: MTLTexture
         let next: MTLTexture
@@ -18,8 +18,15 @@ final class PersonMatteSequence {
     private let times: [Double]
     private let frameBytes: Int
     private let stride: Int
-    private var slots: [(index: Int, texture: MTLTexture?)] =
-        Array(repeating: (index: -1, texture: nil), count: 6)
+    /// All file reads and texture writes run on this serial queue so the
+    /// render thread never blocks in `FileHandle.read` or `MTLTexture.replace`
+    /// (synchronous driver calls on the matte path).
+    private let work = DispatchQueue(label: "lumen.personmatte", qos: .utility)
+    private let lock = NSLock()
+    private var rolling: [Int: MTLTexture] = [:]
+    private var rollingOrder: [Int] = []
+    private let rollingCap = 4
+    private var last: (a: Int, b: Int, f: Float, pair: Pair)?
 
     init?(url: URL, info: PersonMaskInfo) {
         guard info.width > 0, info.height > 0, info.fps > 0, info.frames > 0,
@@ -89,31 +96,66 @@ final class PersonMatteSequence {
         return (a, b, f)
     }
 
-    private func texture(frame: Int, slot: Int, device: MTLDevice) -> MTLTexture? {
-        let position = min(max(slot, 0), 5)
-        if slots[position].index == frame, let texture = slots[position].texture { return texture }
+    /// Reads one matte frame. Rolling-buffer hits are instant; misses read a
+    /// fresh `FileHandle` (the render thread and the serial queue must not
+    /// share a file).
+    private func readTexture(frame: Int, device: MTLDevice) -> MTLTexture? {
+        lock.lock()
+        if let t = rolling[frame] { lock.unlock(); return t }
+        lock.unlock()
+        guard let fh = try? FileHandle(forReadingFrom: url),
+              (try? fh.seek(toOffset: UInt64(16 + frame * stride + 8))) != nil,
+              let raw = try? fh.read(upToCount: frameBytes), raw.count == frameBytes else { return nil }
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: info.width,
-                                                               height: info.height, mipmapped: false)
+                                                            height: info.height, mipmapped: false)
         desc.usage = .shaderRead
         desc.storageMode = device.hasUnifiedMemory ? .shared : .managed
-        guard let texture = slots[position].texture ?? device.makeTexture(descriptor: desc),
-              (try? file.seek(toOffset: UInt64(16 + frame * stride + 8))) != nil,
-              let raw = try? file.read(upToCount: frameBytes), raw.count == frameBytes else { return nil }
+        let texture = device.makeTexture(descriptor: desc)
         raw.withUnsafeBytes { bytes in
             if let pointer = bytes.baseAddress {
-                texture.replace(region: MTLRegionMake2D(0, 0, info.width, info.height),
-                                mipmapLevel: 0, withBytes: pointer, bytesPerRow: info.width)
+                texture?.replace(region: MTLRegionMake2D(0, 0, info.width, info.height),
+                                 mipmapLevel: 0, withBytes: pointer, bytesPerRow: info.width)
             }
         }
-        slots[position] = (frame, texture)
+        try? fh.close()
         return texture
     }
 
     func sample(at t: Double, slot: Int, device: MTLDevice) -> Pair? {
-        guard let (a, b, fraction) = indices(at: t),
-              let first = texture(frame: a, slot: slot * 2, device: device),
-              let second = a == b ? first : texture(frame: b, slot: slot * 2 + 1, device: device)
-        else { return nil }
-        return Pair(previous: first, next: second, fraction: fraction)
+        guard let (a, b, fraction) = indices(at: t) else { return nil }
+        // 1. Serve from the serial queue's rolling buffer: matte ticks are far
+        //    slower than preview frames, so the pair is normally already there.
+        lock.lock()
+        if let p = last, p.a == a, p.b == b, p.2 == fraction { lock.unlock(); return p.pair }
+        lock.unlock()
+        // 2. Ask the serial queue to keep this pair rolling.
+        work.async { [weak self] in
+            guard let self, let first = readTexture(frame: a, device: device) else { return }
+            let second = a == b ? first : readTexture(frame: b, device: device)
+            lock.lock()
+            if second != nil || a == b {
+                rolling[a] = first
+                rollingOrder.append(a)
+                if a != b, let second {
+                    rolling[b] = second
+                    rollingOrder.append(b)
+                }
+                while rollingOrder.count > rollingCap { rolling.removeValue(forKey: rollingOrder.removeFirst()) }
+                last = (a, b, fraction, Pair(previous: first, next: second ?? first, fraction: fraction))
+            }
+            lock.unlock()
+        }
+        // 3. Rare: the pair is not ready yet. Read inline so the matte does
+        //    not vanish on the tick that moved it — identical to the old
+        //    synchronous behavior, now only paid when the matte advances.
+        if let first = readTexture(frame: a, device: device) {
+            let second = a == b ? first : readTexture(frame: b, device: device)
+            let pair = Pair(previous: first, next: second ?? first, fraction: fraction)
+            lock.lock()
+            if last?.a != a || last?.b != b || last?.2 != fraction { last = (a, b, fraction, pair) }
+            lock.unlock()
+            return pair
+        }
+        return nil
     }
 }

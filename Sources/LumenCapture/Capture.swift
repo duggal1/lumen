@@ -7,8 +7,37 @@ import AppKit
 import os
 import LumenCore
 import LumenProject
+import LumenDirector
 
 public enum CaptureError: Error { case noSource, writer(String) }
+
+/// Vision fallback for window content capture. Pure and testable: the SCK
+/// sample loop only builds a small luminance grid and calls `cropRect`, which
+/// runs the same ChromeDetector → CropPlanner path as the offline planner.
+/// The result is a **source-pixel crop rect**; no camera zoom is involved.
+public enum CaptureVisionFallback {
+    /// AX/AXWebArea resolution produced no usable content rect — the window
+    /// belongs to a generic app (or AX is off), so pixels must decide.
+    public static func shouldUseVision(axContent: WindowContent.ResolvedContent?) -> Bool {
+        guard let axContent else { return true }
+        let r = axContent.rect
+        return !(r.width > 8 && r.height > 8 && r.minX.isFinite && r.minY.isFinite)
+    }
+
+    /// Edge grid → true source-pixel crop. `ChromeDetector` rejects grids that
+    /// are entirely chrome; `CropPlanner` applies the aspect fit and clamp so
+    /// the output has exactly the shape the compositor already consumes.
+    public static func cropRect(edges: [Float], gridW: Int, gridH: Int,
+                                source: PxRect,
+                                settings: ChromeDetector.Settings = ChromeDetector.Settings(),
+                                insetPx: Double = 0) -> PxRect? {
+        guard ChromeDetector.contentRect(edges: edges, gridW: gridW, gridH: gridH,
+                                         window: source, s: settings) != nil else { return nil }
+        return CropPlanner.contentRect(fromEdges: edges, gridW: gridW, gridH: gridH,
+                                       window: source, source: source,
+                                       settings: settings, insetPx: insetPx)
+    }
+}
 
 /// Pure guards for the values that come from user-drawn Area selections and
 /// the display system. A hostile rect must never reach SCStreamConfiguration:
@@ -396,6 +425,14 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private let windowTrack = OSAllocatedUnfairLock<WindowTrack?>(initialState: nil)
     private var chromeTimer: DispatchSourceTimer?
     private let chromeFraction = OSAllocatedUnfairLock<Double>(initialState: 0)
+    /// Generic-app window capture: AX gave no content rect, so each sample is
+    /// inspected for chrome and the detected band drives the SAME `chromeFraction`
+    /// → `FrameCropper` path as AX. No extra crop pipeline is introduced.
+    private let visionFallback = OSAllocatedUnfairLock(initialState: false)
+    private let visionPending = OSAllocatedUnfairLock(initialState: false)
+    private var lastVisionDetect = 0.0                  // video queue only
+    private let visionGrid = (w: 12, h: 8)              // ChromeDetector grid
+    private let visionSignpost = OSLog(subsystem: "com.lumen.studio", category: "capture.vision")
     private var pendingVideo: (buffer: CVPixelBuffer, pts: CMTime)?
     private var meta: FrameMetaWriter?
     private let dropped = OSAllocatedUnfairLock(initialState: 0)
@@ -492,12 +529,17 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
             // Content-only capture: measure the title bar and toolbar band once,
             // then crop it off every frame. Nothing of the window chrome ever
             // reaches the writer.
-            let chrome = WindowContent.resolve(windowID: wid, processID: w.owningApplication?.processID ?? 0, frame: w.frame)?.topInset ?? 0
-            windowTrack.withLock {
-                $0 = WindowTrack(id: wid, pid: w.owningApplication?.processID ?? 0, frame: w.frame)
-            }
+            let pid = w.owningApplication?.processID ?? 0
+            let chrome = WindowContent.resolve(windowID: wid, processID: pid, frame: w.frame)?.topInset ?? 0
+            // AXWebArea/children are the first choice. Only when they yield no
+            // usable content do we let the pixel-based detector choose the band.
+            let axContent = WindowContent.resolveContent(windowID: wid, processID: pid, frame: w.frame)
+            let useVision = CaptureVisionFallback.shouldUseVision(axContent: axContent)
+            visionFallback.withLock { $0 = useVision }
+            visionPending.withLock { $0 = useVision }   // first complete frame detects
+            windowTrack.withLock { $0 = WindowTrack(id: wid, pid: pid, frame: w.frame) }
             chromeFraction.withLock { $0 = w.frame.height > 0 ? chrome / w.frame.height : 0 }
-            if chrome > 0 { cropper = FrameCropper() }
+            if chrome > 0 || useVision { cropper = FrameCropper() }
             let contentHeight = max(w.frame.height - chrome, 1)
             origin = CGPoint(x: w.frame.minX, y: w.frame.minY + chrome)
             points = CGSize(width: w.frame.width, height: contentHeight)
@@ -596,6 +638,19 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
                   let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
                   frame.height > 8 else { return }
             let chrome = WindowContent.resolve(windowID: track.id, processID: track.pid, frame: frame)?.topInset ?? 0
+            let axContent = WindowContent.resolveContent(windowID: track.id, processID: track.pid, frame: frame)
+            let useVision = CaptureVisionFallback.shouldUseVision(axContent: axContent)
+            let wasVision = self.visionFallback.withLock { current -> Bool in
+                let previous = current
+                current = useVision
+                return previous
+            }
+            if useVision, chrome <= 0.0001 {
+                // Re-detect on the next complete frame; window contents change.
+                self.visionPending.withLock { $0 = true }
+            } else if wasVision && !useVision {
+                self.visionPending.withLock { $0 = false }
+            }
             self.chromeFraction.withLock { $0 = chrome / frame.height }
             self.windowTrack.withLock { $0?.frame = frame }
         }
@@ -662,12 +717,24 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let info = arr.first, let raw = info[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete,
               let pb = CMSampleBufferGetImageBuffer(sb), let w = writer, vin != nil, adaptor != nil else { return }
+        let pts = sb.presentationTimeStamp
+        // Generic-app window capture: AX gave no content rect. Inspect pixels
+        // and drive the SAME chromeFraction → FrameCropper path as the AX case.
+        if visionFallback.withLock({ $0 }) {
+            let wasPending = visionPending.withLock { pending -> Bool in
+                let value = pending; pending = false; return value
+            }
+            let due = wasPending || pts.seconds - lastVisionDetect >= 1.0
+            if due {
+                detectVisionCrop(from: pb)
+                lastVisionDetect = pts.seconds
+            }
+        }
         // Window capture: the title bar and toolbar band are cropped away here,
         // so the writer only ever sees content pixels.
         let frame = cropped(pb)
         guard let frame else { return }
         updateSourceScale(from: frame)
-        let pts = sb.presentationTimeStamp
         if !started {
             guard w.startWriting() else { return }
             w.startSession(atSourceTime: pts); started = true
@@ -679,6 +746,53 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         var rect = CGRect.zero
         if let d = info[.contentRect] as? [String: Any], let r = CGRect(dictionaryRepresentation: d as CFDictionary) { rect = r }
         meta?.write(pts: pts.seconds, status: raw, rect: rect)
+    }
+
+    /// Vision fallback for a window with no AXWebArea. Builds a tiny luminance
+    /// image by strided sampling (no pixel-buffer copy), runs the detector,
+    /// feeds the edge grid through `CropPlanner.contentRect(fromEdges:)`, and
+    /// publishes the band as `chromeFraction`. The existing `cropped(_:)` then
+    /// applies a true source-pixel crop — nothing downstream changes.
+    private func detectVisionCrop(from pixelBuffer: CVPixelBuffer) {
+        os_signpost(.begin, log: visionSignpost, name: "capture.vision.detect")
+        defer { os_signpost(.end, log: visionSignpost, name: "capture.vision.detect") }
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 16, height > 16 else { return }
+        let lw = visionGrid.w * 8, lh = visionGrid.h * 8
+        var luminance = [UInt8](repeating: 0, count: lw * lh)
+        guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else { return }
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }
+        let bpr = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let bytes = base.assumingMemoryBound(to: UInt8.self)
+        for oy in 0..<lh {
+            let sy = min(height - 1, oy * height / lh)
+            let row = bytes + sy * bpr
+            for ox in 0..<lw {
+                let sx = min(width - 1, ox * width / lw)
+                let p = row + sx * 4                    // kCVPixelFormatType_32BGRA
+                let luma = (77 * Int(p[2]) + 150 * Int(p[1]) + 29 * Int(p[0])) / 256
+                luminance[oy * lw + ox] = UInt8(min(255, max(0, luma)))
+            }
+        }
+        guard let edges = ChromeDetector.edgeGrid(pixels: luminance, width: lw, height: lh,
+                                                  gridW: visionGrid.w, gridH: visionGrid.h),
+              let crop = CaptureVisionFallback.cropRect(edges: edges,
+                                                        gridW: visionGrid.w, gridH: visionGrid.h,
+                                                        source: PxRect(x: 0, y: 0,
+                                                                       w: Double(width), h: Double(height))),
+              crop.y.isFinite else { return }
+        let fraction = min(max(crop.y / Double(height), 0), 0.6)
+        let previous = chromeFraction.withLock { current -> Double in
+            let old = current
+            if abs(current - fraction) > 0.005 { current = fraction }
+            return old
+        }
+        if abs(previous - fraction) > 0.005 {
+            os_log("A4 vision fallback: content crop top=%.1f%% (AX unavailable)", log: .default,
+                   type: .info, fraction * 100)
+        }
     }
 
     /// Crops the chrome band off a window frame. Display and region captures

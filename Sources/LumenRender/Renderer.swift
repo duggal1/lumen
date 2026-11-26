@@ -235,6 +235,9 @@ public final class PresentStats: @unchecked Sendable {
 /// Pure-ish renderer: output depends only on (RenderRequest). Owned by ONE render queue; not thread-safe.
 /// Preview and export call the same `encode`. Triple-buffered; the frame loop allocates nothing after warm-up.
 public final class Renderer: @unchecked Sendable {
+    /// A3: signpost log for the per-frame encode / backdrop intervals. Lets
+    /// Instruments + the frame harness attribute time to a precise pipeline stage.
+    private static let frameLog = OSLog(subsystem: "com.lumen.studio", category: "frame")
     public let device: MTLDevice
     public let presentStats = PresentStats()
     private let queue: MTLCommandQueue
@@ -251,6 +254,7 @@ public final class Renderer: @unchecked Sendable {
     private let pHighlight: MTLRenderPipelineState
     private let pLoupe: MTLRenderPipelineState
     private let textCache = TextOverlayCache()
+    private let shortcutCache = ShortcutPillCache()
     private var pResolve: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     private var personMatte: PersonMatteSequence?
     private let sem = DispatchSemaphore(value: 3)
@@ -319,11 +323,11 @@ public final class Renderer: @unchecked Sendable {
     private let screenMip = MipCache(), webMip = MipCache()
     private var atlas: CursorAtlas?
     private var atlasPack: CursorPack?
-    private var atlasInk: RGBA?
     private var customs: [CustomCursor] = []
     private let outCache: CVMetalTextureCache
     public let fxKernels: FXKernels?
     public let upscaler: Upscaler?
+    private let contentPass: ContentPass?
 
     public init() throws {
         guard let d = MTLCreateSystemDefaultDevice(), let q = d.makeCommandQueue() else { throw RenderError.noDevice }
@@ -349,6 +353,7 @@ public final class Renderer: @unchecked Sendable {
         let fk = try? FXKernels(device: d)
         fxKernels = fk
         upscaler = fk.map(Upscaler.init(kernels:))
+        contentPass = fk.map(ContentPass.init(kernels:))
         // SMOOTHNESS: compile the resolve pipelines up front so the first
         // preview frame never pays a shader compile on the render thread.
         for fmt in [MTLPixelFormat.bgra8Unorm, .bgr10a2Unorm] { pResolve[fmt] = try Self.pipe(d, l, "resolveFS", fmt, 0) }
@@ -411,12 +416,9 @@ public final class Renderer: @unchecked Sendable {
     }
 
     private func styleImageURL(_ path: String) -> URL {
-        if path.hasPrefix("/") { return URL(fileURLWithPath: path) }
-        let root = AppAssets.directory(bundlePath: "Wallpapers", sourcePaths: ["App/public/assets/wallpapers"])
-        let fallback = "paintings/claude-monet/claude-monet_water-lilies-agapanthus_cma-136510.webp"
-        let relative = path == "serene-lake.jpg" ? fallback : path
-        if let root { return root.appendingPathComponent(relative) }
-        return URL(fileURLWithPath: path)
+        (path == "serene-lake.jpg" ? Bundle.main.url(forResource: "serene-lake", withExtension: "jpg", subdirectory: "Wallpapers")
+            ?? Bundle.main.url(forResource: "serene-lake", withExtension: "jpg")
+            : nil) ?? URL(fileURLWithPath: path)
     }
 
     /// User-selected webcam background. Throttled to one stat per second; the
@@ -640,6 +642,8 @@ public final class Renderer: @unchecked Sendable {
     public func encode(_ r: RenderRequest, output: MTLTexture, commandBuffer cb: MTLCommandBuffer, wait: Bool = true) -> Bool {
         let cs = r.canvas
         guard output.width == cs.x, output.height == cs.y, cs.x > 0, cs.y > 0 else { return false }
+        os_signpost(.begin, log: Self.frameLog, name: "encode")
+        defer { os_signpost(.end, log: Self.frameLog, name: "encode") }
         let tl = r.timeline
         // A non-finite request time must never reach timeline evaluation or a
         // shader uniform. Holding the frame at t=0 is the honest fallback.
@@ -708,8 +712,8 @@ public final class Renderer: @unchecked Sendable {
         } else {
             personMatte = nil
         }
-        if atlas == nil || atlasPack != tl.cursor.pack || atlasInk != tl.cursor.ink {
-            atlas = CursorAtlas(device: device, queue: queue, pack: tl.cursor.pack, customs: customs, ink: tl.cursor.ink); atlasPack = tl.cursor.pack; atlasInk = tl.cursor.ink
+        if atlas == nil || atlasPack != tl.cursor.pack {
+            atlas = CursorAtlas(device: device, queue: queue, pack: tl.cursor.pack, customs: customs); atlasPack = tl.cursor.pack
         }
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y))
 
@@ -788,7 +792,7 @@ public final class Renderer: @unchecked Sendable {
                 e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 e.endEncoding()
             }
-
+            os_signpost(.end, log: Self.frameLog, name: "backdrop")
         }
 
         // 2. sub-frames (motion blur): scene over transparent, accumulated, resolved over the backdrop
@@ -950,14 +954,10 @@ public final class Renderer: @unchecked Sendable {
         let n = Int(ceil(blurPx))
         var cap = max(1, tl.camera.maxSamples)     // a corrupted maxSamples must never mean "render nothing"
         if r.quality == .preview {
-            // P2: live playback must never stall. A fast click zoom can drive
-            // the travel-based `n` to the default maxSamples of 12, i.e. 12
-            // full render passes in one frame — measured at 85-100 ms. Cap
-            // preview motion blur at 2 sub-frames so the 60 fps gate holds;
-            // export still uses the full requested sample count.
-            let per = perSample.withLock { $0 }
-            let budget = per > 0 ? min(max(Int(0.5 / max(r.fps, 1) / per), 1), 2) : 1
-            cap = min(max(1, budget), 2)
+            // A rapid click zoom can otherwise request all 12 samples and
+            // miss several preview deadlines at once. Keep live preview to
+            // one sample; export still honors the project's full setting.
+            cap = 1
         }
         let want = min(max(n, 1), max(cap, 1))
         guard r.quality == .preview else { return want }        // export: pure function of the request
@@ -981,12 +981,10 @@ public final class Renderer: @unchecked Sendable {
                                         maxYaw: tl.camera.maxYaw,
                                         maxPitch: tl.camera.maxPitch)
         let sc = st.cameraScale.isFinite ? max(Double(st.cameraScale), 1) : 1
-        // The camera NEVER scales the content rect. Reveal's 0.92 entrance
-        // shrink was removed on purpose: it was the reported "Zoom shrinks"
-        // defect (Docs/REBUILD-FORENSICS.md 3.3). The reveal entrance now lives
-        // entirely in the tilt track (yaw 12 -> 0 over 0.9 s), which this shader
-        // applies through the same homography as Lean. No mode applies a hidden
-        // content-scale shrink; preview, sub-frames and export stay identical.
+        // The camera NEVER scales the content rect. Reveal's entrance shrink is
+        // gone from the renderer entirely (it was the reported "shrink"); the
+        // drawn rect is always `content`, and the .off (default) path applies
+        // no warp, no tilt and no extra scale — a pure viewport magnification.
         let contentRect = content
         // Browser-content crop: the dense AXWebArea track is authoritative; a
         // legacy Area crop is the fallback, then the full source. The Director
@@ -1015,34 +1013,30 @@ public final class Renderer: @unchecked Sendable {
         let cropSize = SIMD2<Float>(Float(max(baseView.w, 1)), Float(max(baseView.h, 1)))
         let pxPerSrc = g.content.z / g.src.x
         let drawingContent = !r.cursorOnly
-        // Reconstruct the visible source ROI only, before the render encoder.
-        // Never cache redacted textures: their mask content can change while
-        // their Metal identity stays constant. The masked direct path is safe.
-        // The preview has a stricter pixel budget; blurred preview frames use
-        // the source sampler instead of repeating an expensive compute chain.
-        var enhanced: UpscaleResult?
-        var blend: Float = 0
-        if drawingContent, screenOpacity > 0.001, tl.camera.upscaleEnabled,
-           st.emphasis.masks.isEmpty, let upscaler,
+        // Real-time upscaler. SMOOTHNESS: the upscale chain still runs as compute
+        // (it must write textures), but its result is now consumed by
+        // `contentFS` as texture 1 instead of a second full-canvas compute
+        // pass that wrote the scene target. Tilt is no longer gated out: the
+        // fragment shader warps first, then samples the upscaled lattice.
+        var upscaled: (UpscaleResult, Float)?
+        if drawingContent, screenOpacity > 0.001, tl.camera.upscaleEnabled, let cp = contentPass, let up = upscaler,
            r.quality == .export || subframes == 1 {
-            let view = SIMD2<Double>(Double(cropSize.x), Double(cropSize.y)) / sc
-            let magnification = max(Double(contentRect.z) / view.x, Double(contentRect.w) / view.y)
+            let layout = ContentLayout(canvas: SIMD2<Int32>(Int32(g.canvas.x), Int32(g.canvas.y)),
+                                       contentRect: content, radii: SIMD4<Float>(g.radii),
+                                       srcSize: SIMD2<Float>(g.src))
             var params = UpscaleParams()
             params.maxFactor = tl.camera.upscaleMaxFactor
             if r.quality == .preview { params.shockIterations = 0; params.finalSharpen = 0 }
-            let weight = Upscaler.blend(forMagnification: magnification, params)
-            if weight > 0.001 {
-                let region = Upscaler.quantize(
-                    Upscaler.region(center: cam, view: view, source: g.src), source: g.src)
-                let pixels = r.quality == .export ? 12_582_912 : (r.fps > 60 ? 786_432 : 1_572_864)
-                if let factor = Upscaler.boundedFactor(forMagnification: magnification,
-                    maxFactor: params.maxFactor, region: region, pixelLimit: pixels),
-                   let result = try? upscaler.upscale(cb, source: src, region: region,
-                       factor: factor, params: params, frameID: r.screen.id) {
-                    enhanced = result
-                    blend = weight
-                }
+            var hasher = Hasher()
+            hasher.combine(tl.overlays.privacy.pixelSize)
+            for mask in st.emphasis.masks {
+                hasher.combine(mask.rect.x); hasher.combine(mask.rect.y)
+                hasher.combine(mask.rect.z); hasher.combine(mask.rect.w); hasher.combine(mask.mode)
             }
+            let upscaleID = st.emphasis.masks.isEmpty ? r.screen.id : r.screen.id ^ UInt64(bitPattern: Int64(hasher.finalize()))
+            upscaled = try? cp.prepareUpscale(up, cb, layout: layout, camCenter: SIMD2<Float>(cam),
+                                              zoom: Float(sc), source: src, sourceID: upscaleID, params: params,
+                                              pixelLimit: r.quality == .export ? 12_582_912 : (r.fps > 60 ? 262_144 : 524_288))
         }
         let pd = MTLRenderPassDescriptor()
         pd.colorAttachments[0].texture = tex; pd.colorAttachments[0].loadAction = .clear; pd.colorAttachments[0].storeAction = .store
@@ -1052,17 +1046,20 @@ public final class Renderer: @unchecked Sendable {
         var enc = e
         func draw() { enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
 
-        // Both preview and export use the same source-pixel transform.
+        // content (fragment path; the upscaler, when engaged, is sampled here)
+        var upBlend = upscaled?.1 ?? 0
+        if !upBlend.isFinite { upBlend = 0 }     // hostile blend can never reach the shader
+        upBlend = min(max(upBlend, 0), 1)
         if drawingContent, screenOpacity > 0.001 {
             enc.setRenderPipelineState(pContent); quad(enc, contentRect, canvasF)
             frag(enc, ContentU(content: contentRect, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam),
                              cropSize: cropSize, scale: Float(sc),
                              radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0,
                              tilt: tilt, radii: SIMD4<Float>(g.radii),
-                             upRegion: enhanced?.region ?? .zero, upTexSize: enhanced?.texSize ?? .one,
-                             upFactor: enhanced?.factor ?? 1, upBlend: blend, opacity: screenOpacity))
+                             upRegion: upscaled?.0.region ?? .zero, upTexSize: upscaled?.0.texSize ?? .one,
+                             upFactor: upscaled?.0.factor ?? 1, upBlend: upBlend, opacity: screenOpacity))
             enc.setFragmentTexture(src, index: 0)
-            enc.setFragmentTexture(enhanced?.texture ?? src, index: 1)
+            enc.setFragmentTexture(upscaled?.0.texture ?? src, index: 1)
             draw()
         }
 
@@ -1119,7 +1116,7 @@ public final class Renderer: @unchecked Sendable {
         // source: the raw texture still contains masked pixels, so sampling it
         // would displace a secret out from under its mosaic. Copy the scene
         // once per frame (only while a click is on screen) and sample that.
-        if screenOpacity > 0.001, tl.cursor.clickEffect != .none, !st.clickFX.isEmpty {
+        if screenOpacity > 0.001, tl.cursor.clickEffect != .none || tl.cursor.clickRing != nil, !st.clickFX.isEmpty {
             let ringSize = min(max(tl.cursor.clickSize, 0.5), 2.0)
             let R = 70 * g.ui * pow(sc, 0.5) * ringSize
             // A ring at exactly 0 or 1 carries no motion: at 0 it would pop at
@@ -1265,16 +1262,9 @@ public final class Renderer: @unchecked Sendable {
                 }
             }
         }
-        if drawingContent, tl.clipSource(atOutput: r.t) == nil,
-           let cues = tl.derived?.shortcuts, !cues.isEmpty {
-            var lo = 0, hi = cues.count
-            while lo < hi {
-                let mid = (lo + hi) / 2
-                if cues[mid].start <= r.t { lo = mid + 1 } else { hi = mid }
-            }
-            if lo > 0, let sprite = textCache.shortcut(cues[lo - 1], time: r.t, canvas: r.canvas, device: device) {
-                sprites.append(sprite)
-            }
+        if drawingContent, let pills = tl.derived?.shortcutPills, tl.shortcutOverlay.enabled {
+            sprites += shortcutCache.sprites(pills: pills, time: r.t, plan: tl.shortcutOverlay,
+                                             canvas: r.canvas, videoRect: g.content, device: device)
         }
         if !sprites.isEmpty {
             // A caption card needs the scene behind it, and Metal cannot read

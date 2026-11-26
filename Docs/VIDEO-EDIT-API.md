@@ -84,7 +84,7 @@ non-mutating tool and for the six mutating tools where repeating an identical ca
 `add_music`, `remove_music`, `reorder_clips`, `set_speed`, `set_zoom`, `trim_clip`. Every other
 mutating tool is `false`.
 
-**One catalog, 50 tools.** The v2 audio transaction is the preferred clip-editing surface; legacy music-bed verbs remain compatibility adapters. The typed edit verbs
+**One catalog, 52 tools.** There is exactly one canonical verb per operation. The typed edit verbs
 (`cut_span`, `split_clip`, `trim_clip`, `reorder_clips`, `set_speed`, `add_music`, `remove_music`,
 `add_caption`, `set_zoom`, `get_edit`, `render_preview`, `export_final`) are the only editing
 vocabulary. The older overlapping verbs they replaced (`cut_range`, `speed_ramp_set`, `zoom_add`,
@@ -104,6 +104,8 @@ background_set | edit | edit | project_id | yes | no | no | no | no | no | -
 captions_generate | edit | edit | project_id | yes | no | no | yes | no | no | -
 captions_set | edit | edit | project_id | yes | no | no | no | no | no | -
 clip_import | edit | edit | path,project_id | yes | no | no | no | no | no | -
+crop_set | edit | edit | project_id | yes | yes | no | no | yes | yes | -
+cursor_set | edit | edit | project_id | yes | yes | no | no | yes | yes | -
 cut_span | edit | edit | end,project_id,start | yes | no | yes | no | yes | yes | -
 edit_apply | edit | edit | ops,project_id | yes | no | yes | no | yes | yes | -
 export_cancel | export | export | job_id | yes | no | yes | no | no | no | -
@@ -115,6 +117,7 @@ list_apps | read | - | - | no | yes | no | no | no | no | -
 list_displays | read | - | - | no | yes | no | no | no | no | -
 list_windows | read | - | - | no | yes | no | no | no | no | -
 lumen_status | read | - | - | no | yes | no | no | no | yes | -
+post_process | edit | edit | project_id | no | yes | no | no | no | yes | -
 privacy_apply | edit | edit | project_id | yes | no | no | no | no | no | -
 privacy_scan | edit | edit | project_id | yes | no | no | yes | no | no | -
 produce_demo | actuate | actuate,edit,export,record | bundle_id,export,script | yes | no | yes | yes | no | no | edit,export,record
@@ -198,6 +201,8 @@ possible: a second is a guess, a marker is a fact.
 | `zoom_remove` | `project_id`, `id` (zoom UUID) | engine edit result; suppresses the auto planner for that zoom; destructive |
 | `zoom_replan` | `project_id` | engine edit result; keeps manual zooms |
 | `style_set` | `project_id`, optional `padding` (0...0.2), `corner_radius` (0...80), `shadow` (0...1), `aspect` (>0.2,<5), `wallpaper_blur` (0...60), `background`, `background_image_path` | engine edit result |
+| `crop_set` | `project_id`, optional `enabled`, `uncrop` (chromeTyping\|anyTyping\|never), `inset_px` (0...40), `hold_after_typing`/`hold_after_ui_click`/`min_dwell` (0...10) | engine edit result; browser auto-crop tuning, idempotent |
+| `cursor_set` | `project_id`, optional `pack` (a `CursorPack.rawValue`), `size` (0.25...4), `smoothing_sigma` (0...0.5), `glide` (0...2), `constant_size`, `click_effect` (none\|ripple\|pulse\|burst\|glass) | engine edit result; cursor artwork and click effect, idempotent |
 | `background_set` | `project_id`, `background?` or `image_path?` (at least one) | engine edit result |
 | `captions_generate` | `project_id`, `locale?="en-US"`, `wait?=false` | `{job_id}` or the completed job result when `wait` |
 | `captions_set` | `project_id`, `enabled?=true`, `locale?` | engine edit result |
@@ -222,6 +227,7 @@ possible: a second is a guess, a marker is a fact.
 |---|---|---|
 | `render_preview` | `project_id`, `time?=0`, `frames?=1` (1...12), `duration?`, `max_width?=960` (160...1920), `png?=false` | image block (JPEG default, PNG when requested) + `{name,time,width,height,bytes}`; `frames>1` returns a contact sheet `{frames,width,height,bytes}` |
 | `qa_report` | `project_id` | output schema: `project_id`, `checks:[{name,ok,detail}]`, `zoom_accuracy` |
+| `post_process` | `project_id`, optional `revision`, `include_qa?=true` | output schema: `project_id`, `revision`, `duration`, `canvas`, `checks`, `post_processed`; read-only derived-state finalization. Returns `REVISION_CONFLICT` when `revision` is stale. |
 | `export_final` | `project_id`, `output` (required), `preset?="1080p30-h264"`, `include_audio?=true`, `export_stems?=false`, `overwrite?=false`, `wait?=true` | `{job_id,output}`; with `wait`, the completed job result plus `output`. An existing output fails with `EXPORT_OUTPUT_EXISTS` unless `overwrite=true`; overwriting is destructive and approval-gated. |
 | `job_status` | `job_id`, `wait_ms?=0` (0...25000) | output schema: `job_id`, `kind`, `state` (queued\|running\|done\|failed\|cancelled), `progress` (0...1), `message`, `result`, `error` |
 | `export_cancel` | `job_id` | `{job_id,cancelled}`; destructive |

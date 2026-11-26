@@ -325,6 +325,8 @@ public enum Director {
                 // Explicit OS autorepeat is never a new physical press. Legacy
                 // down-only streams have no reliable release state, so retain
                 // their events instead of silencing all subsequent presses.
+                // Secure fields must never produce an audible key cue, on
+                // either the press or the paired release.
                 let paired = Set(input.events.lazy.filter { $0.kind == .keyUp }.map(\.keyCode))
                 var held = Set<UInt16>()
                 var privateKeys = Set<UInt16>()
@@ -407,11 +409,18 @@ public enum Director {
             let tc = tgt < g ? t.audio.duckAttack : t.audio.duckRelease
             g += (tgt - g) * (1 - exp(-0.01 / tc)); duck[i] = Float(g)
         }
+        // Shortcut pills are detected from recorded key events in SOURCE time
+        // and mapped to OUTPUT time once, here, so preview and export share one
+        // deterministic track (the renderer never needs the raw event log).
+        let shortcutPills = ShortcutDetector.displays(in: input.events, plan: t.shortcutOverlay).map {
+            ShortcutDisplay(start: tm.output(atSource: $0.start), end: tm.output(atSource: $0.end),
+                            text: $0.text, keyCode: $0.keyCode)
+        }
         t.derived = DerivedTracks(revision: revision, sourceSize: size, outputDuration: tm.outputDuration, cursor: cursor, camera: cam,
                                   clicks: clicks, cues: cues, duck: duck, face: WebcamFraming.solve(input.face, tm: tm, camera: cam, layout: t.webcam),
                                   webcamAspect: input.webcamAspect, layout: layout, placement: placement,
                                    captions: captions, autoMasks: autoMasks, personMask: input.personMask, crop: crop,
-                                   viewportCrop: viewport, shortcuts: ShortcutPlanner.plan(events: input.events, ax: input.ax, tm: tm))
+                                   viewportCrop: viewport, shortcutPills: shortcutPills)
         if ProcessInfo.processInfo.environment["LUMEN_ZOOM_DEBUG"] == "1" {
             let cam = t.derived?.camera
             for event in input.events where event.kind == .down && event.button == 0 {
@@ -557,14 +566,22 @@ public struct FrameState: Sendable {
     let p0 = g(i - 1), p1 = g(i), p2 = g(i + 1), p3 = g(i + 2)
     return p1 + 0.5 * u * (p2 - p0 + u * (2 * p0 - 5 * p1 + 4 * p2 - p3 + u * (3 * (p1 - p2) + p3 - p0)))
 }
-@inline(__always) private func qhm(_ p: [Float], _ v: [Float], _ a: [Float], _ f: Double, rate: Double) -> Float {
+@inline(__always) private func qhm(_ p: [Float], _ v: [Float], _ a: [Float], _ f: Double, rate: Double,
+                                   monotone: Bool = false) -> Float {
     guard p.count >= 2 else { return p.first ?? 0 }
     let i = min(max(Int(f), 0), p.count - 2)
     let duration = 1 / rate
     let move = QuinticMove(t0: Double(i) * duration, T: duration,
                            x0: Double(p[i]), v0: Double(v[i]), a0: Double(a[i]),
                            x1: Double(p[i + 1]), v1: Double(v[i + 1]), a1: Double(a[i + 1]))
-    return Float(move.sample(f * duration).x)
+    let value = Float(move.sample(f * duration).x)
+    // The bake grid is the source of truth. For a monotone channel (the log
+    // zoom) the sub-tick curve must stay between its two bracketing samples:
+    // a central-difference velocity can otherwise lift a quintic sliver above
+    // a descending release even though both endpoints are exact. At integer
+    // ticks this is a no-op, so pixel-exact arrivals are unchanged.
+    guard monotone else { return value }
+    return min(max(value, min(p[i], p[i + 1])), max(p[i], p[i + 1]))
 }
 private func cf(_ v: Float, _ lo: Float, _ hi: Float) -> Float { min(max(v, lo), hi) }
 
@@ -605,7 +622,7 @@ extension Timeline {
         let viewportCrop = d.viewportCrop.rect(at: sourceTime)
         let camN = SIMD2<Double>(Double(qhm(c.nx, c.vx, c.ax, cameraFrame, rate: c.rate)),
                                  Double(qhm(c.ny, c.vy, c.ay, cameraFrame, rate: c.rate)))
-        let logZ = qhm(c.lz, c.vz, c.az, cameraFrame, rate: c.rate)
+        let logZ = qhm(c.lz, c.vz, c.az, cameraFrame, rate: c.rate, monotone: true)
         let visible = CropSpace.visible(crop: viewportCrop,
                                         aspect: d.sourceSize.x / max(d.sourceSize.y, 1.0),
                                         u: camN.x, v: camN.y, logZ: Double(logZ))

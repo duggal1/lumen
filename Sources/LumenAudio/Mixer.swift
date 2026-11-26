@@ -695,98 +695,56 @@ public final class AudioMixer: @unchecked Sendable {
             hasProgram = true
         }
 
-        renderCues(tl, startFrame: 0, left: &L, right: &R, cancelled: cancelled)
+        // Real recorded CC0 one-shots, routed with per-class round-robin and a
+        // bus limiter. Replaces the old single-file-per-key Mechvibes path and
+        // the old click mp3s; key releases carry their own recorded timestamps.
+        let activeCues = d.cues.filter { cue in
+            switch cue.kind {
+            case .key, .keyUp: return a.soundEffectsEnabled && a.keySounds
+            case .click: return a.soundEffectsEnabled && a.clickSounds
+            case .whooshIn, .whooshOut: return false
+            }
+        }
+        for cue in activeCues {
+            NotificationCenter.default.post(
+                name: Notification.Name("lumen.focus.feedback.tap"),
+                object: nil,
+                userInfo: ["kind": cue.kind == .click ? "click" : "key"])
+        }
+        if !activeCues.isEmpty {
+            var settings = KeyMixSettings()
+            settings.keyLevelDb = a.typingLevelDb + 2   // preserve shipped typing level
+            settings.clickLevelDb = a.sfxGainDb
+            settings.clickTone = a.clickTone
+            var router = KeyVariationRouter()
+            let sfx = KeySoundEngine.render(cues: activeCues, library: KeySoundLibraryCache.shared,
+                                            router: &router, settings: settings, frames: n)
+            for i in 0..<n { L[i] += sfx.l[i]; R[i] += sfx.r[i] }
+        }
         Self.silenceClips(tl, &L, &R, fs: fs)
         return AudioMaster.process([L, R], plan: a, hasProgram: hasProgram)
     }
 
-    /// The same physical keyboard bank feeds provisional playback and export.
-    /// Decode/resample once per selected pack and event edge, not once per mix.
-    private func typingPCM(packID: String, release: Bool) -> [Int: [Float]] {
-        let cacheKey = packID + (release ? ":up" : ":down")
-        keyBankLock.lock()
-        let ready = keyBank[cacheKey]
-        keyBankLock.unlock()
-        if let ready { return ready }
-        guard let directory = TypingPackLoader.dir(for: packID) else { return [:] }
-        let loaded = release ? TypingPackLoader.releaseBuffers(in: directory) : TypingPackLoader.buffers(in: directory)
-        var result: [Int: [Float]] = [:]
-        for (code, buffer) in loaded {
-            guard let channel = buffer.floatChannelData?[0] else { continue }
-            let raw = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
-            let samples = AudioIO.resample(raw, from: buffer.format.sampleRate)
-            let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
-            guard peak > 1e-4 else { continue }
-            result[code] = samples.map { $0 / peak }
-        }
-        keyBankLock.lock()
-        // Retain only the selected pack's two banks; switching packs cannot
-        // grow the cache indefinitely.
-        keyBank = keyBank.filter { $0.key.hasPrefix(packID + ":") }
-        keyBank[cacheKey] = result
-        keyBankLock.unlock()
-        return result
-    }
-
     private func renderCues(_ tl: Timeline, startFrame: Int64, left: inout [Float], right: inout [Float],
                             cancelled: (@Sendable () -> Bool)? = nil) {
-        let a = tl.audio, fs = AudioIO.fs
-        guard a.soundEffectsEnabled, let d = tl.derived, !d.cues.isEmpty else { return }
-        let start = Double(startFrame) / fs
-        let end = start + Double(left.count) / fs
-        // Include an earlier transient whose tail overlaps this PCM window.
-        // The recorded key/click packs contain short one-shot samples.
-        var lo = 0, hi = d.cues.count
-        while lo < hi {
-            let mid = (lo + hi) / 2
-            if d.cues[mid].t < start - 2 { lo = mid + 1 } else { hi = mid }
-        }
-        var previousPress: Double?
-        for cue in d.cues.dropFirst(lo) {
-            if cancelled?() == true { return }
-            if cue.t >= end { break }
-            guard cue.t.isFinite else { continue }
-            let samples: [Float]
-            let gain: Float
-            let pan: Float
-            if cue.kind == .key {
-                guard a.keySounds else { continue }
-                let pcm = typingPCM(packID: a.typingPackId, release: cue.isKeyRelease)
-                let key = Int(cue.keyCode), codes = Set(pcm.keys)
-                let code = TypingPackLoader.packCode(for: key, definedIn: codes)
-                    ?? TypingPackLoader.fallbackCode(for: key, definedIn: codes)
-                if let code, let exact = pcm[code] { samples = exact }
-                else if cue.isKeyRelease { continue }
-                else { samples = bank.render(.key).samples }
-                let gap = previousPress.map { cue.t - $0 } ?? 1
-                let cadence: Float = gap < 0.05 ? 0.82 : gap < 0.15 ? 0.92 : 1
-                let edge: Float = cue.isKeyRelease ? 0.45 : 1
-                // Stable per-event gain variation; no preview/export RNG drift.
-                let eventSeed = UInt64(bitPattern: Int64((cue.t * fs).rounded())) &* 6364136223846793005 &+ UInt64(cue.keyCode)
-                let variation = 0.975 + Float((eventSeed >> 32) & 255) / 255 * 0.05
-                gain = Float(pow(10, clamp(a.typingLevelDb + cue.gainDb, -60, 12) / 20)) * cadence * edge * variation
-                if !cue.isKeyRelease { previousPress = cue.t }
-                // Mild physical keyboard positioning; modifiers stay near their side.
-                switch key {
-                case 0, 1, 6, 7, 12, 13, 14, 55, 56, 58, 59: pan = -0.12
-                case 30, 31, 33, 35, 36, 37, 40, 41, 42, 44, 47, 51, 54, 60, 61, 62: pan = 0.12
-                default: pan = 0
-                }
-            } else {
-                let (rendered, bankGain) = bank.render(cue.kind, clickTone: a.clickTone)
-                samples = rendered
-                gain = Float(pow(10, clamp(a.sfxGainDb + cue.gainDb + bankGain, -60, 12) / 20))
-                pan = 0
-            }
-            let offset = Int64((cue.t * fs).rounded()) - startFrame
-            let lower = max(0, Int(-offset)), upper = min(samples.count, left.count - Int(offset))
-            guard lower < upper else { continue }
-            let l = gain * (1 - max(pan, 0)), r = gain * (1 + min(pan, 0))
-            for k in lower..<upper {
-                let i = Int(offset) + k
-                left[i] += samples[k] * l; right[i] += samples[k] * r
+        let a = tl.audio
+        guard a.soundEffectsEnabled, cancelled?() != true, let cues = tl.derived?.cues else { return }
+        let active = cues.filter { cue in
+            guard cue.t.isFinite else { return false }
+            switch cue.kind {
+            case .key, .keyUp: return a.keySounds
+            case .click: return a.clickSounds
+            case .whooshIn, .whooshOut: return false
             }
         }
+        var settings = KeyMixSettings()
+        settings.keyLevelDb = a.typingLevelDb + 2
+        settings.clickLevelDb = a.sfxGainDb
+        settings.clickTone = a.clickTone
+        var router = KeyVariationRouter()
+        let sfx = KeySoundEngine.render(cues: active, library: KeySoundLibraryCache.shared,
+                                        router: &router, settings: settings, frames: left.count, startFrame: startFrame)
+        for i in left.indices { left[i] += sfx.l[i]; right[i] += sfx.r[i] }
     }
 
     /// Fast, bounded raw program for any seek position, while the canonical
@@ -968,7 +926,7 @@ public final class AudioMixer: @unchecked Sendable {
         if let derived = tl.derived {
             for cue in derived.cues {
                 let isKey: Int
-                switch cue.kind { case .key: isKey = 1; default: isKey = 0 }
+                switch cue.kind { case .key, .keyUp: isKey = 1; default: isKey = 0 }
                 hash.update(data: Data("\(cue.t)|\(cue.gainDb)|\(cue.keyCode)|\(isKey)|\(cue.isKeyRelease)|\(cue.kind)".utf8))
             }
             // The duck envelope is derived audio: a different envelope means a

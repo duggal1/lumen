@@ -107,10 +107,24 @@ struct ExportInspector: View {
     private var more: some View {
         VStack(alignment: .leading, spacing: 0) {
             DisclosureGroup("More", isExpanded: $showMore) {
-                StudioToggleRow(label: "Also 1:1 and 9:16", on: model.exportBinding(\.batchAspects))
-                StudioToggleRow(label: "Transparent background", on: model.exportBinding(\.alpha))
-                StudioToggleRow(label: "Separate cursor layer", on: model.exportBinding(\.cursorLayer))
-                StudioToggleRow(label: "Separate WAV stems",
+                ToggleRow(label: "Also 1:1 and 9:16", on: model.exportBinding(\.batchAspects))
+                ToggleRow(label: "Transparent background", on: model.exportBinding(\.alpha))
+                ToggleRow(label: "Separate cursor layer", on: model.exportBinding(\.cursorLayer))
+                ToggleRow(label: "Shortcut pills", on: Binding(
+                    get: { model.timeline.shortcutOverlay.enabled },
+                    set: { value in model.edit { $0.shortcutOverlay.enabled = value } }))
+                if model.timeline.shortcutOverlay.enabled {
+                    Row(label: "Pill position") {
+                        LDropdown(sel: Binding(
+                            get: { model.timeline.shortcutOverlay.position },
+                            set: { value in model.edit { $0.shortcutOverlay.position = value } }),
+                                  options: ShortcutPillPosition.allCases.map {
+                                      ($0, $0 == .topMiddle ? "Top middle" : "Bottom middle", "")
+                                  })
+                            .frame(width: 132)
+                    }
+                }
+                ToggleRow(label: "Separate WAV stems",
                           on: Binding(get: { model.exportSeparateStems },
                                       set: { model.setSeparateWavStems($0) }))
             }

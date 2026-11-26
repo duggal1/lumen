@@ -332,10 +332,9 @@ public struct CameraParams: Codable, Equatable, Sendable {
 
 public enum MicMode: String, Codable, CaseIterable, Sendable {
     case standard, loud, podcast, off
-    /// Kept for decoding older projects and for the mic mute (`.off`) semantics.
-    /// Studio Audio now has ONE target regardless of the stored mode; see
-    /// `AudioPlan.studioTargetLUFS`.
-    public var targetLUFS: Double { switch self { case .standard: -12; case .loud: -12; case .podcast: -16; case .off: -12 } }
+    /// Streaming/web target (-14 LUFS) by default; `.podcast` keeps the Apple
+    /// Podcasts -16 LUFS spec and `.loud` is the -12 LUFS option.
+    public var targetLUFS: Double { switch self { case .standard: -14; case .loud: -12; case .podcast: -16; case .off: -14 } }
 }
 public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
     public enum Role: String, Codable, Sendable { case mic, system, voiceover, music, sfx }
@@ -431,11 +430,7 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     /// chain and before the shared master, so the -1 dBTP ceiling still holds.
     public var voiceBoostDb: Double = 2.5
     public var targetLUFSOverride: Double?
-    /// One always-on Studio Audio loudness target. +2 dB over the old -14 LUFS
-    /// program (the owner's >= +1.6 dB floor) with the shared -1 dBTP limiter.
-    /// The stored mode/override stay decodable but never branch the chain.
-    public static let studioTargetLUFS = -12.0
-    public var targetLUFS: Double { Self.studioTargetLUFS }
+    public var targetLUFS: Double { targetLUFSOverride ?? micMode.targetLUFS }
     public var studioMode: StudioMode = .standard
     public var soundEffectsEnabled = true
     /// Zoom whooshes were removed. The symbol stays only because out-of-scope code and
@@ -742,6 +737,9 @@ public struct Timeline: Sendable, Codable, Equatable {
     public var layouts: [LayoutSegment] = []
     public var layoutSettings = LayoutSet()
     public var captions = CaptionPlan()
+    /// Command-key pills burned into the exported picture. Off by default so
+    /// existing projects render exactly as before.
+    public var shortcutOverlay = ShortcutOverlayPlan()
     /// Imported video appended after the recording, in OUTPUT seconds.
     public var clips: [TimelineClip] = []
     /// Requested crossfade at magnetic-lane clip joins, in OUTPUT seconds.
@@ -761,7 +759,7 @@ public struct Timeline: Sendable, Codable, Equatable {
     public var activity = ActivitySettings()
     public var derived: DerivedTracks?
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, timeMap, zoom, suppressedAuto, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, clips, crossfadeDuration, seams, smartCrop, cropSettings, activity
+        case schemaVersion, timeMap, zoom, suppressedAuto, style, cursor, camera, audio, webcam, overlays, layouts, layoutSettings, captions, shortcutOverlay, clips, crossfadeDuration, seams, smartCrop, cropSettings, activity
     }
     public init(duration: Double) { timeMap = TimeMap(sourceDuration: duration) }
     public init(from d: Decoder) throws {
@@ -780,6 +778,7 @@ public struct Timeline: Sendable, Codable, Equatable {
         audio = c.opt(.audio, audio).studioPolicy(); webcam = try? c.decodeIfPresent(WebcamLayout.self, forKey: .webcam)
         overlays = c.opt(.overlays, overlays); layouts = c.opt(.layouts, layouts); layoutSettings = c.opt(.layoutSettings, layoutSettings)
         captions = c.opt(.captions, captions)
+        shortcutOverlay = c.opt(.shortcutOverlay, shortcutOverlay)
         clips = c.opt(.clips, clips)
         crossfadeDuration = c.opt(.crossfadeDuration, 0)
         smartCrop = c.opt(.smartCrop, smartCrop)
