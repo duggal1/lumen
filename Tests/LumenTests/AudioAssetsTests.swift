@@ -58,7 +58,8 @@ import LumenProject
         #expect(!samples.isEmpty)
         #expect(samples.count == original.count)
         #expect(samples.count >= 960 && samples.count <= 12000)
-        #expect(samples.allSatisfy(\.isFinite))
+        let allSamplesFinite = samples.allSatisfy { $0.isFinite }
+        #expect(allSamplesFinite)
         #expect(samplesSeen.insert(samples).inserted)
         #expect(abs(samples.reduce(Float(0)) { max($0, abs($1)) } - 1) < 0.001)
         var plan = AudioPlan(); plan.clickTone = sound
