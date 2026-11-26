@@ -36,7 +36,7 @@ import LumenProject
 
 @Test func touchSoundsAreBundledPlayableAndPersisted() throws {
     let bank = SFXBank()
-    let choices = ClickSound.allCases.filter { ![.mouse, .subtle, .fresh].contains($0) }
+    let choices = ClickSound.allCases.filter { ![.mouse, .subtle, .fresh].contains($0) && !ClickSound.studioCollection.contains($0) }
     #expect(choices.count == 20)
     for sound in choices {
         let (samples, _) = bank.render(.click, clickTone: sound)
@@ -44,5 +44,24 @@ import LumenProject
         var plan = AudioPlan(); plan.clickTone = sound
         let saved = try JSONEncoder().encode(plan)
         #expect(try JSONDecoder().decode(AudioPlan.self, from: saved).clickTone == sound)
+    }
+}
+
+@Test func curatedCursorSoundsDecodeAndAreDistinct() throws {
+    let bank = SFXBank()
+    var samplesSeen = Set<[Float]>()
+    #expect(ClickSound.studioCollection.count == 8)
+    for sound in ClickSound.studioCollection {
+        let url = try #require(BundledAudioAssets.effect(named: sound.assetPath))
+        let original = try AudioIO.readMono(url)
+        let samples = bank.render(.click, clickTone: sound).samples
+        #expect(!samples.isEmpty)
+        #expect(samples.count == original.count)
+        #expect(samples.count >= 960 && samples.count <= 12000)
+        #expect(samples.allSatisfy(\.isFinite))
+        #expect(samplesSeen.insert(samples).inserted)
+        #expect(abs(samples.reduce(Float(0)) { max($0, abs($1)) } - 1) < 0.001)
+        var plan = AudioPlan(); plan.clickTone = sound
+        #expect(try JSONDecoder().decode(AudioPlan.self, from: JSONEncoder().encode(plan)).clickTone == sound)
     }
 }
