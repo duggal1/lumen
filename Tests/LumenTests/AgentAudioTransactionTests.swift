@@ -39,8 +39,10 @@ import LumenProject
     let registry = ToolRegistry()
     registry.registerAgentAudioTransactions()
     let spec = registry.spec("audio_edit_v2")
-    #expect(spec?.required.contains("revision") == true)
-    #expect(spec?.customDryRun == true)
+    let required = spec?.required ?? []
+    let customDryRun = spec?.customDryRun ?? false
+    #expect(required.contains("revision"))
+    #expect(customDryRun)
     #expect(AgentEditingSkills.all.contains { $0.uri == "lumen://skills/audio-edit" })
     #expect(JSONValue.number(.greatestFiniteMagnitude).intValue == nil)
     #expect(JSONValue.number(1.5).intValue == nil)

@@ -51,7 +51,7 @@ final class TimelineDitherRenderer {
     /// Bayer 4×4, in the same order as Clove.
     private static let bayer: [Float] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map { (Float($0) + 0.5) / 16 }
 
-    /// Clove's `StorageHue` set, expressed in the same Display P3 space the
+    /// Clove's `StorageHue` set, expressed in the sRGB space the
     /// pasted renderer draws into. Media roles keep their identity: clips
     /// blue, imports green, zoom orange, clicks violet, voice cyan, music pink,
     /// cuts rose, system grey.

@@ -323,7 +323,12 @@ public final class CursorAtlas {
         // hand is not an open hand, and text selection is not an arrow.
         switch s {
         case .arrow:
-            // 24-unit arrow at 1.4x (about 25 pt tall), tip is the hotspot
+            if pack == .system {
+                // Familiar arrow silhouette with a defined stem and true tip.
+                let p = SVGPath.parse("M4 3 L4 26 L11 19 L17 30 L21 28 L15 17 L26 17 Z")
+                fillMark(p, rim: 1)
+                return [4, 3]
+            }
             return glyph(arrowD, tip: CGPoint(x: 3.2, y: 3.2), hot: CGPoint(x: 3.5, y: 3.5), scale: 1.4, stroke: 2.1)
         case .iBeam:
             let beam = CGPath(roundedRect: CGRect(x: 14.4, y: 7.4, width: 3.2, height: 17.2), cornerWidth: 0.6, cornerHeight: 0.6, transform: nil)
@@ -450,44 +455,40 @@ public final class CursorAtlas {
             return [16, 16]
         }
         if pack == .pixel {
-            // A true 1-bit arrow on a 16-unit grid: square cells, no curve,
-            // no anti-alias. Drawn at 2 pt per cell with a paper rim so it
-            // stays legible on any wallpaper.
+            // Filled stair-step pointer. All cells and their one-cell paper
+            // rim fit the 32pt atlas; no fractional strokes or clipped tail.
             let cell: CGFloat = 2
-            func px(_ x: Int, _ y: Int) -> CGRect { CGRect(x: 6 + CGFloat(x) * cell, y: 6 + CGFloat(y) * cell, width: cell, height: cell) }
             let rows = [
-                "X.............",
-                "XX............",
-                "X.X...........",
-                "X..X..........",
-                "X...X.........",
-                "X....X........",
-                "X.X..X........",
-                "X..X.X........",
-                "X...XX........",
-                "X....X........",
-                "X.....X.......",
-                "X......X......",
-                "X.......X.....",
-                "X........X....",
-                "X.........X...",
-                "X..........X..",
+                "X...........",
+                "XX..........",
+                "XXX.........",
+                "XXXX........",
+                "XXXXX.......",
+                "XXXXXX......",
+                "XXXXXXX.....",
+                "XXXXXXXX....",
+                "XXXXXXXXX...",
+                "XXXXX.......",
+                "XX.XXX......",
+                "X...XXX.....",
+                "....XXX.....",
+                ".....X......",
             ]
-            shadowed {
-                c.setFillColor(paper)
-                for (y, row) in rows.enumerated() {
-                    for (x, ch) in row.enumerated() where ch == "X" {
-                        c.fill(px(x, y).insetBy(dx: -0.6, dy: -0.6))
-                    }
-                }
-            }
-            c.setFillColor(ink)
+            var points: [(Int, Int)] = []
             for (y, row) in rows.enumerated() {
-                for (x, ch) in row.enumerated() where ch == "X" { c.fill(px(x, y)) }
+                for (x, ch) in row.enumerated() where ch == "X" { points.append((x, y)) }
             }
-            // SIMD2<Double>: convert CGFloat explicitly (Swift 6.1 treats
-            // CGFloat and Double as distinct, so `6 + cell / 2` is ambiguous).
-            return SIMD2<Double>(6 + Double(cell) / 2, 6 + Double(cell) / 2)
+            func px(_ x: Int, _ y: Int) -> CGRect {
+                CGRect(x: 4 + CGFloat(x) * cell, y: 2 + CGFloat(y) * cell, width: cell, height: cell)
+            }
+            c.saveGState()
+            c.setShouldAntialias(false)
+            c.setFillColor(paper)
+            for (x, y) in points { c.fill(px(x, y).insetBy(dx: -1, dy: -1)) }
+            c.setFillColor(ink)
+            for (x, y) in points { c.fill(px(x, y)) }
+            c.restoreGState()
+            return [4, 2]
         }
         if pack == .outline {
             // A sharp hollow arrow, with a real tip and a distinct tail.

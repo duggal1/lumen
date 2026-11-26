@@ -1098,7 +1098,9 @@ enum TimelineSelection: Equatable {
     /// timeline lane. `nil` gain uses a bed level under the voice.
     func addMusicLane(path: String, at start: Double? = nil) {
         let place = max(0, start ?? playhead)
-        dispatch(.addAudioLane(AudioLane(role: .music, path: path, placement: place, gainDb: -18)))
+        var lane = AudioLane(role: .music, path: path, placement: place, gainDb: -18)
+        lane.loops = false
+        dispatch(.addAudioLane(lane))
     }
 
     func updateMusicLane(_ id: UUID, placement: Double? = nil, trimStart: Double? = nil, trimDuration: Double? = nil) {

@@ -121,6 +121,7 @@ private enum VideoEditSchemas {
         "ramps": J.arr(.object(["type": .string("object")]), "Speed ramps."),
         "zoom": J.arr(.object(["type": .string("object")]), "Zoom segments."),
         "texts": J.arr(.object(["type": .string("object")]), "Caption and title text blocks."),
+        "audio_lanes": J.arr(.object(["type": .string("object")]), "Imported audio clips, source trims and output placement."),
         "music_path": .object(["type": .array([.string("string"), .string("null")])]),
         "music_gain_db": J.num("Music trim in dB."),
         "timeline": .object(["type": .string("object")]),
@@ -570,7 +571,7 @@ public extension ToolRegistry {
             var payload = videoEditFields(file.timeline)
             payload["project_id"] = .string(input.projectID)
             payload["revision"] = .int(file.revision ?? 0)
-            payload["timeline"] = try await ctx.engine.timelineValue(projectID: input.projectID)
+            payload["timeline"] = await ctx.engine.encode(timeline: file.timeline, revision: file.revision ?? 0)
             return .object(payload)
         })
 

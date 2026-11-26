@@ -92,6 +92,10 @@ extension ToolRegistry {
             let batch = commands
             let apply: @Sendable (inout Timeline) throws -> Void = { draft in
                 for command in batch {
+                    if case .deleteAudioLane(let id) = command,
+                       !draft.audio.lanes.contains(where: { $0.id == id }) {
+                        throw ToolError.failed("No audio clip with id \(id.uuidString).")
+                    }
                     if case .updateAudioLane(let id, let patch) = command,
                        let old = draft.audio.lanes.first(where: { $0.id == id }),
                        patch.trimStart != nil || patch.trimDuration != nil {
