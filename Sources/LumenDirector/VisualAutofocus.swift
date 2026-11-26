@@ -39,12 +39,12 @@ enum VisualAutofocus {
     }
 
     /// Compatibility entry point kept so existing callers still compile. The
-    /// grid-based path is `intents(shots:input:src:tm:)`; this baseline strips
-    /// `.move` events so a hover highlight can never open a shot.
+    /// grid-based path is `intents(shots:input:src:tm:)`; the legacy path uses
+    /// the same causal hover evidence instead of dropping pointer observations.
     static func intents(_ points: [ActivityPoint], events: [InputEvent] = [],
                         input: [ZoomPlanner.Intent] = [], src: SourceInfo,
                         tm: TimeMap) -> [ZoomPlanner.Intent] {
-        VisualZoom.intents(points, events: events.filter { $0.kind != .move },
+        VisualZoom.intents(points, events: events,
                            input: input, src: src, tm: tm)
     }
 

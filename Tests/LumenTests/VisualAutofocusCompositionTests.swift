@@ -98,21 +98,16 @@ import LumenProject
         #expect(covers, "whole-subject framing must win over a centre shot: \(rectDesc)")
     }
 
-    @Test func hoverBiasIsRemovedFromTheBaseline() {
-        // The legacy baseline lowers its minimum sample count when the pointer
-        // is near; the grid path clears the pointer neighbourhood instead, so a
-        // hover-sized change can never open a shot.
-        let r = CGRect(x: 1050, y: 590, width: 80, height: 80)
-        let pts = [
-            ActivityPoint(t: 5.0, x: r.midX, y: r.midY, region: r, coverage: 0.04),
-            ActivityPoint(t: 5.35, x: r.midX, y: r.midY, region: r, coverage: 0.04),
-        ]
-        let moves = (0..<5).map { InputEvent(t: 5.0 + Double($0) * 0.1, kind: .move,
-                                             x: 1090, y: 630) }
-        let biased = VisualZoom.intents(pts, events: moves, input: [], src: source(), tm: tm())
-        #expect(biased.count == 1, "precondition: pointer bias opens a baseline shot")
-        #expect(intents(stable(5.0, r, count: 5), events: moves).isEmpty,
-                "hover bias must be stripped before composition")
+    @Test func legacyAndGridPathsRejectHoverWithoutDisablingAutonomousResults() {
+        let r = CGRect(x: 1050, y: 590, width: 140, height: 100)
+        let pts = (0..<4).map { index in
+            ActivityPoint(t: 5.0 + Double(index) * 0.2, x: r.midX, y: r.midY, region: r, coverage: 0.04)
+        }
+        let moves = [InputEvent(t: 1, kind: .move, x: 1090, y: 630)]
+        #expect(VisualZoom.intents(pts, events: [], input: [], src: source(), tm: tm()).count == 1)
+        #expect(VisualZoom.intents(pts, events: moves, input: [], src: source(), tm: tm()).isEmpty)
+        #expect(VisualAutofocus.intents(pts, events: moves, src: source(), tm: tm()).isEmpty)
+        #expect(intents(stable(5.0, r, count: 5), events: moves).isEmpty)
     }
 
     @Test func cooldownPreventsCameraPumping() {

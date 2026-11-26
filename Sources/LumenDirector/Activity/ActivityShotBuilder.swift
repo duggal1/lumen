@@ -114,6 +114,13 @@ public enum ActivityShotBuilder {
         for tr in tracks where !tr.hoverTainted {
             let span = tr.lastT - tr.firstT + dt
             let continuity = Double(tr.samples) * dt / span
+            // Long-running motion confined to the same small region with
+            // no meaningful geometry progression is weak attention evidence.
+            // Keep it busy for time editing, but abstain from camera motion.
+            if tr.capT != nil, continuity >= 0.8, tr.wps.count <= 1 {
+                busy.append(tr.firstT...(tr.lastT + s.settleHold))
+                continue
+            }
             let loader = tr.maxCells < s.minCells
             if loader {
                 guard s.zoomOnLoaders, span >= 0.8, continuity >= 0.8 else { continue }

@@ -232,6 +232,13 @@ private struct IntentFingerprint: Equatable {
         #expect(build(stable(2, r, count: 6), events: events).shots.count == 1)
     }
 
+    @Test func endlessLocalAnimationDoesNotBecomeACameraShot() {
+        let r = CGRect(x: 850, y: 420, width: 240, height: 160)
+        let result = build(stable(2, r, count: 110))
+        #expect(result.shots.isEmpty)
+        #expect(!result.mergedBusy.isEmpty)
+    }
+
     // MARK: Determinism
 
     @Test func analysisIsDeterministicAndInsensitiveToInputOrder() {
