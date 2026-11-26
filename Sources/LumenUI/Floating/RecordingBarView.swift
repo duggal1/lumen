@@ -212,8 +212,7 @@ private struct BarItem: View {
             else { action() }
         } label: {
             VStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .regular))
+                PixelSymbol(icon, size: 17)
                     .foregroundStyle(active ? Tok.text : Tok.text.opacity(0.88))
                     .frame(height: 19)
                 Text(title)
@@ -243,8 +242,7 @@ private struct BarItem: View {
                 Button {
                     options(BarAnchor(id: id, rect: anchor))
                 } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .regular))
+                    PixelSymbol("chevron.down", size: 8)
                         .foregroundStyle(Tok.text2)
                         .frame(width: 14, height: 14)
                         .contentShape(Rectangle())
@@ -297,8 +295,7 @@ private struct RecorderAction: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Space.s1) {
-                Image(systemName: icon)
-                    .font(.system(size: 14, weight: .regular))
+                PixelSymbol(icon, size: 14)
                 Text(title)
                     .font(AppType.label)
                     .lineLimit(1)
@@ -348,8 +345,7 @@ private struct DiscardButton: View {
                         .padding(.horizontal, 8).frame(height: 24)
                         .background(RoundedRectangle(cornerRadius: 7).fill(Tok.washStrong))
                 } else {
-                    Image(systemName: "trash")
-                        .font(.system(size: 13))
+                    PixelSymbol("trash", size: 13)
                         .foregroundStyle(hover ? Tok.text : Tok.text2)
                         .frame(width: 26, height: 26)
                 }

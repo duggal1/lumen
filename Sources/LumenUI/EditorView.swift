@@ -15,8 +15,7 @@ public struct EditorRoot: View {
                 if let model { EditorView(model: model) }
                 else if failure != nil {
                     VStack(spacing: Space.s4) {
-                        Image(systemName: "exclamationmark.circle")
-                            .font(.system(size: 32)).foregroundStyle(Tok.text2)
+                        PixelSymbol("exclamationmark.circle", size: 32).foregroundStyle(Tok.text2)
                         Text("This recording can’t be opened")
                             .font(AppType.title).foregroundStyle(Tok.text)
                         Text("The video file wasn’t finished writing, so it can’t be played.")

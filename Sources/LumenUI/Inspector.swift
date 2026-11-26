@@ -112,6 +112,7 @@ struct Inspector: View {
         }
         .frame(width: width)
         .frame(maxHeight: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .environment(\.colorScheme, .dark)
         .environment(\.studioHue, Self.hue(tab))
     }

@@ -35,7 +35,7 @@ struct StudioRailItem: View {
     @Environment(\.accessibilityReduceMotion) private var reduce
     var body: some View {
         Button(action: action) {
-            Image(systemName: IconSymbols.resolve(icon)).font(.system(size: 16, weight: .medium))
+            PixelSymbol(IconSymbols.resolve(icon), size: 16)
                 .foregroundStyle(selected ? accent : StudioInk.secondary)
                 .frame(width: 36, height: 36)
                 .background(RoundedRectangle(cornerRadius: 7).fill(selected ? StudioInk.selected : hover ? StudioInk.hover : .clear))
@@ -95,7 +95,7 @@ struct StudioButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if let icon { Image(systemName: IconSymbols.resolve(icon)).font(.system(size: 12, weight: .medium)) }
+                if let icon { PixelSymbol(IconSymbols.resolve(icon), size: 12) }
                 Text(title).font(AppType.label).lineLimit(1)
             }.foregroundStyle(kind == .primary ? StudioInk.rail : StudioInk.text)
                 .padding(.horizontal, 9).frame(minHeight: height)
@@ -113,7 +113,7 @@ struct StudioPicker<T: Hashable>: View {
             HStack(spacing: 6) {
                 Text(options.first { $0.value == sel }?.title ?? "Custom").lineLimit(1)
                 Spacer(minLength: 2)
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(StudioInk.secondary)
+                PixelSymbol("chevron.down", size: 9).foregroundStyle(StudioInk.secondary)
             }.font(AppType.body).foregroundStyle(StudioInk.text).padding(.horizontal, 8).frame(height: 29)
         }.buttonStyle(StudioControlStyle()).clickable().focusRing()
         .background(GeometryReader { g in
@@ -212,7 +212,7 @@ struct StudioCursorTile: View {
             VStack(spacing: 5) {
                 Group {
                     if let image { Image(nsImage: image).resizable().interpolation(pack == .pixel ? .none : .high).scaledToFit() }
-                    else { Image(systemName: "cursorarrow").font(.system(size: 20)) }
+                    else { PixelSymbol("cursorarrow", size: 20) }
                 }.frame(width: 34, height: 34)
                 Text(pack.studioTitle).font(.system(size: 11))
                 StudioDitherMark(tint: selected ? StudioInk.violet : StudioInk.pressed).frame(width: 11, height: 11)
