@@ -4,6 +4,7 @@ import AVFoundation
 import LumenCore
 import LumenProject
 import LumenDirector
+import LumenAudio
 
 /// The timeline as five strips on one column lattice. Chrome is flat and 1-bit;
 /// hue marks the data role: orange audio, purple zoom, fuchsia clicks, blue
@@ -20,6 +21,8 @@ struct TimelineStrip: View {
     @State var hoveredCut: UUID?
     @State var hoveredMusic: UUID?
     @State var musicDurations: [UUID: Double] = [:]
+    @State var musicWaveforms: [String: MusicWaveform] = [:]
+    @State var musicPaths: [UUID: String] = [:]
     @State var musicDragOrigin: AudioLane?
     @State var hoveredCol: Int?   // event column under the pointer
     @State var scrubCol: Int?     // ghost line column
@@ -49,10 +52,7 @@ struct TimelineStrip: View {
         let vp = viewport(width: width)
         return timelineInteraction(width: width, vp: vp)
             .onChange(of: model.playhead) { _, t in follow(t, width: width) }
-            .onChange(of: musicSignature) { _, _ in
-                Task { await loadMusicDurations() }
-            }
-            .task { await loadMusicDurations() }
+            .task(id: musicSignature) { await loadMusicDurations() }
             .onChange(of: model.timelineFitRequest) { _, _ in
                 zoom = minZoom(width: width)
                 origin = 0
@@ -169,10 +169,23 @@ struct TimelineStrip: View {
         // 3 — the voice tape is gated by real peaks, one full-width run.
         lanes[3].append(Span(0, vp.cols, 4))
 
-        // 4 — music beds.
+        // 4 — music source excerpts. Amplitudes are real decoded stereo
+        // peaks, independent of output gain/ducking (like source clip waveforms).
+        var musicPeaks = [Float](repeating: 0, count: vp.cols)
         for lane in musicLanes() {
             let start = lane.placement, end = start + musicDuration(for: lane)
-            if let s = span(start, end, 5) { lanes[4].append(s) }
+            guard let s = span(start, end, 5) else { continue }
+            lanes[4].append(s)
+            guard let path = lane.path, let waveform = musicWaveforms[path] else { continue }
+            let trim = lane.trimStart ?? 0
+            guard trim.isFinite else { continue }
+            let lo = max(0, s.col0), hi = min(vp.cols, s.col1)
+            guard hi > lo else { continue }
+            for col in lo..<hi {
+                let a = max(start, vp.time(atCol: col))
+                let b = min(end, vp.time(atCol: col + 1))
+                musicPeaks[col] = max(musicPeaks[col], waveform.peak(from: trim + a - start, to: trim + b - start))
+            }
         }
 
         let wave = model.session.waveform
@@ -189,7 +202,7 @@ struct TimelineStrip: View {
             .filter { $0.t.isFinite }
             .map { vp.col($0.t) })
         return TimelineDitherRenderer.Frame(
-            spans: lanes, peaks: peaks, clicks: clicks,
+            spans: lanes, peaks: peaks, musicPeaks: musicPeaks, clicks: clicks,
             head: model.playhead.isFinite && model.playhead >= vp.origin && model.playhead <= vp.origin + vp.visible
                 ? vp.col(model.playhead) : -1,
             playing: model.isPlaying, reduced: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, dt: 0, t: 0)
@@ -261,15 +274,34 @@ struct TimelineStrip: View {
         musicLanes().map { $0.id.uuidString + ":" + ($0.path ?? "") }.joined(separator: "|")
     }
 
-    /// Cache each music file's real duration so a band's width equals its
-    /// audible length. Off the main thread; keyed by lane id.
+    /// One cancellable worker per missing file. Stale lane IDs/path changes
+    /// cannot publish old data, and removing a lane releases unused summaries.
     func loadMusicDurations() async {
-        let lanes = musicLanes().filter { musicDurations[$0.id] == nil && !($0.path ?? "").isEmpty }
-        guard !lanes.isEmpty else { return }
-        let missing: [(UUID, String)] = lanes.compactMap { lane in lane.path.map { (lane.id, $0) } }
-        for (id, path) in missing {
+        let lanes = musicLanes()
+        let active = Dictionary(lanes.compactMap { lane in
+            lane.path.map { (lane.id, $0) }
+        }, uniquingKeysWith: { first, _ in first })
+        musicDurations = musicDurations.filter { active[$0.key] == musicPaths[$0.key] && active[$0.key] != nil }
+        musicPaths = active
+        let activePaths = Set(active.values)
+        musicWaveforms = musicWaveforms.filter { activePaths.contains($0.key) }
+        for (id, path) in active {
+            if Task.isCancelled { return }
+            if let cached = musicWaveforms[path] { musicDurations[id] = cached.duration; continue }
             let seconds = (try? await AVURLAsset(url: URL(fileURLWithPath: path)).load(.duration))?.seconds ?? 0
+            guard !Task.isCancelled, musicPaths[id] == path else { return }
             if seconds.isFinite, seconds > 0 { musicDurations[id] = seconds }
+            let worker = Task.detached(priority: .utility) {
+                try MusicWaveform.read(URL(fileURLWithPath: path))
+            }
+            let result = await withTaskCancellationHandler {
+                try? await worker.value
+            } onCancel: { worker.cancel() }
+            guard !Task.isCancelled, musicPaths[id] == path else { return }
+            if let result {
+                musicWaveforms[path] = result
+                musicDurations[id] = result.duration
+            }
         }
     }
 
