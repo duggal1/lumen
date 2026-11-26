@@ -109,7 +109,20 @@ enum TypingFocus {
                 continue
             }
             let index = Int(event.axFrameIndex) - 1
-            let observed = ax.indices.contains(index) ? field(ax[index], at: event.t, bounds: bounds, backing: b) : nil
+            var observed = ax.indices.contains(index) ? field(ax[index], at: event.t, bounds: bounds, backing: b) : nil
+            // AX may report a nested child while the same field is focused.
+            // Keep the original shot only when the containers really nest and
+            // the available window/epoch identity has not changed.
+            if let active = run?.field, let candidate = observed {
+                let identityCompatible: Bool
+                if let a = active.anchor, let c = candidate.anchor {
+                    identityCompatible = a.windowID == c.windowID && a.appName == c.appName &&
+                        (a.epoch == 0 || c.epoch == 0 || a.epoch == c.epoch)
+                } else { identityCompatible = true }
+                if identityCompatible && (active.rect.contains(candidate.rect) || candidate.rect.contains(active.rect)) {
+                    observed = active
+                }
+            }
             if let current = run {
                 let same = current.field.flatMap { a in observed.map { a.matches($0, backing: b) } }
                 if same == false || event.t - current.end > (same == true ? 1.5 : 0.9) { finish() }
