@@ -228,6 +228,9 @@ public final class MCPServer: @unchecked Sendable {
              "description": "The editable Timeline fields an agent may patch.",
              "mimeType": "application/json"],
         ]
+        out += AgentEditingSkills.all.map { skill in
+            ["uri": skill.uri, "name": skill.title, "description": "Versioned Lumen workflow", "mimeType": "text/markdown"]
+        }
         for project in engine.knownProjects() {
             let id = project.identifier
             out.append(["uri": "lumen://project/\(id)/timeline", "name": "Timeline of \(id)",
@@ -242,6 +245,9 @@ public final class MCPServer: @unchecked Sendable {
         if uri == "lumen://schema/timeline" {
             return result(id: id, ["contents": [["uri": uri, "mimeType": "application/json",
                                                  "text": Engine.timelineSchemaText]]])
+        }
+        if let skill = AgentEditingSkills.all.first(where: { $0.uri == uri }) {
+            return result(id: id, ["contents": [["uri": uri, "mimeType": "text/markdown", "text": skill.markdown]]])
         }
         // lumen://project/<id>/timeline | /markers
         let parts = uri.split(separator: "/").map(String.init)

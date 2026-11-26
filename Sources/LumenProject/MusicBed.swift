@@ -66,7 +66,8 @@ public struct MusicBed: Codable, Equatable, Sendable, Identifiable {
     public init(lane: AudioLane) {
         self.init(id: lane.id, assetPath: lane.path ?? "", placement: lane.placement,
                   trimStart: lane.trimStart ?? 0, trimDuration: lane.trimDuration,
-                  gainDb: lane.gainDb, loops: true)
+                  gainDb: lane.gainDb, loops: lane.loops ?? true,
+                  fadeIn: lane.loops == false ? 0.01 : 0.3, fadeOut: lane.loops == false ? 0.01 : 1.5)
     }
 
     // MARK: Plan

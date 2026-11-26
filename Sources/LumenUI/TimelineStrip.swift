@@ -15,6 +15,7 @@ import LumenAudio
 /// and dragging the ruler pans. Playback keeps the head in view.
 struct TimelineStrip: View {
     let model: EditorModel
+    @Environment(\.colorScheme) private var colorScheme
     @State var drag: Drag?
     @State var hoveredZoom: UUID?
     @State var hoveredClip: UUID?
@@ -45,7 +46,7 @@ struct TimelineStrip: View {
             timelineContent(width: geometry.size.width)
         }
         .frame(height: Lanes.total)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Tok.surface))
+        .background(RoundedRectangle(cornerRadius: 16).fill(colorScheme == .dark ? Color.black : Color.white))
     }
 
     private func timelineContent(width: CGFloat) -> some View {

@@ -1098,16 +1098,17 @@ enum TimelineSelection: Equatable {
     /// timeline lane. `nil` gain uses a bed level under the voice.
     func addMusicLane(path: String, at start: Double? = nil) {
         let place = max(0, start ?? playhead)
-        edit { $0.audio.lanes.append(AudioLane(role: .music, path: path, placement: place, gainDb: -18)) }
+        dispatch(.addAudioLane(AudioLane(role: .music, path: path, placement: place, gainDb: -18)))
     }
 
     func updateMusicLane(_ id: UUID, placement: Double? = nil, trimStart: Double? = nil, trimDuration: Double? = nil) {
-        edit(coalesce: true) { tl in
-            guard let i = tl.audio.lanes.firstIndex(where: { $0.id == id && $0.role == .music }) else { return }
-            if let placement { tl.audio.lanes[i].placement = max(0, placement) }
-            if let trimStart { tl.audio.lanes[i].trimStart = max(0, trimStart) }
-            if let trimDuration { tl.audio.lanes[i].trimDuration = max(0.05, trimDuration) }
-        }
+        var draft = timeline
+        let context = ReduceContext(playhead: playhead, selection: selection, duration: duration, fps: frameRate)
+        do {
+            _ = try reduce(&draft, .updateAudioLane(id, AudioClipPatch(placement: placement, trimStart: trimStart, trimDuration: trimDuration)), ctx: context)
+            edit(coalesce: true) { $0 = draft }
+            editIssue = nil
+        } catch { editIssue = "Invalid music edit." }
     }
 
     func removeMusicLane(_ id: UUID) {

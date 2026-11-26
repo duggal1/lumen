@@ -223,6 +223,14 @@ private func videoEditFields(_ timeline: Timeline) -> [String: JSONValue] {
             .object(["id": .string($0.id.uuidString), "text": .string($0.text),
                      "start": .number($0.start), "end": .number($0.end)])
         }),
+        "audio_lanes": .array(timeline.audio.lanes.map { lane in
+            .object(["id": .string(lane.id.uuidString), "role": .string(lane.role.rawValue),
+                     "path": lane.path.map { .string($0) } ?? .null, "placement": .number(lane.placement),
+                     "trim_start": lane.trimStart.map { .number($0) } ?? .null,
+                     "trim_duration": lane.trimDuration.map { .number($0) } ?? .null,
+                     "gain_db": .number(lane.gainDb), "mute": .bool(lane.mute),
+                     "loops": .bool(lane.loops ?? (lane.role == .music))])
+        }),
         "music_path": timeline.audio.musicPath.map { JSONValue.string($0) } ?? .null,
         "music_gain_db": .number(timeline.audio.musicGainDb),
     ]
@@ -281,6 +289,7 @@ public extension ToolRegistry {
     func registerVideoEditTools() {
         registerVideoEditTimelineTools()
         registerVideoEditMediaTools()
+        registerAgentAudioTransactions()
         registerVideoEditOutputTools()
     }
 

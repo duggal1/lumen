@@ -521,21 +521,25 @@ public final class AudioMixer: @unchecked Sendable {
         }
 
         var voiceIndex = 0
-        for lane in a.lanes where lane.role == .voiceover && !lane.mute {
+        for lane in a.lanes where (lane.role == .voiceover || lane.role == .sfx) && !lane.mute {
             guard let path = lane.path, let track = importTrack(path) else { continue }
             voiceIndex += 1
             var left = [Float](repeating: 0, count: n), right = left
-            let start = max(0, Int(lane.placement * fs))
-            guard start < n else { continue }
-            let count = min(track.l.count, n - start)
+            guard lane.placement.isFinite, lane.placement >= 0, lane.placement < Double(n) / fs else { continue }
+            let start = Int(lane.placement * fs)
+            let available = min(track.l.count, track.r.count)
+            let trim = lane.trimStart.flatMap { $0.isFinite ? max($0, 0) : nil } ?? 0
+            let source = Int(min(trim * fs, Double(available)))
+            let length = lane.trimDuration.flatMap { $0.isFinite ? max($0, 0) : nil }
+            let count = min(n - start, length.map { Int(min($0 * fs, Double(available - source))) } ?? available - source)
             let gain = Float(pow(10, clamp(lane.gainDb, -60, 24) / 20))
             let fade = min(Int(fs * 0.01), count / 2)
             for i in 0..<count {
                 let edge = fade > 0 ? min(1, Float(min(i, count - i - 1)) / Float(fade)) : 1
-                left[start + i] = track.l[i] * gain * edge
-                right[start + i] = track.r[i] * gain * edge
+                left[start + i] = track.l[source + i] * gain * edge
+                right[start + i] = track.r[source + i] * gain * edge
             }
-            result.append(AudioStem(name: "voiceover-\(voiceIndex)", left: left, right: right))
+            result.append(AudioStem(name: "\(lane.role.rawValue)-\(voiceIndex)", left: left, right: right))
         }
         let (beds, bedTracks) = musicBeds(tl)
         if !beds.isEmpty {
@@ -627,10 +631,10 @@ public final class AudioMixer: @unchecked Sendable {
             for i in 0..<n { L[i] += l[i] * gain; R[i] += r[i] * gain }
             hasProgram = true
         }
-        for lane in a.lanes where !lane.mute && lane.role == .voiceover {
+        for lane in a.lanes where !lane.mute && (lane.role == .voiceover || lane.role == .sfx) {
             guard let path = lane.path, let track = importTrack(path) else { continue }
-            let offset = Int(max(0, lane.placement) * fs)
-            guard offset < n else { continue }
+            guard lane.placement.isFinite, lane.placement >= 0, lane.placement < Double(n) / fs else { continue }
+            let offset = Int(lane.placement * fs)
             let sourceCount = min(track.l.count, track.r.count)
             let trimStart = lane.trimStart.flatMap { $0.isFinite ? max($0, 0) : nil } ?? 0
             let sourceOffset = Int(min(trimStart * fs, Double(sourceCount)))
@@ -858,7 +862,7 @@ public final class AudioMixer: @unchecked Sendable {
                     gainDb: a.systemGainDb, mono: false, muteRamps: true)
 
         // Imported voiceover is on the output clock. Read only its overlap.
-        for lane in a.lanes where lane.role == .voiceover && !lane.mute {
+        for lane in a.lanes where (lane.role == .voiceover || lane.role == .sfx) && !lane.mute {
             if cancelled?() == true { return nil }
             guard let path = lane.path else { continue }
             let trim = max(lane.trimStart ?? 0, 0)

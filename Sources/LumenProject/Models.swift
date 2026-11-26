@@ -183,7 +183,7 @@ public enum CursorPack: String, Codable, CaseIterable, Sendable {
     public var studioTitle: String {
         switch self {
         case .system: "Normal"
-        case .pixel: "Pixel"
+        case .pixel: "Pixelated"
         case .outline: "Outline"
         default: rawValue.capitalized
         }
@@ -214,7 +214,7 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     public var glide: Double = 0.35
     public var idleHide: Double? = 2.0
     public var pressScale: Double = 0.86
-    public var clickEffect: ClickEffect = .ripple
+    public var clickEffect: ClickEffect = .none
     /// Apple-glass bloom expands on release and settles in about half a second.
     public var clickDuration: Double = 0.55
     /// Tint off by default (transparent white): the ripple refracts the
@@ -224,7 +224,7 @@ public struct CursorStyle: Codable, Equatable, Sendable {
     public var clickSize: Double = 1.0
     /// Multiplies ring alpha (0...1.5). Renderer consumes it.
     public var clickIntensity: Double = 1.0
-    public var clickRing: Double? = 0.45
+    public var clickRing: Double? = nil
     public var zoomCompensation: Double = 0.5
     public var constantSize = false                     // true = cursor keeps its on-screen size during zoom
     public var loop: Double?                            // seconds of tail that glides back to the first frame; nil = off
@@ -347,6 +347,8 @@ public struct AudioLane: Codable, Equatable, Sendable, Identifiable {
     public var variant: String?                         // "EN", "ES"
     public var trimStart: Double? = nil
     public var trimDuration: Double? = nil
+    /// nil preserves legacy music-bed behavior; false is a finite editable clip.
+    public var loops: Bool? = nil
     public init(id: UUID = UUID(), role: Role, path: String? = nil, placement: Double = 0, gainDb: Double = 0, mute: Bool = false,
                 separateTrack: Bool = false, variant: String? = nil) {
         self.id = id; self.role = role; self.path = path; self.placement = placement; self.gainDb = gainDb; self.mute = mute
