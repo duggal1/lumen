@@ -13,14 +13,14 @@ kernel void lumen_luma_down(texture2d<float, access::sample> src [[texture(0)]],
     constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);
     const float2 step = 1.0 / float2(kLumaW, kLumaH);
     const float2 base = float2(gid) * step;
-    float acc = 0.0;
+    float3 acc = float3(0.0);
     for (uint j = 0; j < 8; ++j) {
         for (uint i = 0; i < 8; ++i) {
             float2 uv = base + step * (float2(i, j) + 0.5) / 8.0;
-            acc += dot(src.sample(s, uv).rgb, float3(0.2126, 0.7152, 0.0722));
+            acc += src.sample(s, uv).rgb;
         }
     }
-    dst.write(float4(acc / 64.0), gid);
+    dst.write(float4(acc / 64.0, 1.0), gid);
 }
 
 kernel void lumen_activity_diff(texture2d<float, access::read> cur  [[texture(0)]],
@@ -33,9 +33,13 @@ kernel void lumen_activity_diff(texture2d<float, access::read> cur  [[texture(0)
     for (uint j = 0; j < 4; ++j) {
         for (uint i = 0; i < 4; ++i) {
             uint2 p = gid * 4 + uint2(i, j);
-            float c = cur.read(p).r;
-            eA = max(eA, fabs(c - lagA.read(p).r));
-            eB = max(eB, fabs(c - lagB.read(p).r));
+            const float3 c = cur.read(p).rgb;
+            const float3 a = fabs(c - lagA.read(p).rgb);
+            const float3 b = fabs(c - lagB.read(p).rgb);
+            // Luma-equivalent changes still register; isoluminant color
+            // changes no longer disappear before attention classification.
+            eA = max(eA, max(a.r, max(a.g, a.b)));
+            eB = max(eB, max(b.r, max(b.g, b.b)));
         }
     }
     float e = max(eA, eB * 1.5);

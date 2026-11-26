@@ -70,12 +70,13 @@ public struct ActivityInputs: Sendable {
     /// hover-only changes can be suppressed; it never becomes a shot by itself.
     public static func make(events: [InputEvent]) -> ActivityInputs {
         var a = ActivityInputs()
-        for e in events {
+        for e in events.filter({ $0.t.isFinite }).sorted(by: { $0.t < $1.t }) {
             switch e.kind {
             case .keyDown: a.keys.append(e.t)
-            case .scroll: a.scrolls.append(e.t)
+            case .scroll, .drag: a.scrolls.append(e.t)
             case .down: a.clicks.append(e.t)
-            case .move, .drag:
+            case .move:
+                guard e.x.isFinite, e.y.isFinite else { continue }
                 a.moveT.append(e.t); a.moveX.append(e.x); a.moveY.append(e.y)
             default: break
             }
@@ -97,10 +98,43 @@ public struct ActivityInputs: Sendable {
         return i < a.count && a[i] <= hi
     }
 
+    /// Last observation at or before t; never borrow a future pointer position.
+    private func lastIndex(_ times: [Double], at t: Double) -> Int? {
+        var lo = 0, hi = times.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if times[mid] <= t { lo = mid + 1 } else { hi = mid }
+        }
+        return lo > 0 ? lo - 1 : nil
+    }
+
+    private func lastTime(_ times: [Double], at t: Double) -> Double {
+        lastIndex(times, at: t).map { times[$0] } ?? -.infinity
+    }
+
     func cursor(at t: Double) -> (x: Double, y: Double)? {
-        guard !moveT.isEmpty else { return nil }
-        let i = min(lowerBound(moveT, t), moveT.count - 1)
+        guard let i = lastIndex(moveT, at: t),
+              moveX.indices.contains(i), moveY.indices.contains(i) else { return nil }
         return (Double(moveX[i]), Double(moveY[i]))
+    }
+
+    /// A stationary pointer can still own a delayed tooltip. For remote
+    /// changes, use a bounded uncertainty window, not an unbounded global
+    /// veto: autonomous results elsewhere must remain eligible after it.
+    func hoverAssociated(at t: Double, box: CellBox, cw: Double, ch: Double,
+                         radius: Double) -> Bool {
+        guard let i = lastIndex(moveT, at: t), let cursor = cursor(at: t) else { return false }
+        let move = moveT[i]
+        let click = lastTime(clicks, at: t)
+        if click >= move { return false }
+        let latestExplicit = max(click, lastTime(keys, at: t), lastTime(scrolls, at: t))
+        if move > latestExplicit && t - move <= 2.5 { return true }
+        // Persistent local hover context; keyboard activity does not move the
+        // pointer away. Classify the whole component, never a clipped remnant.
+        let x = cursor.x / cw, y = cursor.y / ch
+        let dx = max(Double(box.x0) - x, x - Double(box.x1 + 1), 0)
+        let dy = max(Double(box.y0) - y, y - Double(box.y1 + 1), 0)
+        return hypot(dx, dy) <= max(radius, 0)
     }
 }
 

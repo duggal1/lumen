@@ -214,6 +214,39 @@ import LumenProject
         #expect(withClick.zoom.count == 1, "a click must still earn its shot")
     }
 
+    @Test func pixelFallbackRequiresCorroboratedCaretEvidence() {
+        let rect = CGRect(x: 600, y: 300, width: 400, height: 40)
+        let ev = keys(6, from: 2, step: 0.1, index: 0)
+        let held = TypingTrace(t0: 2, t1: 2.5, rect: rect, samples: [
+            .init(t: 2.1, x: 620, y: 320, confidence: 0.15, evidence: .held),
+            .init(t: 2.3, x: 640, y: 320, confidence: 0.4, evidence: .blink)
+        ], line: rect)
+        let good = TypingTrace(t0: 2, t1: 2.5, rect: rect, samples: [
+            .init(t: 2.1, x: 620, y: 320, confidence: 0.95, evidence: .caret),
+            .init(t: 2.3, x: 640, y: 320, confidence: 0.9, evidence: .caret)
+        ], line: rect)
+        func shots(_ traces: [TypingTrace]) -> [TypingFocus.Shot] {
+            TypingFocus.shots(events: ev, ax: [], traces: traces, W: W, H: H, b: 2,
+                              trimStart: 0, trimEnd: 10)
+        }
+        #expect(shots([held]).isEmpty)
+        #expect(shots([held, good]).first?.field == rect)
+        var unrelated = good
+        unrelated.samples = good.samples.map { .init(t: $0.t, x: 100, y: 100, confidence: 0.95) }
+        #expect(shots([unrelated]).isEmpty)
+    }
+
+    @Test func nestedGeometryCannotMergeDifferentFocusEpochs() {
+        let a = CGRect(x: 300, y: 200, width: 500, height: 100)
+        let b = CGRect(x: 320, y: 220, width: 300, height: 40)
+        let ax = [field(a, epoch: 1, sampledAt: 1), field(b, epoch: 2, sampledAt: 1.4)]
+        let ev = keys(3, from: 1, step: 0.1, index: 1) + keys(3, from: 1.4, step: 0.1, index: 2)
+        let shots = TypingFocus.shots(events: ev, ax: ax, traces: [], W: W, H: H, b: 2,
+                                      trimStart: 0, trimEnd: 10)
+        #expect(shots.count == 2)
+        #expect(shots.map(\.field) == [a, b])
+    }
+
     /// 200 seeded sessions: byte-identical replans, no overlapping segments,
     /// no teleport in the solved camera track.
     @Test func twoHundredSeedDeterminismNoOverlapNoTeleport() {

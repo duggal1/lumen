@@ -197,6 +197,48 @@ private struct IntentFingerprint: Equatable {
         #expect(result.shots.isEmpty, "a caret blink is below minCells: \(result.shots)")
     }
 
+    @Test func delayedStationaryHoverNeverBecomesAShot() {
+        let r = CGRect(x: 850, y: 420, width: 240, height: 160)
+        let move = InputEvent(t: 1, kind: .move, x: 960, y: 500)
+        #expect(build(stable(5, r, count: 8), events: [move]).shots.isEmpty)
+    }
+
+    @Test func remoteHoverAnimationCannotResurrectAfterGuardExpires() {
+        let r = CGRect(x: 1350, y: 650, width: 240, height: 160)
+        let move = InputEvent(t: 1, kind: .move, x: 100, y: 100)
+        #expect(build(stable(2, r, count: 35), events: [move]).shots.isEmpty)
+    }
+
+    @Test func independentRemoteResultAfterHoverUncertaintyRemainsEligible() {
+        let r = CGRect(x: 1350, y: 650, width: 240, height: 160)
+        let move = InputEvent(t: 1, kind: .move, x: 100, y: 100)
+        #expect(build(stable(6, r, count: 6), events: [move]).shots.count == 1)
+    }
+
+    @Test func futurePointerDoesNotSuppressEarlierResult() {
+        let r = CGRect(x: 850, y: 420, width: 240, height: 160)
+        let move = InputEvent(t: 8, kind: .move, x: 960, y: 500)
+        #expect(build(stable(5, r, count: 6), events: [move]).shots.count == 1)
+        let inputs = ActivityInputs.make(events: [move, InputEvent(t: 1, kind: .move, x: 20, y: 30)])
+        #expect(inputs.cursor(at: 0) == nil)
+        #expect(inputs.cursor(at: 5)?.x == 20)
+        #expect(inputs.cursor(at: 8)?.x == 960)
+    }
+
+    @Test func clickReleasesRemoteHoverUncertainty() {
+        let r = CGRect(x: 1350, y: 650, width: 240, height: 160)
+        let events = [InputEvent(t: 1, kind: .move, x: 100, y: 100),
+                      InputEvent(t: 1.5, kind: .down, x: 100, y: 100, button: 0)]
+        #expect(build(stable(2, r, count: 6), events: events).shots.count == 1)
+    }
+
+    @Test func endlessLocalAnimationDoesNotBecomeACameraShot() {
+        let r = CGRect(x: 850, y: 420, width: 240, height: 160)
+        let result = build(stable(2, r, count: 110))
+        #expect(result.shots.isEmpty)
+        #expect(!result.mergedBusy.isEmpty)
+    }
+
     // MARK: Determinism
 
     @Test func analysisIsDeterministicAndInsensitiveToInputOrder() {
