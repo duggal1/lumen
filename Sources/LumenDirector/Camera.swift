@@ -132,7 +132,7 @@ enum CameraSolver {
             let manual = z.origin == .manual
             let fixed = p.preset == .fixed && !manual
             let easing = z.easing?.omegaScale ?? 1
-            let rise = clamp(lead / max(easing, 0.5), 0.16, 0.9)
+            let rise = clamp(lead / max(easing, 0.5), 0.45, 0.9)
             let focus: SIMD2<Double>
             switch z.focus {
             case let .fixed(x, y): focus = SIMD2(x, y)
@@ -149,8 +149,8 @@ enum CameraSolver {
             let begin = manual ? a : max(a - rise, 0)
             // Reserve a real stationary interval before the event. At the
             // beginning of a recording there is no history to anticipate.
-            let settle = min(0.04 + 1 / cameraRate, max(a - begin - 1 / cameraRate, 0))
-            let arrive = manual ? min(a + rise, a + (b - a) * 0.45) : max(a - settle, begin + 1 / cameraRate)
+            let settle = min(0.06 + 1 / cameraRate, max(a - begin - 1 / cameraRate, 0))
+            let arrive = manual ? min(a + clamp(0.9 / max(easing, 0.3), 0.25, 2), max(b - 0.05, a + 0.05)) : max(a - settle, begin + 0.3)
             let releaseEnd = fixed ? outDur : (manual ? b : min(b + tail, outDur))
             let holdEnd = fixed ? outDur : (manual
                 ? max(arrive, b - min(tail, (b - a) * 0.4))
@@ -217,8 +217,8 @@ enum CameraSolver {
             let bridge = !shot.manual && !shot.fixed && next.map {
                 !$0.manual && gap < 0.95 && $0.actionStart - chainStart < 4
             } == true
-            let start = max(shot.start, previousReleaseEnd)
-            var arrive = shot.arrive
+            let start = min(max(shot.start, previousReleaseEnd), max(0, outDur - tail - 0.3))
+            var arrive = max(shot.arrive, min(start + 0.3, outDur))
             if !shot.manual && !shot.fixed {
                 // A late click cannot consume the final release runway.
                 arrive = min(arrive, max(start, outDur - min(tail, outDur * 0.4)))
