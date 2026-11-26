@@ -42,8 +42,8 @@ import LumenRender
         #expect(!track.title.isEmpty)
     }
     let titles = Set(music.map(\.title))
-    #expect(titles.contains("Majestic Hills"))
-    #expect(titles.contains("Juniper"))
+    #expect(titles.contains("Breathe"))
+    #expect(titles.contains("Windland"))
     #expect(titles.contains("Echoes in the Dark"))
 }
 

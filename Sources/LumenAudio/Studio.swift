@@ -228,8 +228,10 @@ enum VoiceStudio {
         // 1. Room tone, fan, hum.
         let floor = VoiceLevels.noiseFloor(voice, vad: vad, fs: fs)
         let speech = speechLevelDb(voice, vad: vad, fs: fs) ?? -24
-        voice = VoiceExpander(floorDb: floor, depthDb: 18,
-                              speechRefDb: speech)
+        // Suppress measured stationary room tone during confirmed pauses;
+        // retain pre-open and a continuous gain envelope around speech.
+        voice = VoiceExpander(floorDb: floor, depthDb: 42,
+                              hold: 0.10, close: 0.055, speechRefDb: speech)
             .process(voice, vad: vad, fs: fs)
 
         // 2. Tone: fuller chest, no boxiness, crisp presence and air.

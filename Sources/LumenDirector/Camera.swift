@@ -67,6 +67,8 @@ enum CameraSolver {
         let start: Double
         let arrive: Double
         let holdEnd: Double
+        let actionStart: Double
+        let actionEnd: Double
         let releaseEnd: Double
         let target: Pose
         let manual: Bool
@@ -152,7 +154,7 @@ enum CameraSolver {
             let releaseEnd = fixed ? outDur : (manual ? b : min(b + tail, outDur))
             let holdEnd = fixed ? outDur : (manual
                 ? max(arrive, b - min(tail, (b - a) * 0.4))
-                : max(arrive, b))
+                : max(0, min(b, outDur - tail)))
             // Store the optical pivot, not a second independently eased pan.
             // At the target scale, project the requested center into the
             // feasible viewport and solve C(s) = P + (C(1)-P)/s.
@@ -168,7 +170,7 @@ enum CameraSolver {
             let pivot = SIMD2<Double>(repeating: 0.5) + (center - SIMD2<Double>(repeating: 0.5)) / (1 - 1 / scale)
             let target = Pose(focus: pivot, logScale: logScale)
             shots.append(Shot(start: begin, arrive: min(arrive, outDur), holdEnd: holdEnd,
-                              releaseEnd: releaseEnd, target: target, manual: manual, fixed: fixed))
+                              actionStart: a, actionEnd: b, releaseEnd: releaseEnd, target: target, manual: manual, fixed: fixed))
         }
         shots.sort { a, b in
             if a.start != b.start { return a.start < b.start }
@@ -194,13 +196,59 @@ enum CameraSolver {
             }
             legs.append(Leg(start: start, end: end, from: sample, to: target))
         }
+        // Plan bridges before inserting legs. A short gap belongs to the
+        // same action, while separated shots and overlong chains must return
+        // to 1x. Never schedule a zero-duration final release.
+        var selected: [Shot] = []
         var manualUntil = -Double.infinity
         for shot in shots {
             if cancelled() { return nil }
             if !shot.manual && shot.start < manualUntil { continue }
             if shot.manual { manualUntil = max(manualUntil, shot.releaseEnd) }
-            insert(at: shot.start, end: shot.arrive, target: shot.target)
-            if !shot.fixed { insert(at: shot.holdEnd, end: shot.releaseEnd, target: Pose(focus: shot.target.focus, logScale: 0)) }
+            selected.append(shot)
+        }
+        var chainStart = selected.first?.actionStart ?? 0
+        var previousReleaseEnd = 0.0
+        for i in selected.indices {
+            if cancelled() { return nil }
+            let shot = selected[i]
+            let next = i + 1 < selected.count ? selected[i + 1] : nil
+            let gap = next.map { $0.actionStart - shot.actionEnd } ?? .infinity
+            let bridge = !shot.manual && !shot.fixed && next.map {
+                !$0.manual && gap < 0.95 && $0.actionStart - chainStart < 4
+            } == true
+            let start = max(shot.start, previousReleaseEnd)
+            var arrive = shot.arrive
+            if !shot.manual && !shot.fixed {
+                // A late click cannot consume the final release runway.
+                arrive = min(arrive, max(start, outDur - min(tail, outDur * 0.4)))
+            }
+            if arrive > start + 1 / cameraRate {
+                insert(at: start, end: arrive, target: shot.target)
+            }
+            if shot.fixed || bridge { continue }
+            var releaseEnd = shot.releaseEnd
+            var holdEnd = max(arrive, shot.holdEnd)
+            if let next, !shot.manual {
+                // Separate shots own distinct non-overlapping legs. On dense
+                // chains reserve part of the preceding hold for a clean break.
+                let boundary = max(start, next.start)
+                releaseEnd = min(releaseEnd, boundary)
+                if gap >= 0.95 {
+                    releaseEnd = min(releaseEnd, shot.actionEnd + gap * 0.5)
+                }
+                holdEnd = min(holdEnd, releaseEnd - min(tail, 0.35))
+                holdEnd = max(start, holdEnd)
+                chainStart = next.actionStart
+            }
+            if !shot.manual {
+                holdEnd = min(holdEnd, releaseEnd - min(tail, max(0.25, releaseEnd - start)))
+                holdEnd = max(start, holdEnd)
+            }
+            if releaseEnd > holdEnd + 1 / cameraRate {
+                insert(at: holdEnd, end: releaseEnd, target: Pose(focus: shot.target.focus, logScale: 0))
+                previousReleaseEnd = releaseEnd
+            }
         }
         if let loop, loop.isFinite, loop > 0 {
             let start = max(0, outDur - min(loop, tail))

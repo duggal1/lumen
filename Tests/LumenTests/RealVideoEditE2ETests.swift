@@ -515,7 +515,7 @@ private func runScenario(_ s: T1Scenario, root: URL, source: URL, side: URL,
         let only = env["T1_SCENARIO_FILTER"].flatMap(Int.init)
         let scenarios = manifest.scenarios.filter { only == nil || $0.id == only! }
         let scratch = URL(fileURLWithPath: env["T1_SCRATCH"]
-            ?? "/private/var/folders/ct/cwpf7vpn059fkp932tq9zm4m0000gn/T/opencode/t1-sweep")
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("lumen-t1-\(UUID().uuidString)").path)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         let renderer = try Renderer()
         let sourceSigs = try await decodeSigs(source)
@@ -546,12 +546,14 @@ private func runScenario(_ s: T1Scenario, root: URL, source: URL, side: URL,
 
     @Test func smokeSingleScenarioIsNotVacuous() async throws {
         let root = Self.repoRoot()
-        let source = root.appendingPathComponent(".proof/visual/sequence.mp4")
+        let source = URL(fileURLWithPath: ProcessInfo.processInfo.environment["T1_SOURCE"]
+            ?? root.appendingPathComponent(".proof/visual/sequence.mp4").path)
         guard FileManager.default.fileExists(atPath: source.path) else {
             Issue.record("fixture missing: .proof/visual/sequence.mp4")
             return
         }
         let sigs = try await decodeSigs(source)
+        try #require(sigs.count == 60, "fixture must decode exactly 60 frames")
         // A vacuous suite would pass even when the source frames are identical.
         #expect(FrameSig.distance(sigs[0], sigs[30]) > 0.002,
                 "source frames 0 and 30 must differ; otherwise the pixel oracle is vacuous")
