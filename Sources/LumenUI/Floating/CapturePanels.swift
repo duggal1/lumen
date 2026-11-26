@@ -40,8 +40,7 @@ struct PanelRow: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 if let icon {
-                    Image(systemName: icon)
-                        .font(.system(size: 13, weight: .regular))
+                    PixelSymbol(icon, size: 13)
                         .foregroundStyle(selected ? Tok.text : Tok.text.opacity(0.82))
                         .frame(width: 18, alignment: .center)
                 }
@@ -54,7 +53,7 @@ struct PanelRow: View {
                     Text(detail).font(.system(size: 11)).foregroundStyle(Tok.text2).lineLimit(1)
                 }
                 if selected {
-                    Image(systemName: "checkmark").font(.system(size: 10, weight: .regular))
+                    PixelSymbol("checkmark", size: 10)
                         .foregroundStyle(Tok.text)
                 }
             }
@@ -159,7 +158,7 @@ struct WindowPickerPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Tok.text2)
+                PixelSymbol("magnifyingglass", size: 11).foregroundStyle(Tok.text2)
                 TextField("Find a window", text: $query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
@@ -372,7 +371,7 @@ struct CaptureSettingsPanelView: View {
                            on: Binding(get: { app.countdownSeconds > 0 },
                                        set: { app.countdownSeconds = $0 ? 3 : 0 }))
             HStack(spacing: 8) {
-                Image(systemName: "folder").font(.system(size: 12)).foregroundStyle(Tok.text2)
+                PixelSymbol("folder", size: 12).foregroundStyle(Tok.text2)
                 Text(app.library.lastPathComponent).font(.system(size: 11)).foregroundStyle(Tok.text).lineLimit(1)
                 Spacer(minLength: 8)
                 Button("Choose…") { app.chooseLibrary() }

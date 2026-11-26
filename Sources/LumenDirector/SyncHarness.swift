@@ -34,7 +34,7 @@ public enum SyncHarness {
     public static func measure(_ timeline: Timeline, events: [InputEvent], fps: Double = 60) -> SyncReport {
         let tm = timeline.timeMap
         let eligible = events
-            .filter { $0.kind == .down && !tm.isCut($0.t) }
+            .filter { $0.kind == .down && $0.t.isFinite && $0.t >= tm.trimStart && $0.t <= tm.trimEnd && !tm.isCut($0.t) }
             .map { (source: $0.t, output: tm.output(atSource: $0.t)) }
             .sorted { $0.output < $1.output }
         let derived = timeline.derived?.clicks.sorted { $0.t < $1.t } ?? []
@@ -42,7 +42,9 @@ public enum SyncHarness {
         var clicks: [SyncClick] = []
         var maxDrift = 0.0
         var early = 0, late = 0
-        let dt = 1 / max(fps, 1)
+        let dt = 1 / max(fps.isFinite ? fps : 60, 1)
+        let expectsEffect = timeline.cursor.clickEffect != .none
+        let expectsCue = timeline.audio.soundEffectsEnabled && timeline.audio.clickSounds
         let duration = max(timeline.compositionDuration, dt)
 
         for i in 0..<min(eligible.count, derived.count) {
@@ -53,21 +55,23 @@ public enum SyncHarness {
             // Frame that should show the click: the first sample >= output time.
             // Clamp up to the click time so floating-point rounding on the
             // frame product never hides the ring on its own frame.
-            let firstFrame = min(max(ceil(actual.t / dt) * dt, actual.t), duration)
+            let firstFrame = min(max(ceil(actual.t / dt - 1e-7) * dt, actual.t), duration)
             // The frame immediately before the click must not show its ring.
             let before = floor(actual.t / dt - 1e-6) * dt
-            if before >= 0 {
-                let rings = timeline.evaluate(at: before).clickFX
-                if rings.contains(where: { abs(Double($0.position.x) - Double(actual.x)) < 1
-                    && abs(Double($0.position.y) - Double(actual.y)) < 1 }) { early += 1 }
+            // Distinguish successive clicks at the same location by their
+            // effect age. An older valid ripple is not an early new ripple.
+            let effectDuration = max(timeline.cursor.clickDuration, 0.05)
+            func containsClick(at time: Double) -> Bool {
+                timeline.evaluate(at: time).clickFX.contains {
+                    abs(Double($0.position.x) - Double(actual.x)) < 1
+                        && abs(Double($0.position.y) - Double(actual.y)) < 1
+                        && abs(Double($0.progress) * effectDuration - max(time - actual.t, 0)) < 0.00001
+                }
             }
-            let after = timeline.evaluate(at: firstFrame).clickFX
-            let shown = after.contains {
-                abs(Double($0.position.x) - Double(actual.x)) < 1
-                    && abs(Double($0.position.y) - Double(actual.y)) < 1
-                    && $0.progress >= 0
-            }
-            if !shown { late += 1 }
+            if before >= 0, containsClick(at: before) { early += 1 }
+            let shown = containsClick(at: firstFrame)
+            if expectsEffect && !shown { late += 1 }
+            if !expectsEffect && shown { early += 1 }
 
             clicks.append(SyncClick(sourceTime: expected.source, outputTime: actual.t,
                                     firstFrame: firstFrame, driftMs: drift))
@@ -77,7 +81,7 @@ public enum SyncHarness {
             if case .click = $0.kind { return true }; return false
         }.sorted { $0.t < $1.t }
         var maxCueDrift = 0.0
-        if !derived.isEmpty {
+        if expectsCue {
             if clickCues.count != derived.count {
                 maxCueDrift = 1000
             } else {
@@ -85,7 +89,7 @@ public enum SyncHarness {
                     maxCueDrift = max(maxCueDrift, abs(cue.t - click.t) * 1000)
                 }
             }
-        }
+        } else if !clickCues.isEmpty { maxCueDrift = 1000 }
 
         let countOK = eligible.count == derived.count
         let passes = countOK && maxDrift < 1 && maxCueDrift < 1 && early == 0 && late == 0

@@ -112,6 +112,7 @@ struct Inspector: View {
         }
         .frame(width: width)
         .frame(maxHeight: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .environment(\.colorScheme, .dark)
         .environment(\.studioHue, Self.hue(tab))
     }
@@ -223,6 +224,7 @@ struct Inspector: View {
                 StudioToggleRow(label: "Loop cursor", on: Binding(get: { m.timeline.cursor.loop != nil },
                     set: { enabled in m.edit { $0.cursor.loop = enabled ? 1 : nil } }))
             }.frame(maxWidth: .infinity, alignment: .leading)
+            ClickSoundGrid(selected: m.timeline.audio.clickTone, onChoose: { m.chooseClick($0) }, onStop: { m.stopClickPreview() })
             StudioSection("Pointer color") {
                 StudioColorSwatches(selected: m.timeline.cursor.ink) { color in m.edit { $0.cursor.ink = color } }
                 StudioButton(title: "Original color", icon: "arrow.counterclockwise", kind: .quiet) { m.edit { $0.cursor.ink = nil } }
@@ -285,21 +287,13 @@ struct Inspector: View {
                 Text("Studio Audio").font(AppType.title).foregroundStyle(Tok.text)
                 StudioSliderRow(label: "Voice level", v: m.bind(\.audio.voiceBoostDb), range: 0...6,
                           fmt: { String(format: "%+.1f dB", $0) })
-                StudioSliderRow(label: "Noise reduction", v: Binding(
-                    get: { m.timeline.audio.noiseReductionStrength },
-                    set: { value in m.edit(coalesce: true) {
-                        $0.audio.noiseReductionStrength = value
-                        $0.audio.micClean = value > 0
-                    } }), range: 0...1, fmt: { "\(Int($0 * 100))%" })
             }.frame(maxWidth: .infinity, alignment: .leading)
             StudioSection("Sound effects") {
                 StudioToggleRow(label: "Sound effects", on: m.bind(\.audio.soundEffectsEnabled))
                 StudioToggleRow(label: "Keyboard", on: m.bind(\.audio.keySounds))
                 StudioSliderRow(label: "Keyboard level", v: m.bind(\.audio.typingLevelDb), range: -36...0, fmt: { "\(Int($0)) dB" })
                 StudioToggleRow(label: "Mouse clicks", on: m.bind(\.audio.clickSounds))
-                StudioRow(label: "Click sound") {
-                    StudioPicker(sel: m.bind(\.audio.clickTone), options: ClickSound.allCases.map { ($0, $0.rawValue.capitalized, "speaker.wave.2") }).frame(width: 116)
-                }
+                StudioButton(title: "Choose click sound", icon: "speaker.wave.2", kind: .quiet) { tab = .cursor }
                 StudioSliderRow(label: "System level", v: m.bind(\.audio.systemGainDb), range: -36...6, fmt: { "\(Int($0)) dB" })
             }
         }

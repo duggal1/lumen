@@ -111,7 +111,7 @@ private func rpc(_ object: [String: Any]) throws -> String {
 
 @Test func documentedCatalogMatchesLiveRegistry() throws {
     let rows = block("CONTRACT", in: try docText("VIDEO-EDIT-API.md"))
-    #expect(rows.count == 49, "the API doc must describe all 49 tools")
+    #expect(rows.count == 50, "the API doc must describe all 50 tools")
 
     var documented: [String: [String]] = [:]
     for row in rows {
@@ -121,7 +121,7 @@ private func rpc(_ object: [String: Any]) throws -> String {
     }
 
     let specs = makeRegistry().allSpecs()
-    #expect(specs.count == 49, "registerAllTools must register exactly 49 tools")
+    #expect(specs.count == 50, "registerAllTools must register exactly 50 tools")
     #expect(Set(documented.keys) == Set(specs.map(\.name)), "doc and registry tool names diverged")
 
     for spec in specs {
@@ -146,13 +146,13 @@ private func rpc(_ object: [String: Any]) throws -> String {
 @Test func registryShapeCountsAreLocked() {
     let specs = makeRegistry().allSpecs()
     let capabilities = Dictionary(grouping: specs, by: \.capability).mapValues(\.count)
-    #expect(capabilities == [.read: 13, .record: 5, .actuate: 6, .edit: 22, .network: 1, .export: 2])
-    #expect(specs.filter(\.mutating).count == 34)
-    #expect(specs.filter(\.destructive).count == 8)
+    #expect(capabilities == [.read: 13, .record: 5, .actuate: 6, .edit: 23, .network: 1, .export: 2])
+    #expect(specs.filter(\.mutating).count == 35)
+    #expect(specs.filter(\.destructive).count == 9)
     #expect(specs.filter(\.longRunning).count == 4)
-    #expect(specs.filter(\.customDryRun).count == 11)
+    #expect(specs.filter(\.customDryRun).count == 12)
     #expect(specs.filter { $0.outputSchema != nil }.count == 17)
-    #expect(specs.filter { $0.additionalCapabilities.isEmpty }.count == 48)
+    #expect(specs.filter { $0.additionalCapabilities.isEmpty }.count == 49)
 }
 
 @Test func exactlyOneVideoEditVocabularyIsRegistered() throws {
@@ -184,7 +184,7 @@ private func rpc(_ object: [String: Any]) throws -> String {
     let json = try #require(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
     let result = try #require(json["result"] as? [String: Any])
     let tools = try #require(result["tools"] as? [[String: Any]])
-    #expect(tools.count == 49)
+    #expect(tools.count == 50)
 
     let registry = makeRegistry()
     #expect(Set(tools.compactMap { $0["name"] as? String }) == Set(registry.allSpecs().map(\.name)))
@@ -401,4 +401,21 @@ private func rpc(_ object: [String: Any]) throws -> String {
                                 arguments: .object(["target": .string("display"), "fps": .number(20)]),
                                 context: context)
     #expect(runtime.lastOptions?.fps == 24, "a 20 fps request must be clamped to the effective floor")
+}
+
+@Test func mcpSkillResourcesAreReadableOverJsonRpc() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let list = try #require(await fixture.server.handle(try rpc(["jsonrpc": "2.0", "id": 1, "method": "resources/list"])))
+    let listObject = try #require(JSONSerialization.jsonObject(with: Data(list.utf8)) as? [String: Any])
+    let result = try #require(listObject["result"] as? [String: Any])
+    let resources = try #require(result["resources"] as? [[String: Any]])
+    #expect(resources.contains { $0["uri"] as? String == "lumen://skills/audio-edit" })
+    let read = try #require(await fixture.server.handle(try rpc(["jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": ["uri": "lumen://skills/audio-edit"]])))
+    let readObject = try #require(JSONSerialization.jsonObject(with: Data(read.utf8)) as? [String: Any])
+    let readResult = try #require(readObject["result"] as? [String: Any])
+    let contents = try #require(readResult["contents"] as? [[String: Any]])
+    let content = try #require(contents.first)
+    #expect(content["mimeType"] as? String == "text/markdown")
+    #expect((content["text"] as? String)?.contains("audio_edit_v2") == true)
 }

@@ -19,6 +19,8 @@ final class TimelineDitherRenderer {
         var spans: [[Span]]
         /// Voice peaks per column (0...1), mirrored into the voice band.
         var peaks: [Float]
+        /// Real music source peaks, not synthesized decoration.
+        var musicPeaks: [Float] = []
         /// Columns carrying a click or tap in the events band.
         var clicks: Set<Int>
         /// The playhead column, or -1.
@@ -137,18 +139,20 @@ final class TimelineDitherRenderer {
 
         for lane in 0..<Self.lanes {
             let owners = resolved[lane]
-            if lane == 3 {
+            if lane == 3 || lane == 4 {
                 // Preserve the lane's 40 pt height and 4 pt time lattice.
                 // A finer vertical amplitude grid makes the real waveform
                 // readable even at quiet levels, without inventing signal.
                 let cell = max(1, Int((1.5 * s).rounded()))
                 let gap = max(1, Int((2 * s).rounded()))
-                let middle = Int((topF + Float(lane) * laneF + laneF / 2) * s)
-                let maxSteps = max(1, Int((laneF / 2 - 2) * s) / gap)
-                let c = colors[4]
+                let labelSpace: Float = lane == 4 ? 12 : 0
+                let middle = Int((topF + Float(lane) * laneF + laneF / 2 + labelSpace / 2) * s)
+                let maxSteps = max(1, Int((laneF / 2 - 2 - labelSpace / 2) * s) / gap)
+                let c = colors[lane == 3 ? 4 : 5]
+                let peaks = lane == 3 ? f.peaks : f.musicPeaks
                 for col in 0..<cols {
-                    guard owners[col] >= 0, col < f.peaks.count, f.peaks[col].isFinite else { continue }
-                    let peak = min(max(f.peaks[col], 0), 1)
+                    guard owners[col] >= 0, col < peaks.count, peaks[col].isFinite else { continue }
+                    let peak = min(max(peaks[col], 0), 1)
                     let x = Int((insetF + Float(col) * pitch) * s) + dimOff
                     let steps = Int((peak * Float(maxSteps)).rounded(.up))
                     guard peak > 0.005, steps > 0 else {

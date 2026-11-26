@@ -26,6 +26,7 @@ struct FloatingBarView: View {
     var onPause: () -> Void
     var onDiscard: () -> Void
     var onCancel: () -> Void
+    var onHide: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -83,6 +84,7 @@ struct FloatingBarView: View {
             Spacer(minLength: 6)
 
             RecordButton(action: onRecord)
+            hideControl
         }
     }
 
@@ -114,6 +116,11 @@ struct FloatingBarView: View {
                     .animation(.smooth(duration: 0.2), value: Int(app.stats?.elapsed ?? 0))
             }
             LevelTape(meter: app.recordingMeter, paused: app.paused)
+            if let notice = app.captureQualityNotice {
+                PixelSymbol("exclamationmark.triangle", size: 13)
+                    .foregroundStyle(Tok.text2).help(notice)
+                    .accessibilityHidden(false).accessibilityLabel(notice)
+            }
             RecorderAction(title: app.paused ? "Resume" : "Pause",
                            icon: app.paused ? "play.fill" : "pause.fill",
                            accessibilityLabel: app.paused ? "Resume recording" : "Pause recording",
@@ -121,7 +128,17 @@ struct FloatingBarView: View {
             RecorderAction(title: "Stop", icon: "stop.fill",
                            accessibilityLabel: "Stop recording", action: onStop)
             DiscardButton(action: onDiscard)
+            hideControl
         }
+    }
+
+    private var hideControl: some View {
+        Button(action: onHide) {
+            PixelSymbol("eye.slash", size: 13)
+                .foregroundStyle(Tok.text2).frame(width: 26, height: 26)
+        }.buttonStyle(.plain).floatingHandCursor()
+            .accessibilityLabel("Hide recording controls")
+            .help("Hide controls; click the Lumen menu-bar icon to restore")
     }
 
     private var countdownBar: some View {
@@ -212,8 +229,7 @@ private struct BarItem: View {
             else { action() }
         } label: {
             VStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .regular))
+                PixelSymbol(icon, size: 17)
                     .foregroundStyle(active ? Tok.text : Tok.text.opacity(0.88))
                     .frame(height: 19)
                 Text(title)
@@ -243,8 +259,7 @@ private struct BarItem: View {
                 Button {
                     options(BarAnchor(id: id, rect: anchor))
                 } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .regular))
+                    PixelSymbol("chevron.down", size: 8)
                         .foregroundStyle(Tok.text2)
                         .frame(width: 14, height: 14)
                         .contentShape(Rectangle())
@@ -297,8 +312,7 @@ private struct RecorderAction: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Space.s1) {
-                Image(systemName: icon)
-                    .font(.system(size: 14, weight: .regular))
+                PixelSymbol(icon, size: 14)
                 Text(title)
                     .font(AppType.label)
                     .lineLimit(1)
@@ -348,8 +362,7 @@ private struct DiscardButton: View {
                         .padding(.horizontal, 8).frame(height: 24)
                         .background(RoundedRectangle(cornerRadius: 7).fill(Tok.washStrong))
                 } else {
-                    Image(systemName: "trash")
-                        .font(.system(size: 13))
+                    PixelSymbol("trash", size: 13)
                         .foregroundStyle(hover ? Tok.text : Tok.text2)
                         .frame(width: 26, height: 26)
                 }

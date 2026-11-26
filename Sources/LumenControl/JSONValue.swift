@@ -41,7 +41,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
 
     public var stringValue: String? { if case .string(let s) = self { return s }; return nil }
     public var doubleValue: Double? { if case .number(let n) = self { return n }; return nil }
-    public var intValue: Int? { if case .number(let n) = self { return Int(n) }; return nil }
+    public var intValue: Int? { if case .number(let n) = self { return Int(exactly: n) }; return nil }
     public var boolValue: Bool? { if case .bool(let b) = self { return b }; return nil }
     public var arrayValue: [JSONValue]? { if case .array(let a) = self { return a }; return nil }
     public var objectValue: [String: JSONValue]? { if case .object(let o) = self { return o }; return nil }
@@ -88,7 +88,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
     public var textValue: String {
         switch self {
         case .string(let s): return s
-        case .number(let n): return n == n.rounded() ? String(Int(n)) : String(n)
+        case .number(let n): return Int(exactly: n).map { String($0) } ?? String(n)
         case .bool(let b): return b ? "true" : "false"
         case .null: return ""
         default: return (try? stringValue2) ?? ""
