@@ -132,7 +132,7 @@ private struct ShellSidebar: View {
     private func row(_ r: Route) -> some View {
         Button { go(r) } label: {
             HStack(spacing: Space.s3) {
-                Image(systemName: r.icon).font(.system(size: 14)).frame(width: 20)
+                PixelSymbol(r.icon, size: 14).frame(width: 20)
                 Text(r.title).font(AppType.body)
                 Spacer(minLength: 0)
             }
@@ -169,8 +169,7 @@ private struct SidebarToggle: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "sidebar.left")
-                .font(.system(size: 12, weight: .regular))
+            PixelSymbol("sidebar.left", size: 12)
                 .foregroundStyle(hover ? Tok.text : Tok.text2)
                 .frame(width: 28, height: 28)
                 .background(RoundedRectangle(cornerRadius: Radius.field).fill(hover ? Tok.washStrong : .clear))

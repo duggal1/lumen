@@ -50,7 +50,11 @@ public final class ProjectSession: @unchecked Sendable {
     /// Shared across the project's decoder; imported clips open their own
     /// `ReaderFrameSource` lazily and keep it for the life of the session.
     private let device: SendableMetalDevice
-    private let clipSources = OSAllocatedUnfairLock<[String: ReaderFrameSource]>(initialState: [:])
+    private struct ClipCache {
+        var readers: [String: ReaderFrameSource] = [:]
+        var order: [String] = []
+    }
+    private let clipSources = OSAllocatedUnfairLock(initialState: ClipCache())
     private struct AudioState { var waveform: [Float] = []; var state: AudioPreparation = .idle }
     private let audioState = OSAllocatedUnfairLock(initialState: AudioState())
     private let audioTaskState = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
@@ -110,10 +114,23 @@ public final class ProjectSession: @unchecked Sendable {
     }
 
     private func clipSource(for url: URL) async throws -> ReaderFrameSource {
-        if let existing = clipSources.withLock({ $0[url.path] }) { return existing }
+        let key = url.standardizedFileURL.path
+        if let existing = clipSources.withLock({ cache -> ReaderFrameSource? in
+            guard let reader = cache.readers[key] else { return nil }
+            cache.order.removeAll { $0 == key }; cache.order.append(key)
+            return reader
+        }) { return existing }
         let source = try await ReaderFrameSource(url: url, device: device)
-        clipSources.withLock { $0[url.path] = source }
-        return source
+        return clipSources.withLock { cache in
+            if let existing = cache.readers[key] { return existing }
+            // Each reader owns decoded frames and Metal textures. Retaining
+            // every clip in a long project needlessly grows GPU memory.
+            while cache.order.count >= 3 {
+                cache.readers.removeValue(forKey: cache.order.removeFirst())
+            }
+            cache.readers[key] = source; cache.order.append(key)
+            return source
+        }
     }
 
     public func derive(_ tl: Timeline, revision: Int) -> Timeline { Director.derive(tl, input: input, revision: revision) }
@@ -166,6 +183,7 @@ public final class ProjectSession: @unchecked Sendable {
                         onTyping: @escaping @Sendable () -> Void = {},
                         onActivity: @escaping @Sendable () -> Void = {},
                         onPrivacy: @escaping @Sendable (String?) -> Void = { _ in },
+                        onPrivacyPartial: @escaping @Sendable () -> Void = {},
                         onPrivacyStart: @escaping @Sendable () -> Void = {}) async -> AnalysisResult {
         let sequence = analysisSequence.withLock { value in value += 1; return value }
         let origin = meta.clock.originHostSeconds
@@ -188,6 +206,7 @@ public final class ProjectSession: @unchecked Sendable {
         request.ax = snapshot.ax
         request.sourceDuration = meta.source.duration
         request.privacyProgress = privacyProgress
+        let privacyFinal = OSAllocatedUnfairLock(initialState: false)
         let result = await AnalysisService.shared.run(request, onTyping: { [self] result in
             guard !Task.isCancelled, result.errors["typing"] == nil,
                   applyAnalysis(sequence, { $0.typing = result.typing }) else { return }
@@ -197,8 +216,18 @@ public final class ProjectSession: @unchecked Sendable {
             // when the analysis was cancelled, because a cancelled scan still
             // knows about every secret it detected so far. Only a newer
             // analysis (a higher sequence) may discard it.
-            guard applyAnalysis(sequence, { $0.ocr = result.ocr }) else { return }
-            onPrivacy(result.errors["ocr"])
+            let applied = privacyFinal.withLock { finished -> Bool in
+                finished = true
+                return applyAnalysis(sequence, { $0.ocr = result.ocr })
+            }
+            guard applied else { return }
+            onPrivacy(result.errors["ocr"] ?? result.errors["cancelled"])
+        }, onPrivacyPartial: { [self] result in
+            let applied = privacyFinal.withLock { finished -> Bool in
+                guard !finished else { return false }
+                return applyAnalysis(sequence, { $0.ocr = result.ocr })
+            }
+            if applied { onPrivacyPartial() }
         }, onPrivacyStart: {
             guard self.analysisSequence.withLock({ $0 == sequence }) else { return }
             onPrivacyStart()
@@ -289,9 +318,7 @@ public final class ProjectSession: @unchecked Sendable {
         // A full open already paid for the audio, so the preparation has
         // nothing left to do; the editor path gets it in the background.
         s.audioState.withLock { $0.state = .idle }
-        if shouldPrepare {
-            s.audioTaskState.withLock { $0 = Task.detached(priority: .userInitiated) { await s.performAudioPreparation() } }
-        }
+        if shouldPrepare { _ = s.startAudioPreparation() }
         return (s, file.timeline)
     }
 
@@ -301,41 +328,48 @@ public final class ProjectSession: @unchecked Sendable {
     /// Cancellation is cooperative, so a closed editor does not leave a decode
     /// or a denoiser running.
     public func prepareAudio(cancelled: (@Sendable () -> Bool)? = nil) async -> Bool {
+        if cancelled?() == true || Task.isCancelled { return false }
         if audioPreparation == .ready { return true }
-        if let running = audioTaskState.withLock({ $0 }) {
-            await running.value
-            return audioPreparation == .ready
-        }
-        let task = Task.detached(priority: .userInitiated) { [self] in
-            await self.performAudioPreparation(cancelled: cancelled)
-        }
-        // A concurrent caller may have installed its own task in the meantime;
-        // the loser's task sees `.preparing` and returns without doing work.
-        let installed = audioTaskState.withLock { state -> Bool in
-            guard state == nil else { return false }
-            state = task
-            return true
-        }
+        let task = startAudioPreparation()
         await task.value
-        if installed { audioTaskState.withLock { $0 = nil } }
-        return audioPreparation == .ready
+        return !Task.isCancelled && cancelled?() != true && audioPreparation == .ready
+    }
+
+    /// A task is created and installed under one lock. All callers await the
+    /// same task; no losing caller can accidentally wait on a no-op worker.
+    private func startAudioPreparation() -> Task<Void, Never> {
+        audioTaskState.withLock { current in
+            if let current { return current }
+            let task = Task.detached(priority: .utility) { [self] in
+                await self.performAudioPreparation(cancelled: { Task.isCancelled })
+                self.audioTaskState.withLock { $0 = nil }
+            }
+            current = task
+            return task
+        }
+    }
+
+    public func cancelAudioPreparation() {
+        audioTaskState.withLock { $0?.cancel() }
     }
 
     private func performAudioPreparation(cancelled: (@Sendable () -> Bool)? = nil) async {
-        guard audioPreparation == .idle else { return }
-        audioState.withLock { $0.state = .preparing }
+        let shouldRun = audioState.withLock { state -> Bool in
+            guard state.state == .idle else { return false }
+            state.state = .preparing
+            return true
+        }
+        guard shouldRun else { return }
         let meta = self.meta, b = bundle, origin = meta.clock.originHostSeconds
-        var micOff = micOffset, sysOff = 0.0
-        var mic: [Float]?, sys: [Float]?, sysRight: [Float]?
+        var micOff = micOffset
+        var mic: [Float]?
         var extras: [RecordedMicrophone] = []
         if let m = meta.mic, cancelled?() != true {
             mic = try? AudioIO.readMono(b.micURL)
             micOff = m.startHostSeconds - origin
         }
-        if let s = meta.system, cancelled?() != true {
-            if let (left, right) = try? AudioIO.readStereo(b.systemURL) { sys = left; sysRight = right }
-            sysOff = s.startHostSeconds - origin
-        }
+        // System audio contributes neither voice activity nor the mic
+        // envelope. Leave it on disk for bounded playback / export decoding.
         // Older projects have no extra tracks. An unavailable/missing device
         // recording is skipped on reopen without losing the rest of the project.
         for item in meta.additionalMicrophones where cancelled?() != true {
@@ -346,7 +380,7 @@ public final class ProjectSession: @unchecked Sendable {
                                              offset: item.track.startHostSeconds - origin))
         }
         if cancelled?() == true {
-            audioState.withLock { $0.state = .failed("Cancelled") }
+            audioState.withLock { $0.state = .idle }
             return
         }
         let primaryVAD = (mic.map { VAD.regions($0) } ?? [])
@@ -358,7 +392,12 @@ public final class ProjectSession: @unchecked Sendable {
         }
         let vad = (primaryVAD + secondaryVAD).sorted { $0.lowerBound < $1.lowerBound }
         let wave = mic.map { Self.envelope($0, offset: micOff) } ?? []
-        mixer.installAudio(mic: mic, system: sys, systemRight: sysRight, additionalMicrophones: extras)
+        guard cancelled?() != true else {
+            audioState.withLock { $0.state = .idle }
+            return
+        }
+        // The editor's analysis does not retain full-length PCM in its
+        // mixer cache. The mixer reads its own bounded windows on demand.
         inputState.withLock { $0.vad = vad }
         audioState.withLock { $0.waveform = wave; $0.state = .ready }
     }

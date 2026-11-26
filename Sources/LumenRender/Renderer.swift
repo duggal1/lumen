@@ -1119,7 +1119,7 @@ public final class Renderer: @unchecked Sendable {
         // source: the raw texture still contains masked pixels, so sampling it
         // would displace a secret out from under its mosaic. Copy the scene
         // once per frame (only while a click is on screen) and sample that.
-        if screenOpacity > 0.001, tl.cursor.clickRing != nil, !st.clickFX.isEmpty {
+        if screenOpacity > 0.001, tl.cursor.clickEffect != .none, !st.clickFX.isEmpty {
             let ringSize = min(max(tl.cursor.clickSize, 0.5), 2.0)
             let R = 70 * g.ui * pow(sc, 0.5) * ringSize
             // A ring at exactly 0 or 1 carries no motion: at 0 it would pop at

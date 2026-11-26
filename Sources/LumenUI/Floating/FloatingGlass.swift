@@ -21,7 +21,6 @@ final class FrostView: NSView {
         blur.blendingMode = .behindWindow
         blur.state = .active
         blur.isEmphasized = true
-        blur.appearance = NSAppearance(named: .aqua)
         blur.autoresizingMask = [.width, .height]
         addSubview(blur)
 
@@ -44,7 +43,13 @@ final class FrostView: NSView {
         blur.isHidden = flat
         wash.isHidden = false
         let opacity = flat ? 1 : CGFloat(Tok.floatingWashOpacity)
-        wash.layer?.backgroundColor = NSColor.white.withAlphaComponent(opacity).cgColor
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        wash.layer?.backgroundColor = (dark ? NSColor.black : NSColor.white).withAlphaComponent(opacity).cgColor
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyWash()
     }
 
     /// Re-reads accessibility display settings (Reduce Transparency can flip

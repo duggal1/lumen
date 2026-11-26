@@ -229,6 +229,7 @@ public struct AnalysisResult: Sendable {
 private actor AnalysisCollector {
     private(set) var ocr: [OCRDetection] = []
     private(set) var ocrError: String?
+    private var ocrFinished = false
     private(set) var face: [FaceSample] = []
     private(set) var faceError: String?
     private(set) var activity: [ActivityPoint] = []
@@ -241,10 +242,14 @@ private actor AnalysisCollector {
     private(set) var typing: [TypingTrace] = []
     private(set) var typingError: String?
 
-    func setOCR(_ value: [OCRDetection], error: String?) { ocr = value; ocrError = error }
-    /// The first-frame scan publishes early, but never over a finished scan.
-    func setOCRIfEmpty(_ value: [OCRDetection]) {
-        if ocr.isEmpty { ocr = value }
+    func setOCR(_ value: [OCRDetection], error: String?) {
+        ocr = value; ocrError = error; ocrFinished = true
+    }
+    /// A first-frame result is only provisional, even when it is empty.
+    func setOCRIfEmpty(_ value: [OCRDetection]) -> Bool {
+        guard !ocrFinished, ocr.isEmpty else { return false }
+        ocr = value
+        return true
     }
     func setFace(_ value: [FaceSample], error: String?) { face = value; faceError = error }
     func setActivity(_ value: [ActivityPoint], grids: ActivityCache?, error: String?) {
@@ -262,6 +267,7 @@ public actor AnalysisService {
 
     public func run(_ request: AnalysisRequest, onTyping: @escaping @Sendable (AnalysisResult) -> Void = { _ in },
                     onPrivacy: @escaping @Sendable (AnalysisResult) -> Void = { _ in },
+                    onPrivacyPartial: @escaping @Sendable (AnalysisResult) -> Void = { _ in },
                     onPrivacyStart: @escaping @Sendable () -> Void = {},
                     onActivity: @escaping @Sendable (AnalysisResult) -> Void = { _ in }) async -> AnalysisResult {
         // The privacy gate must always resolve: whatever ends this run — a
@@ -283,7 +289,7 @@ public actor AnalysisService {
         // typing produces the zoom anchors.
         if request.privacy.enabled, request.privacy.autoDetect {
             jobs.append(AnalysisJob(name: "privacy-first-frame", priority: 0) {
-                await self.firstPrivacyFrame(request, collector: collector, onPrivacy: onPrivacy)
+                await self.firstPrivacyFrame(request, collector: collector, onPrivacy: onPrivacyPartial)
             })
         }
         if request.includeTyping, !request.events.isEmpty {
@@ -383,9 +389,8 @@ public actor AnalysisService {
                                    onPrivacy: @Sendable (AnalysisResult) -> Void) async {
         guard ProcessInfo.processInfo.environment["LUMEN_NO_OCR"] != "1" else { return }
         let (detections, error) = await ocr(request, firstFrameOnly: true)
-        if error == nil {
-            await collector.setOCRIfEmpty(detections)
-            if !detections.isEmpty { onPrivacy(AnalysisResult(ocr: detections)) }
+        if error == nil, !detections.isEmpty, await collector.setOCRIfEmpty(detections) {
+            onPrivacy(AnalysisResult(ocr: detections))
         }
     }
 

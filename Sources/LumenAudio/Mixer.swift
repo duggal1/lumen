@@ -195,6 +195,9 @@ public final class AudioMixer: @unchecked Sendable {
     private var jobs: [String: VoiceJob] = [:]
     private var music: MusicCache?
     private var imported: [String: MusicTrack] = [:]
+    private var importOrder: [String] = []
+    private var importBytes = 0
+    private let importBudget = 48 * 1024 * 1024
     private let keyBankLock = NSLock()
     private var keyBank: [String: [Int: [Float]]] = [:]
     private var customDenoiser: (any Denoiser)?
@@ -428,13 +431,28 @@ public final class AudioMixer: @unchecked Sendable {
     private func importTrack(_ path: String) -> MusicTrack? {
         state.lock()
         let cached = imported[path]
+        if cached != nil { importOrder.removeAll { $0 == path }; importOrder.append(path) }
         state.unlock()
         if let cached { return cached }
         guard let (l, r) = try? AudioIO.readStereo(URL(fileURLWithPath: path)),
               !l.isEmpty, l.count == r.count else { return nil }
         let result = MusicTrack(l: l, r: r)
         state.lock()
-        imported[path] = result
+        let cost = (l.count + r.count) * MemoryLayout<Float>.stride
+        if cost <= importBudget {
+            if let previous = imported.removeValue(forKey: path) {
+                importBytes -= (previous.l.count + previous.r.count) * MemoryLayout<Float>.stride
+            }
+            importOrder.removeAll { $0 == path }
+            while importBytes > importBudget - cost, !importOrder.isEmpty {
+                let evicted = importOrder.removeFirst()
+                if let track = imported.removeValue(forKey: evicted) {
+                    importBytes -= (track.l.count + track.r.count) * MemoryLayout<Float>.stride
+                }
+            }
+            imported[path] = result
+            importOrder.append(path); importBytes += cost
+        }
         state.unlock()
         return result
     }
@@ -521,21 +539,25 @@ public final class AudioMixer: @unchecked Sendable {
         }
 
         var voiceIndex = 0
-        for lane in a.lanes where lane.role == .voiceover && !lane.mute {
+        for lane in a.lanes where (lane.role == .voiceover || lane.role == .sfx) && !lane.mute {
             guard let path = lane.path, let track = importTrack(path) else { continue }
             voiceIndex += 1
             var left = [Float](repeating: 0, count: n), right = left
-            let start = max(0, Int(lane.placement * fs))
-            guard start < n else { continue }
-            let count = min(track.l.count, n - start)
+            guard lane.placement.isFinite, lane.placement >= 0, lane.placement < Double(n) / fs else { continue }
+            let start = Int(lane.placement * fs)
+            let available = min(track.l.count, track.r.count)
+            let trim = lane.trimStart.flatMap { $0.isFinite ? max($0, 0) : nil } ?? 0
+            let source = Int(min(trim * fs, Double(available)))
+            let length = lane.trimDuration.flatMap { $0.isFinite ? max($0, 0) : nil }
+            let count = min(n - start, length.map { Int(min($0 * fs, Double(available - source))) } ?? available - source)
             let gain = Float(pow(10, clamp(lane.gainDb, -60, 24) / 20))
             let fade = min(Int(fs * 0.01), count / 2)
             for i in 0..<count {
                 let edge = fade > 0 ? min(1, Float(min(i, count - i - 1)) / Float(fade)) : 1
-                left[start + i] = track.l[i] * gain * edge
-                right[start + i] = track.r[i] * gain * edge
+                left[start + i] = track.l[source + i] * gain * edge
+                right[start + i] = track.r[source + i] * gain * edge
             }
-            result.append(AudioStem(name: "voiceover-\(voiceIndex)", left: left, right: right))
+            result.append(AudioStem(name: "\(lane.role.rawValue)-\(voiceIndex)", left: left, right: right))
         }
         let (beds, bedTracks) = musicBeds(tl)
         if !beds.isEmpty {
@@ -582,7 +604,7 @@ public final class AudioMixer: @unchecked Sendable {
         if a.micMode != .off, micURL != nil || mic != nil || extraCount() > 0 { return true }
         if sys != nil || systemURL != nil { return true }
         if a.musicPath != nil { return true }
-        if a.lanes.contains(where: { !$0.mute && $0.path != nil && ($0.role == .voiceover || $0.role == .music) }) { return true }
+        if a.lanes.contains(where: { !$0.mute && $0.path != nil && ($0.role == .voiceover || $0.role == .music || $0.role == .sfx) }) { return true }
         if a.soundEffectsEnabled, let cues = tl.derived?.cues, !cues.isEmpty { return true }
         return false
     }
@@ -627,10 +649,10 @@ public final class AudioMixer: @unchecked Sendable {
             for i in 0..<n { L[i] += l[i] * gain; R[i] += r[i] * gain }
             hasProgram = true
         }
-        for lane in a.lanes where !lane.mute && lane.role == .voiceover {
+        for lane in a.lanes where !lane.mute && (lane.role == .voiceover || lane.role == .sfx) {
             guard let path = lane.path, let track = importTrack(path) else { continue }
-            let offset = Int(max(0, lane.placement) * fs)
-            guard offset < n else { continue }
+            guard lane.placement.isFinite, lane.placement >= 0, lane.placement < Double(n) / fs else { continue }
+            let offset = Int(lane.placement * fs)
             let sourceCount = min(track.l.count, track.r.count)
             let trimStart = lane.trimStart.flatMap { $0.isFinite ? max($0, 0) : nil } ?? 0
             let sourceOffset = Int(min(trimStart * fs, Double(sourceCount)))
@@ -858,7 +880,7 @@ public final class AudioMixer: @unchecked Sendable {
                     gainDb: a.systemGainDb, mono: false, muteRamps: true)
 
         // Imported voiceover is on the output clock. Read only its overlap.
-        for lane in a.lanes where lane.role == .voiceover && !lane.mute {
+        for lane in a.lanes where (lane.role == .voiceover || lane.role == .sfx) && !lane.mute {
             if cancelled?() == true { return nil }
             guard let path = lane.path else { continue }
             let trim = max(lane.trimStart ?? 0, 0)
@@ -1036,12 +1058,15 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
 
     /// Plays the selected click at the current click level without touching
     /// the timeline playback node, so the preview never desyncs transport.
+    public func stopClickPreview() { previewNode.stop() }
+
     public func previewClick(_ plan: AudioPlan) {
         guard plan.soundEffectsEnabled, plan.clickSounds else { return }
         let (samples, bankGain) = SFXBank().render(.click, clickTone: plan.clickTone)
         guard !samples.isEmpty,
               let buffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
-        let amp = Float(pow(10, (plan.sfxGainDb + plan.clickGainDb + bankGain) / 20))
+        let db = plan.sfxGainDb + plan.clickGainDb + bankGain
+        let amp = Float(pow(10, clamp(db.isFinite ? db : -9, -60, 0) / 20))
         buffer.frameLength = AVAudioFrameCount(samples.count)
         for i in samples.indices {
             buffer.floatChannelData![0][i] = samples[i] * amp

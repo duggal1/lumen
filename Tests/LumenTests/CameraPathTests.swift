@@ -15,7 +15,11 @@ private enum CP {
         tl.zoom = zoom
         let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: duration,
                                 backingScale: 1, originX: 0, originY: 0)
-        return Director.derive(tl, input: DirectorInput(events: [], source: source), revision: 1)
+        var derived = Director.derive(tl, input: DirectorInput(events: [], source: source), revision: 1)
+        derived.derived?.camera = CameraSolver.solve(zoom: zoom, tm: tl.timeMap,
+            cursor: CursorTrack(count: Int(duration * gridRate) + 1), p: tl.camera,
+            src: SIMD2(1920, 1080), outDur: duration, loop: nil)
+        return derived
     }
 
     static func frame(_ tl: Timeline, _ t: Double) -> (s: Double, c: SIMD2<Double>) {
