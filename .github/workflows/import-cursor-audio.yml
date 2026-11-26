@@ -1,0 +1,63 @@
+name: Import verified cursor audio (one-time)
+on:
+  push:
+    branches: [fix/cursor-sound-previews]
+permissions:
+  contents: write
+jobs:
+  import:
+    if: github.repository == 'duggal1/lumen'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned CC0 source, validate and commit WAV assets
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, pathlib, urllib.request, wave, io, math, struct
+          sources = {
+              'crisp': ('click4.wav', '0903a32680672d55d21f23b0d56a2a76d72d9136'),
+              'soft': ('click5.wav', '6e907ee72e0590c6d2966d77dbeceed03aef46b0'),
+              'mechanical': ('mouseclick1.wav', 'dcb3cf43f385861356082484246cb113d6765568'),
+              'release': ('mouserelease1.wav', 'd16c2b0e1171004305650f7311840cceab709b40'),
+              'snap': ('switch12.wav', '6216f8c270f4ae0a8c0205d2ebb2b006e5a83132'),
+              'tick': ('switch13.wav', '54d699280cb2d85ec2b1d0108c43fe7bd91ff308'),
+              'light': ('switch14.wav', '91d6f7f24555545753b89222ace1c3fee316a609'),
+              'tap': ('click2.wav', 'c20fd33c6eb7adfbe378f4629fd44cdbe34f2feb'),
+          }
+          root = pathlib.Path('App/public/assets/cursor-clicks')
+          root.mkdir(parents=True, exist_ok=True)
+          base = 'https://raw.githubusercontent.com/Calinou/kenney-ui-audio/8c3d81b9159d058c444f89d12d518276b0b09345/addons/kenney_ui_audio/'
+          seen = set()
+          for name, (file, sha) in sources.items():
+              with urllib.request.urlopen(base + file, timeout=20) as r:
+                  data = r.read(2000000)
+              assert hashlib.sha1(('blob %d\0' % len(data)).encode() + data).hexdigest() == sha, file
+              with wave.open(io.BytesIO(data), 'rb') as f:
+                  rate, chans, width, n = f.getframerate(), f.getnchannels(), f.getsampwidth(), f.getnframes()
+                  assert width == 2 and chans in (1, 2) and 0 < n <= rate, (file, rate, chans, width, n)
+                  vals = struct.unpack('<%dh' % (n * chans), f.readframes(n))
+              mono = [sum(vals[i:i+chans])/chans for i in range(0, len(vals), chans)]
+              peak = max(map(abs, mono))
+              assert peak > 100
+              active = [i for i, x in enumerate(mono) if abs(x) >= peak * 0.015]
+              start = max(0, active[0] - round(rate * .001))
+              end = min(n, active[-1] + round(rate * .008) + 1)
+              mono = mono[start:end]
+              fade = min(round(rate * .002), len(mono)//2)
+              for i in range(fade):
+                  mono[i] *= i / max(fade,1)
+                  mono[-i-1] *= i / max(fade,1)
+              peak = max(map(abs, mono))
+              pcm = struct.pack('<%dh' % len(mono), *(round(x/peak*26000) for x in mono))
+              assert hashlib.sha256(pcm).hexdigest() not in seen
+              seen.add(hashlib.sha256(pcm).hexdigest())
+              with wave.open(str(root / (name+'.wav')), 'wb') as f:
+                  f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate); f.writeframes(pcm)
+              print(name, file, rate, round(len(mono)/rate*1000), 'ms', 'peak', round(peak), 'source verified')
+          PY
+          git add App/public/assets/cursor-clicks/*.wav
+          if git diff --cached --quiet; then exit 0; fi
+          git -c user.name='Lumen asset import' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Bundle eight verified CC0 cursor click recordings'
+          git push origin HEAD:fix/cursor-sound-previews
