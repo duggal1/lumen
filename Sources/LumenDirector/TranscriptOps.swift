@@ -32,20 +32,8 @@ enum TranscriptOps {
 
     static func pauseCuts(_ transcript: Transcript, events: [InputEvent], maxPause: Double = 0.6,
                           keepPause: Double = 0.25) -> [CutRange] {
-        guard maxPause >= 0, keepPause >= 0 else { return [] }
-        let words = transcript.words.sorted { $0.start < $1.start }
-        guard words.count > 1 else { return [] }
-        var cuts: [CutRange] = []
-        for pair in zip(words, words.dropFirst()) {
-            let start = pair.0.end, end = pair.1.start, gap = end - start
-            guard gap > maxPause, gap < 2, end > start,
-                  !events.contains(where: { $0.t > start && $0.t < end }) else { continue }
-            let removed = gap - min(keepPause, gap)
-            guard removed > 0 else { continue }
-            let edge = removed / 2
-            cuts.append(CutRange(start: start + edge, end: end - edge, origin: .transcript))
-        }
-        return merge(cuts)
+        TranscriptEdits.pauseCuts(transcript: transcript, events: events,
+                                  maxPause: maxPause, keepPause: keepPause)
     }
 
     /// Sentence segmentation over the sorted word stream. A sentence ends on

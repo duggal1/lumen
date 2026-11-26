@@ -286,12 +286,6 @@ struct Inspector: View {
                 Text("Studio Audio").font(AppType.title).foregroundStyle(Tok.text)
                 StudioSliderRow(label: "Voice level", v: m.bind(\.audio.voiceBoostDb), range: 0...6,
                           fmt: { String(format: "%+.1f dB", $0) })
-                StudioSliderRow(label: "Noise reduction", v: Binding(
-                    get: { m.timeline.audio.noiseReductionStrength },
-                    set: { value in m.edit(coalesce: true) {
-                        $0.audio.noiseReductionStrength = value
-                        $0.audio.micClean = value > 0
-                    } }), range: 0...1, fmt: { "\(Int($0 * 100))%" })
             }.frame(maxWidth: .infinity, alignment: .leading)
             StudioSection("Sound effects") {
                 StudioToggleRow(label: "Sound effects", on: m.bind(\.audio.soundEffectsEnabled))
