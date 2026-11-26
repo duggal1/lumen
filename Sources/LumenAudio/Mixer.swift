@@ -881,21 +881,13 @@ public final class AudioMixer: @unchecked Sendable {
             guard let track = tracks[bed.id] else { continue }
             let plan = MusicBed.plan(bed, track: track, outputSamples: Int(total), fs: fs)
             guard plan.isRenderable else { continue }
-            let period = max(plan.sourceSpan - plan.crossfade, 1)
             let lo = max(Int(startFrame), plan.start), hi = min(Int(startFrame) + count, plan.start + plan.count)
             guard hi > lo else { continue }
             for output in lo..<hi {
-                let local = output - plan.start
-                let phase = plan.loops ? local % period : local
-                let source = plan.sourceStart + phase
-                let prev = source + period
-                let fade = plan.loops && local >= period && phase < plan.crossfade ? Float(phase) / Float(max(plan.crossfade, 1)) : 1
-                let edge = min(plan.fadeIn > 0 ? Float(local) / Float(plan.fadeIn) : 1,
-                               plan.fadeOut > 0 ? Float(plan.count - local) / Float(plan.fadeOut) : 1, 1)
-                let g = plan.gain * max(edge, 0) * MusicBed.duckGain(tl.derived?.duck, atSample: output, fs: fs)
+                let value = MusicBed.sample(plan, track: track, duck: tl.derived?.duck, at: output, fs: fs)
                 let i = output - Int(startFrame)
-                left[i] += (sample(track.left, at: Double(source)) * fade + sample(track.left, at: Double(prev)) * (1 - fade)) * g
-                right[i] += (sample(track.right, at: Double(source)) * fade + sample(track.right, at: Double(prev)) * (1 - fade)) * g
+                left[i] += value.left
+                right[i] += value.right
             }
         }
         // Older projects store a single legacy music bed instead of lanes.

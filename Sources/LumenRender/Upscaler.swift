@@ -15,7 +15,7 @@ private struct ShockParams { var size: SIMD2<Int32>; var strength: Float; var ed
 private struct SharpParams { var size: SIMD2<Int32>; var amount: Float }
 
 /// Training-free UI upscaler. Upscales only the visible source region, on a source-aligned lattice, by a quantized factor
-/// {2,3,4,6,8}, as a chain of edge-directed stages (each followed by shock iterations) and a final limited sharpen.
+/// {2,3,4,5,6,8,10}, as a chain of edge-directed stages (each followed by shock iterations) and a final limited sharpen.
 /// The compositor then resamples this texture with Catmull-Rom, so continuous zoom never shimmers.
 /// Owned by one render queue. Use a separate instance per consumer (view, loupe): the buffers are reused every call.
 public final class Upscaler {
@@ -53,6 +53,19 @@ public final class Upscaler {
         return ok.first { Double($0) >= need } ?? (ok.last ?? 2)
     }
 
+    /// Select an actual reconstruction rung before allocating a GPU texture.
+    /// The limit is in output texels, not source pixels or a decorative zoom label.
+    public static func boundedFactor(forMagnification m: Double, maxFactor: Int,
+                                     region: SIMD4<Int32>, pixelLimit: Int) -> Int? {
+        guard m.isFinite, m > 1, region.z > 0, region.w > 0, pixelLimit > 0 else { return nil }
+        let requested = factor(forMagnification: m, maxFactor: maxFactor)
+        return ladder.reversed().first { f in
+            let w = Double(region.z) * Double(f), h = Double(region.w) * Double(f)
+            return f <= requested && w <= 8192 && h <= 8192
+                && ceil(w / 64) * 64 * ceil(h / 64) * 64 <= Double(pixelLimit)
+        }
+    }
+
     /// The upscaler engages as soon as source pixels are actually enlarged
     /// (magnification > 1). The old 1.5..2.2 band left a "2x" zoom on the plain
     /// Catmull sample — the advertised factor was not the applied one. A short
@@ -74,7 +87,10 @@ public final class Upscaler {
         let sy = min(max(source.y.isFinite ? source.y : 1, 1), 1e9)
         let c0 = SIMD2<Double>(min(max(c.x.isFinite ? c.x : sx / 2, 0), sx),
                                min(max(c.y.isFinite ? c.y : sy / 2, 0), sy))
-        let h = view / 2 + margin
+        let pad = margin.isFinite ? min(max(margin, 0), 1e9) : 8
+        let vx = view.x.isFinite ? min(max(view.x, 1), 2e9) : sx
+        let vy = view.y.isFinite ? min(max(view.y, 1), 2e9) : sy
+        let h = SIMD2(vx, vy) / 2 + pad
         let x0 = min(max((c0.x - h.x).rounded(.down), 0), sx - 1)
         let y0 = min(max((c0.y - h.y).rounded(.down), 0), sy - 1)
         let x1 = min(max((c0.x + h.x).rounded(.up), x0 + 1), sx)
@@ -103,9 +119,20 @@ public final class Upscaler {
 
     public func upscale(_ cb: MTLCommandBuffer, source: MTLTexture, region: SIMD4<Int32>, factor: Int,
                         params p: UpscaleParams, frameID: UInt64) throws -> UpscaleResult {
+        // Validate before Int32 multiplication or Metal dispatch. This also
+        // protects direct callers (CLI/tests), not only the compositor.
+        guard Self.ladder.contains(factor), region.x >= 0, region.y >= 0,
+              region.z > 0, region.w > 0,
+              Int64(region.x) + Int64(region.z) <= Int64(source.width),
+              Int64(region.y) + Int64(region.w) <= Int64(source.height),
+              Self.boundedFactor(forMagnification: Double(factor), maxFactor: factor,
+                                 region: region, pixelLimit: 12_582_912) == factor else {
+            throw FXError.noTexture
+        }
         let sourceKey = ObjectIdentifier(source)
         if let l = last, l.id == frameID, l.source == sourceKey, l.region == region,
            l.factor == factor, l.params == p { return l.result }
+        last = nil  // a partially encoded failure must not publish an old cache entry
         guard let e = cb.makeComputeCommandEncoder() else { throw FXError.noEncoder }
         // A failed pipeline/texture allocation must not leak an open encoder.
         defer { e.endEncoding() }
@@ -120,10 +147,11 @@ public final class Upscaler {
             cum *= Float(s)
             var a = try buffer(n & 1, 0, out), b = try buffer(n & 1, 1, out)
             var dp = DirectedParams(srcOrigin: origin, srcSize: size, outSize: out, scale: Float(s), sharp: Float(p.edgeSharpness))
-            e.setComputePipelineState(try k.pipeline("up_directed"))
+            let directed = try k.pipeline("up_directed")
+            e.setComputePipelineState(directed)
             e.setTexture(input, index: 0); e.setTexture(a, index: 1)
             e.setBytes(&dp, length: MemoryLayout<DirectedParams>.stride, index: 0)
-            k.dispatch(e, pipeline: try k.pipeline("up_directed"), width: Int(out.x), height: Int(out.y))
+            k.dispatch(e, pipeline: directed, width: Int(out.x), height: Int(out.y))
 
             var sp = ShockParams(size: out, strength: Float(p.shock), edgeLo: 0.04 / cum, edgeHi: 0.25 / cum, k: 30)
             let shock = try k.pipeline("up_shock")
@@ -160,7 +188,12 @@ public final class Upscaler {
     private func buffer(_ set: Int, _ i: Int, _ size: SIMD2<Int32>) throws -> MTLTexture {
         let w = Int(size.x), h = Int(size.y)
         if let t = sets[set][i], t.width >= w, t.height >= h { return t }
-        let nw = (max(w, sets[set][i]?.width ?? 0) + 63) & ~63, nh = (max(h, sets[set][i]?.height ?? 0) + 63) & ~63
+        var nw = (max(w, sets[set][i]?.width ?? 0) + 63) & ~63
+        var nh = (max(h, sets[set][i]?.height ?? 0) + 63) & ~63
+        // Alternating portrait/landscape must not retain the Cartesian product
+        // of their maximum dimensions.
+        if nw * nh > 12_582_912 { nw = (w + 63) & ~63; nh = (h + 63) & ~63 }
+        guard nw * nh <= 12_582_912 else { throw FXError.noTexture }
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: nw, height: nh, mipmapped: false)
         d.usage = [.shaderRead, .shaderWrite]; d.storageMode = .private
         guard let t = k.device.makeTexture(descriptor: d) else { throw FXError.noTexture }

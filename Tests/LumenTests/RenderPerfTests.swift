@@ -52,3 +52,13 @@ final class UpscaleCostTests: XCTestCase {
     #expect(!b.evaluate(Array(repeating: 17.0, count: 120), clickScenario: true).passes)
     #expect(!b.evaluate(Array(repeating: .nan, count: 120), clickScenario: true).passes)
 }
+
+@Test func clickBudgetIsRateSpecific() {
+    let b90 = FrameBudget(fps: 90)
+    let b30 = FrameBudget(fps: 30)
+    #expect(b90.evaluate([10, 11], clickScenario: true).passes)
+    #expect(!b90.evaluate([10, 12], clickScenario: true).passes)
+    #expect(b30.evaluate([20, 30], clickScenario: true).passes)
+    #expect(!b30.evaluate([20, 34], clickScenario: true).passes)
+    #expect(FrameBudget(fps: .nan).budgetMilliseconds.isFinite)
+}

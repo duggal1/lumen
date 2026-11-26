@@ -20,7 +20,7 @@ struct ExportInspector: View {
         switch r { case .source: "rectangle.dashed"; case .ultraHD8K: "4k.tv"; case .ultraHD: "4k.tv"; case .p1440: "tv"; case .p1080: "tv.fill"; case .p720: "rectangle"; case .custom: "slider.horizontal.3" }
     }
     private static func rateIcon(_ r: ExportRate) -> String {
-        switch r { case .source: "timer"; case .f24: "clock"; case .f30: "clock.fill"; case .f60: "speedometer"; case .f120: "gauge"; case .f144: "gauge"; case .f240: "gauge.with.dots.needle.67percent" }
+        switch r { case .source: "timer"; case .f24: "clock"; case .f30: "clock.fill"; case .f60: "speedometer"; case .f90: "gauge"; case .f120: "gauge"; case .f144: "gauge"; case .f240: "gauge.with.dots.needle.67percent" }
     }
     private static func qualityIcon(_ q: ExportQuality) -> String {
         switch q { case .low: "dial.low"; case .medium: "dial.medium"; case .high: "dial.high"; case .max: "dial.high.fill" }

@@ -1015,7 +1015,35 @@ public final class Renderer: @unchecked Sendable {
         let cropSize = SIMD2<Float>(Float(max(baseView.w, 1)), Float(max(baseView.h, 1)))
         let pxPerSrc = g.content.z / g.src.x
         let drawingContent = !r.cursorOnly
-        // Direct source sampling: never allocate or dispatch the legacy upscale chain per frame.
+        // Reconstruct the visible source ROI only, before the render encoder.
+        // Never cache redacted textures: their mask content can change while
+        // their Metal identity stays constant. The masked direct path is safe.
+        // The preview has a stricter pixel budget; blurred preview frames use
+        // the source sampler instead of repeating an expensive compute chain.
+        var enhanced: UpscaleResult?
+        var blend: Float = 0
+        if drawingContent, screenOpacity > 0.001, tl.camera.upscaleEnabled,
+           st.emphasis.masks.isEmpty, let upscaler,
+           r.quality == .export || subframes == 1 {
+            let view = SIMD2<Double>(Double(cropSize.x), Double(cropSize.y)) / sc
+            let magnification = max(Double(contentRect.z) / view.x, Double(contentRect.w) / view.y)
+            var params = UpscaleParams()
+            params.maxFactor = tl.camera.upscaleMaxFactor
+            if r.quality == .preview { params.shockIterations = 0; params.finalSharpen = 0 }
+            let weight = Upscaler.blend(forMagnification: magnification, params)
+            if weight > 0.001 {
+                let region = Upscaler.quantize(
+                    Upscaler.region(center: cam, view: view, source: g.src), source: g.src)
+                let pixels = r.quality == .export ? 12_582_912 : (r.fps > 60 ? 786_432 : 1_572_864)
+                if let factor = Upscaler.boundedFactor(forMagnification: magnification,
+                    maxFactor: params.maxFactor, region: region, pixelLimit: pixels),
+                   let result = try? upscaler.upscale(cb, source: src, region: region,
+                       factor: factor, params: params, frameID: r.screen.id) {
+                    enhanced = result
+                    blend = weight
+                }
+            }
+        }
         let pd = MTLRenderPassDescriptor()
         pd.colorAttachments[0].texture = tex; pd.colorAttachments[0].loadAction = .clear; pd.colorAttachments[0].storeAction = .store
         pd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
@@ -1024,17 +1052,17 @@ public final class Renderer: @unchecked Sendable {
         var enc = e
         func draw() { enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
 
-        // Content uses the original masked source, with no intermediate upscale.
+        // Both preview and export use the same source-pixel transform.
         if drawingContent, screenOpacity > 0.001 {
             enc.setRenderPipelineState(pContent); quad(enc, contentRect, canvasF)
             frag(enc, ContentU(content: contentRect, src: SIMD2<Float>(g.src), cam: SIMD2<Float>(cam),
                              cropSize: cropSize, scale: Float(sc),
                              radius: Float(g.radius), border: tl.style.innerBorder ? 1 : 0,
                              tilt: tilt, radii: SIMD4<Float>(g.radii),
-                             upRegion: .zero, upTexSize: .one,
-                             upFactor: 1, upBlend: 0, opacity: screenOpacity))
+                             upRegion: enhanced?.region ?? .zero, upTexSize: enhanced?.texSize ?? .one,
+                             upFactor: enhanced?.factor ?? 1, upBlend: blend, opacity: screenOpacity))
             enc.setFragmentTexture(src, index: 0)
-            enc.setFragmentTexture(src, index: 1)
+            enc.setFragmentTexture(enhanced?.texture ?? src, index: 1)
             draw()
         }
 

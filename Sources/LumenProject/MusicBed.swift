@@ -81,15 +81,23 @@ public struct MusicBed: Codable, Equatable, Sendable, Identifiable {
         guard sourceCount > 0 else { p.reason = "empty track"; return p }
         guard bed.placement.isFinite, bed.placement >= 0 else { p.reason = "invalid placement"; return p }
 
-        let start = Int((bed.placement * fs).rounded(.down))
+        // Bound in floating point before conversion: huge but finite saved
+        // times (or their product with fs) must not trap Int conversion.
+        func index(_ seconds: Double, limit: Int) -> Int {
+            let samples = seconds * fs
+            if samples >= Double(limit) { return limit }
+            if !samples.isFinite || samples <= 0 { return 0 }
+            return Int(samples.rounded(.down))
+        }
+        let start = index(bed.placement, limit: outputSamples)
         guard start < outputSamples else { p.reason = "placement past end"; return p }
 
         let trim = bed.trimStart.isFinite ? max(0, bed.trimStart) : 0
-        let sourceStart = min(Int((trim * fs).rounded(.down)), sourceCount)
+        let sourceStart = index(trim, limit: sourceCount)
         let available = sourceCount - sourceStart
         var span = available
         if let duration = bed.trimDuration, duration.isFinite {
-            span = min(max(0, Int((duration * fs).rounded(.down))), available)
+            span = index(duration, limit: available)
         }
         guard span > 0 else { p.reason = "empty trim"; return p }
 
@@ -98,10 +106,10 @@ public struct MusicBed: Codable, Equatable, Sendable, Identifiable {
         p.count = bed.loops ? room : min(room, span)
         p.sourceStart = sourceStart
         p.sourceSpan = span
-        p.crossfade = bed.loops && span > 1 ? min(Int((0.5 * fs).rounded(.down)), span / 2) : 0
-        p.gain = Float(pow(10, clamp(bed.gainDb, -60, 24) / 20))
-        p.fadeIn = bed.fadeIn.isFinite ? max(0, Int((bed.fadeIn * fs).rounded(.down))) : 0
-        p.fadeOut = bed.fadeOut.isFinite ? max(0, Int((bed.fadeOut * fs).rounded(.down))) : 0
+        p.crossfade = bed.loops && span > 1 ? index(0.5, limit: span / 2) : 0
+        p.gain = Float(pow(10, clamp(bed.gainDb.isFinite ? bed.gainDb : -18, -60, 24) / 20))
+        p.fadeIn = bed.fadeIn.isFinite ? index(bed.fadeIn, limit: Int.max / 2) : 0
+        p.fadeOut = bed.fadeOut.isFinite ? index(bed.fadeOut, limit: Int.max / 2) : 0
         return p
     }
 
@@ -111,46 +119,54 @@ public struct MusicBed: Codable, Equatable, Sendable, Identifiable {
     /// `i`. A missing or short envelope is unity — music must never go silent
     /// because derived data was truncated.
     public static func duckGain(_ duck: [Float]?, atSample i: Int, fs: Double) -> Float {
-        guard let d = duck, !d.isEmpty, fs > 0, i >= 0 else { return 1 }
-        let p = Double(i) / fs * 100
-        let i0 = min(Int(p), d.count - 1)
+        guard let d = duck, !d.isEmpty, fs.isFinite, fs > 0, i >= 0 else { return 1 }
+        let p = min(Double(i) / fs * 100, Double(d.count - 1))
+        let i0 = Int(p)
         let i1 = min(i0 + 1, d.count - 1)
-        return d[i0] + (d[i1] - d[i0]) * Float(p - Double(i0))
+        let a = d[i0].isFinite ? d[i0] : 1
+        let b = d[i1].isFinite ? d[i1] : 1
+        return a + (b - a) * Float(p - Double(i0))
     }
 
-    /// Loop a source excerpt with a half-second equal-gain crossfade at each
-    /// seam, then apply placement, trim, edge fades, gain and ducking. Returns a
-    /// full output-length buffer so beds can be summed without re-indexing.
+    /// Shared sample evaluator for whole export and bounded preview windows.
+    /// Both paths must agree at loop seams, the final partial repeat and short
+    /// clips whose entrance and exit fades overlap.
+    public static func sample(_ plan: Plan, track: PCM, duck: [Float]?,
+                              at output: Int, fs: Double) -> (left: Float, right: Float) {
+        guard plan.isRenderable, plan.start >= 0, output >= plan.start,
+              plan.sourceStart >= 0, plan.sourceSpan > 0,
+              plan.sourceStart <= min(track.left.count, track.right.count),
+              plan.sourceSpan <= min(track.left.count, track.right.count) - plan.sourceStart,
+              plan.crossfade >= 0, plan.crossfade <= plan.sourceSpan / 2 else { return (0, 0) }
+        let local = output - plan.start
+        guard local < plan.count else { return (0, 0) }
+        let period = plan.loops ? plan.sourceSpan - plan.crossfade : plan.sourceSpan
+        let phase = plan.loops ? local % period : local
+        guard phase < plan.sourceSpan else { return (0, 0) }
+        let index = plan.sourceStart + phase
+        var l = track.left[index], r = track.right[index]
+        if plan.loops, local >= period, phase < plan.crossfade {
+            let old = index + period
+            let t = Float(phase) / Float(plan.crossfade)
+            l = l * t + track.left[old] * (1 - t)
+            r = r * t + track.right[old] * (1 - t)
+        }
+        let fin = plan.fadeIn > 0 ? min(1, Float(local) / Float(plan.fadeIn)) : 1
+        let fout = plan.fadeOut > 0 ? min(1, Float(plan.count - local) / Float(plan.fadeOut)) : 1
+        let gain = plan.gain * fin * fout * duckGain(duck, atSample: output, fs: fs)
+        return (l * gain, r * gain)
+    }
+
     public static func render(_ plan: Plan, track: PCM, duck: [Float]?,
                               outputSamples: Int, fs: Double) -> PCM {
-        var L = [Float](repeating: 0, count: outputSamples)
+        let count = max(outputSamples, 0)
+        var L = [Float](repeating: 0, count: count)
         var R = L
-        guard plan.isRenderable, plan.start + plan.count <= outputSamples else {
-            return PCM(left: L, right: R)
-        }
-        let span = plan.sourceSpan, xf = plan.crossfade
-        var i = 0
-        while i < plan.count {
-            let c = min(span, plan.count - i)
-            for k in 0..<c {
-                var a: Float = 1
-                if xf > 0 && i > 0 && k < xf { a = Float(k) / Float(xf) }
-                if xf > 0 && c == span && k >= span - xf && i + span < plan.count {
-                    a = min(a, Float(span - k) / Float(xf))
-                }
-                let src = plan.sourceStart + k
-                let dst = plan.start + i + k
-                L[dst] += track.left[src] * a
-                R[dst] += track.right[src] * a
-            }
-            i += max(span - xf, 1)
-        }
-        for j in 0..<plan.count {
-            let fin = plan.fadeIn > 0 ? min(1, Float(j) / Float(plan.fadeIn)) : 1
-            let fout = plan.fadeOut > 0 ? min(1, Float(plan.count - j) / Float(plan.fadeOut)) : 1
-            let g = plan.gain * fin * fout * duckGain(duck, atSample: plan.start + j, fs: fs)
-            let idx = plan.start + j
-            L[idx] *= g; R[idx] *= g
+        guard plan.isRenderable, plan.start >= 0, plan.start <= count,
+              plan.count <= count - plan.start else { return PCM(left: L, right: R) }
+        for output in plan.start..<(plan.start + plan.count) {
+            let value = sample(plan, track: track, duck: duck, at: output, fs: fs)
+            L[output] = value.left; R[output] = value.right
         }
         return PCM(left: L, right: R)
     }
@@ -159,6 +175,7 @@ public struct MusicBed: Codable, Equatable, Sendable, Identifiable {
     /// loader; a bed whose track is absent is skipped rather than faked.
     public static func render(beds: [MusicBed], tracks: [UUID: PCM], duck: [Float]?,
                               outputSamples: Int, fs: Double) -> PCM {
+        guard outputSamples > 0 else { return PCM(left: [], right: []) }
         var L = [Float](repeating: 0, count: outputSamples)
         var R = L
         for bed in beds {

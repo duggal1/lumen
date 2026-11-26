@@ -283,7 +283,7 @@ public struct CameraParams: Codable, Equatable, Sendable {
     /// {2,3,4,5,6,8,10}). Magnification picks the smallest factor >= need.
     public var upscaleMaxFactor = 10
     /// Master switch for the real-time upscaler (A/B testing, low-end GPUs).
-    public var upscaleEnabled = false
+    public var upscaleEnabled = true
     public var tilt: TiltMode = .off
     public var maxYaw = 8.0, maxPitch = 6.0, omegaTilt = 5.0
     enum CodingKeys: String, CodingKey {
