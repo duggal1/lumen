@@ -925,14 +925,9 @@ public final class AudioMixer: @unchecked Sendable {
         }
         if let derived = tl.derived {
             for cue in derived.cues {
-                let kindTag: Int
-                switch cue.kind {
-                case .key: kindTag = 1
-                case .keyUp: kindTag = 2
-                case .click: kindTag = 3
-                case .whooshIn, .whooshOut: kindTag = 4
-                }
-                hash.update(data: Data("\(cue.t)|\(cue.gainDb)|\(cue.keyCode)|\(kindTag)".utf8))
+                let isKey: Int
+                switch cue.kind { case .key, .keyUp: isKey = 1; default: isKey = 0 }
+                hash.update(data: Data("\(cue.t)|\(cue.gainDb)|\(cue.keyCode)|\(isKey)|\(cue.isKeyRelease)|\(cue.kind)".utf8))
             }
             // The duck envelope is derived audio: a different envelope means a
             // different music bed, so it belongs in the identity.

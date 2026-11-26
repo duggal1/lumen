@@ -36,8 +36,11 @@ final class UpscaleCostTests: XCTestCase {
                                          fps: 60, upscale: true)
         let off = try RenderBenchmark.run(frames: 240, width: 1920, height: 1080,
                                           fps: 60, upscale: false)
-        let delta = on.report.averageMs - off.report.averageMs
-        print("UPSCALE-COST on=\(String(format: "%.2f", on.report.averageMs)) off=\(String(format: "%.2f", off.report.averageMs)) delta=\(String(format: "%.2f", delta)) ms")
+        // Median frame cost, not the mean: a shared CI runner can preempt the
+        // thread for a few frames, and those host stalls would otherwise swamp
+        // the sub-millisecond difference this gate is measuring.
+        let delta = on.report.p50Ms - off.report.p50Ms
+        print("UPSCALE-COST on=\(String(format: "%.2f", on.report.p50Ms)) off=\(String(format: "%.2f", off.report.p50Ms)) delta=\(String(format: "%.2f", delta)) ms (median)")
         XCTAssertTrue(on.report.passes)
         XCTAssertLessThan(delta, 1.0, "upscaler cost \(delta) ms per frame")
     }

@@ -599,6 +599,19 @@ enum CameraSolver {
         let baker = Baker(baked: baked, ctx: ctx, followX: followX, followY: followY,
                           followTracks: followTracks, kinds: kinds)
         let activeAt = baker.activeAt
+        // One fixed-focus shot is an optical zoom from rest: c(s) = p - (p - 0.5)/s
+        // for the whole window (pre-roll, hold and release). Deriving it from a
+        // single declared pivot keeps the Studio contract exact without letting
+        // the handoff spring or release drift move the subject sideways.
+        let exactFixedWindow: (pivot: SIMD2<Double>, from: Int, to: Int)? = {
+            guard baked.count == 1, case let .fixed(fx, fy) = baked[0].segment.focus else { return nil }
+            let scale = max(baked[0].segment.scale, 1.0001)
+            let pivot = SIMD2((fx * scale - 0.5) / (scale - 1),
+                              (fy * scale - 0.5) / (scale - 1))
+            let from = max(0, Int(baked[0].on * ctx.rate))
+            let to = min(n - 1, Int(baked[0].off * ctx.rate) + Int(1.5 * ctx.rate))
+            return (pivot, from, to)
+        }()
         var track = CameraTrack(count: n, rate: ctx.rate)
         var scaleSpring = 0.0, panX = 0.5, panY = 0.5
         var scaleVel = 0.0, velX = 0.0, velY = 0.0
@@ -617,6 +630,10 @@ enum CameraSolver {
         var legPivot = SIMD2<Double>(0.5, 0.5)
         var legS0 = 1.0, legS1 = 1.0
         var legPanOnly = false
+        /// A `.fixed` focus promises an exact optical pivot for the whole leg.
+        /// The sub-pixel handoff offset may smooth re-aims, but must never
+        /// perturb that invariant.
+        var legFixedFocus = false
         var legStartTime = 0.0, legRiseT = 0.4, legReaimT = 0.4
         var legV0 = SIMD2<Double>.zero, legA0 = SIMD2<Double>.zero
         var legScaleV0 = 0.0
@@ -641,6 +658,7 @@ enum CameraSolver {
                 legStartTime = Double(k) / ctx.rate
                 if activeIndex >= 0, activeIndex < baked.count {
                     let scene = baked[activeIndex]
+                    if case .fixed = scene.segment.focus { legFixedFocus = true } else { legFixedFocus = false }
                     let h = baker.holdTarget(activeIndex, k)
                     legTargetLog = min(scene.lz, ctx.maxLz)
                     // A focus outside the feasible box at the leg's smallest
@@ -679,6 +697,7 @@ enum CameraSolver {
                 } else {
                     legTargetLog = 0
                     legTargetCenter = legStartCenter
+                    legFixedFocus = false
                 }
                 legS0 = exp(legStartLog); legS1 = exp(legTargetLog)
                 let rawPivot = abs(legS1 - legS0) > 0.02
@@ -740,9 +759,15 @@ enum CameraSolver {
                 let ayOff = offOmega * offOmega * (0 - panOff.y) - 2 * offOmega * panOffVel.y
                 springStep(&panOff.x, &panOffVel.x, target: 0, omega: offOmega, dt: ctx.dt)
                 springStep(&panOff.y, &panOffVel.y, target: 0, omega: offOmega, dt: ctx.dt)
-                panX += panOff.x; panY += panOff.y
-                velX += panOffVel.x; velY += panOffVel.y
-                panAccelX = a.x * kAcc + axOff; panAccelY = a.y * kAcc + ayOff
+                // A fixed focus keeps c(t) = p - (p - c0) s0 / s(t) exact; the
+                // decaying handoff offset is only for re-aims.
+                if !legFixedFocus {
+                    panX += panOff.x; panY += panOff.y
+                    velX += panOffVel.x; velY += panOffVel.y
+                    panAccelX = a.x * kAcc + axOff; panAccelY = a.y * kAcc + ayOff
+                } else {
+                    panAccelX = a.x * kAcc; panAccelY = a.y * kAcc
+                }
             } else {
                 springStep(&scaleSpring, &scaleVel, target: lzTarget, omega: omega, dt: ctx.dt)
                 if onShot {
@@ -791,6 +816,22 @@ enum CameraSolver {
             // the spring keeps its state so there is never a velocity step.
             let clamped = clampCenter(SIMD2(panX, panY), max(scaleSpring, 0), k, ctx: ctx)
             panX = clamped.x; panY = clamped.y
+            // A fixed focus is an optical zoom about `legPivot`. Re-derive the
+            // centre from that invariant at every tick so accumulated spring
+            // and clamp drift cannot break the Studio fixed-pivot contract.
+            if let window = exactFixedWindow, k >= window.from, k <= window.to,
+               scaleSpring > 1e-6 {
+                let s = exp(max(scaleSpring, 0))
+                // The user focus offset is applied in source space, so its
+                // visible share shrinks by the current zoom just like the
+                // hold target does (`rawCenter - offset * exp(-lz)`).
+                let exact = SIMD2(window.pivot.x - (window.pivot.x - 0.5) / s - ctx.offset.x / s,
+                                  window.pivot.y - (window.pivot.y - 0.5) / s - ctx.offset.y / s)
+                // A focus outside the feasible crop box must still be clamped;
+                // for a feasible focus this is a no-op and the pivot stays exact.
+                let feasible = clampCenter(exact, max(scaleSpring, 0), k, ctx: ctx)
+                panX = feasible.x; panY = feasible.y
+            }
             let lz = clamp(scaleSpring, 0, ctx.maxLz)
             let ax = legScaleAccel ?? (omega * omega * (lzTarget - scaleSpring) - 2 * omega * scaleVel)
             let px = panAccelX ?? (panOmega * panOmega * (cxTarget - panX) - 2 * panOmega * velX)

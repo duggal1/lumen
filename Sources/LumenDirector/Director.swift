@@ -322,12 +322,50 @@ public enum Director {
                 cues += clicks.map { SFXCue(t: $0.t, kind: .click, gainDb: t.audio.clickGainDb) }
             }
             if t.audio.keySounds {
-                cues += input.events.filter { $0.kind == .keyDown && !tm.isCut($0.t) }
-                    .map { SFXCue(t: tm.output(atSource: $0.t), kind: .key, gainDb: 0, keyCode: $0.keyCode) }
-                // Recorded key releases are real events, not a synthetic tail:
-                // they carry their own timestamp and their own recorded sample.
-                cues += input.events.filter { $0.kind == .keyUp && !tm.isCut($0.t) }
-                    .map { SFXCue(t: tm.output(atSource: $0.t), kind: .keyUp, gainDb: 0, keyCode: $0.keyCode) }
+                // Explicit OS autorepeat is never a new physical press. Legacy
+                // down-only streams have no reliable release state, so retain
+                // their events instead of silencing all subsequent presses.
+                // Secure fields must never produce an audible key cue, on
+                // either the press or the paired release.
+                let paired = Set(input.events.lazy.filter { $0.kind == .keyUp }.map(\.keyCode))
+                var held = Set<UInt16>()
+                var privateKeys = Set<UInt16>()
+                for event in input.events.sorted(by: { $0.t < $1.t }) {
+                    let release: Bool
+                    switch event.kind {
+                    case .keyDown:
+                        guard !event.isKeyRepeat else { continue }
+                        if paired.contains(event.keyCode) {
+                            guard held.insert(event.keyCode).inserted else { continue }
+                        }
+                        if event.axFrameIndex > 0, Int(event.axFrameIndex) <= input.ax.count,
+                           input.ax[Int(event.axFrameIndex) - 1].secure { privateKeys.insert(event.keyCode); continue }
+                        release = false
+                    case .keyUp:
+                        guard held.remove(event.keyCode) != nil else { continue }
+                        if privateKeys.remove(event.keyCode) != nil { continue }
+                        release = true
+                    case .flagsChanged:
+                        // Old recordings did not persist the modifier keycode.
+                        guard [54, 55, 56, 57, 58, 59, 60, 61, 62, 63].contains(Int(event.keyCode)) else { continue }
+                        let mask: UInt16
+                        switch event.keyCode {
+                        case 54, 55: mask = 0x10
+                        case 56, 60: mask = 0x02
+                        case 57: mask = 0x01
+                        case 58, 61: mask = 0x08
+                        case 59, 62: mask = 0x04
+                        default: mask = 0x80
+                        }
+                        if held.remove(event.keyCode) != nil { release = true }
+                        else if event.flags & mask != 0 { held.insert(event.keyCode); release = false }
+                        else { continue }
+                    default: continue
+                    }
+                    guard event.t.isFinite, event.t >= tm.trimStart, event.t < tm.trimEnd, !tm.isCut(event.t) else { continue }
+                    cues.append(SFXCue(t: tm.output(atSource: event.t), kind: .key, gainDb: 0,
+                                       keyCode: event.keyCode, isKeyRelease: release))
+                }
             }
         }
         if t.audio.soundEffectsEnabled && t.audio.whooshes {
