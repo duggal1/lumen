@@ -160,6 +160,7 @@ enum TimelineSelection: Equatable {
     private var exportTask: Task<Void, Never>?
     private var activeExportID = UUID()
     private var mixTask: Task<Void, Never>?
+    private var masterDelayTask: Task<Void, Never>?
     private var hasMixed = false
     private var isMixing = false
     private var needsInitialMix = true
@@ -410,7 +411,7 @@ enum TimelineSelection: Equatable {
                 self.pendingInitialAnalysis = false
                 self.analyzeInBackground(out)
             }
-            if audioChanged, !self.needsInitialMix { self.invalidateAudio(); self.remix() }
+            if audioChanged, !self.needsInitialMix { self.invalidateAudio(); self.scheduleIdleMaster() }
             // Warm the preview buffer after derive publishes so a typical
             // Play (seconds after open) has sound instantly. The mix runs
             // off-main and never blocks open; an eager Play already owns
@@ -419,7 +420,7 @@ enum TimelineSelection: Equatable {
                 self.needsInitialMix = false
                 if !self.hasMixed, !self.isMixing, !self.wantsPlayback {
                     self.prepareFirstWindow()
-                    self.remix()
+                    self.scheduleIdleMaster()
                 }
             }
             // SMOOTHNESS: `playhead` is a 12 Hz echo, up to ~83 ms behind the real clock.
@@ -446,8 +447,26 @@ enum TimelineSelection: Equatable {
         player.stop(); player.load(nil)
         clock.pause(at: HostClock.now()); clock.seek(t)
         playhead = t; published = t
+        yieldMasterToTransport()
         hasMixed = false; isPlaying = false
         if resume { startWhenAudioReady(t) }
+    }
+
+    /// Whole-program mastering is admitted while transport is idle.
+    private func scheduleIdleMaster() {
+        masterDelayTask?.cancel()
+        guard !wantsPlayback, !hasMixed else { return }
+        masterDelayTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled, let self, !self.wantsPlayback, !self.hasMixed, !self.isMixing else { return }
+            self.remix()
+        }
+    }
+
+    private func yieldMasterToTransport() {
+        masterDelayTask?.cancel(); masterDelayTask = nil
+        // Keep the previous task as a cancellation barrier for the next master.
+        if isMixing { mixGeneration += 1; mixTask?.cancel(); isMixing = false }
     }
 
     /// Mastering is independent from transport. Cancel obsolete work and
@@ -507,6 +526,7 @@ enum TimelineSelection: Equatable {
     func play() {
         if clock.playing || preparingPlayback { return }
         wantsPlayback = true
+        yieldMasterToTransport()
         cancelWindowRequests()
         let t = playhead >= duration - 0.02 ? 0 : playhead
         if audioReady(at: t) { startPlayback(t) }
@@ -520,6 +540,7 @@ enum TimelineSelection: Equatable {
         playhead = clock.time(at: HostClock.now()); published = playhead
         isPlaying = false
         if editIssue == "Preparing audio…" { editIssue = nil }
+        scheduleIdleMaster()
     }
     func togglePlay() { wantsPlayback ? pause() : play() }
 
@@ -557,7 +578,7 @@ enum TimelineSelection: Equatable {
         isPlaying = true; preparingPlayback = false
         if editIssue == "Preparing audio…" { editIssue = nil }
         lastStartLatency = max(audible - requested, 0)
-        if hasAudio, !hasMixed, !isMixing { remix() }
+        // Bounded preview windows own playback; mastering resumes when idle.
     }
 
     /// Every seek gets its own bounded window. There is no polling for an
@@ -579,7 +600,7 @@ enum TimelineSelection: Equatable {
             self.startPlayback(t)
             self.lastStartLatency = max(HostClock.now() - started, self.lastStartLatency ?? 0)
         }
-        if !hasMixed, !isMixing { remix() }
+        // Do not launch a full-program mix while the first window is pending.
     }
 
     private func prepareNextWindow(at t: Double) {

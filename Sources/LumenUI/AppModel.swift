@@ -272,6 +272,12 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         FloatingBarMenuBarToggle.shared.syncAccessibility()
     }
 
+    public func hideFloatingBar() {
+        FloatingBarVisibility.hide()
+        bar?.hide()
+        FloatingBarMenuBarToggle.shared.syncAccessibility()
+    }
+
     public var floatingBarHidden: Bool { FloatingBarVisibility.isHidden() }
 
     public func showBarPanel(_ id: String) {
@@ -707,11 +713,12 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
         guard perms.screen else { Permissions.requestScreen(); error = "Screen Recording is off. Grant it, then relaunch Lumen."; return }
         guard perms.input else { Permissions.requestInput(); error = "Input Monitoring is off. Grant it, then relaunch Lumen."; return }
         if !perms.accessibility { Permissions.requestAccessibility() }
-        if mic || webcam {
+        if (mic && !perms.mic) || (webcam && !perms.camera) {
             await Permissions.requestMedia()
             perms = await Task.detached(priority: .userInitiated) { PermissionSnapshot.read() }.value
             permissions = perms
         }
+        guard !cancelRequested else { return }
         var cfg: RecordingConfig
         switch kind {
         case .display: cfg = RecordingConfig(source: .display(displayID))
@@ -766,6 +773,7 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
             // AGENT: the option existed but was never copied, so auto-mask did nothing.
             cfg.privacyAutoMask = options.privacyAutoMask
         }
+        guard !cancelRequested else { return }
         let sourceDisplay: CGDirectDisplayID?
         switch cfg.source {
         case .display(let id), .region(let id, _): sourceDisplay = id

@@ -195,6 +195,9 @@ public final class AudioMixer: @unchecked Sendable {
     private var jobs: [String: VoiceJob] = [:]
     private var music: MusicCache?
     private var imported: [String: MusicTrack] = [:]
+    private var importOrder: [String] = []
+    private var importBytes = 0
+    private let importBudget = 48 * 1024 * 1024
     private let keyBankLock = NSLock()
     private var keyBank: [String: [Int: [Float]]] = [:]
     private var customDenoiser: (any Denoiser)?
@@ -428,13 +431,28 @@ public final class AudioMixer: @unchecked Sendable {
     private func importTrack(_ path: String) -> MusicTrack? {
         state.lock()
         let cached = imported[path]
+        if cached != nil { importOrder.removeAll { $0 == path }; importOrder.append(path) }
         state.unlock()
         if let cached { return cached }
         guard let (l, r) = try? AudioIO.readStereo(URL(fileURLWithPath: path)),
               !l.isEmpty, l.count == r.count else { return nil }
         let result = MusicTrack(l: l, r: r)
         state.lock()
-        imported[path] = result
+        let cost = (l.count + r.count) * MemoryLayout<Float>.stride
+        if cost <= importBudget {
+            if let previous = imported.removeValue(forKey: path) {
+                importBytes -= (previous.l.count + previous.r.count) * MemoryLayout<Float>.stride
+            }
+            importOrder.removeAll { $0 == path }
+            while importBytes > importBudget - cost, !importOrder.isEmpty {
+                let evicted = importOrder.removeFirst()
+                if let track = imported.removeValue(forKey: evicted) {
+                    importBytes -= (track.l.count + track.r.count) * MemoryLayout<Float>.stride
+                }
+            }
+            imported[path] = result
+            importOrder.append(path); importBytes += cost
+        }
         state.unlock()
         return result
     }
@@ -586,7 +604,7 @@ public final class AudioMixer: @unchecked Sendable {
         if a.micMode != .off, micURL != nil || mic != nil || extraCount() > 0 { return true }
         if sys != nil || systemURL != nil { return true }
         if a.musicPath != nil { return true }
-        if a.lanes.contains(where: { !$0.mute && $0.path != nil && ($0.role == .voiceover || $0.role == .music) }) { return true }
+        if a.lanes.contains(where: { !$0.mute && $0.path != nil && ($0.role == .voiceover || $0.role == .music || $0.role == .sfx) }) { return true }
         if a.soundEffectsEnabled, let cues = tl.derived?.cues, !cues.isEmpty { return true }
         return false
     }

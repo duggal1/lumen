@@ -26,6 +26,7 @@ struct FloatingBarView: View {
     var onPause: () -> Void
     var onDiscard: () -> Void
     var onCancel: () -> Void
+    var onHide: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -83,6 +84,7 @@ struct FloatingBarView: View {
             Spacer(minLength: 6)
 
             RecordButton(action: onRecord)
+            hideControl
         }
     }
 
@@ -121,7 +123,17 @@ struct FloatingBarView: View {
             RecorderAction(title: "Stop", icon: "stop.fill",
                            accessibilityLabel: "Stop recording", action: onStop)
             DiscardButton(action: onDiscard)
+            hideControl
         }
+    }
+
+    private var hideControl: some View {
+        Button(action: onHide) {
+            PixelSymbol("eye.slash", size: 13)
+                .foregroundStyle(Tok.text2).frame(width: 26, height: 26)
+        }.buttonStyle(.plain).floatingHandCursor()
+            .accessibilityLabel("Hide recording controls")
+            .help("Hide controls; click the Lumen menu-bar icon to restore")
     }
 
     private var countdownBar: some View {
