@@ -461,6 +461,11 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         ptsRange.withLock { $0.first.map { $0 > 0 ? max(HostClock.now() - $0 - pausedTime.withLock { $0 }, 0) : 0 } ?? 0 }
     }
     public var lastPTS: Double { ptsRange.withLock { $0.last } }
+    /// Read both ends under one lock: a journal must never observe a first
+    /// frame from a newer callback and a last frame from an older callback.
+    public var checkpointPTS: (first: Double?, last: Double) {
+        ptsRange.withLock { ($0.first, $0.last) }
+    }
 
     /// Stops accepting frames and audio. The gap is cut out on stop, so a paused
     /// span never reaches the timeline — important when the user pauses to hide
@@ -580,7 +585,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
 
         let w = try AVAssetWriter(outputURL: bundle.screenURL, fileType: .mov)
         // Fragmented so a crash/force-quit still leaves a playable file.
-        w.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
+        w.movieFragmentInterval = CMTime(seconds: 1, preferredTimescale: 600)
         let bitrate: Double = switch cfg.quality {
         case .standard: min(Double(pw * ph) * Double(fps) * RecordingConfig.Quality.standard.bitsPerPixel, 250_000_000)
         case .high: min(Double(pw * ph) * Double(fps) * RecordingConfig.Quality.high.bitsPerPixel, 250_000_000)
@@ -670,18 +675,30 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         let sp = OSSignposter(logger: Logger(subsystem: "com.lumen.studio", category: "capture"))
         let state = sp.beginInterval("engine.stop")
         defer { sp.endInterval("engine.stop", state) }
-        try await stream?.stopCapture()
+        // Even if ScreenCaptureKit stopped itself (disconnect/revoke), drain
+        // existing queues and finalize any valid media already captured.
+        do { try await stream?.stopCapture() }
+        catch { NSLog("SCStream stop: \(error)") }
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             videoQ.async {
+                self.drainVideo()
                 if self.pendingVideo != nil { self.dropped.withLock { $0 += 1 }; self.pendingVideo = nil }
                 if self.started { self.vin?.markAsFinished() }
                 c.resume()
             }
         }
-        guard started, let w = writer else { writer?.cancelWriting(); throw CaptureError.writer("no frames were captured") }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            audioQ.async { c.resume() }
+        }
+        // CAFWriter.close drains its own serial writer queue.
+        defer { meta?.close(); mic?.close(); system?.close() }
+        guard started, let w = writer, writtenFrames > 0 else {
+            writer?.cancelWriting(); throw CaptureError.writer("no frames were captured")
+        }
         await w.finishWriting()
-        meta?.close(); mic?.close(); system?.close()
-        if w.status == .failed { throw CaptureError.writer(w.error?.localizedDescription ?? "writer failed") }
+        guard w.status == .completed else {
+            throw CaptureError.writer(w.error?.localizedDescription ?? "writer did not finish")
+        }
     }
 
     /// Abandons a prepared capture that never produced a recording. The stream
@@ -738,7 +755,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         if !started {
             guard w.startWriting() else { return }
             w.startSession(atSourceTime: pts); started = true
-            ptsRange.withLock { $0.first = pts.seconds }
+            ptsRange.withLock { $0.first = pts.seconds; $0.last = pts.seconds }
         }
         if pendingVideo != nil { dropped.withLock { $0 += 1 } }
         pendingVideo = (frame, pts)

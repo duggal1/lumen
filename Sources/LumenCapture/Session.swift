@@ -72,10 +72,13 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 
     init(url: URL, deviceID: String?, quality: String = "auto") throws {
         writer = try AVAssetWriter(outputURL: url, fileType: .mov)
-        writer.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
+        writer.movieFragmentInterval = CMTime(seconds: 1, preferredTimescale: 600)
         self.quality = quality
         super.init()
-        guard let dev = deviceID.flatMap({ AVCaptureDevice(uniqueID: $0) }) ?? AVCaptureDevice.default(for: .video) else { throw CaptureError.noSource }
+        let requested: AVCaptureDevice?
+        if let deviceID { requested = AVCaptureDevice(uniqueID: deviceID) }
+        else { requested = AVCaptureDevice.default(for: .video) }
+        guard let dev = requested else { throw CaptureError.noSource }
         session.beginConfiguration()
         // macOS does not expose AVCaptureSession.Preset.inputPriority. Use the
         // highest *supported* session preset, then encode the actual buffer
@@ -191,6 +194,8 @@ public actor RecordingSession {
     private var sleepObserver: NSObjectProtocol?
     private var terminateObserver: NSObjectProtocol?
     private var journalStart = Date()
+    private var stopTask: Task<Void, Error>?
+    private var finalizeTask: Task<ProjectBundle, Error>?
     public private(set) var isPaused = false
     public private(set) var stage: RecordingStage = .idle
     private let logger = Logger(subsystem: "com.lumen.studio", category: "capture")
@@ -239,6 +244,7 @@ public actor RecordingSession {
     }
 
     public func prepare(_ config: RecordingConfig, library: URL) async throws {
+        stopTask = nil; finalizeTask = nil
         MainThreadWatchdog.shared.start()
         transition(to: .preparing)
         let timeoutTask = armStageTimeout(.preparing, seconds: 15)
@@ -343,7 +349,7 @@ public actor RecordingSession {
     /// Pause keeps the capture graph alive but stops appending frames and audio.
     /// Everything recorded during the pause is cut out on stop.
     public func pause() {
-        guard !isPaused else { return }
+        guard stage == .recording, !isPaused else { return }
         engine?.pause(); webcam?.pause(); extraMicrophones.forEach { $0.pause() }
         viewportPaused?.withLock { $0 = true }
         isPaused = true
@@ -351,7 +357,7 @@ public actor RecordingSession {
     }
 
     public func resume() {
-        guard isPaused else { return }
+        guard stage == .paused, isPaused else { return }
         engine?.resume(); webcam?.resume(); extraMicrophones.forEach { $0.resume() }
         viewportPaused?.withLock { $0 = false }
         isPaused = false
@@ -383,17 +389,24 @@ public actor RecordingSession {
 
     private func writeJournal() async throws {
         guard let b = bundle, let e = engine, let info = e.info else { return }
-        let j = RecordingJournal(started: journalStart, updated: Date(), source: info,
+        let pts = e.checkpointPTS
+        var j = RecordingJournal(started: journalStart, updated: Date(), source: info,
                                  fps: Double(cfg?.fps ?? 60),
                                  mic: cfg?.mic ?? false, system: cfg?.systemAudio ?? false,
                                  webcam: cfg?.webcamDeviceID != nil,
                                  pauseIntervals: e.pauseIntervals,
-                                 lastFramePTS: e.lastPTS,
-                                 firstFramePTS: e.firstPTS,
+                                 lastFramePTS: pts.last,
+                                 firstFramePTS: pts.first,
                                  droppedFrames: e.droppedFrames,
                                  smartCrop: cfg?.smartCrop.isActive == true ? cfg?.smartCrop : nil)
+        j.eventUnit = unit
+        j.micStart = e.mic?.first.withLock { $0 }
+        j.systemStart = e.system?.first.withLock { $0 }
+        j.webcamStart = webcam?.first.withLock { $0 }
+        j.extraMicrophones = extraMicrophones.compactMap(\.track)
+        let checkpoint = j
         try await Task.detached(priority: .utility) {
-            try b.writeJournal(j).get()
+            try b.writeJournal(checkpoint).get()
         }.value
     }
 
@@ -457,6 +470,14 @@ public actor RecordingSession {
     /// (stopCapture, drain sample queue, endSession, mark inputs finished,
     ///  `await finishWriting` off main).
     public func stopCapture() async throws {
+        if let stopTask { return try await stopTask.value }
+        guard stage == .recording || stage == .paused else { throw CaptureError.noSource }
+        let task = Task { try await self.performStopCapture() }
+        stopTask = task
+        try await task.value
+    }
+
+    private func performStopCapture() async throws {
         transition(to: .stopping)
         let timeoutTask = armStageTimeout(.stopping, seconds: 10)
         defer { timeoutTask.cancel() }
@@ -467,7 +488,11 @@ public actor RecordingSession {
             pendingJournal?.cancel()
             await pendingJournal?.value
             stopWatchdog()
-            if isPaused { resume() }
+            if isPaused {
+                // Close the pause interval without transitioning the session
+                // back to recording while the stop operation is in progress.
+                engine.resume()
+            }
             isPaused = false
             viewport?.stop(); viewport = nil; viewportPaused = nil
             async let inputStop: Void = input.stop()
@@ -475,6 +500,9 @@ public actor RecordingSession {
             async let engineStop: Void = engine.stop()
             for recorder in extraMicrophones { await recorder.stop() }
             _ = try await (inputStop, webcamStop, engineStop)
+            // Last checkpoint includes actual track origins and the final
+            // accepted frame, even if the app dies during post-processing.
+            try await writeJournal()
         } catch {
             transition(to: .failed("Stopping stalled. \(error)"))
             throw error
@@ -485,6 +513,17 @@ public actor RecordingSession {
     /// Runs at `.utility` QoS off main; UI shows "Finishing…" with real progress.
     /// Heavy analysis starts only after this returns.
     public func finalize(progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> ProjectBundle {
+        if let finalizeTask { return try await finalizeTask.value }
+        guard let stopTask else { throw CaptureError.noSource }
+        let task = Task {
+            try await stopTask.value
+            return try await self.performFinalize(progress: progress)
+        }
+        finalizeTask = task
+        return try await task.value
+    }
+
+    private func performFinalize(progress: @escaping @Sendable (Double) -> Void) async throws -> ProjectBundle {
         progress(0)
         transition(to: .finalizing)
         // Snapshot actor state first (cheap), then run heavy IO off-actor.
@@ -493,9 +532,16 @@ public actor RecordingSession {
             throw CaptureError.noSource
         }
         let activityToken = activity
-        let origin = engine.firstPTS ?? 0
-        let stopHostSeconds = HostClock.now()
-        info.duration = max(engine.lastPTS - origin, stopHostSeconds - origin, 0)
+        guard let origin = engine.firstPTS else { throw CaptureError.writer("Recording has no source clock anchor.") }
+        // Use the finalized video track, not the wall clock after stopping.
+        // Metadata loading is cheap and avoids a phantom tail after idle/stop.
+        let asset = AVURLAsset(url: b.screenURL)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+            throw CaptureError.writer("Recording has no video track.")
+        }
+        let duration = try await track.load(.timeRange).duration.seconds
+        guard duration.isFinite, duration > 0 else { throw CaptureError.writer("Recording has no playable duration.") }
+        info.duration = duration
         var meta = ProjectMeta(name: b.url.deletingPathExtension().lastPathComponent, source: info,
                                clock: RecordingClock(originHostSeconds: origin, eventUnit: unit))
         meta.droppedFrames = engine.droppedFrames
@@ -564,6 +610,7 @@ public actor RecordingSession {
         activity = nil
         RecordingGate.recordingStopped()
         MainThreadWatchdog.shared.stop()
+        transition(to: .ready)
         return b
     }
 
@@ -582,6 +629,7 @@ public actor RecordingSession {
         let pendingJournal = journalTask
         journalTask = nil
         pendingJournal?.cancel()
+        await pendingJournal?.value
         stopWatchdog()
         if isPaused {
             engine?.resume()
