@@ -54,8 +54,26 @@ public actor ReaderFrameSource: FrameSource {
     private var out: AVAssetReaderTrackOutput?
     private var cur: Entry?, peek: Entry?
     private var lru: [Entry] = []
+    private var cachedBytes = 0
+    private let cacheBudget: Int
+    private let maxCachedFrames: Int
 
-    public init(url: URL, device: SendableMetalDevice) async throws {
+    public struct CacheUsage: Sendable {
+        public var entries: Int
+        public var retainedBytes: Int
+        public var budgetBytes: Int
+    }
+
+    /// LRU budget excludes the decoder's own surfaces, one lookahead frame
+    /// and frames leased to render consumers. The current frame always survives.
+    public func cacheUsage() -> CacheUsage {
+        CacheUsage(entries: lru.count, retainedBytes: cachedBytes, budgetBytes: cacheBudget)
+    }
+
+    public init(url: URL, device: SendableMetalDevice, cacheBudget: Int = 64 * 1024 * 1024,
+                maxCachedFrames: Int = 8) async throws {
+        self.cacheBudget = max(cacheBudget, 0)
+        self.maxCachedFrames = max(1, min(maxCachedFrames, 8))
         let a = AVURLAsset(url: url)
         guard let tr = try await a.loadTracks(withMediaType: .video).first else { throw FrameSourceError.noTrack }
         var c: CVMetalTextureCache?
@@ -103,7 +121,11 @@ public actor ReaderFrameSource: FrameSource {
             guard let p = peek, p.pts <= t else { break }
             cur?.end = p.pts
             cur = p; peek = nil
-            lru.append(p); if lru.count > 8 { lru.removeFirst() }
+            lru.append(p)
+            cachedBytes += CVPixelBufferGetDataSize(p.pb)
+            while lru.count > 1 && (lru.count > maxCachedFrames || cachedBytes > cacheBudget) {
+                cachedBytes -= CVPixelBufferGetDataSize(lru.removeFirst().pb)
+            }
         }
         if reader?.status == .failed {
             throw FrameSourceError.read(reader?.error?.localizedDescription ?? "decode failed")

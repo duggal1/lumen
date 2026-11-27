@@ -47,20 +47,15 @@ public final class ProjectSession: @unchecked Sendable {
     public var waveform: [Float] { audioState.withLock { $0.waveform } }
     public var audioPreparation: AudioPreparation { audioState.withLock { $0.state } }
     public let cursors: [CustomCursor]
-    /// Shared across the project's decoder; imported clips open their own
-    /// `ReaderFrameSource` lazily and keep it for the life of the session.
     private let device: SendableMetalDevice
-    private struct ClipCache {
-        var readers: [String: ReaderFrameSource] = [:]
-        var order: [String] = []
-    }
-    private let clipSources = OSAllocatedUnfairLock(initialState: ClipCache())
+    private let frameReader: ProjectFrameReader
     private struct AudioState { var waveform: [Float] = []; var state: AudioPreparation = .idle }
     private let audioState = OSAllocatedUnfairLock(initialState: AudioState())
     private let audioTaskState = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
     init(bundle: ProjectBundle, meta: ProjectMeta, revision: Int, screen: ReaderFrameSource, webcam: (any FrameSource)?, input: DirectorInput,
          mixer: AudioMixer, transcriptFile: TranscriptFile?, micOffset: Double, waveform: [Float], cursors: [CustomCursor], device: SendableMetalDevice) {
         self.bundle = bundle; self.meta = meta; self.screen = screen; self.webcam = webcam
+        self.frameReader = ProjectFrameReader(screen: screen, webcam: webcam, device: device)
         projectRevision = OSAllocatedUnfairLock(initialState: revision)
         inputState = OSAllocatedUnfairLock(initialState: input)
         self.mixer = mixer; self.transcriptFile = transcriptFile; self.micOffset = micOffset; self.cursors = cursors; self.device = device
@@ -93,44 +88,23 @@ public final class ProjectSession: @unchecked Sendable {
         projectChangeHandler.withLock { $0 }?(file)
     }
 
-    /// One frame for an OUTPUT time. Recording times read the screen track at
-    /// the source time the TimeMap resolves; imported clips read their own file.
-    /// Preview and export both go through here so a clip and the recording
-    /// cannot disagree about what is on screen at a given moment.
     public func frames(atOutput t: Double, timeline tl: Timeline) async throws -> (screen: SourceFrame, webcam: SourceFrame?) {
-        if let (clip, time) = tl.clipSource(atOutput: t) {
-            let source = try await clipSource(for: clip.url)
-            return (try await source.frame(atSource: time), nil)
-        }
-        let s = tl.timeMap.source(atOutput: t)
-        // SMOOTHNESS: the webcam and the screen are two independent readers.
-        // Awaiting the webcam first delayed the screen decode by a full frame.
-        async let web: SourceFrame? = {
-            guard tl.webcam != nil, let w = webcam else { return nil }
-            return try? await w.frame(atSource: s)
-        }()
-        let screenFrame = try await screen.frame(atSource: s)
-        return (screenFrame, await web)
+        try await frameReader.frames(atOutput: t, timeline: tl)
     }
 
-    private func clipSource(for url: URL) async throws -> ReaderFrameSource {
-        let key = url.standardizedFileURL.path
-        if let existing = clipSources.withLock({ cache -> ReaderFrameSource? in
-            guard let reader = cache.readers[key] else { return nil }
-            cache.order.removeAll { $0 == key }; cache.order.append(key)
-            return reader
-        }) { return existing }
-        let source = try await ReaderFrameSource(url: url, device: device)
-        return clipSources.withLock { cache in
-            if let existing = cache.readers[key] { return existing }
-            // Each reader owns decoded frames and Metal textures. Retaining
-            // every clip in a long project needlessly grows GPU memory.
-            while cache.order.count >= 3 {
-                cache.readers.removeValue(forKey: cache.order.removeFirst())
-            }
-            cache.readers[key] = source; cache.order.append(key)
-            return source
+    /// A distinct decoder set for each export; scrubbing can never rewind it.
+    func makeExportFrameReader() async throws -> ProjectFrameReader {
+        let budget = 32 * 1024 * 1024
+        let screen = try await ReaderFrameSource(url: bundle.screenURL, device: device,
+            cacheBudget: budget, maxCachedFrames: 2)
+        var webcam: (any FrameSource)?
+        if let web = meta.webcam {
+            let source = try await ReaderFrameSource(url: bundle.webcamURL, device: device,
+                cacheBudget: budget, maxCachedFrames: 2)
+            webcam = OffsetFrameSource(source, offset: web.startHostSeconds - meta.clock.originHostSeconds)
         }
+        return ProjectFrameReader(screen: screen, webcam: webcam, device: device,
+            cacheBudget: budget, maxCachedFrames: 2, maxClipReaders: 1)
     }
 
     public func derive(_ tl: Timeline, revision: Int) -> Timeline { Director.derive(tl, input: input, revision: revision) }
