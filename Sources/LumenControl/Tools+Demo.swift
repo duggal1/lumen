@@ -230,15 +230,19 @@ public extension ToolRegistry {
                             }
                         }
                         reporter.progress(0.75, "qa")
-                        let qa = try await engine.qaReport(projectID: project.identifier)
-                        let failed = qa["checks"]?.arrayValue?.filter { $0["ok"]?.boolValue != true } ?? []
-                        guard failed.isEmpty else {
-                            throw ToolError(code: "QA_FAILED", hint: "Quality checks failed: \(JSONValue.array(failed).jsonText)")
+                        let quality = try await AgentDemoQuality.run(
+                            assess: { try await engine.qaReport(projectID: project.identifier) },
+                            repair: { adjustment, revision in
+                                try await engine.adjustDemoMaster(projectID: project.identifier, revision: revision, adjustment: adjustment)
+                            })
+                        let qa = quality.report
+                        guard let qaRevision = qa["revision"]?.intValue else {
+                            throw ToolError.failed("Quality report has no persisted revision.")
                         }
                         try reporter.checkpoint(.object(["project_path": .string(projectURL.path), "project_id": .string(project.identifier), "stage": .string("ready_to_export"), "output": .string(outputURL.path)]))
                         reporter.progress(0.80, "exporting")
                         let exportID = try await engine.startExport(projectID: project.identifier, presetName: export.preset,
-                            outputPath: outputURL.path, includeAudio: true, exportStems: false)
+                            outputPath: outputURL.path, includeAudio: true, exportStems: false, expectedRevision: qaRevision)
                         try reporter.checkpoint(.object(["project_path": .string(projectURL.path), "project_id": .string(project.identifier), "stage": .string("exporting"), "output": .string(outputURL.path), "export_job_id": .string(exportID)]))
                         let finalExport = try await jobs.waitForCompletion(exportID) { progress, message in
                             reporter.progress(0.80 + progress * 0.20, message ?? "Exporting")
@@ -248,7 +252,7 @@ public extension ToolRegistry {
                             throw ToolError(code: "EXPORT_VERIFICATION_FAILED", hint: "Export job did not return verification evidence.")
                         }
                         return .object(["project_id": .string(project.identifier), "output": .string(output),
-                                        "qa": qa, "verification": proof, "markers": .int(markers.count)])
+                                        "qa": qa, "corrections": .array(quality.corrections), "verification": proof, "markers": .int(markers.count)])
                     } catch {
                         if isRecording {
                             if let recovered = try? await runtime.stopRecording() { recoveryProject = recovered.path }
