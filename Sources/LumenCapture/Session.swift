@@ -545,11 +545,15 @@ public actor RecordingSession {
         guard let origin = engine.firstPTS else { throw CaptureError.writer("Recording has no source clock anchor.") }
         // Use the finalized video track, not the wall clock after stopping.
         // Metadata loading is cheap and avoids a phantom tail after idle/stop.
-        let asset = AVURLAsset(url: b.screenURL)
-        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
-            throw CaptureError.writer("Recording has no video track.")
-        }
-        let duration = try await track.load(.timeRange).duration.seconds
+        let duration = try await Task.detached(priority: .utility) {
+            // Keep non-Sendable AVAssetTrack objects inside this task; only
+            // the scalar media duration crosses the recording actor.
+            let asset = AVURLAsset(url: b.screenURL)
+            guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                throw CaptureError.writer("Recording has no video track.")
+            }
+            return try await track.load(.timeRange).duration.seconds
+        }.value
         guard duration.isFinite, duration > 0 else { throw CaptureError.writer("Recording has no playable duration.") }
         info.duration = duration
         var meta = ProjectMeta(name: b.url.deletingPathExtension().lastPathComponent, source: info,
