@@ -251,6 +251,7 @@ public enum Director {
         if cancelled() { return nil }
         t.timeMap = tm
         var autoKinds: [UUID: ZoomPlanner.IntentKind] = [:]
+        var protectedVisual: Set<UUID> = []
         if t.camera.autoZoom {
             let manual = t.zoom.filter { $0.origin == .manual }
             let avoid = manual.map { min($0.start, $0.end)...max($0.start, $0.end) }
@@ -267,6 +268,7 @@ public enum Director {
                 cache.planKey = pkey; cache.plan = planned
             }
             autoKinds = planned.kinds
+            protectedVisual = planned.protectedVisual
             // AGENT: applying suppression here covers normal derives as well as explicit replans.
             let suppressed = Set(t.suppressedAuto)
             t.zoom = (manual + planned.segments.filter { !suppressed.contains($0.id.uuidString) }).sorted { $0.start < $1.start }
@@ -315,7 +317,7 @@ public enum Director {
         guard let cam = CameraSolver.solve(zoom: t.zoom, tm: tm, cursor: cursor, p: t.camera, src: size,
                                            outDur: tm.outputDuration, loop: t.cursor.loop,
                                            crop: viewport, aspect: drawAspect,
-                                           kinds: autoKinds,
+                                           kinds: autoKinds, protectedVisual: protectedVisual,
                                            follow: followPaths,
                                            cancelled: cancelled) else { return nil }
         let placement = WebcamPlacement.solve(t, tm: tm, cam: cam, cursor: cursor, src: size, vad: input.vad,

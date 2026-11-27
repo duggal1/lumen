@@ -58,6 +58,7 @@ enum ZoomPlanner {
         /// Intent kinds by segment id, so the camera solver can tell a typing
         /// shot (stable target) from a follow shot.
         var kinds: [UUID: IntentKind] = [:]
+        var protectedVisual: Set<UUID> = []
     }
     enum IntentKind { case click, typing, visual, marker, dialog }
     struct Intent {
@@ -414,6 +415,7 @@ enum ZoomPlanner {
         var shots: [ZoomSegment] = []
         var followPaths: [UUID: [FollowPoint]] = [:]
         var kinds: [UUID: IntentKind] = [:]
+        var protectedVisual: Set<UUID> = []
         var centers: [UUID: SIMD2<Double>] = [:]
         var cur: Open?
         var shotCap = maxShot                     // effective ceiling for the open shot
@@ -444,6 +446,7 @@ enum ZoomPlanner {
                 focus = .fixed(x: o.c.x / W, y: o.c.y / H)
             }
             kinds[id] = o.kind
+            if o.kind == .visual, o.visualEnd != nil { protectedVisual.insert(id) }
             centers[id] = o.c
             shots.append(ZoomSegment(id: id, start: o.start, end: e, scale: o.scale, focus: focus, origin: .auto))
         }
@@ -696,7 +699,8 @@ enum ZoomPlanner {
         // Only the paths of segments that survived the filter travel on.
         let ids = Set(kept.map(\.id))
         return ZoomPlan(segments: kept, follow: followPaths.filter { ids.contains($0.key) },
-                        kinds: kinds.filter { ids.contains($0.key) })
+                        kinds: kinds.filter { ids.contains($0.key) },
+                        protectedVisual: protectedVisual.intersection(ids))
     }
 
 }

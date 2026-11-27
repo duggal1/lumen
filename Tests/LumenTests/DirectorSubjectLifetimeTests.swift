@@ -148,8 +148,9 @@ import LumenProject
         let prior = try #require(fallback.segments.first)
         #expect(fallback.segments.count == 2)
         #expect(prior.end == 13)
-        #expect(plan.kinds[response.id] == .visual)
+        #expect(fallback.kinds[prior.id] == .visual)
         #expect(fallback.segments.last.map { fallback.kinds[$0.id] == .click } == true)
+        #expect(plan.protectedVisual.contains(response.id))
     }
 
     @Test func trimmedOutResponseDoesNotResurrectAtTrimStart() {
@@ -157,6 +158,32 @@ import LumenProject
                              backingScale: 1, originX: 0, originY: 0)
         let tm = TimeMap(sourceDuration: 20, trimStart: 15, trimEnd: 20)
         #expect(VisualAutofocus.intents(shots: [responseShot()], src: src, tm: tm).isEmpty)
+    }
+
+
+    @Test func cameraHandoffCannotStealReadingTime() throws {
+        let response = ZoomSegment(start: 1, end: 13, scale: 1.6,
+            focus: .fixed(x: 0.7, y: 0.5), origin: .auto)
+        let next = ZoomSegment(start: 13.1, end: 15, scale: 1.8,
+            focus: .fixed(x: 0.25, y: 0.4), origin: .auto)
+        let tm = TimeMap(sourceDuration: 17)
+        let track = try #require(CameraSolver.solve(zoom: [response, next], tm: tm,
+            cursor: CursorTrack(count: Int(17 * gridRate) + 1), p: CameraParams(),
+            src: SIMD2<Double>(1920, 1080), outDur: 17, loop: nil,
+            kinds: [response.id: .visual, next.id: .visual],
+            protectedVisual: [response.id], follow: [:], cancelled: { false }))
+        func tick(_ t: Double) -> Int { Int((t * track.rate).rounded()) }
+        let reading = tick(11)
+        for k in tick(12.5)...tick(12.95) {
+            #expect(abs(track.nx[k] - track.nx[reading]) < 0.002)
+            #expect(abs(track.ny[k] - track.ny[reading]) < 0.002)
+            #expect(abs(track.lz[k] - track.lz[reading]) < 0.002)
+        }
+        #expect(track.nx[tick(14.3)] < track.nx[reading] - 0.1)
+        for k in tick(12.5)...tick(14.5) {
+            #expect(abs(track.nx[k] - track.nx[k - 1]) < 0.02)
+            #expect(abs(track.lz[k] - track.lz[k - 1]) < 0.02)
+        }
     }
 
 }
