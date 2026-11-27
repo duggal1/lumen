@@ -51,7 +51,7 @@ enum Tok {
     static let text = Color(light: 0x0A0A0A, dark: 0xFAFAFA)
     static let text2 = Color(light: 0x666666, dark: 0xA3A3A3)
     static let textAction = Color(light: 0x2E2E2E, dark: 0xE5E5E5)
-    static let floatingText = Color(light: 0x000000, dark: 0x000000)
+    static let floatingText = Color(light: 0x0A0A0A, dark: 0xFAFAFA)
     // Blue accents identify actions and selection on neutral surfaces.
     static let action = Color(light: 0x0067D5, dark: 0x46A4FF)
     static let accent = Color(light: 0x0067D5, dark: 0x46A4FF)

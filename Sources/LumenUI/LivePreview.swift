@@ -35,16 +35,9 @@ final class LiveHub: @unchecked Sendable {
         hub = LiveHub(source: src, config: config)
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 488, height: 278), styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
-        p.appearance = NSAppearance(named: .darkAqua)
-        // Apple native blur card: the floating preview sits on a real
-        // NSVisualEffectView so it reads as a system surface, not a black box.
-        let blur = NSVisualEffectView()
-        blur.material = .hudWindow
-        blur.blendingMode = .behindWindow
-        blur.state = .active
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = 20
-        blur.layer?.masksToBounds = true
+        // Use the same semantic material/accessibility policy as other
+        // floating panels. Never force dark Aqua on the live preview.
+        let blur = FrostView(radius: 20)
         let preview = LivePreviewNSView(renderer: r, hub: hub)
         preview.translatesAutoresizingMaskIntoConstraints = false
         blur.addSubview(preview)
