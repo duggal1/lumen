@@ -22,16 +22,40 @@ public enum ActivityShotBuilder {
         var wps: [(t: Double, box: CellBox)] = []
         var capT: Double? = nil
         var hoverTainted = false
+        var localHoverTainted = false
+        var actionTime: Double? = nil
+        var growthSteps = 0
+        var growthAnchor: CellBox? = nil
+        var lastGrowth = -Double.infinity
+        var progressionOverflow = false
+
+        var sustained: Bool {
+            actionTime != nil && !localHoverTainted && growthSteps >= 2 &&
+                samples >= 5 && lastT - firstT >= 0.5
+        }
 
         mutating func absorb(_ c: Comp, t: Double, s: ActivitySettings) {
             lastT = t; samples += 1
             maxCells = max(maxCells, c.cells); energy += c.energy
             if capT == nil, t - firstT >= s.maxActiveSeconds { capT = t }
-            if capT == nil {
-                let u = union.union(c.box)
+            let u = union.union(c.box)
+            if capT == nil || sustained {
                 if Double(u.area) / Double(ActivityConst.cells) <= s.maxAreaFraction { union = u }
+                else { progressionOverflow = true }
             }
-            guard samples >= s.onsetSamples, capT == nil else { return }
+            if actionTime != nil, !localHoverTainted {
+                if let anchor = growthAnchor {
+                    let extent = max(union.x1 - anchor.x1, anchor.x0 - union.x0,
+                                     union.y1 - anchor.y1, anchor.y0 - union.y0)
+                    if extent >= 1, Double(union.area) >= Double(anchor.area) * 1.18,
+                       t - lastGrowth >= 0.25 {
+                        growthSteps += 1; growthAnchor = union; lastGrowth = t
+                    }
+                } else {
+                    growthAnchor = union; lastGrowth = t
+                }
+            }
+            guard samples >= s.onsetSamples, capT == nil || sustained else { return }
             if let last = wps.last {
                 let grew = Double(union.area) >= 1.2 * Double(last.box.area)
                 let moved = hypot(union.cx - last.box.cx, union.cy - last.box.cy) >= 3
@@ -40,8 +64,8 @@ public enum ActivityShotBuilder {
         }
     }
 
-    /// Builds shots and `busy` spans. Overlapping shots are chained into one shot
-    /// with in-shot waypoints, never emitted as two overlapping segments.
+    /// Builds shots and busy spans; overlapping independent subjects are
+    /// arbitrated rather than concatenated into a single camera path.
     public static func build(grids: [ActivityGrid], source: (w: Double, h: Double),
                              inputs: ActivityInputs, settings s: ActivitySettings) -> ActivityResult {
         guard s.enabled, source.w.isFinite, source.h.isFinite, source.w > 0, source.h > 0 else { return ActivityResult() }
@@ -60,7 +84,12 @@ public enum ActivityShotBuilder {
         var live: [Int] = []
 
         for g in grids where g.cells.count == ActivityConst.cells && g.t.isFinite {
-            live.removeAll { g.t - tracks[$0].lastT > s.settleHold + 1e-6 }
+            live.removeAll {
+                let track = tracks[$0]
+                // Only confirmed progression earns a longer token-pause grace.
+                let grace = track.sustained ? max(s.settleHold, 1.6) : s.settleHold
+                return g.t - track.lastT > grace + 1e-6
+            }
             let active = mask(for: g, t: g.t, inputs: inputs, settings: s, cw: cw, ch: ch)
             for c in components(active, g.cells) {
                 var best = -1, bestOv = 0
@@ -71,7 +100,9 @@ public enum ActivityShotBuilder {
                     if ov > bestOv { bestOv = ov; best = i }
                 }
                 if best < 0 {
-                    tracks.append(Track(firstT: g.t, lastT: g.t, union: c.box))
+                    var track = Track(firstT: g.t, lastT: g.t, union: c.box)
+                    track.actionTime = inputs.recentAction(at: g.t)
+                    tracks.append(track)
                     best = tracks.count - 1
                     live.append(best)
                 }
@@ -82,6 +113,10 @@ public enum ActivityShotBuilder {
                    inputs.hoverAssociated(at: g.t, box: c.box, cw: cw, ch: ch,
                                           radius: s.hoverRadiusCells) {
                     tracks[best].hoverTainted = true
+                }
+                if g.t - tracks[best].firstT <= 0.25,
+                   inputs.localHover(at: g.t, box: c.box, cw: cw, ch: ch, radius: s.hoverRadiusCells) {
+                    tracks[best].localHoverTainted = true
                 }
                 tracks[best].absorb(c, t: g.t, s: s)
             }
@@ -111,13 +146,21 @@ public enum ActivityShotBuilder {
                               settings s: ActivitySettings) -> (shots: [VisualShot], busy: [ClosedRange<Double>]) {
         var shots: [VisualShot] = []
         var busy: [ClosedRange<Double>] = []
-        for tr in tracks where !tr.hoverTainted {
+        // Multiple growing candidates tied to the same action are ambiguous:
+        // do not grant any of them an exception to remote-hover uncertainty.
+        var confirmedPerAction: [Double: Int] = [:]
+        for tr in tracks where tr.sustained {
+            if let action = tr.actionTime { confirmedPerAction[action, default: 0] += 1 }
+        }
+        for (id, tr) in tracks.enumerated() {
+            let sustained = tr.sustained && tr.actionTime.map { confirmedPerAction[$0] == 1 } == true
+            guard !tr.localHoverTainted, !tr.hoverTainted || sustained else { continue }
             let span = tr.lastT - tr.firstT + dt
             let continuity = Double(tr.samples) * dt / span
             // Long-running motion confined to the same small region with
             // no meaningful geometry progression is weak attention evidence.
             // Keep it busy for time editing, but abstain from camera motion.
-            if tr.capT != nil, continuity >= 0.8, tr.wps.count <= 1 {
+            if !sustained, tr.capT != nil, continuity >= 0.8, tr.wps.count <= 1 {
                 busy.append(tr.firstT...(tr.lastT + s.settleHold))
                 continue
             }
@@ -125,12 +168,17 @@ public enum ActivityShotBuilder {
             if loader {
                 guard s.zoomOnLoaders, span >= 0.8, continuity >= 0.8 else { continue }
             } else {
-                guard tr.samples >= s.onsetSamples, continuity >= 0.35 || span < 1.2 else { continue }
+                guard tr.samples >= s.onsetSamples, sustained || continuity >= 0.35 || span < 1.2 else { continue }
             }
             let start = max(grids[0].t, tr.firstT - s.lead)
-            let end = max((tr.capT ?? tr.lastT) + s.settleHold, start + s.minHold)
-            busy.append(start...(tr.lastT + s.settleHold))
-            let boxes = tr.wps.isEmpty ? [(t: tr.firstT, box: tr.union)] : tr.wps
+            let settle = sustained ? max(s.settleHold, 1.6) : s.settleHold
+            let end = max((sustained ? tr.lastT : (tr.capT ?? tr.lastT)) + settle, start + s.minHold)
+            busy.append(start...(tr.lastT + settle))
+            // Recorded look-ahead can frame the eventual growing subject from
+            // the start. No per-token camera chase; if it cannot fit, stay wide.
+            if sustained && tr.progressionOverflow { continue }
+            let boxes = sustained ? [(t: tr.firstT, box: tr.union)] :
+                (tr.wps.isEmpty ? [(t: tr.firstT, box: tr.union)] : tr.wps)
             var wps: [VisualShot.Waypoint] = []
             for (i, w) in boxes.enumerated() {
                 guard let tg = target(w.box, cw: cw, ch: ch, source: source, settings: s) else {
@@ -139,8 +187,12 @@ public enum ActivityShotBuilder {
                 wps.append(VisualShot.Waypoint(t: i == 0 ? start : w.t, rect: tg.rect, scale: tg.scale))
             }
             guard !wps.isEmpty else { continue }
-            shots.append(VisualShot(start: start, end: end, waypoints: wps,
-                                    strength: tr.energy, kind: loader ? .loader : .region))
+            var shot = VisualShot(start: start, end: end, waypoints: wps,
+                                  strength: tr.energy, kind: loader ? .loader : .region)
+            shot.subjectID = id
+            shot.sustained = sustained
+            shot.actionTime = sustained ? tr.actionTime : nil
+            shots.append(shot)
         }
         return (shots, busy)
     }
@@ -158,17 +210,20 @@ public enum ActivityShotBuilder {
         return scale >= s.minTrigger ? (r, min(scale, s.maxScale)) : nil
     }
 
-    /// Overlapping shots become one shot whose later waypoints pan the camera
-    /// inside it. Guarantees one target at a time and no overlapping segments.
+    /// Distinct connected subjects never become an invented pan. Hold the
+    /// current subject unless a corroborated action-associated one arrives.
+    /// Conservative overlap arbitration leaves ambiguous competitors wide.
     private static func chain(_ shots: [VisualShot]) -> [VisualShot] {
         var chained: [VisualShot] = []
         for sh in shots.sorted(by: { $0.start < $1.start }) {
             if var prev = chained.last, sh.start < prev.end {
-                prev.waypoints += sh.waypoints.map { var w = $0; w.t = max(w.t, sh.start); return w }
-                prev.waypoints.sort { $0.t < $1.t }
-                prev.end = max(prev.end, sh.end)
-                prev.strength = max(prev.strength, sh.strength)
-                chained[chained.count - 1] = prev
+                guard sh.sustained, !prev.sustained else { continue }
+                if sh.start - prev.start >= 0.2 {
+                    prev.end = sh.start
+                    prev.waypoints.removeAll { $0.t >= prev.end }
+                    chained[chained.count - 1] = prev
+                } else { chained.removeLast() }
+                chained.append(sh)
             } else { chained.append(sh) }
         }
         return chained

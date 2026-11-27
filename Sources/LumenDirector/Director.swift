@@ -76,6 +76,14 @@ public struct DeriveCache: Sendable {
     }
     var planKey: PlanKey?
     var plan: ZoomPlanner.ZoomPlan?
+    struct ActivityKey: Equatable {
+        var digest: UInt64
+        var settings: ActivitySettings
+        var width: Int
+        var height: Int
+    }
+    var activityKey: ActivityKey?
+    var activityResult: ActivityResult?
 
     /// Smart crop depends on its own config and the same recorded evidence.
     /// PlanKey is the zoom-planner cache and must not be repurposed.
@@ -199,10 +207,18 @@ public enum Director {
         if cancelled() { return nil }
         let digest = inputDigest(input)
         // F2: one pure activity pass feeds both the zoom planner and the speed-ramp planner.
-        let activityResult = ActivityShotBuilder.build(grids: input.activityGrids,
-                                                       source: (Double(src.width), Double(src.height)),
-                                                       inputs: ActivityInputs.make(events: input.events),
-                                                       settings: t.activity)
+        let activityKey = DeriveCache.ActivityKey(digest: digest, settings: t.activity,
+                                                   width: src.width, height: src.height)
+        let activityResult: ActivityResult
+        if cache.activityKey == activityKey, let cached = cache.activityResult {
+            activityResult = cached
+        } else {
+            activityResult = ActivityShotBuilder.build(grids: input.activityGrids,
+                source: (Double(src.width), Double(src.height)),
+                inputs: ActivityInputs.make(events: input.events), settings: t.activity)
+            if cancelled() { return nil }
+            cache.activityKey = activityKey; cache.activityResult = activityResult
+        }
         // F1: one pure browser-crop pass produces a dense 480 Hz source-pixel track.
         let viewportPlan = CropPlanner.plan(samples: input.viewportSamples,
                                             inputs: CropInputs.make(events: input.events, samples: input.viewportSamples),

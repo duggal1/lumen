@@ -25,17 +25,29 @@ enum VisualAutofocus {
         for shot in shots {
             guard let opening = shot.waypoints.first else { continue }
             let start = min(max(shot.start, tm.trimStart), tm.trimEnd)
-            let end = min(max(shot.end, start + 0.2), tm.trimEnd)
+            var end = min(max(shot.end, start + 0.2), tm.trimEnd)
+            if shot.sustained, let action = shot.actionTime {
+                // Later explicit actions end the previous response subject.
+                if let next = input.filter({ $0.t > max(action + 0.05, start) && $0.t < end })
+                    .map(\.t).min() { end = next }
+            }
             guard end > start else { continue }
-            guard let first = intent(opening, t: start, tEnd: end, W: W, H: H) else { continue }
+            guard var first = intent(opening, t: start, tEnd: end, W: W, H: H) else { continue }
+            first.visualSubjectID = shot.subjectID
+            first.sustainedVisual = shot.sustained
+            first.visualActionTime = shot.actionTime
+            guard !collides(first, with: input) else { continue }
             out.append(first)
             for waypoint in shot.waypoints.dropFirst() {
                 let t = min(max(waypoint.t, start), end)
-                guard let pan = intent(waypoint, t: t, tEnd: t, W: W, H: H) else { continue }
-                out.append(pan)
+                guard t < end, var pan = intent(waypoint, t: t, tEnd: t, W: W, H: H) else { continue }
+                pan.visualSubjectID = shot.subjectID
+                pan.sustainedVisual = shot.sustained
+                pan.visualActionTime = shot.actionTime
+                if !collides(pan, with: input) { out.append(pan) }
             }
         }
-        return out.filter { !collides($0, with: input) }.sorted { $0.t < $1.t }
+        return out.sorted { $0.t < $1.t }
     }
 
     /// Compatibility entry point kept so existing callers still compile. The
@@ -66,6 +78,10 @@ enum VisualAutofocus {
     private static func collides(_ candidate: ZoomPlanner.Intent,
                                  with input: [ZoomPlanner.Intent]) -> Bool {
         input.contains { other in
+            // The initiating click is evidence for the corroborated result,
+            // not a second competing subject. Later input still has priority.
+            if candidate.sustainedVisual, let action = candidate.visualActionTime,
+               other.kind == .click, abs(other.t - action) < 0.000001 { return false }
             guard other.t <= candidate.tEnd + inputGuard,
                   candidate.t <= other.tEnd + inputGuard else { return false }
             if let r = other.frameRect ?? other.rect, let c = candidate.rect {

@@ -1,0 +1,9 @@
+# Director subject lifetime — first implementation
+
+Based on the approved Director plan. Keep the existing 480 Hz solver and all manual controls.
+
+- Deterministic evidence-local subject IDs; distinguish persistent local hover from the bounded remote uncertainty guard. Only an explicit primary click or non-repeat Return/Enter followed by two spatial growth steps and at least five observations may corroborate a sustained result. Competing growing subjects linked to one action remain ambiguous. No AX text inspection or semantic AI classification is claimed.
+- Confirmed subjects tolerate a short 1.6s token pause and bypass ordinary shot ceilings. Recorded look-ahead chooses a stable union framing if the full region fits, otherwise stays wide. Never concatenate unrelated visual tracks into an invented pan. Preserve explicit later input and manual/suppressed auto shot policy.
+- Only the associated initiating click may be replaced by a corroborated destination shot. Ordinary click behavior remains unchanged, including no-op clicks. No URL recognition or generation-control semantics yet; quiet settling is a heuristic.
+- Reuse the derived activity result across camera/style-only replans. Keep native 60Hz on ordinary displays and permit up to 120Hz on supported displays; actual presented cadence not measured.
+- Three deterministic synthetic replay tests, including identical pointer stream with growing vs stationary remote activity, pause/long response and independent regions. These are not recordings of the user's demo. Real recorded paired replay, semantic ambiguity (growing remote hover can still mimic output), live/offline shared subject evidence, completion/URL recognition, output-aware webcam/caption geometry and measured display cadence remain outstanding. No claim of flawless intent recognition.
