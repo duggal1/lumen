@@ -20,7 +20,7 @@ public final class TypingSampler {
     // CC0 library state
     private var cc0Down: [KeyClass: [AVAudioPCMBuffer]] = [:]
     private var cc0Up: [KeyClass: [AVAudioPCMBuffer]] = [:]
-    private var cc0Clicks: [AVAudioPCMBuffer] = []
+    private var recordedLibrary = KeySoundLibrary()
     private var router = KeyVariationRouter()
     private var usingCC0 = false
 
@@ -89,10 +89,10 @@ public final class TypingSampler {
     /// oscillator or procedural sound is ever generated.
     public func loadCC0Library(_ library: KeySoundLibrary = KeySoundLibraryCache.shared) {
         for keyClass in KeyClass.allCases where keyClass != .click {
-            cc0Down[keyClass] = library.down[keyClass]?.compactMap { buffer($0.samples) } ?? []
-            cc0Up[keyClass] = library.up[keyClass]?.compactMap { buffer($0.samples) } ?? []
+            cc0Down[keyClass] = library.takes(keyClass, .down).compactMap { buffer($0.samples) }
+            cc0Up[keyClass] = library.takes(keyClass, .up).compactMap { buffer($0.samples) }
         }
-        cc0Clicks = library.clicks.compactMap { buffer($0.samples) }
+        recordedLibrary = library
         router = KeyVariationRouter()
         usingCC0 = true
     }
@@ -109,15 +109,11 @@ public final class TypingSampler {
     }
 
     public func playClick(tone: ClickSound = .fresh, gain: Float = 1, hostTime: UInt64? = nil) {
-        var settings = KeyMixSettings(); settings.clickTone = tone
-        guard usingCC0, let pair = router.clickPair(cc0Clicks.count,
-                                                    preferred: settings.preferredClickIndex) else { return }
-        for (index, attenuation) in [(pair.down, Float(1.0)), (pair.up, Float(0.55))] {
-            guard cc0Clicks.indices.contains(index) else { continue }
-            schedule(cc0Clicks[index], gain: gain * attenuation,
-                     variation: KeyVariation(variant: index, pitchCents: 0, gainDb: 0),
-                     hostTime: index == pair.down ? hostTime : nil)
-        }
+        guard usingCC0, let take = recordedLibrary.clickTake(tone),
+              let pcm = buffer(take.samples) else { return }
+        schedule(pcm, gain: gain,
+                 variation: KeyVariation(variant: 0, pitchCents: 0, gainDb: 0),
+                 hostTime: hostTime)
     }
 
     private func schedule(_ source: AVAudioPCMBuffer, gain: Float, variation: KeyVariation,

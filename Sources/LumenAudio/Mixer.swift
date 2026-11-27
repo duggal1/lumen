@@ -705,15 +705,10 @@ public final class AudioMixer: @unchecked Sendable {
             case .whooshIn, .whooshOut: return false
             }
         }
-        for cue in activeCues {
-            NotificationCenter.default.post(
-                name: Notification.Name("lumen.focus.feedback.tap"),
-                object: nil,
-                userInfo: ["kind": cue.kind == .click ? "click" : "key"])
-        }
+        // An offline mix must not emit real-time UI feedback for every cue.
         if !activeCues.isEmpty {
             var settings = KeyMixSettings()
-            settings.keyLevelDb = a.typingLevelDb + 2   // preserve shipped typing level
+            settings.keyLevelDb = a.typingLevelDb - 5   // one gain stage; preserve default headroom
             settings.clickLevelDb = a.sfxGainDb
             settings.clickTone = a.clickTone
             var router = KeyVariationRouter()
@@ -738,7 +733,7 @@ public final class AudioMixer: @unchecked Sendable {
             }
         }
         var settings = KeyMixSettings()
-        settings.keyLevelDb = a.typingLevelDb + 2
+        settings.keyLevelDb = a.typingLevelDb - 5
         settings.clickLevelDb = a.sfxGainDb
         settings.clickTone = a.clickTone
         var router = KeyVariationRouter()

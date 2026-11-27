@@ -18,8 +18,8 @@ Part 2: [PR #43](https://github.com/duggal1/lumen/pull/43). Implementation in re
 | Part | Scope | State |
 |---|---|---|
 | 1 | Attention evidence, hover, typing | All macOS CI checks passed; merged PR #42; real-recording calibration pending |
-| 2 | Camera motion, zoom, framing, cursor, blur | PR #43 open; latest-head CI and real-recording proof pending |
-| 3 | SFX replacement and studio audio | Not started |
+| 2 | Camera motion, zoom, framing, cursor, blur | PR #43 merged; corrected PR CI passed; real-recording proof pending |
+| 3 | SFX replacement and studio audio | Backend reconstruction in progress; new assets and listening blocked |
 | 4 | Adaptive glass, layout, recording, editing | Not started |
 | 5 | Preview/export performance and release proof | Not started |
 
@@ -159,3 +159,7 @@ Finish **Part 2 only**: inspect latest PR #43 CI, fix any failures without weake
 - [x] Identified three failures in [run 45898300325](https://github.com/duggal1/lumen/actions/runs/45898300325): two dense-click pan jerk tests and one click anticipation timing test; all eight new tests passed.
 - [x] Bound ordinary click anticipation; preserve dense optical handoffs and restrict continuous follow to isolated actions. Existing assertions unchanged.
 - [ ] Verify corrected head with all 882 tests and release packaging; merge only if green. Dense continuous-follow motion and real recording quality remain open.
+
+### Part 3 implementation status
+
+See [Part 3 plan](Docs/Part-03/plan.md). Fixed canonical click selection, duplicate key gain, release-flag routing, omission of unverified releases, stereo-linked limiter, preview window warm-up, offline UI side effects, and invalid denoiser output validation. Added conservative input-dependent voice expansion. Existing legacy packs and studio recordings remain for compatibility until authentic replacements are acquired. New assets and actual listening are not complete. Part 2 corrected CI [passed](https://github.com/duggal1/lumen/actions/runs/45954321659); both prior PRs merged.

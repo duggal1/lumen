@@ -225,15 +225,21 @@ enum VoiceStudio {
         let amount = plan.studio.isFinite ? clamp(plan.studio, 0, 1) : 0
         guard amount > 0 else { return boosted(tone(voice, plan: plan, optimized: false), plan: plan) }
 
-        let optimized = plan.studioMode == .optimized
+        let optimized = plan.studioMode == .optimized // legacy low-level compatibility
         let strength = 0.8 + 0.4 * amount
 
         // 1. Room tone, fan, hum.
         let floor = VoiceLevels.noiseFloor(voice, vad: vad, fs: fs)
-        let speech = speechLevelDb(voice, vad: vad, fs: fs) ?? -24
-        voice = VoiceExpander(floorDb: floor,
-                              depthDb: (optimized ? 48 : 30) * strength,
-                              speechRefDb: speech)
+        let measuredSpeech = speechLevelDb(voice, vad: vad, fs: fs)
+        let speech = measuredSpeech ?? -24
+        // Clean, high-SNR input does not need the same attenuation as a
+        // noisy room. Low-confidence/short clips get a conservative depth.
+        // Keep the legacy optimized curve available to old low-level callers;
+        // the application studioPolicy selects the single standard path.
+        let contrast = max(0, speech - floor)
+        let need = measuredSpeech == nil ? 0.5 : clamp((45 - contrast) / 25, 0.45, 1)
+        let depth = (optimized ? 48 : 30 * need) * strength
+        voice = VoiceExpander(floorDb: floor, depthDb: depth, speechRefDb: speech)
             .process(voice, vad: vad, fs: fs)
 
         // 2. Tone: chest, no boxiness, presence, air.

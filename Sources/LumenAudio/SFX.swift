@@ -1,10 +1,7 @@
 import Foundation
 import LumenProject
 
-/// Real recorded effects only. The old mp3 click set and the Mechvibes fallback
-/// are gone: all sfx now come from the CC0 one-shot library built by
-/// `scripts/fetch_sounds.py`. Zoom whooshes remain removed (stale cues render
-/// silence). Key-down and key-up each resolve to their own recorded sample.
+/// Inspector audition and offline export share the same selected recording.
 public struct SFXBank: Sendable {
     public init() {}
 
@@ -12,17 +9,11 @@ public struct SFXBank: Sendable {
         let library = KeySoundLibraryCache.shared
         switch kind {
         case .key:
-            return (library.down[.alpha]?.first?.samples ?? [], 0)
+            return (library.takes(.alpha, .down).first?.samples ?? [], 0)
         case .keyUp:
-            return (library.up[.alpha]?.first?.samples ?? [], 0)
+            return (library.takes(.alpha, .up).first?.samples ?? [], 0)
         case .click:
-            if ClickSound.studioCollection.contains(clickTone) {
-                return (library.studioClicks[clickTone]?.samples ?? [], 0)
-            }
-            var settings = KeyMixSettings()
-            settings.clickTone = clickTone
-            let index = settings.preferredClickIndex
-            return (library.clicks.indices.contains(index) ? library.clicks[index].samples : [], 0)
+            return (library.clickTake(clickTone)?.samples ?? [], 0)
         case .whooshIn, .whooshOut:
             return ([], 0)
         }

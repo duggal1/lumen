@@ -52,6 +52,9 @@ public struct KeySoundLibrary: Sendable {
     public var up: [KeyClass: [KeyTake]] = [:]
     public var clicks: [KeyTake] = []
     public var studioClicks: [ClickSound: KeyTake] = [:]
+    /// Old catalogs may label a down strike as a release. Keep their inventory
+    /// readable for migration, but do not play an unverified release.
+    public var unverifiedReleaseIDs: Set<String> = []
 
     public var isEmpty: Bool { down.isEmpty && clicks.isEmpty && studioClicks.isEmpty }
 
@@ -65,13 +68,30 @@ public struct KeySoundLibrary: Sendable {
                 return FileManager.default.fileExists(atPath: url.path) ? url : nil
             }
         } ?? { (name: String) -> URL? in BundledAudioAssets.sound(named: name) }
+        struct Catalog: Decodable {
+            struct Entry: Decodable {
+                let path: String
+                let phase: String?
+                let releaseEvidence: String?
+            }
+            let files: [Entry]
+        }
+        let catalog = resolver("manifest.json").flatMap { try? Data(contentsOf: $0) }
+            .flatMap { try? JSONDecoder().decode(Catalog.self, from: $0) }
+        let verifiedReleases = Set((catalog?.files ?? []).filter {
+            $0.phase == "up" && $0.releaseEvidence == "separate-recorded-release"
+        }.map(\.path))
         for keyClass in KeyClass.allCases where keyClass != .click {
             for phase in [KeyPhase.down, .up] {
                 var takes: [KeyTake] = []
                 for index in 1...8 {
                     let name = "typing/\(keyClass.rawValue)/\(keyClass.rawValue)-\(phase.rawValue)-\(index).wav"
-                    guard let url = resolver(name), let pcm = try? AudioIO.readMono(url), !pcm.isEmpty else { break }
+                    guard let url = resolver(name), let pcm = try? AudioIO.readMono(url),
+                          !pcm.isEmpty, pcm.allSatisfy(\.isFinite) else { continue }
                     takes.append(KeyTake(id: name, samples: pcm))
+                    if phase == .up, !verifiedReleases.contains(name) {
+                        lib.unverifiedReleaseIDs.insert(name)
+                    }
                 }
                 if phase == .down { lib.down[keyClass] = takes } else { lib.up[keyClass] = takes }
             }
@@ -92,7 +112,19 @@ public struct KeySoundLibrary: Sendable {
     }
 
     public func takes(_ keyClass: KeyClass, _ phase: KeyPhase) -> [KeyTake] {
-        (phase == .down ? down[keyClass] : up[keyClass]) ?? []
+        if phase == .down { return down[keyClass] ?? [] }
+        return (up[keyClass] ?? []).filter { !unverifiedReleaseIDs.contains($0.id) }
+    }
+
+    /// The selected tone is the recording, not a hint to a random router.
+    /// Curated legacy tones remain available until a verified replacement
+    /// catalog can migrate their persisted IDs.
+    public func clickTake(_ tone: ClickSound) -> KeyTake? {
+        if ClickSound.studioCollection.contains(tone) { return studioClicks[tone] }
+        var settings = KeyMixSettings()
+        settings.clickTone = tone
+        let index = settings.preferredClickIndex
+        return clicks.indices.contains(index) ? clicks[index] : nil
     }
 }
 
@@ -185,38 +217,45 @@ public struct BusLimiter: Sendable {
     public var release: Float
 
     public init(ceiling: Float = 0.89, lookahead: Int = Int(0.003 * AudioIO.fs), release: Float = 0.0009) {
-        self.ceiling = max(0.05, min(1, ceiling))
-        self.lookahead = max(1, lookahead)
-        self.release = release
+        self.ceiling = max(0.05, min(1, ceiling.isFinite ? ceiling : 0.89))
+        self.lookahead = max(0, min(lookahead, 48_000))
+        self.release = release.isFinite ? min(max(release, 0), 1) : 0.0009
     }
 
     public func process(left: inout [Float], right: inout [Float]) {
         let n = min(left.count, right.count)
         guard n > 0 else { return }
-        var peaks = [Float](repeating: 0, count: n + lookahead)
-        for i in 0..<(n + lookahead) where i < n {
-            peaks[i] = max(abs(left[i]), abs(right[i]))
-        }
+        let cap = ceiling.isFinite ? min(max(ceiling, 0.05), 1) : 0.89
+        let span = min(max(lookahead, 0), min(n - 1, 48_000))
+        let recovery = release.isFinite ? min(max(release, 0), 1) : 0.0009
+        // Circular monotonic deque. O(n) work, O(lookahead) scratch. Each
+        // window includes the current sample and exactly span future samples.
+        let capacity = span + 2
+        var indices = [Int](repeating: 0, count: capacity)
+        var peaks = [Float](repeating: 0, count: capacity)
+        var head = 0, count = 0, inserted = 0
         var previousGain: Float = 1
-        // Monotonic deque gives a sliding maximum in O(n).
-        var deque: [Int] = []
-        for i in 0..<peaks.count {
-            while let last = deque.last, peaks[last] <= peaks[i] { deque.removeLast() }
-            deque.append(i)
-            if let first = deque.first, first <= i - lookahead { deque.removeFirst() }
-            if i < lookahead { continue }
-            let j = i - lookahead
-            let env = peaks[deque.first ?? j]
-            let target: Float = env > ceiling ? ceiling / env : 1
-            // Instant attack, smooth release back to unity.
-            let g: Float = target < previousGain ? target
-                                                 : previousGain + (1 - previousGain) * release
-            previousGain = g
-            left[j] *= g
-            right[j] *= g
-            // Residual single-sample spikes are soft-clipped, never hard cut.
-            if abs(left[j]) > ceiling { left[j] = ceiling * tanh(left[j] / ceiling) }
-            if abs(right[j]) > ceiling { right[j] = ceiling * tanh(right[j] / ceiling) }
+        for j in 0..<n {
+            while count > 0, indices[head] < j {
+                head = (head + 1) % capacity; count -= 1
+            }
+            let end = min(n - 1, j + span)
+            while inserted <= end {
+                if !left[inserted].isFinite { left[inserted] = 0 }
+                if !right[inserted].isFinite { right[inserted] = 0 }
+                let peak = max(abs(left[inserted]), abs(right[inserted]))
+                while count > 0, peaks[(head + count - 1) % capacity] <= peak { count -= 1 }
+                let tail = (head + count) % capacity
+                indices[tail] = inserted; peaks[tail] = peak
+                count += 1; inserted += 1
+            }
+            let env = count > 0 ? peaks[head] : 0
+            let required: Float = env > cap ? cap / env : 1
+            // Never release above the safe gain while a loud sample remains
+            // in the window. The two channels share the same gain envelope.
+            let gain = min(required, previousGain + (1 - previousGain) * recovery)
+            previousGain = gain
+            left[j] *= gain; right[j] *= gain
         }
     }
 }
@@ -263,49 +302,50 @@ public enum KeySoundEngine {
     public static func render(cues: [SFXCue], library: KeySoundLibrary,
                               router: inout KeyVariationRouter, settings: KeyMixSettings,
                               frames: Int, startFrame: Int64 = 0) -> StereoBuffer {
-        var left = [Float](repeating: 0, count: frames)
-        var right = [Float](repeating: 0, count: frames)
-        guard !library.isEmpty else { return StereoBuffer(l: left, r: right) }
-        let keyAmp = Float(pow(10, settings.keyLevelDb / 20))
+        guard frames > 0 else { return StereoBuffer(l: [], r: []) }
+        // A preview window gets a small limiter warm-up and lookahead. It
+        // selects from the entire cue sequence to preserve variant identity.
+        // The normal export starts at zero and needs no extra allocation.
+        let prefix = Int(min(max(startFrame, 0), 48_000))
+        let suffix = prefix > 0 ? 144 : 0
+        let renderStart = startFrame - Int64(prefix)
+        let total = frames + prefix + suffix
+        var left = [Float](repeating: 0, count: total)
+        var right = [Float](repeating: 0, count: total)
+        guard !library.isEmpty else {
+            return StereoBuffer(l: [Float](repeating: 0, count: frames), r: [Float](repeating: 0, count: frames))
+        }
 
+        func gain(_ db: Double) -> Float {
+            guard db.isFinite else { return 0 }
+            return Float(pow(10, min(max(db, -96), 24) / 20))
+        }
         func add(_ take: [Float], at t: Double, amplitude: Float) {
-            let start = Int((t * AudioIO.fs).rounded()) - Int(startFrame)
-            guard start >= -take.count, start < frames else { return }
-            for (k, sample) in take.enumerated() {
-                let i = start + k
-                guard i >= 0, i < frames else { continue }
-                let v = sample * amplitude
-                left[i] += v
-                right[i] += v
+            let relative = t * AudioIO.fs - Double(renderStart)
+            guard relative.isFinite, relative >= -Double(take.count), relative < Double(total),
+                  amplitude.isFinite, amplitude > 0 else { return }
+            let start = Int(relative.rounded())
+            let first = max(0, -start), end = min(take.count, total - start)
+            guard first < end else { return }
+            for k in first..<end where take[k].isFinite {
+                let v = take[k] * amplitude
+                left[start + k] += v
+                right[start + k] += v
             }
         }
 
         for cue in cues {
+            guard cue.t.isFinite, cue.gainDb.isFinite else { continue }
             let phase: KeyPhase
             switch cue.kind {
-            case .key: phase = .down
+            case .key: phase = cue.isKeyRelease ? .up : .down
             case .keyUp: phase = .up
             case .click: phase = .down
             case .whooshIn, .whooshOut: continue // removed feature: always silence
             }
             if cue.kind == .click {
-                if ClickSound.studioCollection.contains(settings.clickTone) {
-                    guard let take = library.studioClicks[settings.clickTone] else { continue }
-                    let gain = Float(pow(10, (cue.gainDb + settings.clickLevelDb) / 20))
-                    add(take.samples, at: cue.t, amplitude: gain)
-                    continue
-                }
-                guard let pair = router.clickPair(library.clicks.count,
-                                                  preferred: settings.preferredClickIndex) else { continue }
-                let gain = Float(pow(10, (cue.gainDb + settings.clickLevelDb) / 20))
-                if library.clicks.indices.contains(pair.down) {
-                    add(library.clicks[pair.down].samples, at: cue.t, amplitude: gain)
-                }
-                // The release is a quieter, distinct clean click shortly after.
-                if library.clicks.indices.contains(pair.up) {
-                    add(library.clicks[pair.up].samples, at: cue.t + 0.018,
-                        amplitude: gain * 0.55)
-                }
+                guard let take = library.clickTake(settings.clickTone) else { continue }
+                add(take.samples, at: cue.t, amplitude: gain(cue.gainDb + settings.clickLevelDb))
                 continue
             }
             if phase == .up && !settings.includeReleases { continue }
@@ -314,16 +354,24 @@ public enum KeySoundEngine {
             guard let variation = router.next(keyClass, phase: phase, key: Int(cue.keyCode),
                                               variantCount: takes.count),
                   takes.indices.contains(variation.variant) else { continue }
-            var take = takes[variation.variant].samples
-            take = pitchShift(take, cents: variation.pitchCents)
+            let take = takes[variation.variant].samples
+            // Advance the deterministic router for out-of-window events, but
+            // don't pitch-resample their audio just to throw it away.
+            let relative = cue.t * AudioIO.fs - Double(renderStart)
+            guard relative >= -Double(take.count) * 1.03, relative < Double(total) else { continue }
+            let shifted = pitchShift(take, cents: variation.pitchCents)
             let level = cue.gainDb + settings.keyLevelDb + variation.gainDb
-            add(take, at: cue.t, amplitude: Float(pow(10, level / 20)) * keyAmp)
+            add(shifted, at: cue.t, amplitude: gain(level))
         }
 
         // Sample-accurate ceiling, then a gentle lookahead limiter so a burst
         // is controlled rather than hard-clipped.
-        var limiter = BusLimiter(ceiling: settings.limiterCeiling)
+        let limiter = BusLimiter(ceiling: settings.limiterCeiling)
         limiter.process(left: &left, right: &right)
+        if prefix > 0 {
+            return StereoBuffer(l: Array(left[prefix..<(prefix + frames)]),
+                                r: Array(right[prefix..<(prefix + frames)]))
+        }
         return StereoBuffer(l: left, r: right)
     }
 }

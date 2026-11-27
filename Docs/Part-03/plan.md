@@ -26,3 +26,7 @@ Baseline: 5673f1d3fcdb99a53d500b7fd01494a4cf3c6f03, Parts 1 and 2 merged. Scope:
 - [ ] Adaptive voice clean/noisy corpus, original duration, no unacceptable speech loss, final -1 dBTP ceiling.
 - [ ] All tests pass, package signature and assets verified, merged commit read back on main.
 - [ ] Real listening and M1 resource measurements documented. CI alone is not sonic acceptance.
+
+## Implemented in this PR
+
+Canonical exact click selection, no invented click release, real release flag handling, silence for legacy releases lacking separate-recording provenance, single gain stage, stereo-linked bounded limiter, bounded preview warm-up, removal of offline UI notification side effects, denoiser sample-count/finite guard and input-adaptive expansion. Existing recordings remain; acquisition and listening blocked by network. Legacy UI/pack compatibility intentionally preserved until verified assets replace them.
