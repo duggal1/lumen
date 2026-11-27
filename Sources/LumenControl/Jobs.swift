@@ -81,7 +81,11 @@ public final class JobManager: @unchecked Sendable {
     }
 
     public func job(_ id: String) -> Job? {
-        state.withLock { $0.jobs[id] }
+        state.withLock { s in
+            if let job = s.jobs[id] { return job }
+            guard let journal else { return nil }
+            return try? journal.read(id)
+        }
     }
 
     public func recentJobs() -> [Job] {

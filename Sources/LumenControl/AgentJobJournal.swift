@@ -40,6 +40,16 @@ final class AgentJobJournal: Sendable {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path(job.id).path)
     }
 
+    func read(_ id: String) throws -> JobManager.Job? {
+        guard id.range(of: "^job_[a-f0-9-]+$", options: .regularExpression) != nil,
+              FileManager.default.fileExists(atPath: path(id).path) else { return nil }
+        let record = try JSONDecoder().decode(Record.self, from: Data(contentsOf: path(id)))
+        guard record.version == 1, record.job.id == id, Self.isDurable(record.job.kind) else {
+            throw ToolError(code: "JOB_JOURNAL_INVALID", hint: "Invalid job receipt.")
+        }
+        return record.job
+    }
+
     func restore() throws -> [JobManager.Job] {
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
         let now = Date().timeIntervalSince1970

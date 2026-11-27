@@ -239,6 +239,7 @@ public extension ToolRegistry {
                         reporter.progress(0.80, "exporting")
                         let exportID = try await engine.startExport(projectID: project.identifier, presetName: export.preset,
                             outputPath: outputURL.path, includeAudio: true, exportStems: false)
+                        try reporter.checkpoint(.object(["project_path": .string(projectURL.path), "project_id": .string(project.identifier), "stage": .string("exporting"), "output": .string(outputURL.path), "export_job_id": .string(exportID)]))
                         let finalExport = try await jobs.waitForCompletion(exportID) { progress, message in
                             reporter.progress(0.80 + progress * 0.20, message ?? "Exporting")
                         }
