@@ -142,7 +142,8 @@ public final class JobManager: @unchecked Sendable {
     }
 
     private func progress(_ id: String, _ value: Double, _ message: String?) {
-        update(id) { j in j.progress = min(max(value, 0), 1); j.message = message; j.updated = Date().timeIntervalSince1970 }
+        guard value.isFinite else { return }
+        update(id) { j in j.progress = max(j.progress, min(max(value, 0), 1)); j.message = message; j.updated = Date().timeIntervalSince1970 }
         let listener = state.withLock { $0.listeners[id] }
         listener?(Event(jobID: id, progress: value, message: message))
     }
@@ -150,6 +151,9 @@ public final class JobManager: @unchecked Sendable {
     private func update(_ id: String, _ body: @Sendable (inout Job) -> Void) {
         state.withLock { s in
             guard var job = s.jobs[id] else { return }
+            // Terminal states are immutable. Late progress or a worker that ignores
+            // cancellation must not resurrect a cancelled job.
+            guard job.state == .queued || job.state == .running else { return }
             body(&job)
             s.jobs[id] = job
         }

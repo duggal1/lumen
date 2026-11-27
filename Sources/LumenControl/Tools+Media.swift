@@ -282,23 +282,31 @@ public extension ToolRegistry {
                 let placement = try await self.resolvePlacement(projectID: input.projectID, ctx: ctx,
                                                           atMarker: input.atMarker, atOutput: input.atOutput,
                                                           offsetMs: input.offsetMs)
-                let provider = DefaultVoiceProvider(cacheDirectory: ctx.engine.cacheDirectory(projectID: input.projectID))
-                let generated = try await provider.generate(text: input.text, voice: input.voice, model: input.model)
-                let url = ctx.engine.cacheDirectory(projectID: input.projectID)
-                    .appendingPathComponent("voiceover-" + UUID().uuidString + ".mp3")
-                try generated.data.write(to: url)
-                let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
-                                                      describe: "voice-over") { timeline in
-                    var audio = timeline.audio
-                    let gain = try Self.validated(input.gainDb ?? 0, name: "gain_db", range: -60 ... 12)
-                    audio.lanes.append(AudioLane(role: .voiceover, path: url.path,
-                                                 placement: placement, gainDb: gain))
-                    try applyCommand(.setAudio(audio), to: &timeline)
+                let gain = try Self.validated(input.gainDb ?? 0, name: "gain_db", range: -60 ... 12)
+                let cache = ctx.engine.cacheDirectory(projectID: input.projectID)
+                let provider = DefaultVoiceProvider(cacheDirectory: cache)
+                let generated = try await NarrationAsset.generate(in: cache.deletingLastPathComponent(), text: input.text,
+                                                                  voice: input.voice, model: input.model, provider: provider)
+                do {
+                    try Task.checkCancellation()
+                    let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
+                                                          describe: "voice-over") { timeline in
+                        guard placement + generated.duration <= timeline.compositionDuration + 0.05 else {
+                            throw ToolError.invalidArguments("Narration exceeds remaining video duration. Shorten text or move placement.")
+                        }
+                        var lane = AudioLane(role: .voiceover, path: generated.url.path, placement: placement, gainDb: gain)
+                        lane.loops = false
+                        try applyCommand(.addAudioLane(lane), to: &timeline)
+                    }
+                    var payload = result
+                    payload["network"] = .string(generated.disclosure)
+                    payload["audio_path"] = .string(generated.url.path)
+                    payload["duration"] = .number(generated.duration)
+                    return .object(payload)
+                } catch {
+                    try? FileManager.default.removeItem(at: generated.url)
+                    throw error
                 }
-                var payload = result
-                payload["network"] = .string(generated.disclosure)
-                payload["audio_path"] = .string(url.path)
-                return .object(payload)
             })
 
         register(ToolDefinition<QAReportInput>(name: "qa_report",

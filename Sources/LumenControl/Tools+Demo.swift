@@ -160,6 +160,7 @@ public extension ToolRegistry {
                     options.privacyAutoMask = true
                     let target = RecordingTarget(kind: .window, bundleID: input.bundleID)
                     var isRecording = false
+                    var recoveryProject: String?
                     do {
                         try await runtime.startRecording(target, options: options)
                         isRecording = true
@@ -174,6 +175,7 @@ public extension ToolRegistry {
                         reporter.progress(0.45, "finalizing")
                         let projectURL = try await runtime.stopRecording()
                         isRecording = false
+                        recoveryProject = projectURL.path
                         let project = try await engine.openProject(at: projectURL.path)
                         reporter.progress(0.50, "privacy scan")
                         let scanID = try await engine.startPrivacyScan(projectID: project.identifier)
@@ -207,15 +209,20 @@ public extension ToolRegistry {
                                 let placement = try await engine.outputSeconds(projectID: project.identifier,
                                     time: .marker(id: markerID, offsetMs: 0))
                                 let provider = DefaultVoiceProvider(cacheDirectory: engine.cacheDirectory(projectID: project.identifier))
-                                let generated = try await provider.generate(text: text, voice: "", model: "")
-                                let cache = engine.cacheDirectory(projectID: project.identifier)
-                                try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
-                                let voiceURL = cache.appendingPathComponent("voiceover-\(UUID().uuidString).mp3")
-                                try generated.data.write(to: voiceURL, options: .atomic)
-                                try await engine.edit(projectID: project.identifier, expectRevision: nil, describe: "add script narration") { timeline in
-                                    var audio = timeline.audio
-                                    audio.lanes.append(AudioLane(role: .voiceover, path: voiceURL.path, placement: placement))
-                                    try applyCommand(.setAudio(audio), to: &timeline)
+                                let generated = try await NarrationAsset.generate(in: projectURL, text: text, provider: provider)
+                                do {
+                                    try Task.checkCancellation()
+                                    try await engine.edit(projectID: project.identifier, expectRevision: nil, describe: "add script narration") { timeline in
+                                        guard placement + generated.duration <= timeline.compositionDuration + 0.05 else {
+                                            throw ToolError.invalidArguments("Narration at \(markerID) exceeds the remaining recording.")
+                                        }
+                                        var lane = AudioLane(role: .voiceover, path: generated.url.path, placement: placement)
+                                        lane.loops = false
+                                        try applyCommand(.addAudioLane(lane), to: &timeline)
+                                    }
+                                } catch {
+                                    try? FileManager.default.removeItem(at: generated.url)
+                                    throw error
                                 }
                             }
                         }
@@ -235,7 +242,14 @@ public extension ToolRegistry {
                         return .object(["project_id": .string(project.identifier), "output": .string(output),
                                         "qa": qa, "markers": .int(markers.count)])
                     } catch {
-                        if isRecording { _ = try? await runtime.stopRecording() }
+                        if isRecording {
+                            if let recovered = try? await runtime.stopRecording() { recoveryProject = recovered.path }
+                        }
+                        if error is CancellationError { throw error }
+                        if let recoveryProject {
+                            let hint = (error as? ToolError)?.hint ?? error.localizedDescription
+                            throw ToolError(code: "DEMO_RECOVERABLE", hint: "\(hint) Recorded project retained at \(recoveryProject). Open it and resume editing/export; do not repeat capture automatically.")
+                        }
                         throw error
                     }
                 }
