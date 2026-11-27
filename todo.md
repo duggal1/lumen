@@ -169,3 +169,9 @@ See [Part 3 plan](Docs/Part-03/plan.md). Fixed canonical click selection, duplic
 
 - [x] Corrected two failures in Part 3 CI (890 tests): boundary-safe pitch variation and evidence-gated studio expansion; original assertions retained.
 - [ ] Confirm replacement CI, package and merge. Fresh recorded assets and listening evidence remain outstanding.
+
+### Listening revision after Part 3
+
+- [x] Preserve Fresh recording; remove rejected click files; author three explicitly synthetic retro click options, keep old IDs compatible.
+- [x] Switch production keyboard to exact Mechvibes recordings, no pitch synthesis or arbitrary fallback. Support private Orange Deluxe install without public redistribution.
+- [ ] Audition the new tones and keyboard pack; macOS CI and merge verification.

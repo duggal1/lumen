@@ -57,9 +57,85 @@ public struct KeySoundLibrary: Sendable {
     /// readable for migration, but do not play an unverified release.
     public var unverifiedReleaseIDs: Set<String> = []
     private var usesNamedClickSlots = false
-    private static let clickNames = ["mouse-click-1", "mouse-click-2", "tick", "snap", "analog"]
+    private static let clickNames = ["mouse-click-2"]
+    /// Production uses an actual Mechvibes timing map, not a guessed key class.
+    public var exactDown: [Int: KeyTake] = [:]
+    public var exactUp: [Int: KeyTake] = [:]
+    public var usesExactKeys = false
 
-    public var isEmpty: Bool { down.isEmpty && clicks.isEmpty && studioClicks.isEmpty }
+    public func takes(keyCode: Int, phase: KeyPhase) -> [KeyTake] {
+        if usesExactKeys {
+            let take = (phase == .down ? exactDown : exactUp)[keyCode]
+            return take.map { [$0] } ?? []
+        }
+        return takes(KeyClass.forCode(keyCode), phase)
+    }
+
+    /// Optional personal pack is outside the checkout and never redistributed.
+    /// Missing/invalid private packs leave the licensed bundled pack in use.
+    public static func loadProduction() -> KeySoundLibrary {
+        var library = load()
+        let fm = FileManager.default
+        let user = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Lumen/TypingPacks/orange-deluxe", isDirectory: true)
+        let candidates = [user, TypingPackLoader.dir(for: TypingPackLoader.defaultPackID)].compactMap { $0 }
+        for dir in candidates {
+            let down = TypingPackLoader.buffers(in: dir)
+            guard !down.isEmpty else { continue }
+            func convert(_ source: [Int: AVAudioPCMBuffer], phase: KeyPhase) -> [Int: KeyTake] {
+                var result: [Int: KeyTake] = [:]
+                for (code, buffer) in source {
+                    guard let channels = buffer.floatChannelData, buffer.format.channelCount > 0,
+                          buffer.frameLength > 0 else { continue }
+                    let count = Int(buffer.frameLength)
+                    var mono = [Float](repeating: 0, count: count)
+                    for channel in 0..<Int(buffer.format.channelCount) {
+                        for i in 0..<count { mono[i] += channels[channel][i] / Float(buffer.format.channelCount) }
+                    }
+                    guard let pcm = try? AudioIO.resampleMono(mono, from: buffer.format.sampleRate, to: AudioIO.fs),
+                          !pcm.isEmpty, pcm.allSatisfy(\.isFinite) else { continue }
+                    result[code] = KeyTake(id: "\(dir.lastPathComponent)/\(code)/\(phase.rawValue)", samples: pcm)
+                }
+                return result
+            }
+            let exactDown = convert(down, phase: .down)
+            // A corrupt or partial local pack must not replace a usable
+            // keyboard. Require the actual letter keys and basic editing keys.
+            let required = Set(TypingPackLoader.macToMechvibes.compactMap { code, name in
+                name.hasPrefix("Key") || ["Space", "Enter", "Backspace"].contains(name) ? code : nil
+            })
+            guard required.isSubset(of: Set(exactDown.keys)) else { continue }
+            library.exactDown = exactDown
+            library.exactUp = convert(TypingPackLoader.releaseBuffers(in: dir), phase: .up)
+            break
+        }
+        // Missing key or phase is silence, never a random recording or synth.
+        library.usesExactKeys = true
+        return library
+    }
+
+    public var identity: String {
+        var hash = SHA256()
+        for (phase, entries) in [("down", exactDown), ("up", exactUp)] {
+            for code in entries.keys.sorted() {
+                guard let take = entries[code] else { continue }
+                hash.update(data: Data("\(phase)|\(code)|\(take.id)|\(take.samples.count)".utf8))
+                take.samples.withUnsafeBytes { hash.update(bufferPointer: $0) }
+            }
+        }
+        for tone in ClickSound.activeCollection {
+            if let take = clickTake(tone) {
+                hash.update(data: Data("\(tone.rawValue)|\(take.id)|\(take.samples.count)".utf8))
+                take.samples.withUnsafeBytes { hash.update(bufferPointer: $0) }
+            }
+        }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    public var isEmpty: Bool {
+        let noKeys = usesExactKeys ? exactDown.isEmpty && exactUp.isEmpty : down.isEmpty && up.isEmpty
+        return noKeys && clicks.isEmpty && studioClicks.isEmpty
+    }
 
     public init() {}
 
@@ -124,10 +200,9 @@ public struct KeySoundLibrary: Sendable {
         for sound in ClickSound.studioCollection {
             guard let url = BundledAudioAssets.effect(named: sound.assetPath),
                   let pcm = try? AudioIO.readMono(url), !pcm.isEmpty else { continue }
-            let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
-            guard peak.isFinite, peak > 0 else { continue }
-            let samples = pcm.map { $0 / peak }
-            lib.studioClicks[sound] = KeyTake(id: sound.rawValue, samples: samples)
+            guard pcm.allSatisfy(\.isFinite), pcm.contains(where: { abs($0) > 0.0001 }) else { continue }
+            // Explicitly authored retro UI tones: preserve their baked gain.
+            lib.studioClicks[sound] = KeyTake(id: sound.rawValue, samples: pcm)
         }
         return lib
     }
@@ -141,14 +216,15 @@ public struct KeySoundLibrary: Sendable {
     /// Curated legacy tones remain available until a verified replacement
     /// catalog can migrate their persisted IDs.
     public func clickTake(_ tone: ClickSound) -> KeyTake? {
-        if ClickSound.studioCollection.contains(tone) { return studioClicks[tone] }
+        if usesNamedClickSlots {
+            let active = tone.activeTone
+            if active != .fresh { return studioClicks[active] }
+            return clicks.first { $0.id == "mouse-click-2" }
+        }
+        if let take = studioClicks[tone] { return take }
         var settings = KeyMixSettings()
         settings.clickTone = tone
         let index = settings.preferredClickIndex
-        if usesNamedClickSlots {
-            guard Self.clickNames.indices.contains(index) else { return nil }
-            return clicks.first { $0.id == Self.clickNames[index] }
-        }
         return clicks.indices.contains(index) ? clicks[index] : nil
     }
 }
@@ -327,7 +403,8 @@ public struct StereoBuffer: Sendable {
 /// recorded event timestamp; no lookahead, swing or quantisation is applied.
 /// Loaded once per process: 86 small WAVs, shared by preview and export.
 public enum KeySoundLibraryCache {
-    public static let shared = KeySoundLibrary.load()
+    public static let shared = KeySoundLibrary.loadProduction()
+    public static let identity = shared.identity
 }
 
 public enum KeySoundEngine {
@@ -383,7 +460,13 @@ public enum KeySoundEngine {
             }
             if phase == .up && !settings.includeReleases { continue }
             let keyClass = KeyClass.forCode(Int(cue.keyCode))
-            let takes = library.takes(keyClass, phase)
+            let takes = library.takes(keyCode: Int(cue.keyCode), phase: phase)
+            if library.usesExactKeys {
+                if let take = takes.first {
+                    add(take.samples, at: cue.t, amplitude: gain(cue.gainDb + settings.keyLevelDb))
+                }
+                continue
+            }
             guard let variation = router.next(keyClass, phase: phase, key: Int(cue.keyCode),
                                               variantCount: takes.count),
                   takes.indices.contains(variation.variant) else { continue }

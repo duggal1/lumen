@@ -913,6 +913,7 @@ public final class AudioMixer: @unchecked Sendable {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         var hash = SHA256()
         hash.update(data: Data((ProcessedVoiceCache.mixRevision + "|\(n)|\(customDenoiser == nil ? "df3" : "custom")").utf8))
+        hash.update(data: Data(KeySoundLibraryCache.identity.utf8))
         if let d = try? encoder.encode(tl.audio) { hash.update(data: d) }
         if let d = try? encoder.encode(tl.timeMap) { hash.update(data: d) }
         for clip in tl.clips {

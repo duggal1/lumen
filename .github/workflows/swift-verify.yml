@@ -48,7 +48,7 @@ jobs:
           codesign --verify --strict .build/Lumen.app
           test -f .build/Lumen.app/Contents/Resources/Sounds/manifest.json
           test -f .build/Lumen.app/Contents/Resources/Sounds/LICENSES.md
-          for sound in crisp soft mechanical release snap tick light tap; do
+          for sound in crisp soft mechanical; do
             test -f ".build/Lumen.app/Contents/Resources/Audio/cursor-clicks/$sound.wav"
           done
           test -f .build/Lumen.app/Contents/Resources/Audio/music/credits.csv
@@ -60,7 +60,8 @@ jobs:
           root = pathlib.Path(".build/Lumen.app/Contents/Resources/Sounds")
           manifest = json.loads((root / "manifest.json").read_text())
           assert manifest["sampleRate"] == 48000
-          assert len(manifest["files"]) >= 86
+          assert len(manifest["files"]) == 82
+          assert {e["path"] for e in manifest["files"] if e["keyClass"] == "click"} == {"clicks/mouse-click-2.wav"}
           seen = set()
           for entry in manifest["files"]:
               path = root / entry["path"]
