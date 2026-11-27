@@ -176,9 +176,9 @@ public extension ToolRegistry {
                         let projectURL = try await runtime.stopRecording()
                         isRecording = false
                         recoveryProject = projectURL.path
-                        reporter.checkpoint(.object(["project_path": .string(projectURL.path), "stage": .string("captured")]))
+                        try reporter.checkpoint(.object(["project_path": .string(projectURL.path), "stage": .string("captured")]))
                         let project = try await engine.openProject(at: projectURL.path)
-                        reporter.checkpoint(.object(["project_path": .string(projectURL.path), "project_id": .string(project.identifier), "stage": .string("editing")]))
+                        try reporter.checkpoint(.object(["project_path": .string(projectURL.path), "project_id": .string(project.identifier), "stage": .string("editing")]))
                         reporter.progress(0.50, "privacy scan")
                         let scanID = try await engine.startPrivacyScan(projectID: project.identifier)
                         let scan = try await jobs.waitForCompletion(scanID) { progress, message in
@@ -235,6 +235,7 @@ public extension ToolRegistry {
                         guard failed.isEmpty else {
                             throw ToolError(code: "QA_FAILED", hint: "Quality checks failed: \(JSONValue.array(failed).jsonText)")
                         }
+                        try reporter.checkpoint(.object(["project_path": .string(projectURL.path), "project_id": .string(project.identifier), "stage": .string("ready_to_export"), "output": .string(outputURL.path)]))
                         reporter.progress(0.80, "exporting")
                         let exportID = try await engine.startExport(projectID: project.identifier, presetName: export.preset,
                             outputPath: outputURL.path, includeAudio: true, exportStems: false)

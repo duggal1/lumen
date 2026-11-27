@@ -35,7 +35,46 @@ public final class JobManager: @unchecked Sendable {
         var listeners: [String: @Sendable (Event) -> Void] = [:]
     }
 
-    public init() {}
+    private let journal: AgentJobJournal?
+    private let journalFailure: String?
+
+    public init(journalDirectory: URL? = nil) {
+        guard let journalDirectory else {
+            journal = nil; journalFailure = nil
+            return
+        }
+        do {
+            let storage = try AgentJobJournal(directory: journalDirectory)
+            let recovered = try storage.restore()
+            journal = storage
+            journalFailure = nil
+            state.withLock { s in
+                for job in recovered {
+                    s.jobs[job.id] = job
+                    s.order.append(job.id)
+                }
+            }
+        } catch {
+            journal = nil
+            journalFailure = error.localizedDescription
+        }
+    }
+
+    private func persist(_ job: Job) throws {
+        guard AgentJobJournal.isDurable(job.kind) else { return }
+        if let journalFailure { throw ToolError(code: "JOB_JOURNAL_UNAVAILABLE", hint: journalFailure) }
+        try journal?.write(job)
+    }
+
+    private func checkpoint(_ id: String, value: JSONValue) throws {
+        try state.withLock { s in
+            guard var job = s.jobs[id], job.state == .running else { throw CancellationError() }
+            job.result = value
+            job.updated = Date().timeIntervalSince1970
+            try persist(job)
+            s.jobs[id] = job
+        }
+    }
 
     public func subscribe(jobID: String, _ listener: @escaping @Sendable (Event) -> Void) {
         state.withLock { $0.listeners[jobID] = listener }
@@ -95,7 +134,7 @@ public final class JobManager: @unchecked Sendable {
     /// Starts a job. The body reports progress; it is never run on main.
     @discardableResult
     public func start(kind: String, _ body: @escaping @Sendable (JobReporter) async throws -> JSONValue) -> String {
-        let id = "job_" + UUID().uuidString.prefix(8).lowercased()
+        let id = "job_" + UUID().uuidString.lowercased()
         let job = Job(id: id, kind: kind, state: .queued, progress: 0, message: nil, result: nil, error: nil,
                       created: Date().timeIntervalSince1970, updated: Date().timeIntervalSince1970)
         // AGENT: install the task while holding the store lock so fast completion cannot leave a stale handle.
@@ -111,16 +150,24 @@ public final class JobManager: @unchecked Sendable {
                 let key = s.order.remove(at: index); s.jobs[key] = nil; s.listeners[key] = nil
             }
             s.jobs[id] = job; s.order.append(id)
+            do { try persist(job) } catch {
+                var failed = job
+                failed.state = .failed
+                failed.error = "JOB_JOURNAL_UNAVAILABLE: " + error.localizedDescription
+                s.jobs[id] = failed
+                return
+            }
             let task = Task { [weak self] in
             guard let self else { return }
             let reporter = JobReporter(jobID: id, report: { [weak self] progress, message in
                 self?.progress(id, progress, message)
             }, saveCheckpoint: { [weak self] checkpoint in
-                self?.update(id) { $0.result = checkpoint; $0.updated = Date().timeIntervalSince1970 }
+                guard let self else { throw CancellationError() }
+                try self.checkpoint(id, value: checkpoint)
             })
             do {
                 try Task.checkCancellation()
-                self.update(id) { j in if j.state == .queued { j.state = .running } }
+                try self.begin(id)
                 let result = try await body(reporter)
                 if Task.isCancelled {
                     self.update(id) { $0.state = .cancelled }
@@ -143,6 +190,16 @@ public final class JobManager: @unchecked Sendable {
         return id
     }
 
+    private func begin(_ id: String) throws {
+        try state.withLock { s in
+            guard var job = s.jobs[id], job.state == .queued else { throw CancellationError() }
+            job.state = .running
+            job.updated = Date().timeIntervalSince1970
+            try persist(job)
+            s.jobs[id] = job
+        }
+    }
+
     private func progress(_ id: String, _ value: Double, _ message: String?) {
         guard value.isFinite else { return }
         update(id) { j in j.progress = max(j.progress, min(max(value, 0), 1)); j.message = message; j.updated = Date().timeIntervalSince1970 }
@@ -156,7 +213,14 @@ public final class JobManager: @unchecked Sendable {
             // Terminal states are immutable. Late progress or a worker that ignores
             // cancellation must not resurrect a cancelled job.
             guard job.state == .queued || job.state == .running else { return }
+            let previous = job.state
             body(&job)
+            if job.state != previous {
+                do { try persist(job) } catch {
+                    job.state = .failed
+                    job.error = "JOB_JOURNAL_UNAVAILABLE: " + error.localizedDescription
+                }
+            }
             s.jobs[id] = job
         }
     }
@@ -166,8 +230,8 @@ public final class JobManager: @unchecked Sendable {
 public struct JobReporter: Sendable {
     public let jobID: String
     let report: @Sendable (Double, String?) -> Void
-    let saveCheckpoint: @Sendable (JSONValue) -> Void
-    public func checkpoint(_ value: JSONValue) { saveCheckpoint(value) }
+    let saveCheckpoint: @Sendable (JSONValue) throws -> Void
+    public func checkpoint(_ value: JSONValue) throws { try saveCheckpoint(value) }
     public func progress(_ value: Double, _ message: String? = nil) { report(value, message) }
 }
 
