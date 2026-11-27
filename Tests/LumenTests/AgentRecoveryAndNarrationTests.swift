@@ -24,7 +24,7 @@ private struct InvalidNarrationProvider: VoiceProvider {
 @Test func failedAgentJobRetainsRecoverableCheckpoint() async throws {
     let jobs = JobManager()
     let id = jobs.start(kind: "test") { reporter in
-        reporter.checkpoint(.object(["project_path": .string("/fixture/recording.lumen")]))
+        try reporter.checkpoint(.object(["project_path": .string("/fixture/recording.lumen")]))
         throw ToolError(code: "FIXTURE_FAILED", hint: "Recover this project.")
     }
     do {

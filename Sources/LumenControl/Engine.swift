@@ -732,6 +732,8 @@ public actor Engine {
                     if !keepRecoveryFiles { try? FileManager.default.removeItem(at: directory) }
                 }
                 let staging = directory.appendingPathComponent(output.lastPathComponent)
+                try reporter.checkpoint(.object(["project_id": .string(projectID), "project_path": .string(session.bundle.url.path),
+                    "output": .string(output.path), "staging": .string(staging.path), "stage": .string("rendering")]))
                 await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
                 try await Exporter.run(session: session, timeline: timeline, preset: preset, to: staging,
                                        includeAudio: includeAudio, exportStems: exportStems) { progress in
@@ -741,6 +743,8 @@ public actor Engine {
                 let proof = try await AgentExportProof.verify(staging, expectedDuration: timeline.compositionDuration,
                     fps: preset.fps, expectsAudio: includeAudio && session.mixer.hasProgram(timeline),
                     expectedSize: CGSize(width: preset.width(aspect: timeline.style.aspectRatio), height: preset.height))
+                try reporter.checkpoint(.object(["project_id": .string(projectID), "project_path": .string(session.bundle.url.path),
+                    "output": .string(output.path), "staging": .string(staging.path), "stage": .string("publishing"), "verification": proof]))
                 let stems: [URL]
                 do {
                     stems = try AgentExportProof.publish(staging, to: output, overwrite: overwrite)
