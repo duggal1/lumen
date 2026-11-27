@@ -44,8 +44,9 @@ import LumenProject
         let take: [Float] = [-0.4, -0.2, 0.1, 0]
         for cents in [-28.0, 28.0, -12.0, 12.0] {
             let shifted = pitchShift(take, cents: cents)
+            let allFinite = shifted.allSatisfy(\.isFinite)
             #expect(shifted.first == take.first)
-            #expect(shifted.allSatisfy(\.isFinite))
+            #expect(allFinite)
             #expect(shifted.contains { $0 != 0 })
         }
         #expect(pitchShift(take, cents: .nan) == take)

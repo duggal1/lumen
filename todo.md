@@ -89,7 +89,7 @@ Relevant files: `LumenDirector/Planner.swift`, `Camera.swift`, `LiveCamera.swift
 
 ## Part 3 — Replace all sound effects; studio voice
 
-Relevant files: `LumenAudio/{BundledAudioAssets,KeySoundEngine,SFX,TypingPacks,TypingSampler,Mixer,Studio,ProcessedVoice,DeepFilterNet,Dereverb,DSP,Mastering,AudioIO}.swift`, sound assets, `scripts/fetch_sounds.py`, `Tools/make-app.sh`, CI and sound preview UI.
+Relevant files: `LumenAudio/{BundledAudioAssets,KeySoundEngine,SFX,TypingPacks,TypingSampler,Mixer,Studio,ProcessedVoice,DeepFilterNet,Dereverb,DSP,Mastering,AudioIO}.swift`, sound assets, `scripts/rebuild_recorded_sounds.py`, `Tools/make-app.sh`, CI and sound preview UI.
 
 - [ ] Inventory all old effects and routes: Resources/Sounds, Resources/TypingPacks, App/public/assets/{typing,cursor-clicks,touches}, loose interaction MP3s. Preserve music.
 - [ ] Fetch genuinely new, professional recorded keyboard and mouse sounds from verified redistribution-compatible sources; audition originals. No generated sounds, fake releases, reused fallback files or unlicensed sources.

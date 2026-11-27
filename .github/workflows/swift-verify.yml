@@ -46,8 +46,31 @@ jobs:
       - name: Verify packaged audio and signature
         run: |
           codesign --verify --strict .build/Lumen.app
-          test -f .build/Lumen.app/Contents/Resources/Audio/mouse-click.mp3
+          test -f .build/Lumen.app/Contents/Resources/Sounds/manifest.json
+          test -f .build/Lumen.app/Contents/Resources/Sounds/LICENSES.md
           for sound in crisp soft mechanical release snap tick light tap; do
             test -f ".build/Lumen.app/Contents/Resources/Audio/cursor-clicks/$sound.wav"
           done
           test -f .build/Lumen.app/Contents/Resources/Audio/music/credits.csv
+          test ! -e .build/Lumen.app/Contents/Resources/Audio/mouse-click.mp3
+          test ! -e .build/Lumen.app/Contents/Resources/Audio/new-click.mp3
+          test ! -e .build/Lumen.app/Contents/Resources/Audio/touches
+          python3 - <<'PY'
+          import hashlib, json, pathlib, wave
+          root = pathlib.Path(".build/Lumen.app/Contents/Resources/Sounds")
+          manifest = json.loads((root / "manifest.json").read_text())
+          assert manifest["sampleRate"] == 48000
+          assert len(manifest["files"]) >= 86
+          seen = set()
+          for entry in manifest["files"]:
+              path = root / entry["path"]
+              assert path.is_file(), path
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              assert digest == entry["sha256"], path
+              assert digest not in seen, f"duplicate recording: {path}"
+              seen.add(digest)
+              assert entry["license"] == "CC0 1.0", path
+              with wave.open(str(path)) as audio:
+                  assert (audio.getframerate(), audio.getnchannels(), audio.getsampwidth()) == (48000, 1, 2), path
+          print(f"verified {len(seen)} canonical 48 kHz recordings")
+          PY

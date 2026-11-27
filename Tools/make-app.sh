@@ -42,18 +42,14 @@ if [ -x "$bin_dir/lumen-cli" ]; then
   cp "$bin_dir/lumen-cli" "$app/Contents/MacOS/lumen-cli"
 fi
 cp App/Info.plist "$app/Contents/Info.plist"
-# The native app must ship the MP3 assets it actually plays. They are not
-# synthesized and are resolved from Contents/Resources/Audio at runtime.
+# The native app ships the music library and the curated studio click tiles.
+# Legacy interaction MP3s and the generic touches folder are retired: the
+# canonical recorded catalog lives in Contents/Resources/Sounds.
 mkdir -p "$app/Contents/Resources/Audio"
-for sound in App/public/assets/*.mp3; do
-    [ -f "$sound" ] || continue
-    ditto "$sound" "$app/Contents/Resources/Audio/$(basename "$sound")"
-done
 ditto App/public/assets/music "$app/Contents/Resources/Audio/music"
 ditto App/public/assets/typing "$app/Contents/Resources/Audio/typing"
-ditto App/public/assets/touches "$app/Contents/Resources/Audio/touches"
 ditto App/public/assets/cursor-clicks "$app/Contents/Resources/Audio/cursor-clicks"
-# CC0 one-shot library (typing keys + clicks) produced by scripts/fetch_sounds.py.
+# CC0 one-shot library (typing keys + clicks) produced by scripts/rebuild_recorded_sounds.py.
 # BundledAudioAssets.sound(named:) resolves it from Contents/Resources/Sounds.
 if [ -d Resources/Sounds ]; then
     ditto Resources/Sounds "$app/Contents/Resources/Sounds"

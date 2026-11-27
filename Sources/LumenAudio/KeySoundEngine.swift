@@ -83,9 +83,17 @@ public struct KeySoundLibrary: Sendable {
         }
         let catalog = resolver("manifest.json").flatMap { try? Data(contentsOf: $0) }
             .flatMap { try? JSONDecoder().decode(Catalog.self, from: $0) }
+        // A release is playable only when the catalog records where its separate
+        // transient came from. `separate-recorded-release` is a reviewed human
+        // assertion; `detected-secondary-transient` is the measured detector
+        // evidence written by scripts/rebuild_recorded_sounds.py. A bare `up`
+        // label with no evidence is a down stroke in disguise and stays silent.
+        let releaseEvidenceTokens: Set<String> = [
+            "separate-recorded-release", "detected-secondary-transient",
+        ]
         var verifiedReleases: [String: String] = [:]
         for entry in catalog?.files ?? [] where entry.phase == "up" &&
-            entry.releaseEvidence == "separate-recorded-release" {
+            entry.releaseEvidence.map(releaseEvidenceTokens.contains) == true {
             if let hash = entry.sha256, hash.count == 64 { verifiedReleases[entry.path] = hash }
         }
         func releaseVerified(_ name: String, _ url: URL) -> Bool {
