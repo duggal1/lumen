@@ -166,3 +166,6 @@ See [Part 3 plan](Docs/Part-03/plan.md). Fixed canonical click selection, duplic
 
 - [x] Retire unsafe legacy generator; add reviewed hash-pinned candidate staging with no in-place shipping overwrite. Require valid release hash; preserve named click slot identity; inspector audition uses canonical mixer.
 - [ ] Obtain real original audio files, create reviewed manifest, run importer, listen, commit replacement catalog and migrate old package gates.
+
+- [x] Corrected two failures in Part 3 CI (890 tests): boundary-safe pitch variation and evidence-gated studio expansion; original assertions retained.
+- [ ] Confirm replacement CI, package and merge. Fresh recorded assets and listening evidence remain outstanding.

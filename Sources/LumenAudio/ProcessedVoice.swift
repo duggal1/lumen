@@ -10,11 +10,11 @@ struct ProcessedVoiceCache {
     /// Bump whenever the processing semantics change: every persisted voice
     /// and mix cache below is keyed by it, so an algorithm change can never
     /// be served a result produced by the old one.
-    static let revision = "voice-v19-validated-studio-output"
+    static let revision = "voice-v20-evidence-gated-expansion"
     /// Full-program mix cache. Keyed by revision + exact settings + time map.
     /// Bumped when key samples were trimmed to their acoustic attack: an older
     /// cached mix still carries the pre-strike silence and must not be reused.
-    static let mixRevision = "mix-v9-recorded-cue-routing"
+    static let mixRevision = "mix-v10-boundary-safe-recorded-cues"
 
     private struct Settings: Encodable {
         let noiseStrength: Double

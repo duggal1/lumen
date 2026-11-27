@@ -40,6 +40,17 @@ import LumenProject
         #expect(render([SFXCue(t: 0, kind: .keyUp, gainDb: 0)], lib).l.allSatisfy { $0 == 0 })
     }
 
+    @Test func pitchVariationPreservesTheRecordedFirstSample() {
+        let take: [Float] = [-0.4, -0.2, 0.1, 0]
+        for cents in [-28.0, 28.0, -12.0, 12.0] {
+            let shifted = pitchShift(take, cents: cents)
+            #expect(shifted.first == take.first)
+            #expect(shifted.allSatisfy(\.isFinite))
+            #expect(shifted.contains { $0 != 0 })
+        }
+        #expect(pitchShift(take, cents: .nan) == take)
+    }
+
     @Test func typingLevelHasSingleSixDecibelGainSlope() {
         var lib = KeySoundLibrary()
         lib.down[.alpha] = [KeyTake(id: "test", samples: [0.3, 0.2, 0.1, 0])]

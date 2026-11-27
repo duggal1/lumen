@@ -211,16 +211,23 @@ public struct KeyVariationRouter: Sendable {
 /// Resampling by a pitch ratio. Cubic (Catmull-Rom) keeps the transient crisp;
 /// linear interpolation would audibly low-pass a 1 ms key click.
 public func pitchShift(_ x: [Float], cents: Double) -> [Float] {
-    guard abs(cents) > 0.01, x.count > 2 else { return x }
-    let ratio = pow(2.0, cents / 1200.0)
+    guard cents.isFinite, abs(cents) > 0.01, x.count > 2 else { return x }
+    // Bound the public helper as well as the production variation router.
+    let ratio = pow(2.0, min(max(cents, -1200), 1200) / 1200.0)
     let count = max(1, Int((Double(x.count) / ratio).rounded()))
     var out = [Float](repeating: 0, count: count)
     for i in 0..<count {
         let pos = Double(i) * ratio
         let base = Int(pos.rounded(.down))
+        guard base < x.count else { continue }
         let f = Float(pos - Double(base))
-        guard base >= 1, base + 2 < x.count else { continue }
-        let p0 = x[base - 1], p1 = x[base], p2 = x[base + 1], p3 = x[base + 2]
+        // The former interior-only guard erased the first sample and the
+        // last two samples on every shifted recording. That is especially
+        // destructive to short clicks and can introduce a delayed attack.
+        // Replicate the leading boundary and zero-extend the recorded tail.
+        let p0 = x[max(base - 1, 0)], p1 = x[base]
+        let p2 = base + 1 < x.count ? x[base + 1] : 0
+        let p3 = base + 2 < x.count ? x[base + 2] : 0
         out[i] = p1 + 0.5 * f * (p2 - p0 + f * (2 * p0 - 5 * p1 + 4 * p2 - p3 + f * (3 * (p1 - p2) + p3 - p0)))
     }
     return out

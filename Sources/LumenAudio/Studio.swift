@@ -237,7 +237,10 @@ enum VoiceStudio {
         // Keep the legacy optimized curve available to old low-level callers;
         // the application studioPolicy selects the single standard path.
         let contrast = max(0, speech - floor)
-        let need = measuredSpeech == nil ? 0.5 : clamp((45 - contrast) / 25, 0.45, 1)
+        // Without enough measured speech, do not infer a clean recording
+        // from a missing estimate. Retain the proven normal expansion;
+        // only reduce depth on positively measured high-contrast speech.
+        let need = measuredSpeech == nil ? 1 : clamp((55 - contrast) / 25, 0.45, 1)
         let depth = (optimized ? 48 : 30 * need) * strength
         voice = VoiceExpander(floorDb: floor, depthDb: depth, speechRefDb: speech)
             .process(voice, vad: vad, fs: fs)
