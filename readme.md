@@ -1,99 +1,71 @@
 <p align="center">
-  <img src="App/public/assets/brand/logo/lumen.svg" alt="" width="320" />
+  <img src="App/public/assets/brand/logo/lumen.svg" alt="Lumen" width="320" />
 </p>
 
-# Screen work, shaped into a clear story
+<h1 align="center">Lumen Studio</h1>
+<p align="center">A native macOS screen recorder with an intelligent Director and an editable, pixel-native timeline.</p>
 
-Lumen is a macOS screen recording product for demos, walkthroughs, and product stories. It captures the work as it happens, then uses cursor movement and interaction timing to guide focus and pace.
+## Why I built this
 
-## Made for clear communication
+Screen Studio was charging $29 a month when I started looking for alternatives. I tried at least ten recorders, including [Cap](https://cap.so/) and other open-source tools. None gave me the combination I wanted: sharp output, intelligent direction and a genuinely good editing experience.
 
-A useful recording keeps the viewer oriented. Lumen captures a display, window, or selected region, along with the timing and input events that explain what happened on screen. Optional microphone, system audio, and webcam tracks keep the full session together.
+Some felt bloated. Others had capture, motion or post-processing problems that no amount of interface polish could hide. The poor UI was just the most visible symptom.
 
-From that source, Lumen can derive cursor motion, zoom focus, pacing changes, click cues, and webcam framing. You can keep automatic direction or preserve manual edits in the timeline.
+I built the first prototype on November 4, 2026. By November 5, a basic recorder was working. It proved the idea, not the quality of the implementation. Lumen grew out of that gap.
 
-## One source of truth
+## Architecture
 
-Each recording lives in a `.lumen` project bundle. The bundle keeps the original media, event data, and project timeline together. The timeline stores creative choices separately from the captured source, so those choices can be adjusted without losing the recording they came from.
+![Lumen's logical runtime architecture: capture, project storage, analysis, Director, audio, shared Metal composition, preview, export and agent control.](readme-assets/architecture.svg)
 
-The architecture follows that boundary:
+Every recording lives in a `.lumen` project bundle. Original media, input events and recovery data are kept separate from the editable timeline. Camera decisions, cuts and creative choices can change without rewriting the source recording.
 
-- **Capture** records screen media and session signals.
-- **Project** stores source details, timeline settings, and derived tracks.
-- **Director** turns interaction events into cursor, camera, and pacing guidance.
-- **Render and export** are separate stages for composing and delivering the finished recording.
+The application is built with Swift, SwiftUI, AppKit, ScreenCaptureKit, AVFoundation and Metal. `ProjectSession` coordinates frame sources, analysis and audio preparation; `TimeMap` resolves source time against edited output time. Preview and export share the renderer and audio-mixing logic, rather than maintaining independent composition systems.
 
-## Product principles
+## The Director
 
-- Keep the original session intact.
-- Make automatic direction predictable and editable.
-- Keep camera movement, cursor treatment, and pacing in service of the story.
-- Preserve a clear path from captured source to finished video.
+![Illustrative attention signals, planned shot intervals and a continuous camera-scale trace.](readme-assets/director.svg)
 
-## Build and run
+The Planner converts clicks, typing traces, accessibility context, activity and explicit markers into candidate shots. It chooses focus, framing, scale and duration. The camera solver turns those decisions into a continuous path, using critically damped motion and a high-resolution internal camera track.
 
-Requires Apple Silicon, macOS 15+, and Xcode with the Metal toolchain installed.
-If Metal is unavailable, run `xcodebuild -downloadComponent MetalToolchain`.
+A cursor passing through a control is not necessarily a reason to zoom. A sustained typing interaction or meaningful visual change can be. The design goal is to show what matters, hold long enough to understand it and return to context when the action is over. Automatic decisions remain editable.
+
+## Product judgment
+
+I chose a native macOS application over an Electron wrapper or a cross-platform abstraction. I chose editable direction over destructive, baked-in effects. I chose a focused recording workflow over trying to recreate a general-purpose video editor.
+
+The goal is not to expose every possible setting. It is to make a recording look considered before the user touches a single control, while keeping manual control where the automation gets it wrong.
+
+## Design language
+
+![Illustrative five-lane pixel timeline, semantic media colors, mirrored waveforms and blue pixel controls.](readme-assets/design.svg)
+
+The Dieother theme uses neutral-black surfaces, bright blue (`#1688FF`) and light blue (`#A7DFFF`) as interface signals. The timeline retains distinct media colors because they convey meaning.
+
+The same pixel vocabulary appears in the timeline, progress indicators, sliders and SF Symbol-derived glyphs. A 4-point lattice, 3-point cells and deterministic Bayer dithering create the visual rhythm. Voice and music waveforms are derived from audio peaks; the idle timeline does not need a continuous raster loop.
+
+## The first failure, and where it stands
+
+The first prototype worked in a day. Making the result reliable was a different problem. The hard part turned out to be post-processing: the relationship between attention, timing, camera motion, audio and the final rendered frame.
+
+Lumen is still under construction. It is **not a stable release**. The architecture is connected and substantial work has gone into correcting the original pipeline, but post-processing quality, real-device behavior and end-to-end reliability still need release-level verification. No performance claims are implied by the diagrams.
+
+## Build from source
+
+Apple Silicon, macOS 15+, Xcode and the Metal toolchain are required. If needed, install Metal with `xcodebuild -downloadComponent MetalToolchain`.
 
 ```sh
 make build       # Debug app and CLI
-make test        # Synthetic media integration and algorithm checks
+make test        # Integration and algorithm checks
 make app         # Release bundle at .build/Lumen.app
-make verify      # Tests, release packaging, signature and launch checks
+make verify      # Tests, packaging, signing and launch checks
 open .build/Lumen.app
 make probe       # Encoder capabilities on this Mac
 ```
 
-The app icon is generated from `App/public/assets/brand/logo/lumen-icon.png`,
-which is rendered from `lumen-tracker/assets/lumen-icon.svg`.
-Local builds use ad hoc signing by default. Set `CODE_SIGN_IDENTITY` to a stable
-local signing identity to preserve permission identity across rebuilds.
+Local builds use ad hoc signing by default; set `CODE_SIGN_IDENTITY` for a persistent signing identity. The packaged build is not notarized. The app icon is generated from `App/public/assets/brand/logo/lumen-icon.png`.
 
-## Agent control
+Agent control is available through the CLI's MCP transport and a headless daemon with explicit capability approvals. See [agent platform](Docs/agent-platform.md), [design contract](DESIGN.md) and [core features](CORE-FEATURES.MD). The in-app MCP server is opt-in, localhost-only and token-protected.
 
-Lumen can be driven by an AI agent over MCP: launch the app, record it, edit
-the timeline, add audio, check the result and export — with no human in the
-UI. The agent talks to a headless daemon (the same signed app, no windows, no
-Dock icon) through a private socket, and every capability beyond reading is
-granted by a human first.
+The repository includes Metal performance, golden-image, synchronization and long-capture test harnesses. `make verify` is not a substitute for clean-machine permissions testing or physical-device acceptance. See the [verification reports](Docs/Verification/) for evidence and remaining limitations. DeepFilterNet3 failures pass the microphone signal through unchanged; the CLI `sync` command reports offsets rather than performing render-level sync validation. Music uses loop/trim crossfades, not beat detection; mesh backgrounds are static. Unsplash photo backgrounds require an access key, and email notifications open a draft rather than sending mail.
 
-```json
-{ "mcpServers": { "lumen": { "command": "/Applications/Lumen.app/Contents/MacOS/lumen-cli", "args": ["mcp"] } } }
-```
-
-See `Docs/agent-platform.md` for the tool catalog, the permission model, the
-demo-script DSL and the smoke test.
-
-## Implementation and verification
-
-Capture, project storage, Director, Metal rendering, offline audio mixing,
-export, CLI, and SwiftUI app targets are connected. Preview and export use the
-same renderer and offline audio mix. Frame placement preserves source aspect
-inside the padded canvas. DeepFilterNet3 is the only microphone denoiser; when
-it is unavailable or fails, the microphone signal passes through unchanged.
-
-Tests cover event encoding, time-map inversion and speech protection, manual
-zoom preservation, click positioning, camera bounds, repeatable audio and
-loudness, repeated frame rendering, and actual exported video frame count.
-
-Validation harnesses are now in the tree and runnable:
-
-- `lumen-cli bench --frames 120` renders a real Metal loop and exits non-zero
-  when the p99/over-budget gate is missed (`LumenRender/PerformanceHarness.swift`).
-- `lumen-cli golden <project> --update` establishes reference PNGs;
-  later runs compare and fail on drift (`LumenExport/GoldenImage.swift`).
-- `LumenDirector/SyncHarness.swift` checks flash-and-click drift, cue drift and
-  early/late rings across cuts (`flashAndClickStayOnTheSameFrameAcrossCuts`).
-- Long-capture derive is covered by a synthetic 10-minute, 60 fps session with
-  a resident-memory ceiling (`longCaptureStaysWithinTimeAndMemoryBudget`).
-
-`make verify` still does not certify every acceptance criterion in the parent
-build plan. Clean-machine permission checks need hardware verification. The CLI
-`sync` command reports offsets only (it does not run the render-level sync
-harness); music uses loop/trim crossfades without beat detection; mesh
-backgrounds are static. Photo backgrounds need an
-Unsplash access key and are cached under Application Support. Email
-notifications open a mailto draft, not SMTP. The in-app MCP server is
-localhost-only and opt-in, and now requires the shared agent token
-(`~/Library/Application Support/Lumen/agent-token`, mode 0600); the agent
-daemon listens on a 0600 unix socket. The packaged build is not notarized.
+Regenerate the README diagrams with `python3 scripts/generate_readme_svgs.py`. The illustrations are deterministic and require no third-party Python packages.
