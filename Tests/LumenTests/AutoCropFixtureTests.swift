@@ -91,6 +91,17 @@ import LumenCapture
         #expect(Self.plan(samples).track.rect(at: 5) == PxRect(x: 2, y: 2, w: 1918, h: 896))
     }
 
+    @Test func singleAddressBarKeyRevealsChromeUnderDefaultPolicy() {
+        let page = PxRect(x: 0, y: 90, w: 1920, h: 990)
+        var samples = Self.makeSamples(0, 8, web: page, window: Self.source)
+        for i in samples.indices { samples[i].ui = (2...2.5).contains(samples[i].t) }
+        let plan = CropPlanner.plan(samples: samples, inputs: CropInputs(keys: [2.1], uiClicks: []),
+                                    duration: 8, source: Self.source, settings: CropSettings())
+        #expect(plan.track.rect(at: 1).y > 89)
+        #expect(plan.track.rect(at: 2.6).y < 1)
+        #expect(plan.track.rect(at: 6).y > 89)
+    }
+
     /// Manual override: `CropSettings.overrides` produce `.window` spans in the
     /// plan's change list during [start, end).
     @Test func manualOverrideIsHonored() {

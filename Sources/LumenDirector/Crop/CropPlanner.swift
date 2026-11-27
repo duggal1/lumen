@@ -267,26 +267,33 @@ public enum CropPlanner {
                             _ duration: Double) -> [(Double, Double)] {
         guard s.uncrop != .never else { return [] }
         var raw: [(Double, Double)] = []
-        func keys(_ a: Double, _ b: Double) -> [Double] { inp.keys.filter { $0 >= a && $0 <= b } }
-        if s.uncrop == .chromeTyping {
-            var start: Double?
-            var last = 0.0
-            func close() {
-                guard let st = start else { return }
-                let k = keys(st - 0.2, last + 0.5)
-                if let f = k.first, let l = k.last {
-                    raw.append((min(st, f) - s.uncropLead, max(last, l) + s.holdAfterTyping))
-                }
-                start = nil
+        var keyIndex = 0
+        // Focused browser chrome should be visible from the first key, even
+        // with the broader any-typing policy selected.
+        var start: Double?
+        var last = 0.0
+        func close() {
+            guard let st = start else { return }
+            while keyIndex < inp.keys.count, inp.keys[keyIndex] < st - 0.2 { keyIndex += 1 }
+            let first = keyIndex
+            while keyIndex < inp.keys.count, inp.keys[keyIndex] <= last + 0.5 { keyIndex += 1 }
+            if first < keyIndex {
+                let firstKey = inp.keys[first], lastKey = inp.keys[keyIndex - 1]
+                let reveal = s.uncrop == .chromeTyping ? min(st, firstKey) : firstKey
+                let release = s.uncrop == .chromeTyping ? max(last, lastKey) : lastKey
+                raw.append((reveal - s.uncropLead, release + s.holdAfterTyping))
             }
-            for sm in samples {
-                if sm.front && sm.ui {
-                    if start == nil { start = sm.t }
-                    last = sm.t
-                } else if start != nil, sm.t - last > 0.3 { close() }
-            }
-            close()
-        } else {
+            start = nil
+        }
+        for sm in samples {
+            if sm.front && sm.ui {
+                if start == nil { start = sm.t }
+                last = sm.t
+            } else if start != nil, sm.t - last > 0.3 { close() }
+        }
+        close()
+
+        if s.uncrop == .anyTyping {
             var group: [Double] = []
             func flush() {
                 if group.count >= 4, let f = group.first, let l = group.last {
