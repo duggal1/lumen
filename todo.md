@@ -153,3 +153,9 @@ These are targets, not results. Report denominator, fixture mix, device/OS, actu
 ## Next action
 
 Finish **Part 2 only**: inspect latest PR #43 CI, fix any failures without weakening tests, confirm merge on main once green, and record real-recording evidence for Parts 1 and 2. Do not begin Part 3 until this gate is addressed. Do not claim product-level resolution before verification.
+
+### Part 2 CI correction
+
+- [x] Identified three failures in [run 45898300325](https://github.com/duggal1/lumen/actions/runs/45898300325): two dense-click pan jerk tests and one click anticipation timing test; all eight new tests passed.
+- [x] Bound ordinary click anticipation; preserve dense optical handoffs and restrict continuous follow to isolated actions. Existing assertions unchanged.
+- [ ] Verify corrected head with all 882 tests and release packaging; merge only if green. Dense continuous-follow motion and real recording quality remain open.

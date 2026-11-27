@@ -65,9 +65,10 @@ enum CameraSolver {
         let (followX, followY) = globalFollow(cursor: cursor, baked: baked, ctx: ctx)
         var followTracks: [(start: Int, centers: [SIMD2<Double>])?] = []
         followTracks.reserveCapacity(baked.count)
-        for s in baked {
+        for (index, s) in baked.enumerated() {
             if cancelled() { return nil }
-            followTracks.append(pathCenters(s, ctx: ctx))
+            let continuous = supportsContinuousFollow(index, in: baked)
+            followTracks.append(pathCenters(s, ctx: ctx, continuous: continuous))
         }
         guard var track = bake(baked, ctx: ctx, followX: followX, followY: followY,
                                followTracks: followTracks, kinds: kinds, cancelled: cancelled) else { return nil }
@@ -388,7 +389,11 @@ enum CameraSolver {
             if z.origin == .auto, kinds[z.id] != nil, z.easing == nil, gap >= 1.3 {
                 let desired = automaticRunway(logScale: lz, center: center, base: lead)
                 // Keep room for the preceding release and the arrival settle.
-                lead = max(lead, min(desired, gap - 0.30))
+                // Preserve the established click timing contract: an ordinary
+                // click must not become visibly magnified (>1.1x) more than
+                // 0.5 s before the event. Explicit longer leads remain intact.
+                let limit = kinds[z.id] == .click ? max(lead, 0.50) : 0.85
+                lead = max(lead, min(desired, gap - 0.30, limit))
             }
             let settle = z.origin == .auto ? min(clamp(0.11 / max(ease, 0.6), 0.06, 0.18), 0.35 * lead) : 0
             let on = z.origin == .auto ? max(a - lead - settle, 0) : a
@@ -463,12 +468,27 @@ enum CameraSolver {
         return (followX, followY)
     }
 
-    private static func pathCenters(_ s: Scene, ctx: Context) -> (start: Int, centers: [SIMD2<Double>])? {
+    /// Continuous moving-target holds require a real quiet interval on
+    /// both sides. A dense chain still has its established optical-leg
+    /// handoff; mixing an independent pan spring into that handoff introduces
+    /// acceleration discontinuities when a later shot takes over.
+    private static func supportsContinuousFollow(_ index: Int, in scenes: [Scene]) -> Bool {
+        let s = scenes[index]
+        let before = index == 0 || s.segment.start - scenes[index - 1].segment.end >= 1.3
+        let after = index + 1 == scenes.count || scenes[index + 1].segment.start - s.segment.end >= 1.3
+        return before && after
+    }
+
+    private static func pathCenters(_ s: Scene, ctx: Context, continuous: Bool) -> (start: Int, centers: [SIMD2<Double>])? {
         guard s.path.count >= 2 else { return nil }
         let a = tickIndex(s.on, rate: ctx.rate, n: ctx.n)
         let b = min(max(Int((s.off * ctx.rate).rounded()), a), ctx.n - 1)
         guard b > a else { return nil }
         let scale = exp(s.lz)
+        // Dense legacy optical handoffs were calibrated with this opening
+        // composition offset. Keep that path unchanged until the unified
+        // dense moving-target solver satisfies the full jerk contract.
+        let openingBias = continuous ? 0 : 0.12 / scale
         var xs: [Double] = [], ys: [Double] = []
         xs.reserveCapacity(b - a + 1); ys.reserveCapacity(b - a + 1)
         var j = 0
@@ -482,7 +502,7 @@ enum CameraSolver {
             }
             // Waypoints stay attached to their source pixels as the crop moves.
             let box = ctx.crop(at: k)
-            xs.append((c.x * ctx.src.x - box.x) / box.w)
+            xs.append((c.x * ctx.src.x - box.x) / box.w + openingBias)
             ys.append((c.y * ctx.src.y - box.y) / box.h)
         }
         xs = causalSpring(centredPlay(xs, halfZone: 0.04 / scale), omega: ctx.followOmega, dt: ctx.dt)
@@ -633,6 +653,7 @@ enum CameraSolver {
         let baker = Baker(baked: baked, ctx: ctx, followX: followX, followY: followY,
                           followTracks: followTracks, kinds: kinds)
         let activeAt = baker.activeAt
+        let continuousFollow = baked.indices.map { supportsContinuousFollow($0, in: baked) }
         // One fixed-focus shot is an optical zoom from rest: c(s) = p - (p - 0.5)/s
         // for the whole window (pre-roll, hold and release). Deriving it from a
         // single declared pivot keeps the Studio contract exact without letting
@@ -773,7 +794,7 @@ enum CameraSolver {
             // derivatives at both ends. Fixed and typing shots never follow
             // the cursor. Keep the spring's existing position and velocity.
             let followU: Double = {
-                guard onShot, activeIndex < baked.count,
+                guard onShot, activeIndex < baked.count, continuousFollow[activeIndex],
                       case .follow = baked[activeIndex].segment.focus,
                       baked[activeIndex].path.count >= 2 else { return 0 }
                 let arrival = legStartTime + (legPanOnly ? legReaimT : legRiseT)
@@ -865,10 +886,10 @@ enum CameraSolver {
                 if abs(scaleSpring - lzTarget) < 5e-4 && abs(scaleVel) < 1e-2 {
                     scaleSpring = lzTarget; scaleVel = 0
                 }
-                if abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 {
+                if followU == 0, abs(panX - cxTarget) < 1e-4 && abs(velX) < 5e-3 {
                     panX = cxTarget; velX = 0; panAccelX = nil
                 }
-                if abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0; panAccelY = nil }
+                if followU == 0, abs(panY - cyTarget) < 1e-4 && abs(velY) < 5e-3 { panY = cyTarget; velY = 0; panAccelY = nil }
             }
             // The clamp can only move the position sideways to the boundary;
             // the spring keeps its state so there is never a velocity step.
