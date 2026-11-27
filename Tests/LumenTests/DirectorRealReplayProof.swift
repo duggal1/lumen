@@ -71,6 +71,7 @@ func actualDirectorReplayProof() async throws {
                      "Unexpected camera subject in an annotated hover-only interval.")
     }
     var records: [[String: Any]] = []
+    var exports: [[String: Any]] = []
     for aspect in [CanvasAspect.r16x9, .r9x16] {
         var intent = original
         intent.style.canvas = aspect
@@ -95,22 +96,16 @@ func actualDirectorReplayProof() async throws {
             try #require(sample.minimumOutputHeight.isFinite && sample.minimumOutputHeight > 0)
             let time = timeline.timeMap.output(atSource: sample.time)
             let state = timeline.evaluate(at: time)
-            var g = Geometry(canvas: canvas, src: size, style: timeline.style)
-            g = g.positioned(in: state.layout, contentScale: timeline.style.contentScale)
-            let crop: CGRect? = state.crop.isValid
-                ? CGRect(x: state.crop.x, y: state.crop.y, width: state.crop.w, height: state.crop.h)
-                : (state.cropRect.width > 1 && state.cropRect.height > 1 ? state.cropRect : nil)
+            let transform = ZoomTransform(canvas: canvas, source: size, timeline: timeline, at: time)
             let points = [
                 SIMD2(r[0], r[1]), SIMD2(r[0] + r[2], r[1]),
                 SIMD2(r[0], r[1] + r[3]), SIMD2(r[0] + r[2], r[1] + r[3])
-            ].map { point in
-                g.toCanvas(point * size, cam: SIMD2<Double>(Double(state.cameraCenter.x), Double(state.cameraCenter.y)),
-                           scale: Double(state.cameraScale), crop: crop, tilt: state.cameraTilt)
-            }
+            ].map { transform.sourceToCanvas($0 * size) }
             let x0 = try #require(points.map(\.x).min()), x1 = try #require(points.map(\.x).max())
             let y0 = try #require(points.map(\.y).min()), y1 = try #require(points.map(\.y).max())
             let visible = CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
-            let content = CGRect(x: g.content.x, y: g.content.y, width: g.content.z, height: g.content.w)
+            let card = transform.videoRect
+            let content = CGRect(x: card.x, y: card.y, width: card.z, height: card.w)
             try #require(points.allSatisfy { $0.x.isFinite && $0.y.isFinite })
             try #require(content.insetBy(dx: -1, dy: -1).contains(visible))
             try #require(CGRect(x: 0, y: 0, width: canvas.x, height: canvas.y).contains(visible))
@@ -122,12 +117,24 @@ func actualDirectorReplayProof() async throws {
             records.append(["file": name, "sourceTime": sample.time, "scale": Double(state.cameraScale),
                             "rect": [x0, y0, x1 - x0, y1 - y0]])
         }
+        let preset = ExportPreset(name: "director-replay", codec: .hevc, height: canvas.y, fps: 60)
+        let movieName = "\(aspect.rawValue)-replay.mov"
+        let movie = output.appendingPathComponent(movieName)
+        let clock = ContinuousClock()
+        let start = clock.now
+        try await Exporter.run(session: session, timeline: timeline, preset: preset, to: movie,
+                               includeAudio: false) { _ in }
+        let elapsed = (clock.now - start).components
+        let expectedFrames = max(Int(ceil(timeline.compositionDuration * Double(preset.fps) - 1e-8)), 1)
+        let frames = try await ExportBenchmark.validateVideo(at: movie, expectedFrames: expectedFrames, fps: preset.fps)
+        exports.append(["file": movieName, "frames": frames, "fps": preset.fps,
+                        "wallSeconds": Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18])
     }
     let report: [String: Any] = [
         "commit": env["LUMEN_DIRECTOR_REPLAY_COMMIT"] ?? "unverified",
         "response": [response.start, response.end], "destination": [destination.start, destination.end],
-        "frames": records,
-        "limits": "Annotated geometry and rendered samples, not semantic URL recognition, overlay occlusion or actual display presentation cadence."
+        "frames": records, "exports": exports,
+        "limits": "Annotated geometry, rendered samples and encoded timestamps. Semantic URL recognition, overlay occlusion, duplicate motion images and Studio presentation cadence require separate review."
     ]
     try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
         .write(to: output.appendingPathComponent("report.json"), options: .atomic)
