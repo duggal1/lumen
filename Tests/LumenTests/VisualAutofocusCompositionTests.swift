@@ -73,8 +73,9 @@ import LumenProject
         let click = ZoomPlanner.Intent(kind: .click, t: 5.1, tEnd: 5.1, x: 1400, y: 700)
         let typing = ZoomPlanner.Intent(kind: .typing, t: 6.0, tEnd: 6.9, x: 600, y: 560,
                                         rect: r2, frameRect: r2)
-        #expect((build(g).shots.first?.waypoints.count ?? 0) >= 2,
-                "precondition: two passive subjects chain into one shot")
+        let passive = build(g).shots
+        #expect(passive.count == 1, "competing subjects must not pump the camera")
+        #expect(passive.first?.waypoints.count == 1, "unrelated regions are never joined by an invented pan")
         let out = intents(g, input: [click, typing])
         #expect(out.isEmpty, "explicit input outranks passive pixels: \(out)")
     }
@@ -116,9 +117,9 @@ import LumenProject
         var active: [(Double, CGRect)] = (0..<5).map { (5.0 + Double($0) * 0.1, a) }
         active += (0..<5).map { (6.6 + Double($0) * 0.1, b) }
         let result = build(grids(from: 5.0, to: 7.6, active: active))
-        #expect(result.shots.count == 1, "two nearby results must chain into one shot: \(result.shots)")
-        #expect((result.shots.first?.waypoints.count ?? 0) >= 2,
-                "the second result becomes an in-shot pan, not a second segment")
+        #expect(result.shots.count == 1, "overlapping unrelated results must not pump the camera: \(result.shots)")
+        #expect(result.shots.first?.waypoints.count == 1,
+                "keep the established subject instead of inventing a pan to unrelated activity")
     }
 
     @Test func emptyAndMalformedEvidenceProducesNothing() {

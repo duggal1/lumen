@@ -71,4 +71,92 @@ import LumenProject
         #expect(shot.waypoints.count == 1)
         #expect(shot.waypoints[0].rect.x < 500)
     }
+
+    private func responseShot(end: Double = 14) -> VisualShot {
+        var shot = VisualShot(start: 1, end: end, waypoints: [
+            .init(t: 1, rect: PxRect(x: 900, y: 180, w: 800, h: 600), scale: 1.6)
+        ], strength: 100, kind: .region)
+        shot.subjectID = 1; shot.sustained = true; shot.actionTime = 0.5
+        return shot
+    }
+
+    @Test func overlappingURLClickEndsResponseWithoutErasingHistory() throws {
+        let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 20,
+                                backingScale: 1, originX: 0, originY: 0)
+        let click = ZoomPlanner.Intent(kind: .click, t: 12, tEnd: 12, x: 1300, y: 680,
+                                       rect: CGRect(x: 1200, y: 640, width: 200, height: 80))
+        let result = VisualAutofocus.intents(shots: [responseShot()], input: [click],
+                                             src: source, tm: TimeMap(sourceDuration: 20))
+        let response = try #require(result.first)
+        #expect(result.count == 1)
+        #expect(response.t == 1)
+        #expect(response.tEnd == 12)
+        #expect(response.visualEnd == 12)
+        let lateClick = ZoomPlanner.Intent(kind: .click, t: 14.1, tEnd: 14.1, x: 1300, y: 680,
+                                           rect: click.rect)
+        let late = VisualAutofocus.intents(shots: [responseShot()], input: [lateClick],
+                                          src: source, tm: TimeMap(sourceDuration: 20))
+        #expect(late.first?.tEnd == 14)
+    }
+
+    @Test func precedingExplicitTypingStillHasPriority() {
+        let source = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 20,
+                                backingScale: 1, originX: 0, originY: 0)
+        let typing = ZoomPlanner.Intent(kind: .typing, t: 0.2, tEnd: 2, x: 1300, y: 500,
+                                        frameRect: CGRect(x: 1000, y: 300, width: 500, height: 400))
+        #expect(VisualAutofocus.intents(shots: [responseShot()], input: [typing],
+                                       src: source, tm: TimeMap(sourceDuration: 20)).isEmpty)
+    }
+
+    @Test func completeSyntheticResponseToDestinationHandoff() throws {
+        let fixture = replay(response: true)
+        // Same pointer sequence until the user clicks within the response.
+        // The destination has a stable reveal, not streaming growth.
+        let click = InputEvent(t: 13, kind: .down, x: 1200, y: 560)
+        let events = fixture.events.filter { $0.t < 13 } + [click]
+        let grids = fixture.grids.map { grid -> ActivityGrid in
+            guard grid.t >= 13.2, grid.t <= 13.9 else { return grid }
+            var cells = grid.cells
+            for y in 4...10 { for x in 4...11 { cells[y * ActivityConst.gw + x] = 255 } }
+            return ActivityGrid(t: grid.t, cells: cells)
+        }
+        let src = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 16,
+                             backingScale: 1, originX: 0, originY: 0)
+        let result = ActivityShotBuilder.build(grids: grids, source: (1920, 1080),
+            inputs: ActivityInputs.make(events: events), settings: ActivitySettings())
+        #expect(result.shots.count == 2)
+        let first = try #require(result.shots.first)
+        let destination = try #require(result.shots.last)
+        #expect(first.sustained && first.end == 13)
+        #expect(destination.actionTime == 13)
+        #expect(destination.waypoints.first?.rect.x == 0)
+        let plan = ZoomPlanner.plan(events: events, ax: [], typing: [], activity: [], src: src,
+            p: CameraParams(), tm: TimeMap(sourceDuration: 16), avoid: [], activityShots: result.shots)
+        #expect(plan.segments.count == 2)
+        let response = try #require(plan.segments.first)
+        let next = try #require(plan.segments.last)
+        #expect(plan.kinds[response.id] == .visual && plan.kinds[next.id] == .visual)
+        #expect(response.end == 13)
+        #expect(response.start < 2 && response.end > 12.5)
+        #expect(next.start >= 13 && next.start >= response.end)
+        // No destination evidence: ordinary explicit click remains, and
+        // cannot erase the response or extend its segment past the click.
+        let noReveal = ActivityShotBuilder.build(grids: fixture.grids, source: (1920, 1080),
+            inputs: ActivityInputs.make(events: events), settings: ActivitySettings())
+        let fallback = ZoomPlanner.plan(events: events, ax: [], typing: [], activity: [], src: src,
+            p: CameraParams(), tm: TimeMap(sourceDuration: 16), avoid: [], activityShots: noReveal.shots)
+        let prior = try #require(fallback.segments.first)
+        #expect(fallback.segments.count == 2)
+        #expect(prior.end == 13)
+        #expect(plan.kinds[response.id] == .visual)
+        #expect(fallback.segments.last.map { fallback.kinds[$0.id] == .click } == true)
+    }
+
+    @Test func trimmedOutResponseDoesNotResurrectAtTrimStart() {
+        let src = SourceInfo(width: 1920, height: 1080, fps: 60, duration: 20,
+                             backingScale: 1, originX: 0, originY: 0)
+        let tm = TimeMap(sourceDuration: 20, trimStart: 15, trimEnd: 20)
+        #expect(VisualAutofocus.intents(shots: [responseShot()], src: src, tm: tm).isEmpty)
+    }
+
 }

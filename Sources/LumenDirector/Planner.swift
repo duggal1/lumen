@@ -73,6 +73,7 @@ enum ZoomPlanner {
         var visualSubjectID: Int? = nil
         var sustainedVisual = false
         var visualActionTime: Double? = nil
+        var visualEnd: Double? = nil
     }
     private struct Open {
         var start: Double, scale: Double, c: SIMD2<Double>
@@ -80,6 +81,7 @@ enum ZoomPlanner {
         var kind: IntentKind = .click
         var frameRect: CGRect? = nil
         var visualSubjectID: Int? = nil
+        var visualEnd: Double? = nil
     }
 
     /// Same source-time window -> same id across replans.
@@ -361,7 +363,7 @@ enum ZoomPlanner {
         let visual = VisualAutofocus.intents(shots: activityShots, input: intents, src: src, tm: tm)
         // Only a corroborated result can replace its own initiating click.
         // Never remove manual/marker/dialog/typing intent or an unrelated click.
-        let replacedClicks = Set(visual.compactMap { $0.sustainedVisual ? $0.visualActionTime : nil })
+        let replacedClicks = Set(visual.compactMap(\.visualActionTime))
         intents.removeAll { $0.kind == .click && replacedClicks.contains($0.t) }
         intents += visual
         intents = intents.filter { ok($0.t) && $0.tEnd.isFinite && $0.x.isFinite && $0.y.isFinite }
@@ -421,7 +423,7 @@ enum ZoomPlanner {
         func close(at end: Double) {
             guard let o = cur else { return }
             cur = nil
-            let e = min(end, o.start + shotCap, tm.trimEnd)
+            let e = min(end, o.start + shotCap, tm.trimEnd, o.visualEnd ?? .infinity)
             guard e - o.start > 0.02, o.scale > 1.001 else { return }
             let id = stableID(o.start, e)
             var path = o.path.filter { $0.t >= o.start - 1e-6 && $0.t <= e + 1e-6 }
@@ -548,7 +550,7 @@ enum ZoomPlanner {
                 }
             }
             var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect,
-                             visualSubjectID: it.visualSubjectID)
+                             visualSubjectID: it.visualSubjectID, visualEnd: it.visualEnd)
             fresh = withPoint(fresh, it.t, anchor)
             cur = fresh
             shotCap = cap
@@ -557,6 +559,9 @@ enum ZoomPlanner {
         }
 
         for it in intents {
+            if let o = cur, let end = o.visualEnd, it.t >= end {
+                close(at: end)
+            }
             if let o = cur {
                 if it.kind == .visual, o.kind != .visual {
                     if it.t <= last + hold { continue }

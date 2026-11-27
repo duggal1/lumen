@@ -15,27 +15,31 @@ enum VisualAutofocus {
 
     /// Maps every shot to planner intents. `waypoints[0]` opens the shot; later
     /// waypoints become in-shot pans that the existing solver folds into the
-    /// same segment. Overlapping shots were already chained by the builder, so
-    /// two segments never claim the same instant.
+    /// same segment. The builder arbitrates distinct subjects, and explicit
+    /// input transfers ownership at a half-open source-time boundary.
     static func intents(shots: [VisualShot], input: [ZoomPlanner.Intent] = [],
                         src: SourceInfo, tm: TimeMap) -> [ZoomPlanner.Intent] {
         let W = Double(src.width), H = Double(src.height)
         guard W > 0, H > 0 else { return [] }
         var out: [ZoomPlanner.Intent] = []
         for shot in shots {
-            guard let opening = shot.waypoints.first else { continue }
-            let start = min(max(shot.start, tm.trimStart), tm.trimEnd)
-            var end = min(max(shot.end, start + 0.2), tm.trimEnd)
-            if shot.sustained, let action = shot.actionTime {
-                // Later explicit actions end the previous response subject.
-                if let next = input.filter({ $0.t > max(action + 0.05, start) && $0.t < end })
-                    .map(\.t).min() { end = next }
+            guard let opening = shot.waypoints.first,
+                  shot.start.isFinite, shot.end.isFinite,
+                  shot.end > tm.trimStart, shot.start < tm.trimEnd else { continue }
+            let start = max(shot.start, tm.trimStart)
+            var end = min(shot.end, tm.trimEnd)
+            if let action = shot.actionTime {
+                // Half-open ownership [start, end): a later explicit intent
+                // can terminate the shot but must not invalidate its history.
+                if let next = input.lazy.filter({ $0.t.isFinite && $0.t > action + 0.000001 &&
+                    $0.t >= start && $0.t < end }).map(\.t).min() { end = next }
             }
-            guard end > start else { continue }
+            guard end > start + 0.02 else { continue }
             guard var first = intent(opening, t: start, tEnd: end, W: W, H: H) else { continue }
             first.visualSubjectID = shot.subjectID
             first.sustainedVisual = shot.sustained
             first.visualActionTime = shot.actionTime
+            first.visualEnd = shot.actionTime == nil ? nil : end
             guard !collides(first, with: input) else { continue }
             out.append(first)
             for waypoint in shot.waypoints.dropFirst() {
@@ -44,6 +48,7 @@ enum VisualAutofocus {
                 pan.visualSubjectID = shot.subjectID
                 pan.sustainedVisual = shot.sustained
                 pan.visualActionTime = shot.actionTime
+                pan.visualEnd = first.visualEnd
                 if !collides(pan, with: input) { out.append(pan) }
             }
         }
@@ -80,10 +85,16 @@ enum VisualAutofocus {
         input.contains { other in
             // The initiating click is evidence for the corroborated result,
             // not a second competing subject. Later input still has priority.
-            if candidate.sustainedVisual, let action = candidate.visualActionTime,
-               other.kind == .click, abs(other.t - action) < 0.000001 { return false }
-            guard other.t <= candidate.tEnd + inputGuard,
-                  candidate.t <= other.tEnd + inputGuard else { return false }
+            if let action = candidate.visualActionTime, let end = candidate.visualEnd {
+                if other.kind == .click, abs(other.t - action) < 0.000001 { return false }
+                // Input at or beyond the exclusive end has no temporal
+                // intersection, even if the control lies inside the subject.
+                guard other.t < end, other.tEnd >= candidate.t else { return false }
+            } else {
+                // Retain the legacy guard for uncorroborated passive changes.
+                guard other.t <= candidate.tEnd + inputGuard,
+                      candidate.t <= other.tEnd + inputGuard else { return false }
+            }
             if let r = other.frameRect ?? other.rect, let c = candidate.rect {
                 return r.insetBy(dx: -spatialGuard, dy: -spatialGuard).intersects(c)
             }
