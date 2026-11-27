@@ -283,8 +283,9 @@ public extension ProjectBundle {
             return existing
         }
         guard let j = try readJournal() else { return nil }
-        // Without a source clock anchor the track cannot be safely rebased.
-        guard let origin = j.firstFramePTS else { return nil }
+        // Legacy journals allowed a zero-based media clock. New sessions
+        // record the calibrated unit and must have a real source anchor.
+        guard let origin = j.firstFramePTS ?? (j.eventUnit == nil ? 0 : nil) else { return nil }
         let checkpointDuration = max(j.lastFramePTS - origin, 0)
         let duration: Double
         if let playableScreenDuration {

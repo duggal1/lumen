@@ -189,6 +189,7 @@ public actor RecordingSession {
     private var cfg: RecordingConfig?
     private var unit = EventTimeUnit.machTicks
     private var activity: NSObjectProtocol?
+    private var gateHeld = false
     private var journalTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var sleepObserver: NSObjectProtocol?
@@ -313,7 +314,7 @@ public actor RecordingSession {
         }
         let timeoutTask = armStageTimeout(.recording, seconds: 10)
         defer { timeoutTask.cancel() }
-        RecordingGate.recordingStarted()
+        if !gateHeld { RecordingGate.recordingStarted(); gateHeld = true }
         do {
             activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled, .idleSystemSleepDisabled],
                                                              reason: "Lumen recording")
@@ -487,11 +488,8 @@ public actor RecordingSession {
             pendingJournal?.cancel()
             await pendingJournal?.value
             stopWatchdog()
-            if isPaused {
-                // Keep capture paused until the stream is stopped. The
-                // unrecorded trailing pause is outside the playable media;
-                // reopening the input would capture content the user hid.
-            }
+            // Keep the capture engine paused until shutdown: resuming here
+            // would record content the user explicitly hid.
             isPaused = false
             viewport?.stop(); viewport = nil; viewportPaused = nil
             async let inputStop: Void = input.stop()
@@ -532,7 +530,7 @@ public actor RecordingSession {
     private func releaseRecordingActivity() {
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
-        RecordingGate.recordingStopped()
+        if gateHeld { RecordingGate.recordingStopped(); gateHeld = false }
         MainThreadWatchdog.shared.stop()
     }
 
@@ -648,8 +646,7 @@ public actor RecordingSession {
         if let webcam { await webcam.stop() }
         if let input { await input.stop() }
         if let engine { await engine.cancel() }
-        if let activity { ProcessInfo.processInfo.endActivity(activity) }
-        activity = nil
+        releaseRecordingActivity()
         var discardError: String?
         if let bundleURL = bundle?.url {
             do {
@@ -660,8 +657,6 @@ public actor RecordingSession {
                 discardError = error.localizedDescription
             }
         }
-        RecordingGate.recordingStopped()
-        MainThreadWatchdog.shared.stop()
         engine = nil; input = nil; webcam = nil; bundle = nil; cfg = nil
         transition(to: .idle)
         return discardError
