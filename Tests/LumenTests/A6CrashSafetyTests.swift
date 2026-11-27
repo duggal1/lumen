@@ -237,3 +237,59 @@ import LumenControl
         #expect(FileManager.default.fileExists(atPath: bundle.projectURL.path), "project is never swept")
     }
 }
+
+
+@Suite struct Core04DurabilityTests {
+    @Test func validPreviousCheckpointSurvivesCorruptPrimary() throws {
+        let dir = try A6CrashSafetyTests.tempDir("backup")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bundle = try ProjectBundle.create(named: "Recovery", in: dir)
+        var first = RecordingJournal(source: A6CrashSafetyTests.source(), fps: 60,
+                                     mic: false, system: false, webcam: false,
+                                     lastFramePTS: 12, firstFramePTS: 10)
+        try bundle.writeJournal(first).get()
+        first.lastFramePTS = 14
+        try bundle.writeJournal(first).get()
+        try Data("torn".utf8).write(to: bundle.journalURL)
+        let journal = try #require(try bundle.readJournal())
+        #expect(journal.lastFramePTS == 12)
+        let project = try #require(try bundle.recoverFromJournal(playableScreenDuration: 2))
+        #expect(project.meta.source.duration == 2)
+        #expect(!bundle.isUnfinished)
+        #expect(!FileManager.default.fileExists(atPath: bundle.journalBackupURL.path))
+    }
+
+    @Test func recoveredTrackOriginsRemainIndependentOfVideo() throws {
+        let dir = try A6CrashSafetyTests.tempDir("track-clock")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bundle = try ProjectBundle.create(named: "Tracks", in: dir)
+        try Data("fixture".utf8).write(to: bundle.micURL)
+        try Data("fixture".utf8).write(to: bundle.systemURL)
+        var journal = RecordingJournal(source: A6CrashSafetyTests.source(), fps: 60,
+                                       mic: true, system: true, webcam: false,
+                                       lastFramePTS: 15, firstFramePTS: 10)
+        journal.eventUnit = .machTicks
+        journal.micStart = 10.25
+        journal.systemStart = 9.75
+        try bundle.writeJournal(journal).get()
+        let recovered = try #require(try bundle.recoverFromJournal(playableScreenDuration: 4.5))
+        #expect(recovered.meta.mic?.startHostSeconds == 10.25)
+        #expect(recovered.meta.system?.startHostSeconds == 9.75)
+        #expect(recovered.meta.source.duration == 4.5)
+    }
+
+    @Test func unknownNewTrackOriginDoesNotInventSynchronization() throws {
+        let dir = try A6CrashSafetyTests.tempDir("unknown-clock")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bundle = try ProjectBundle.create(named: "Unknown", in: dir)
+        try Data("fixture".utf8).write(to: bundle.micURL)
+        var journal = RecordingJournal(source: A6CrashSafetyTests.source(), fps: 60,
+                                       mic: true, system: false, webcam: false,
+                                       lastFramePTS: 15, firstFramePTS: 10)
+        journal.eventUnit = .machTicks
+        try bundle.writeJournal(journal).get()
+        let recovered = try #require(try bundle.recoverFromJournal(playableScreenDuration: 4))
+        #expect(recovered.meta.mic == nil)
+        #expect(FileManager.default.fileExists(atPath: bundle.micURL.path))
+    }
+}

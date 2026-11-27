@@ -125,9 +125,17 @@ public struct RecordingJournal: Codable, Sendable {
     /// Absent on older journals (and on full-screen takes), so a crashed Area
     /// recording can rebuild the same intelligent crop instead of losing it.
     public var smartCrop: SmartCropConfig?
+    /// Optional fields keep old journals readable. A new checkpoint records
+    /// actual per-track origins and the calibrated event clock, never guesses.
+    public var eventUnit: EventTimeUnit?
+    public var micStart: Double?
+    public var systemStart: Double?
+    public var webcamStart: Double?
+    public var extraMicrophones: [MicrophoneSourceMeta]?
     enum CodingKeys: String, CodingKey {
         case schemaVersion, started, updated, source, fps, mic, system, webcam,
-             pauseIntervals, lastFramePTS, firstFramePTS, droppedFrames, smartCrop
+             pauseIntervals, lastFramePTS, firstFramePTS, droppedFrames, smartCrop,
+             eventUnit, micStart, systemStart, webcamStart, extraMicrophones
     }
     public init(started: Date = Date(), updated: Date? = nil, source: SourceInfo, fps: Double, mic: Bool, system: Bool,
                 webcam: Bool, pauseIntervals: [PauseInterval] = [], lastFramePTS: Double = 0,
@@ -154,6 +162,11 @@ public struct RecordingJournal: Codable, Sendable {
         // Backward compatible: journals written before smartCrop existed decode
         // to nil and recover exactly as they did before.
         smartCrop = try? c.decodeIfPresent(SmartCropConfig.self, forKey: .smartCrop)
+        eventUnit = try c.decodeIfPresent(EventTimeUnit.self, forKey: .eventUnit)
+        micStart = try c.decodeIfPresent(Double.self, forKey: .micStart)
+        systemStart = try c.decodeIfPresent(Double.self, forKey: .systemStart)
+        webcamStart = try c.decodeIfPresent(Double.self, forKey: .webcamStart)
+        extraMicrophones = try c.decodeIfPresent([MicrophoneSourceMeta].self, forKey: .extraMicrophones)
     }
 
     func validate() throws {
@@ -175,6 +188,12 @@ public struct RecordingJournal: Codable, Sendable {
         guard pauseIntervals.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.end >= $0.start }) else {
             throw RecoveryJournalError.invalidValue("pause intervals")
         }
+        guard [micStart, systemStart, webcamStart].compactMap({ $0 }).allSatisfy({ $0.isFinite && $0 >= 0 }),
+              (extraMicrophones ?? []).allSatisfy({
+                  $0.track.startHostSeconds.isFinite && $0.track.startHostSeconds >= 0 &&
+                  $0.track.file.hasPrefix("mic-extra-") && $0.track.file.hasSuffix(".caf") &&
+                  !$0.track.file.contains("/") && !$0.track.file.contains("\\")
+              }) else { throw RecoveryJournalError.invalidValue("track origins") }
         if let roi = smartCrop?.roi {
             guard roi.origin.x.isFinite, roi.origin.y.isFinite, roi.size.width.isFinite, roi.size.height.isFinite,
                   roi.size.width >= 0, roi.size.height >= 0 else {
@@ -200,7 +219,11 @@ public extension ProjectBundle {
     /// Present for the whole life of a recording and removed only after the
     /// project file is safely written. A leftover journal is the recovery signal.
     var journalURL: URL { url.appendingPathComponent("recording.journal") }
-    var isUnfinished: Bool { FileManager.default.fileExists(atPath: journalURL.path) }
+    var journalBackupURL: URL { url.appendingPathComponent("recording.previous.journal") }
+    var isUnfinished: Bool {
+        FileManager.default.fileExists(atPath: journalURL.path) ||
+        FileManager.default.fileExists(atPath: journalBackupURL.path)
+    }
 
     @discardableResult
     func writeJournal(_ j: RecordingJournal) -> Result<Void, Error> {
@@ -208,20 +231,38 @@ public extension ProjectBundle {
             try j.validate()
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
-            try encoder.encode(j).write(to: journalURL, options: .atomic)
+            let data = try encoder.encode(j)
+            // Retain the last VALID checkpoint, not a possibly torn primary.
+            // At most two tiny JSON files; never rewrite or copy the media.
+            if let previous = try? Data(contentsOf: journalURL),
+               let decoded = try? JSONDecoder().decode(RecordingJournal.self, from: previous),
+               (try? decoded.validate()) != nil, decoded.started == j.started {
+                try previous.write(to: journalBackupURL, options: .atomic)
+            }
+            try data.write(to: journalURL, options: .atomic)
         }
     }
     func readJournal() throws -> RecordingJournal? {
-        guard FileManager.default.fileExists(atPath: journalURL.path) else { return nil }
-        let journal = try JSONDecoder().decode(RecordingJournal.self, from: Data(contentsOf: journalURL))
-        try journal.validate()
-        return journal
+        var failure: (any Error)?
+        for candidate in [journalURL, journalBackupURL] {
+            guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
+            do {
+                let journal = try JSONDecoder().decode(RecordingJournal.self, from: Data(contentsOf: candidate))
+                try journal.validate()
+                return journal
+            } catch { if failure == nil { failure = error } }
+        }
+        if let failure { throw failure }
+        return nil
     }
     @discardableResult
     func clearJournal() -> Result<Void, Error> {
         Result {
-            guard FileManager.default.fileExists(atPath: journalURL.path) else { return }
-            try FileManager.default.removeItem(at: journalURL)
+            // Remove the backup first. A crash between removals still leaves
+            // the current checkpoint and a finalized project to reconcile.
+            for candidate in [journalBackupURL, journalURL] where FileManager.default.fileExists(atPath: candidate.path) {
+                try FileManager.default.removeItem(at: candidate)
+            }
         }
     }
 
@@ -232,11 +273,19 @@ public extension ProjectBundle {
         guard isUnfinished else { return nil }
         if let existing = try? load(), existing.meta.source.duration.isFinite,
            existing.meta.source.duration > 0 {
+            // The app supplies a real media probe. Do not clear recovery
+            // evidence if the already-published project exceeds that media.
+            if let playableScreenDuration {
+                guard playableScreenDuration.isFinite, playableScreenDuration > 0,
+                      existing.meta.source.duration <= playableScreenDuration + 0.05 else { return nil }
+            }
             try clearJournal().get()
             return existing
         }
         guard let j = try readJournal() else { return nil }
-        let origin = j.firstFramePTS ?? 0
+        // Legacy journals allowed a zero-based media clock. New sessions
+        // record the calibrated unit and must have a real source anchor.
+        guard let origin = j.firstFramePTS ?? (j.eventUnit == nil ? 0 : nil) else { return nil }
         let checkpointDuration = max(j.lastFramePTS - origin, 0)
         let duration: Double
         if let playableScreenDuration {
@@ -249,11 +298,23 @@ public extension ProjectBundle {
         var info = j.source
         info.duration = duration
         var meta = ProjectMeta(name: url.deletingPathExtension().lastPathComponent, source: info,
-                               clock: RecordingClock(originHostSeconds: origin, eventUnit: .machTicks))
+                               clock: RecordingClock(originHostSeconds: origin, eventUnit: j.eventUnit ?? .machTicks))
         meta.droppedFrames = j.droppedFrames
-        if j.mic, FileManager.default.fileExists(atPath: micURL.path) { meta.mic = TrackMeta(file: "mic.caf", startHostSeconds: origin) }
-        if j.system, FileManager.default.fileExists(atPath: systemURL.path) { meta.system = TrackMeta(file: "system.caf", startHostSeconds: origin) }
-        if j.webcam, FileManager.default.fileExists(atPath: webcamURL.path) { meta.webcam = TrackMeta(file: "webcam.mov", startHostSeconds: origin) }
+        if j.mic, FileManager.default.fileExists(atPath: micURL.path),
+           let start = j.micStart ?? (j.eventUnit == nil ? origin : nil) {
+            meta.mic = TrackMeta(file: "mic.caf", startHostSeconds: start)
+        }
+        if j.system, FileManager.default.fileExists(atPath: systemURL.path),
+           let start = j.systemStart ?? (j.eventUnit == nil ? origin : nil) {
+            meta.system = TrackMeta(file: "system.caf", startHostSeconds: start)
+        }
+        if j.webcam, FileManager.default.fileExists(atPath: webcamURL.path),
+           let start = j.webcamStart ?? (j.eventUnit == nil ? origin : nil) {
+            meta.webcam = TrackMeta(file: "webcam.mov", startHostSeconds: start)
+        }
+        meta.additionalMicrophones = (j.extraMicrophones ?? []).filter {
+            FileManager.default.fileExists(atPath: url.appendingPathComponent($0.track.file).path)
+        }
         var tl = Timeline(duration: duration)
         // An Area take must come back with the same intelligent crop it was
         // recording with, not a fresh full-frame timeline.
