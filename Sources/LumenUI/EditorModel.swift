@@ -349,12 +349,12 @@ enum TimelineSelection: Equatable {
             }, onTyping: { [weak self] in
                 Task { @MainActor [weak self] in
                     guard let self, self.analysisGeneration == generation else { return }
-                    self.replan()
+                    self.replan(debounce: true)
                 }
             }, onActivity: { [weak self] in
                 Task { @MainActor [weak self] in
                     guard let self, self.analysisGeneration == generation else { return }
-                    self.replan()
+                    self.replan(debounce: true)
                 }
             }, onPrivacy: { [weak self] error in
                 Task { @MainActor [weak self] in
@@ -1038,9 +1038,8 @@ enum TimelineSelection: Equatable {
 
     /// Delete a whole sentence by its word range. One cut, one undo step.
     func deleteSentence(words range: Range<Int>) {
-        let indices = Array(range).filter { transcriptWords.indices.contains($0) }
         guard let cut = TranscriptEdits.sentenceSpan(for: transcriptWords, range: range) else { return }
-        dispatch(.deleteTranscriptWords(indices, cuts: [cut]))
+        dispatch(.deleteTranscriptWords(Array(range), cuts: [cut]))
     }
 
     /// Bulk cleanup: filler words and long pauses go in one pass, and each one
@@ -1052,7 +1051,13 @@ enum TimelineSelection: Equatable {
         let indices = transcriptWords.enumerated().compactMap { index, word in
             terms.contains(TranscriptEdits.normalized(word.text)) ? index : nil
         }
-        let cuts = TranscriptEdits.cleanupCuts(transcript: transcript, events: session.input.events)
+        let input = session.input
+        let hasVisualEvidence = !input.activityGrids.isEmpty
+        let cuts = TranscriptEdits.cleanupCuts(transcript: transcript, events: input.events,
+            protectedVisualTimes: input.activity.map(\.t), includePauses: hasVisualEvidence)
+        if !hasVisualEvidence {
+            notice = "Filler cleanup is available. Automatic pause removal waits for screen activity analysis."
+        }
         guard !indices.isEmpty || !cuts.isEmpty else { return }
         dispatch(.deleteTranscriptWords(indices, cuts: cuts))
     }

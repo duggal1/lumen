@@ -96,21 +96,27 @@ public enum TranscriptEdits {
     /// leaves a natural breath so speech does not sound machine-edited.
     public static func cleanupCuts(transcript: Transcript, events: [InputEvent] = [],
                                    maxPause: Double = 0.6, keepPause: Double = 0.25,
-                                   padding: Double = defaultPadding) -> [CutRange] {
+                                   padding: Double = defaultPadding, protectedVisualTimes: [Double] = [],
+                                   includePauses: Bool = true) -> [CutRange] {
         let fillers = spans(for: transcript.words, at: fillerIndices(in: transcript), padding: padding)
+        guard includePauses else { return fillers }
         return merge(fillers + pauseCuts(transcript: transcript, events: events,
-                                        maxPause: maxPause, keepPause: keepPause))
+                                        maxPause: maxPause, keepPause: keepPause,
+                                        protectedVisualTimes: protectedVisualTimes))
     }
 
     /// One indexed implementation used by both the director and editor.
     public static func pauseCuts(transcript: Transcript, events: [InputEvent] = [],
-                                 maxPause: Double = 0.6, keepPause: Double = 0.25) -> [CutRange] {
+                                 maxPause: Double = 0.6, keepPause: Double = 0.25,
+                                 protectedVisualTimes: [Double] = []) -> [CutRange] {
         guard maxPause.isFinite, keepPause.isFinite, maxPause >= 0, keepPause >= 0 else { return [] }
         var cuts: [CutRange] = []
         let ordered = transcript.words.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
             .sorted { $0.start < $1.start }
-        let activity = events.lazy.filter { $0.t.isFinite && $0.kind != .move && $0.kind != .flagsChanged }
-            .map(\.t).sorted()
+        let explicit = events.lazy.filter { $0.t.isFinite && $0.kind != .move && $0.kind != .flagsChanged }.map(\.t)
+        // Meaningful screen changes can occur with no click or key at all
+        // (generated output, progress, results). Preserve rather than guess.
+        let activity = (Array(explicit) + protectedVisualTimes.filter(\.isFinite)).sorted()
         var activityIndex = 0
         var speechEnd = ordered.first?.end ?? 0
         for word in ordered.dropFirst() {

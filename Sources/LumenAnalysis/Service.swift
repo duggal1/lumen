@@ -110,16 +110,24 @@ public enum AnalysisScheduler {
         await withTaskGroup(of: Void.self) { group in
             var next = 0, running = 0
             while next < ordered.count || running > 0 {
-                while running < cap, next < ordered.count {
+                if Task.isCancelled {
+                    // Do not admit a new decoder or Vision job from a stale
+                    // editor revision. Drain only the already-admitted work.
+                    group.cancelAll()
+                    next = ordered.count
+                }
+                while !Task.isCancelled, running < cap, next < ordered.count {
                     let job = ordered[next]
                     next += 1; running += 1
                     group.addTask {
+                        guard !Task.isCancelled else { return }
                         state.enter(job.name)
                         let at = DispatchTime.now().uptimeNanoseconds
                         await job.run()
                         state.leave(job.name, seconds: Double(DispatchTime.now().uptimeNanoseconds - at) / 1_000_000_000)
                     }
                 }
+                guard running > 0 else { break }
                 _ = await group.next()
                 running -= 1
             }
@@ -349,7 +357,16 @@ public actor AnalysisService {
         put("speech", await collector.transcriptError)
         put("personMask", await collector.personMaskError)
         put("typing", await collector.typingError)
-        if Task.isCancelled { errors["cancelled"] = "analysis cancelled" }
+        if Task.isCancelled {
+            errors["cancelled"] = "analysis cancelled"
+            if request.privacy.enabled, request.privacy.autoDetect,
+               !report.order.contains("privacy-scan") {
+                // A cancelled queued scan never got its normal completion
+                // callback. Publish what was found and an explicit failure,
+                // rather than pretending automatic privacy verification ran.
+                onPrivacy(AnalysisResult(ocr: await collector.ocr, errors: errors))
+            }
+        }
         return AnalysisResult(face: await collector.face, activity: await collector.activity,
                               activityGrids: await collector.activityGrids,
                               ocr: await collector.ocr, transcript: await collector.transcript,
@@ -404,11 +421,10 @@ public actor AnalysisService {
     }
 
     private func activity(_ r: AnalysisRequest) async -> ([ActivityPoint], ActivityCache?, String?) {
-        let analyzer: ActivityAnalyzer
-        do { analyzer = try ActivityAnalyzer() }
-        catch { return ([], nil, error.localizedDescription) }
         let (cache, error) = await ActivityFetch.cached(url: r.screen, directory: analysisDirectory(r), hz: 10) {
-            try await analyzer.analyze(screen: r.screen, hz: 10)
+            // Warm-cache reopen does not allocate a Metal pipeline or reader.
+            let analyzer = try ActivityAnalyzer()
+            return try await analyzer.analyze(screen: r.screen, hz: 10)
         }
         guard let cache else { return ([], nil, error) }
         return (ActivityPointBridge.points(from: cache), cache, nil)
@@ -475,22 +491,7 @@ public actor AnalysisService {
         guard r.includeTyping, !r.events.isEmpty else { return ([], nil) }
         let bursts = r.events.typingBursts()
         guard !bursts.isEmpty else { return ([], nil) }
-        let anchors: [SIMD2<Double>?] = bursts.map { burst in
-            if let event = r.events.first(where: { $0.kind == .keyDown && $0.t >= burst.t0 && $0.t <= burst.t1
-                && $0.axFrameIndex > 0 && Int($0.axFrameIndex) <= r.ax.count }) {
-                let frame = r.ax[Int(event.axFrameIndex) - 1]
-                if frame.w > 0 {
-                    let anchor = frame.anchor
-                    // A missing anchor is unknown context, never a point to
-                    // zoom at and never evidence of a public page.
-                    if let anchor, !anchor.resolved { return nil }
-                    return SIMD2(frame.caret.map { $0.x + $0.w / 2 } ?? frame.x + frame.w / 2,
-                                 frame.caret.map { $0.y + $0.h / 2 } ?? frame.y + frame.h / 2)
-                }
-            }
-            return r.events.last { $0.kind == .down && $0.t <= burst.t0 && burst.t0 - $0.t < 20 }
-                .map { SIMD2(Double($0.x), Double($0.y)) }
-        }
+        let anchors = TypingAnchorIndex.resolve(events: r.events, ax: r.ax, bursts: bursts)
         let settings = TypingTraceSettings(sampleHz: min(max(r.typingSampleHz, 2), 30))
         let policy = TypingContextPolicy(usesAXAnchors: anchors.contains { $0 != nil }, treatsMissingAnchorAsUnknown: true)
         let params = TypingParameters(bursts: bursts.map { [$0.t0, $0.t1] },
@@ -508,9 +509,12 @@ public actor AnalysisService {
                                                                            parameters: Parameters,
                                                                            produce: () async throws -> Value) async -> (Value?, String?) {
         do {
+            try Task.checkCancellation()
             let key = try await AnalysisCache.key(media: url, analyzer: analyzer, version: version, parameters: parameters)
+            try Task.checkCancellation()
             if let cached = AnalysisCache.load(Value.self, key: key, directory: directory) { return (cached, nil) }
             let value = try await produce()
+            try Task.checkCancellation()
             try AnalysisCache.save(value, key: key, directory: directory)
             return (value, nil)
         } catch is CancellationError {
