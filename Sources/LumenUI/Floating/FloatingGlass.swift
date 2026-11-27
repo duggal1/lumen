@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// Native white HUD glass shared by the recorder and its floating panels.
-/// A light white tint keeps text legible while leaving the live blur visible.
-/// Reduce Transparency swaps the system material for an opaque white surface.
+/// Native semantic material shared by recorder panels. Let AppKit compose
+/// the backdrop instead of imposing a black HUD or a large opaque wash.
+/// No screen capture permission or private WindowServer API is used.
 @MainActor
 final class FrostView: NSView {
     private let blur = NSVisualEffectView()
@@ -17,10 +17,10 @@ final class FrostView: NSView {
         layer?.cornerRadius = radius
         layer?.masksToBounds = true
 
-        blur.material = .hudWindow
+        blur.material = .popover
         blur.blendingMode = .behindWindow
         blur.state = .active
-        blur.isEmphasized = true
+        blur.isEmphasized = false
         blur.autoresizingMask = [.width, .height]
         addSubview(blur)
 
@@ -39,12 +39,22 @@ final class FrostView: NSView {
     }
 
     private func applyWash() {
-        let flat = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        let workspace = NSWorkspace.shared
+        let flat = workspace.accessibilityDisplayShouldReduceTransparency
         blur.isHidden = flat
-        wash.isHidden = false
-        let opacity = flat ? 1 : CGFloat(Tok.floatingWashOpacity)
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        wash.layer?.backgroundColor = (dark ? NSColor.black : NSColor.white).withAlphaComponent(opacity).cgColor
+        // Default is entirely native material. Use an opaque semantic
+        // background for accessibility rather than hard-coded black/white.
+        let contrast = workspace.accessibilityDisplayShouldIncreaseContrast
+        wash.isHidden = !flat && !contrast
+        let fill = NSColor.windowBackgroundColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            wash.layer?.backgroundColor = fill.withAlphaComponent(flat ? 1 : 0.45).cgColor
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshMaterial()
     }
 
     override func viewDidChangeEffectiveAppearance() {

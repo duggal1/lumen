@@ -16,27 +16,36 @@ enum WebcamPlacement {
     static func solve(_ tl: Timeline, tm: TimeMap, cam: CameraTrack, cursor: CursorTrack, src: SIMD2<Double>,
                       vad: [ClosedRange<Double>], outDur: Double, clicks: [ClickFX] = [],
                       crop: DenseCropTrack = DenseCropTrack()) -> PlacementTrack {
-        guard tl.webcam != nil else { return PlacementTrack() }
+        guard tl.webcam != nil, outDur.isFinite, outDur >= 0,
+              outDur * rate < Double(Int.max / 2), src.x.isFinite, src.y.isFinite,
+              src.x > 0, src.y > 0 else { return PlacementTrack() }
         let s = tl.layoutSettings.cameraOverlay
-        let a = tl.style.aspectRatio
+        let a = LayoutResolver.safeAspect(tl.style.aspectRatio)
         let full = PxRect(x: 0, y: 0, w: src.x, h: src.y)
-        let contentScale = min(max(tl.style.contentScale, 0.3), 2)
+        let contentScale = tl.style.contentScale.isFinite ? min(max(tl.style.contentScale, 0.3), 2) : 1
         let n = max(Int(outDur * rate) + 2, 3), dt = 1 / rate
         var voice = [Bool](repeating: false, count: n)
         for r in vad {
-            let lo = max(Int(tm.output(atSource: r.lowerBound) * rate), 0), hi = min(Int(tm.output(atSource: r.upperBound) * rate), n - 1)
+            let start = tm.output(atSource: r.lowerBound), end = tm.output(atSource: r.upperBound)
+            guard start.isFinite, end.isFinite else { continue }
+            let lo = Int(min(max(start * rate, 0), Double(n)))
+            let hi = Int(min(max(end * rate, -1), Double(n - 1)))
             if hi >= lo { for i in lo...hi { voice[i] = true } }
         }
         let cand = [s.corner, flipH(s.corner), flipV(s.corner), flipH(flipV(s.corner))]
         let rects = cand.map { LayoutResolver.bubbleRect(corner: $0, size: s.size, aspect: a) }
-        let mx = s.avoidMargin / src.x, my = mx * a
+        let margin = s.avoidMargin.isFinite ? min(max(s.avoidMargin, 0), src.x * 0.25) : 48
+        let mx = margin / src.x, my = mx * a
 
         /// Transform recorded screen pixels through the zoom at a chosen
         /// output timestamp. Use this for both live cursor and future clicks,
         /// rather than comparing source pixels with a canvas-space bubble.
         func canvasPoint(_ x: Double, _ y: Double, at t: Double, opacity: Double = 1) -> SIMD3<Double>? {
-            guard !cam.nx.isEmpty, !cam.lz.isEmpty else { return nil }
-            let ci = min(max(Int(t * cam.rate), 0), min(cam.nx.count, cam.lz.count) - 1)
+            let count = min(cam.nx.count, min(cam.ny.count, cam.lz.count))
+            guard count > 0, t.isFinite, x.isFinite, y.isFinite,
+                  cam.rate.isFinite, cam.rate > 0 else { return nil }
+            let ci = Int(min(max(t * cam.rate, 0), Double(count - 1)))
+            guard cam.nx[ci].isFinite, cam.ny[ci].isFinite, cam.lz[ci].isFinite else { return nil }
             let region = crop.rect(at: tm.source(atOutput: t))
             let base = region.isValid ? region : full
             let view = CropSpace.visible(crop: base, aspect: nil, u: Double(cam.nx[ci]), v: Double(cam.ny[ci]),
@@ -50,8 +59,9 @@ enum WebcamPlacement {
 
         /// Cursor in canvas-normalized space through the live camera; z = cursor opacity.
         func cursorCanvas(_ t: Double) -> SIMD3<Double>? {
-            guard !cursor.x.isEmpty else { return nil }
-            let i = min(max(Int(t * gridRate), 0), min(cursor.x.count, cursor.y.count, cursor.opacity.count) - 1)
+            let count = min(cursor.x.count, min(cursor.y.count, cursor.opacity.count))
+            guard count > 0, t.isFinite else { return nil }
+            let i = Int(min(max(t * gridRate, 0), Double(count - 1)))
             return canvasPoint(Double(cursor.x[i]), Double(cursor.y[i]), at: t,
                                opacity: Double(cursor.opacity[i]))
         }
@@ -64,7 +74,7 @@ enum WebcamPlacement {
             return false
         }
         func behind(_ k: Int, _ t: Double) -> Bool {
-            if let p = cursorCanvas(t), p.z > 0.3 { return inside(rects[k], p, 0, 0) }
+            if s.avoidCursor, let p = cursorCanvas(t), p.z > 0.3 { return inside(rects[k], p, 0, 0) }
             return false
         }
 
@@ -98,7 +108,7 @@ enum WebcamPlacement {
             }
             let isNear = near(cur, t), isBehind = behind(cur, t)
             if isNear { if badSince == nil { badSince = t } } else { badSince = nil }
-            let dwell = (isBehind && s.behindFace == .move) ? 0.25 : s.snapDwell
+            let dwell = (isBehind && s.behindFace == .move) ? 0.25 : (s.snapDwell.isFinite ? max(s.snapDwell, 0) : 0.45)
             let predictedOcclusion = hidesClick(cur)
             // Clicks are not ordinary cursor wiggles. Move proactively so the
             // 120Hz layout spring can settle before a quick click or tap.
@@ -113,7 +123,8 @@ enum WebcamPlacement {
             }
             var target = 1.0
             if behind(cur, t) { switch s.behindFace { case .hide: target = 0; case .fade: target = 0.2; case .move: break } }
-            if s.hideOnSilence, t - lastVoice > s.silenceHold { target = 0 }
+            let hold = s.silenceHold.isFinite ? max(s.silenceHold, 0) : 0.6
+            if s.hideOnSilence, t - lastVoice > hold { target = 0 }
             vis += (target - vis) * (1 - exp(-dt / (target < vis ? 0.25 : 0.4)))
             corner[i] = UInt8(order.firstIndex(of: cand[cur]) ?? 3)
             visible[i] = Float(vis)
