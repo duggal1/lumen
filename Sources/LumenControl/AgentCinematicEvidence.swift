@@ -23,13 +23,23 @@ enum AgentCinematicEvidence {
             }
         }
         let tm = timeline.timeMap
-        let holds = timeline.zoom.map { tm.output(atSource: $0.end) - tm.output(atSource: $0.start) }
+        let validShots = timeline.zoom.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
+        let holds = validShots.map { tm.output(atSource: $0.end) - tm.output(atSource: $0.start) }
             .filter { $0.isFinite && $0 > 0 }.sorted()
+        // Offer bounded, exact output times for an external vision-capable
+        // agent to inspect with render_preview. No fabricated visual verdict.
+        let critical = validShots.flatMap { shot in
+            [tm.output(atSource: shot.start), tm.output(atSource: shot.end)]
+        }.filter { $0.isFinite && $0 >= 0 && $0 < duration }.sorted()
+        let samples = critical.count <= 9 ? critical : (0..<9).map { critical[$0 * (critical.count - 1) / 8] }
         let captions = tracks.captions.filter { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
         let maxCaptionPace = captions.map { Double($0.text.count) / ($0.end - $0.start) }.filter(\.isFinite).max() ?? 0
         return (valid, .object([
             "status": .string(valid ? "measured" : "invalid_camera_track"),
             "requires_external_review": .bool(true),
+            "review_output_times": .array(([0, duration / 2, max(0, duration - 0.05)] + samples)
+                .sorted().map { .number($0) }),
+            "review_tool": .string("render_preview"),
             "zoom_shots": .int(holds.count),
             "shots_per_minute": .number(Double(holds.count) * 60 / duration),
             "short_shots_under_0_7s": .int(holds.filter { $0 < 0.7 }.count),

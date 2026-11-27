@@ -9,3 +9,5 @@ Read Director, derived tracks, camera solver, Mixer, Engine, export and agent re
 - Test correction bounds, privacy preservation and missing evidence.
 
 Acceptance: exact-head CI; held-out real recordings and human/agent review of actual rendered videos. This is not a trained aesthetic evaluator and does not guarantee cinematic quality.
+
+Security follow-up: bind durable job receipts to the authenticated MCP client, including composite child exports. Reject cross-client reads/cancellation and do not expose ownerless legacy receipts through MCP. Add restart ownership regression. Report representative output times for external visual review.

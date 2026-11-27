@@ -692,7 +692,6 @@ public actor Engine {
                             includeAudio: Bool, exportStems: Bool, overwrite: Bool = false,
                             client: String? = nil, expectedRevision: Int? = nil) async throws -> String {
         // The client identity is recorded by the job manager for approvals and audit.
-        _ = client
         // AGENT: capture and export compete for the same GPU and must not run together.
         guard !RecordingGate.isRecordingActive else {
             throw ToolError(code: "RECORDING_ACTIVE", hint: "Stop recording before exporting.")
@@ -741,7 +740,7 @@ public actor Engine {
         }
         let gpuLane = self.gpuLane
         let exportRevision = h.revision
-        return jobs.start(kind: "export") { reporter in
+        return jobs.start(kind: "export", owner: client) { reporter in
             try await gpuLane.withPermit {
                 let directory = output.deletingLastPathComponent()
                     .appendingPathComponent(".lumen-\(UUID().uuidString)", isDirectory: true)
