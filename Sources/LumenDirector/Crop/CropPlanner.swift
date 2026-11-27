@@ -159,13 +159,10 @@ public enum CropPlanner {
             switch m {
             case .full: return source
             case .content:
-                // TRUE CROP of the AXWebArea source rect: inset the chrome
-                // divider, then grow to the OUTPUT aspect so the compositor
-                // never stretches the picture. No camera zoom factor is used.
-                let detected = web.at(t).insetBy(s.insetPx)
-                return SmartCropPlanner.aspectFit(detected, source: source)
-                    .intersection(source)
-            case .window: return win.at(t).intersection(source)
+                // Layout fits the card to this page. Expanding the source rect
+                // to the desktop aspect can bring the address bar back in.
+                return contained(web.at(t).insetBy(s.insetPx))
+            case .window: return contained(win.at(t))
             }
         }
         var rects: [SIMD4<Float>] = []
