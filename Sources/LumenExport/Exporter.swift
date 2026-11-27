@@ -52,7 +52,16 @@ public enum FrameImage {
     /// One frame, fully rendered (CLI `frame`, GIF, cursor sidecar).
     public static func render(renderer: Renderer, session: ProjectSession, timeline tl: Timeline, t: Double, canvas: SIMD2<Int>,
                               fps: Double = 60, transparent: Bool = false, cursorOnly: Bool = false) async throws -> CVPixelBuffer {
-        let (sf, wf) = try await session.frames(atOutput: t, timeline: tl)
+        try await renderFrame(renderer: renderer, session: session, timeline: tl, t: t, canvas: canvas,
+                              fps: fps, transparent: transparent, cursorOnly: cursorOnly, reader: nil)
+    }
+
+    static func renderFrame(renderer: Renderer, session: ProjectSession, timeline tl: Timeline, t: Double, canvas: SIMD2<Int>,
+                            fps: Double = 60, transparent: Bool = false, cursorOnly: Bool = false,
+                            reader: ProjectFrameReader?) async throws -> CVPixelBuffer {
+        let (sf, wf): (SourceFrame, SourceFrame?)
+        if let reader { (sf, wf) = try await reader.frames(atOutput: t, timeline: tl) }
+        else { (sf, wf) = try await session.frames(atOutput: t, timeline: tl) }
         guard let pb = makeBuffer(canvas.x, canvas.y) else { throw ExportError.render }
         let latch = Latch()
         let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: canvas, fps: fps,
@@ -133,6 +142,7 @@ public enum Exporter {
             throw ExportError.writer("This Mac cannot encode the selected resolution, frame rate and codec.")
         }
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
+        let reader = try await session.makeExportFrameReader()
         let h = preset.height, w = preset.width(aspect: aspect), fps = preset.fps
         let compositionDuration = tl.compositionDuration
         let total = max(Int(ceil(compositionDuration * Double(fps) - 1e-8)), 1)
@@ -237,7 +247,7 @@ public enum Exporter {
             let t = Double(i) / Double(fps)
             let readStart = HostClock.now()
             os_signpost(.begin, log: exportLog, name: "export.decode")
-            let (sf, wf) = try await session.frames(atOutput: t, timeline: tl)
+            let (sf, wf) = try await reader.frames(atOutput: t, timeline: tl)
             os_signpost(.end, log: exportLog, name: "export.decode")
             decodeSeconds += HostClock.now() - readStart
             var pbo: CVPixelBuffer?
@@ -381,10 +391,11 @@ public enum Exporter {
         writer.startSession(atSourceTime: .zero)
         guard let pool = adaptor.pixelBufferPool else { throw ExportError.writer("no cursor layer buffer pool") }
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
+        let reader = try await session.makeExportFrameReader()
         for i in 0..<total {
             try Task.checkCancellation()
             let t = Double(i) / Double(fps)
-            let (sf, _) = try await session.frames(atOutput: t, timeline: tl)
+            let (sf, _) = try await reader.frames(atOutput: t, timeline: tl)
             var pbo: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pbo)
             guard let pb = pbo else { throw ExportError.render }
@@ -424,13 +435,14 @@ public enum Exporter {
         let w = 800, h = (Int((Double(w) / tl.style.aspectRatio).rounded()) + 1) & ~1, fps = 15
         let total = max(Int(ceil(tl.compositionDuration * Double(fps) - 1e-8)), 1)
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
+        let reader = try await session.makeExportFrameReader()
         let staged = url.deletingLastPathComponent().appendingPathComponent(".lumen-gif-\(UUID().uuidString).gif")
         defer { try? FileManager.default.removeItem(at: staged) }
         guard let dest = CGImageDestinationCreateWithURL(staged as CFURL, UTType.gif.identifier as CFString, total, nil) else { throw ExportError.writer("gif") }
         CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
         for i in 0..<total {
             try Task.checkCancellation()
-            let pb = try await FrameImage.render(renderer: renderer, session: session, timeline: tl, t: Double(i) / Double(fps), canvas: SIMD2(w, h), fps: Double(fps))
+            let pb = try await FrameImage.renderFrame(renderer: renderer, session: session, timeline: tl, t: Double(i) / Double(fps), canvas: SIMD2(w, h), fps: Double(fps), reader: reader)
             guard let img = FrameImage.cgImage(pb) else { throw ExportError.render }
             CGImageDestinationAddImage(dest, img, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(fps)]] as CFDictionary)
             progress(ExportProgress(frame: i + 1, total: total, notice: nil))
