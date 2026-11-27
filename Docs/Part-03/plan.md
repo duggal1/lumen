@@ -30,3 +30,7 @@ Baseline: 5673f1d3fcdb99a53d500b7fd01494a4cf3c6f03, Parts 1 and 2 merged. Scope:
 ## Implemented in this PR
 
 Canonical exact click selection, no invented click release, real release flag handling, silence for legacy releases lacking separate-recording provenance, single gain stage, stereo-linked bounded limiter, bounded preview warm-up, removal of offline UI notification side effects, denoiser sample-count/finite guard and input-adaptive expansion. Existing recordings remain; acquisition and listening blocked by network. Legacy UI/pack compatibility intentionally preserved until verified assets replace them.
+
+### Acquisition safety follow-up
+
+The legacy automatic builder is retired for generation (its verify-only route remains). `scripts/stage_recorded_sounds.py` stages actual local downloads from reviewed CC0 pages, checks pinned original hashes, explicit independently recorded release evidence, nonoverlapping source windows and duplicate output hashes, converts to 48 kHz with static gain and minimal fades, and writes a candidate outside the repository. No asset is downloaded or claimed replaced by this change. The candidate manifest requires separate migration of the old LUFS/inventory/package contracts after listening. Runtime release acceptance also checks the actual WAV hash against the review manifest. Click audition now runs the same cue mixer and limiter as export; missing named slots do not shift a user's selection.

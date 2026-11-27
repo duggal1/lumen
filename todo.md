@@ -163,3 +163,6 @@ Finish **Part 2 only**: inspect latest PR #43 CI, fix any failures without weake
 ### Part 3 implementation status
 
 See [Part 3 plan](Docs/Part-03/plan.md). Fixed canonical click selection, duplicate key gain, release-flag routing, omission of unverified releases, stereo-linked limiter, preview window warm-up, offline UI side effects, and invalid denoiser output validation. Added conservative input-dependent voice expansion. Existing legacy packs and studio recordings remain for compatibility until authentic replacements are acquired. New assets and actual listening are not complete. Part 2 corrected CI [passed](https://github.com/duggal1/lumen/actions/runs/45954321659); both prior PRs merged.
+
+- [x] Retire unsafe legacy generator; add reviewed hash-pinned candidate staging with no in-place shipping overwrite. Require valid release hash; preserve named click slot identity; inspector audition uses canonical mixer.
+- [ ] Obtain real original audio files, create reviewed manifest, run importer, listen, commit replacement catalog and migrate old package gates.

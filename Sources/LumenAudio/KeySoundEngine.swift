@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import CryptoKit
 import LumenCore
 import LumenProject
 
@@ -55,6 +56,8 @@ public struct KeySoundLibrary: Sendable {
     /// Old catalogs may label a down strike as a release. Keep their inventory
     /// readable for migration, but do not play an unverified release.
     public var unverifiedReleaseIDs: Set<String> = []
+    private var usesNamedClickSlots = false
+    private static let clickNames = ["mouse-click-1", "mouse-click-2", "tick", "snap", "analog"]
 
     public var isEmpty: Bool { down.isEmpty && clicks.isEmpty && studioClicks.isEmpty }
 
@@ -62,6 +65,7 @@ public struct KeySoundLibrary: Sendable {
 
     public static func load(root: URL? = nil) -> KeySoundLibrary {
         var lib = KeySoundLibrary()
+        lib.usesNamedClickSlots = true
         let resolver: (String) -> URL? = root.map { rootURL in
             { (name: String) -> URL? in
                 let url = rootURL.appendingPathComponent(name)
@@ -73,14 +77,23 @@ public struct KeySoundLibrary: Sendable {
                 let path: String
                 let phase: String?
                 let releaseEvidence: String?
+                let sha256: String?
             }
             let files: [Entry]
         }
         let catalog = resolver("manifest.json").flatMap { try? Data(contentsOf: $0) }
             .flatMap { try? JSONDecoder().decode(Catalog.self, from: $0) }
-        let verifiedReleases = Set((catalog?.files ?? []).filter {
-            $0.phase == "up" && $0.releaseEvidence == "separate-recorded-release"
-        }.map(\.path))
+        var verifiedReleases: [String: String] = [:]
+        for entry in catalog?.files ?? [] where entry.phase == "up" &&
+            entry.releaseEvidence == "separate-recorded-release" {
+            if let hash = entry.sha256, hash.count == 64 { verifiedReleases[entry.path] = hash }
+        }
+        func releaseVerified(_ name: String, _ url: URL) -> Bool {
+            guard let expected = verifiedReleases[name],
+                  let bytes = try? Data(contentsOf: url, options: .mappedIfSafe) else { return false }
+            let actual = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            return actual == expected.lowercased()
+        }
         for keyClass in KeyClass.allCases where keyClass != .click {
             for phase in [KeyPhase.down, .up] {
                 var takes: [KeyTake] = []
@@ -89,14 +102,14 @@ public struct KeySoundLibrary: Sendable {
                     guard let url = resolver(name), let pcm = try? AudioIO.readMono(url),
                           !pcm.isEmpty, pcm.allSatisfy(\.isFinite) else { continue }
                     takes.append(KeyTake(id: name, samples: pcm))
-                    if phase == .up, !verifiedReleases.contains(name) {
+                    if phase == .up, !releaseVerified(name, url) {
                         lib.unverifiedReleaseIDs.insert(name)
                     }
                 }
                 if phase == .down { lib.down[keyClass] = takes } else { lib.up[keyClass] = takes }
             }
         }
-        for name in ["mouse-click-1", "mouse-click-2", "tick", "snap", "analog"] {
+        for name in clickNames {
             guard let url = resolver("clicks/\(name).wav"), let pcm = try? AudioIO.readMono(url), !pcm.isEmpty else { continue }
             lib.clicks.append(KeyTake(id: name, samples: pcm))
         }
@@ -124,6 +137,10 @@ public struct KeySoundLibrary: Sendable {
         var settings = KeyMixSettings()
         settings.clickTone = tone
         let index = settings.preferredClickIndex
+        if usesNamedClickSlots {
+            guard Self.clickNames.indices.contains(index) else { return nil }
+            return clicks.first { $0.id == Self.clickNames[index] }
+        }
         return clicks.indices.contains(index) ? clicks[index] : nil
     }
 }
@@ -309,6 +326,7 @@ public enum KeySoundEngine {
         let prefix = Int(min(max(startFrame, 0), 48_000))
         let suffix = prefix > 0 ? 144 : 0
         let renderStart = startFrame - Int64(prefix)
+        guard frames <= Int.max - prefix - suffix else { return StereoBuffer(l: [], r: []) }
         let total = frames + prefix + suffix
         var left = [Float](repeating: 0, count: total)
         var right = [Float](repeating: 0, count: total)

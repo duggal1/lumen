@@ -91,6 +91,18 @@ import LumenProject
         #expect(window.r == Array(full.r[24_000..<44_000]))
     }
 
+    @Test func missingNamedClickSlotDoesNotSelectAnotherRecording() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clicks = root.appendingPathComponent("clicks")
+        try FileManager.default.createDirectory(at: clicks, withIntermediateDirectories: true)
+        try AudioIO.writeMonoWAV([0.1, 0.2, 0.1, 0], sampleRate: AudioIO.fs,
+                                 to: clicks.appendingPathComponent("mouse-click-2.wav"))
+        let lib = KeySoundLibrary.load(root: root)
+        #expect(lib.clickTake(.click1) == nil)
+        #expect(lib.clickTake(.click2)?.id == "mouse-click-2")
+    }
+
     @Test func hostileCueTimesAndGainsAreIgnored() {
         var lib = KeySoundLibrary()
         lib.clicks = [KeyTake(id: "test", samples: [1, 0])]
