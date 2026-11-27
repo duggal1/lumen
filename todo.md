@@ -175,3 +175,8 @@ See [Part 3 plan](Docs/Part-03/plan.md). Fixed canonical click selection, duplic
 - [x] Preserve Fresh recording; remove rejected click files; author three explicitly synthetic retro click options, keep old IDs compatible.
 - [x] Switch production keyboard to exact Mechvibes recordings, no pitch synthesis or arbitrary fallback. Support private Orange Deluxe install without public redistribution.
 - [ ] Audition the new tones and keyboard pack; macOS CI and merge verification.
+
+### Part 5 baseline (merged Parts 1–4)
+
+- Combined main CI [46037490081](https://github.com/duggal1/lumen/actions/runs/46037490081): 903 tests, two webcam hide/fade failures; debug and Metal passed. Part 5A restores independent hide/fade policy without changing existing test expectations.
+- Part 5A: actual compressed output frame-count/timestamp validation, correct Darwin RSS units, monotonic export and validation timing. Target-M1 measurements and combined green CI pending.

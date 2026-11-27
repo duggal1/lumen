@@ -75,6 +75,9 @@ import simd
         var last: ExportBenchmark.Result?
         for _ in 0..<3 {
             let r = try await ExportBenchmark.run(session: session, timeline: tl, preset: preset, frames: 180)
+            #expect(r.outputBytes > 0)
+            #expect(r.validationSeconds >= 0)
+            #expect(r.verifiedRealtimeFactor <= r.realtimeFactor + 0.000001)
             factors.append(r.realtimeFactor); last = r
         }
         factors.sort()
@@ -101,6 +104,9 @@ import simd
         var last: ExportBenchmark.Result?
         for _ in 0..<3 {
             let r = try await ExportBenchmark.run(session: session, timeline: tl, preset: preset, frames: 240)
+            #expect(r.outputBytes > 0)
+            #expect(r.validationSeconds >= 0)
+            #expect(r.verifiedRealtimeFactor <= r.realtimeFactor + 0.000001)
             factors.append(r.realtimeFactor); last = r
         }
         factors.sort()
@@ -309,5 +315,18 @@ import simd
         // Samples arrive in decode order (HEVC B-frames reorder PTS). Cadence
         // is about presentation order, so sort and drop non-finite values.
         return out.filter { $0.isFinite }.sorted()
+    }
+}
+
+@Test func benchmarkRejectsWrongDeliveredFrameCount() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let movie = directory.appendingPathComponent("short.mov")
+    try await ExportBenchmark.makeLadderMovie(at: movie, count: 6, fps: 60, size: CGSize(width: 320, height: 180))
+    let verified = try await ExportBenchmark.validateVideo(at: movie, expectedFrames: 6, fps: 60)
+    #expect(verified == 6)
+    await #expect(throws: ExportError.self) {
+        _ = try await ExportBenchmark.validateVideo(at: movie, expectedFrames: 7, fps: 60)
     }
 }
