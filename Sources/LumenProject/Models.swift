@@ -488,6 +488,23 @@ public struct AudioPlan: Codable, Equatable, Sendable {
         return result
     }
 
+    /// Deliberately conservative whitelist of mixer-only controls.
+    /// New fields default to requiring derivation until explicitly audited.
+    /// Click gain (embedded in derived cues), ducking and ramp controls are
+    /// NOT mix-only. Click tone, key level and SFX bus gain are.
+    public func hasSameDerivation(as other: AudioPlan) -> Bool {
+        var normalized = self
+        normalized.micGainDb = other.micGainDb
+        normalized.systemGainDb = other.systemGainDb
+        normalized.outputGainDb = other.outputGainDb
+        normalized.voiceBoostDb = other.voiceBoostDb
+        normalized.musicGainDb = other.musicGainDb
+        normalized.typingLevelDb = other.typingLevelDb
+        normalized.sfxGainDb = other.sfxGainDb
+        normalized.clickTone = other.clickTone
+        return normalized == other
+    }
+
     public static func migrateLUFS(override: Double?, legacy: Double?, mode: MicMode) -> Double? {
         if let o = override { return o }
         guard let l = legacy else { return nil }
