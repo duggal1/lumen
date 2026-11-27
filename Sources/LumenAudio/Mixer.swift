@@ -158,7 +158,7 @@ private final class VoiceJob: @unchecked Sendable {
 /// Offline mix of the whole timeline. Preview plays this buffer; export encodes it. One code path = they always match.
 /// Processed microphone Float32 WAVs are cached by source content and exact settings.
 public final class AudioMixer: @unchecked Sendable {
-    private struct MusicCache { var path: String; var track: MusicTrack?; var lufs: Double }
+    private struct MusicCache { var identity: String; var track: MusicTrack?; var lufs: Double }
     private struct VoiceKey: Hashable { var mic: Int; var settings: String }
 
     /// Voice sits at -16 LUFS before the master stage. Music reference is 6 dB hotter so the default
@@ -419,39 +419,44 @@ public final class AudioMixer: @unchecked Sendable {
 
     private func loadMusic(_ path: String?) -> MusicCache? {
         guard let path else { return nil }
+        let url = URL(fileURLWithPath: path), identity = fileIdentity(url)
         state.lock()
-        if let m = music, m.path == path { state.unlock(); return m }
+        if let m = music, m.identity == identity { state.unlock(); return m }
         state.unlock()
-        let t = AudioIO.loadMusic(URL(fileURLWithPath: path))
-        let c = MusicCache(path: path, track: t, lufs: t.map { Loudness.integrated([$0.l, $0.r]) } ?? -70)
-        state.lock(); music = c; state.unlock()
+        let t = AudioIO.loadMusic(url)
+        let c = MusicCache(identity: identity, track: t, lufs: t.map { Loudness.integrated([$0.l, $0.r]) } ?? -70)
+        // Do not publish a failed decode or content that changed during read.
+        if t != nil, fileIdentity(url) == identity {
+            state.lock(); music = c; state.unlock()
+        }
         return c
     }
 
     private func importTrack(_ path: String) -> MusicTrack? {
+        let url = URL(fileURLWithPath: path), identity = fileIdentity(url)
         state.lock()
-        let cached = imported[path]
-        if cached != nil { importOrder.removeAll { $0 == path }; importOrder.append(path) }
+        let cached = imported[identity]
+        if cached != nil { importOrder.removeAll { $0 == identity }; importOrder.append(identity) }
         state.unlock()
         if let cached { return cached }
-        guard let (l, r) = try? AudioIO.readStereo(URL(fileURLWithPath: path)),
+        guard let (l, r) = try? AudioIO.readStereo(url),
               !l.isEmpty, l.count == r.count else { return nil }
         let result = MusicTrack(l: l, r: r)
         state.lock()
         let cost = (l.count + r.count) * MemoryLayout<Float>.stride
-        if cost <= importBudget {
-            if let previous = imported.removeValue(forKey: path) {
+        if cost <= importBudget, fileIdentity(url) == identity {
+            if let previous = imported.removeValue(forKey: identity) {
                 importBytes -= (previous.l.count + previous.r.count) * MemoryLayout<Float>.stride
             }
-            importOrder.removeAll { $0 == path }
+            importOrder.removeAll { $0 == identity }
             while importBytes > importBudget - cost, !importOrder.isEmpty {
                 let evicted = importOrder.removeFirst()
                 if let track = imported.removeValue(forKey: evicted) {
                     importBytes -= (track.l.count + track.r.count) * MemoryLayout<Float>.stride
                 }
             }
-            imported[path] = result
-            importOrder.append(path); importBytes += cost
+            imported[identity] = result
+            importOrder.append(identity); importBytes += cost
         }
         state.unlock()
         return result
@@ -591,9 +596,16 @@ public final class AudioMixer: @unchecked Sendable {
         let duration = tl.compositionDuration
         guard duration.isFinite, duration >= 0, duration * AudioIO.fs < Double(Int.max / 2) else { return nil }
         let n = Int(duration * AudioIO.fs) + 1
-        if let cached = mixCacheRead(tl, n: n) { return cancelled?() == true ? nil : cached }
+        let signature = mixSignature(tl, n: n)
+        if let cached = mixCacheRead(signature: signature, n: n), mixSignature(tl, n: n) == signature {
+            return cancelled?() == true ? nil : cached
+        }
         let out = render(tl, derived: d, n: n, range: .whole, cancelled: cancelled)
-        if let out, cancelled?() != true { mixCacheWrite(tl, n: n, mix: out) }
+        // Never cache an old decode under a replacement file's identity.
+        if let out, let signature, cancelled?() != true,
+           mixSignature(tl, n: n) == signature {
+            mixCacheWrite(signature: signature, mix: out)
+        }
         return out
     }
 
@@ -941,28 +953,41 @@ public final class AudioMixer: @unchecked Sendable {
             hash.update(data: Data("\(extra.offset)".utf8))
             extra.samples.withUnsafeBytes { hash.update(bufferPointer: $0) }
         }
-        if let path = tl.audio.musicPath { hash.update(data: Data(path.utf8)) }
+        // AudioPlan encodes paths, not their backing media revisions. Include
+        // both imported lane sources and the legacy music bed in cache identity.
+        if let path = tl.audio.musicPath {
+            hash.update(data: Data(fileIdentity(URL(fileURLWithPath: path)).utf8))
+        }
+        for lane in tl.audio.lanes {
+            if let path = lane.path {
+                hash.update(data: Data(fileIdentity(URL(fileURLWithPath: path)).utf8))
+            }
+        }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Path plus size plus modification date: two different recordings of the
-    /// same length never share a cache, and a re-recorded file invalidates it.
+    /// Fast filesystem revision identity; ordinary edits/replacements
+    /// invalidate the cache. This is not a cryptographic content digest.
     private func fileIdentity(_ url: URL) -> String {
-        guard let s = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return url.path }
-        return "\(url.path)|\(s.fileSize ?? 0)|\(s.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+        // Fresh URL avoids stale URL resource values after an external edit.
+        let fresh = URL(fileURLWithPath: url.path)
+        guard let s = try? fresh.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .fileResourceIdentifierKey]) else {
+            return "\(url.path)|missing"
+        }
+        let identifier = s.fileResourceIdentifier.map { String(describing: $0) } ?? ""
+        return "\(url.path)|\(s.fileSize ?? 0)|\(s.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(identifier)"
     }
 
-    private func mixCacheRead(_ tl: Timeline, n: Int) -> MixedAudio? {
-        guard let signature = mixSignature(tl, n: n), let cacheDir,
-              n == Int(tl.compositionDuration * AudioIO.fs) + 1 else { return nil }
+    private func mixCacheRead(signature: String?, n: Int) -> MixedAudio? {
+        guard let signature, let cacheDir else { return nil }
         let url = cacheDir.appendingPathComponent("mix-\(signature).caf")
         guard let (l, r) = try? AudioIO.readStereo(url), l.count == n, r.count == n else { return nil }
         let ch = [l, r]
         return MixedAudio(l: l, r: r, lufs: Loudness.integrated(ch), truePeakDb: Loudness.truePeakDb(ch))
     }
 
-    private func mixCacheWrite(_ tl: Timeline, n: Int, mix: MixedAudio) {
-        guard let signature = mixSignature(tl, n: n), let cacheDir else { return }
+    private func mixCacheWrite(signature: String, mix: MixedAudio) {
+        guard let cacheDir else { return }
         let url = cacheDir.appendingPathComponent("mix-\(signature).caf")
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
         let temporary = cacheDir.appendingPathComponent("mix-\(UUID().uuidString).caf")

@@ -3,27 +3,28 @@
 Last audited: 2026-11-27 (IST).
 Baseline main: `a32842f6109535338dd871c84822fb5b37ad4bc0`.
 Part 1: [PR #42](https://github.com/duggal1/lumen/pull/42), verified head `dc462a0c0475e070e411077f3f843987caf81c74`; [macOS verification succeeded](https://github.com/duggal1/lumen/actions/runs/45894273304), merged into main as `f8327cd96d4a434e93cf992da28043ba79f65700`.
-Part 2: [PR #43](https://github.com/duggal1/lumen/pull/43). Implementation in review; use latest head's checks, not superseded runs.
+Part 2: [PR #43](https://github.com/duggal1/lumen/pull/43), merged; [CI passed](https://github.com/duggal1/lumen/actions/runs/45954321659).
+Final backend audit baseline: `07b4c745b0488d2460ad4a77b5f153a622b53b0e`. See [combined verification report](Docs/Verification/CORE-01-05-FINAL-AUDIT.md).
 
 ## Status and how to work
 
 - [x] Code implemented or a specifically named verification gate completed. This does **not** mean verified, released, or flawless.
 - [ ] Remaining work or verification not established.
 - A part is complete only when implementation, regression tests, relevant real recordings, release build and merge are verified. Record evidence links and actual measurements before checking a verification box.
-- Work on exactly one part at a time. Five implementation PRs total; keep documentation changes within those PRs. Do not start the next part while the previous part has failing or unverified release-critical checks.
+- Prefer small independently reviewable PRs within each part, in dependency order. Preserve all local and remote work; resolve conflicts non-destructively. Require relevant verification before claiming completion.
 - Preserve the approved SwiftUI frontend and timeline, existing project files, native Apple Silicon implementation and MCP contract. No unnecessary rebuilds, fake results, hidden fallbacks, bypassed tests or weakened assertions.
 
 ## Progress snapshot
 
 | Part | Scope | State |
 |---|---|---|
-| 1 | Attention evidence, hover, typing | All macOS CI checks passed; merged PR #42; real-recording calibration pending |
-| 2 | Camera motion, zoom, framing, cursor, blur | PR #43 merged; corrected PR CI passed; real-recording proof pending |
-| 3 | SFX replacement and studio audio | Backend reconstruction in progress; new assets and listening blocked |
-| 4 | Adaptive glass, layout, recording, editing | Not started |
-| 5 | Preview/export performance and release proof | Not started |
+| 1 | Attention evidence, hover, typing | Merged #42; combined automated CI passed; real recordings pending |
+| 2 | Camera motion, zoom, framing, cursor, blur | Merged #43; combined automated CI passed; real motion review pending |
+| 3 | SFX replacement and studio audio | Merged #44–45; combined CI passed; private Orange Deluxe and listening pending |
+| 4 | Adaptive glass, layout, recording, editing | Merged #46–48; combined CI passed after #49 correction; remaining device/visual/crash gates open |
+| 5 | Preview/export performance and release proof | Merged #49–54; combined CI passed; performance stretch targets and remaining pipeline work open |
 
-Implementation progress: 2/5 parts have a code PR (40% by part count, **not effort-weighted**). CI-verified and merged: 1/5. Real-recording signoff: not yet established. No product-level accuracy or subjective camera quality claim follows solely from synthetic tests.
+All five parts have merged implementation changes. [Combined CI 46047181739](https://github.com/duggal1/lumen/actions/runs/46047181739) passed (911-test reported suite, opt-in real-project test skipped), including release packaging and signature. Latest main CI [46053710708](https://github.com/duggal1/lumen/actions/runs/46053710708) was running at the audit. Code merged does not equal complete product acceptance.
 
 ## Part 1 — Attention intelligence and typing (PR #42)
 
@@ -143,7 +144,7 @@ Relevant files: `LumenAudio/{BundledAudioAssets,KeySoundEngine,SFX,TypingPacks,T
 | Camera overshoot | ≤1% intended magnification change |
 | SFX cue alignment | p95 absolute error ≤20 ms |
 | Audio/video drift | ≤1 output frame over tested recordings |
-| Unknown/legacy/synthesized shipped SFX | 0 |
+| Unknown or unauthorized shipped SFX | 0; user-approved original retro UI tones are the explicit synthesis exception, never synthesize keyboard recordings |
 | Crash recovery | Measured documented loss bounds |
 | Privacy, project data loss | 0 unauthorized uploads or migration data loss |
 | Preview/export mismatch | 0 beyond explicit documented tolerance |
@@ -152,7 +153,7 @@ These are targets, not results. Report denominator, fixture mix, device/OS, actu
 
 ## Next action
 
-Finish **Part 2 only**: inspect latest PR #43 CI, fix any failures without weakening tests, confirm merge on main once green, and record real-recording evidence for Parts 1 and 2. Do not begin Part 3 until this gate is addressed. Do not claim product-level resolution before verification.
+All implementation PRs have merged. Review the final audit and remaining unchecked acceptance gates. Do not treat this historical checklist as a request to rebuild the completed work. Collect real-device and real-recording evidence before marking those gates complete.
 
 ### Part 2 CI correction
 
@@ -180,3 +181,7 @@ See [Part 3 plan](Docs/Part-03/plan.md). Fixed canonical click selection, duplic
 
 - Combined main CI [46037490081](https://github.com/duggal1/lumen/actions/runs/46037490081): 903 tests, two webcam hide/fade failures; debug and Metal passed. Part 5A restores independent hide/fade policy without changing existing test expectations.
 - Part 5A: actual compressed output frame-count/timestamp validation, correct Darwin RSS units, monotonic export and validation timing. Target-M1 measurements and combined green CI pending.
+
+### Final audit reconciliation
+
+The earlier notes above describe intermediate commits, not current status. All PRs #42–54 are merged. [Combined CI](https://github.com/duggal1/lumen/actions/runs/46047181739) passed. The four active mouse options are Fresh and three explicitly synthesized user-approved retro tones; exact recorded Mechvibes keys remain production keyboard input. The older class library is diagnostic/compatibility material. The original recorded-only mouse requirement was superseded by that user listening revision. Do not mark all historical unchecked bullets as passed: see [audit](Docs/Verification/CORE-01-05-FINAL-AUDIT.md) for verified versus outstanding items.

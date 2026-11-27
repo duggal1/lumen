@@ -11,3 +11,7 @@ Baseline b613104a11eb1a41471e62a4c1c0d01e1ca68663. Preserve all approved UI, Swi
 7. 5G: complete real footage, audio, fault-injection, privacy, compatibility, target-device stress and release gates.
 
 M1 8 GB targets (not measurements): 1080p60 p99 <=16.67 ms, 40s 1080p60 <=5s and 4K60 >=3x realtime as stretch goals. No missing frames, silently changed presets or fake quality evidence. Measure cold/warm, actual encoding and finalization, verification overhead, physical footprint, thermal state. Idle <=200 MiB, 1080p active <=1 GiB, 4K <=2 GiB are proposed budgets subject to profiling. Keep existing stricter test assertions. Close outstanding Parts 1–4 validation; unsupported device capture remains explicit.
+
+### Final combined CI evidence
+
+[Run 46047181739](https://github.com/duggal1/lumen/actions/runs/46047181739) passed its reported 911-test suite; targetHardwareRealProjectProof was skipped by design. 1080p60 render p99 2.59 ms; 4K60 median trial p99 7.68 ms; export medians 2.21x and 1.14x realtime. These are CI synthetic fixture results, not M1 or full real-project benchmarks. All implementation PRs #49–54 merged. Ordered prefetch, event-driven video writer readiness, full streaming audio and target-device release gates remain open; see final audit.
