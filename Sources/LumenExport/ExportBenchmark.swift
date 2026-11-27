@@ -18,8 +18,15 @@ public enum ExportBenchmark {
         public var frames: Int
         public var seconds: Double
         public var realtimeFactor: Double
-        /// Peak resident memory in KiB observed after the export (ru_maxrss).
+        /// Process-lifetime peak RSS in KiB, not isolated export memory.
         public var peakRSSKb: Int64
+        /// Time spent inspecting the delivered compressed sample stream.
+        public var validationSeconds: Double
+        public var outputBytes: Int64
+        public var verifiedRealtimeFactor: Double {
+            Double(frames) / max(seconds + validationSeconds, 0.001) / frameRate
+        }
+        public var frameRate: Double
     }
 
     /// A real movie whose frame `k` is a flat gray `k * step` (analogous to
@@ -92,20 +99,68 @@ public enum ExportBenchmark {
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("lumen-export-bench-\(UUID().uuidString).mov")
         defer { try? FileManager.default.removeItem(at: out) }
-        let start = Date()
+        let expected = max(Int(ceil(tl.compositionDuration * fps - 1e-8)), 1)
+        guard frames == expected else {
+            throw ExportError.writer("Benchmark fixture expected \(frames) frames, timeline requires \(expected).")
+        }
+        let start = HostClock.now()
         try await Exporter.run(session: session, timeline: tl, preset: preset, to: out,
                                includeAudio: true) { _ in }
-        let elapsed = Date().timeIntervalSince(start)
-        let total = max(Int(ceil(tl.compositionDuration * fps - 1e-8)), 1)
-        let peak = Self.peakRSSKb()
-        return Result(frames: total, seconds: elapsed,
-                      realtimeFactor: elapsed > 0 ? Double(total) / (fps * elapsed) : 0,
-                      peakRSSKb: peak)
+        let elapsed = HostClock.now() - start
+        let validationStart = HostClock.now()
+        let actual = try await validateVideo(at: out, expectedFrames: expected, fps: preset.fps)
+        let bytes = try out.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard bytes > 0 else { throw ExportError.writer("Benchmark output is empty.") }
+        return Result(frames: actual, seconds: elapsed,
+                      realtimeFactor: elapsed > 0 ? Double(actual) / (fps * elapsed) : 0,
+                      peakRSSKb: Self.peakRSSKb(), validationSeconds: HostClock.now() - validationStart,
+                      outputBytes: Int64(bytes), frameRate: fps)
+    }
+
+    /// Inspect actual compressed samples without decoding the entire movie.
+    /// Presentation timestamps may be reordered by B-frames; verify sorted
+    /// presentation order, not container decode order.
+    public static func validateVideo(at url: URL, expectedFrames: Int, fps: Int) async throws -> Int {
+        guard expectedFrames > 0, fps > 0 else { throw ExportError.writer("Invalid benchmark expectation.") }
+        let asset = AVURLAsset(url: url)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+            throw ExportError.writer("Benchmark output has no video track.")
+        }
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else { throw ExportError.writer("Benchmark reader configuration.") }
+        reader.add(output)
+        guard reader.startReading() else { throw ExportError.writer("Benchmark reader start.") }
+        defer { if reader.status == .reading { reader.cancelReading() } }
+        var timestamps: [Double] = []
+        timestamps.reserveCapacity(min(expectedFrames, 100_000))
+        while let sample = output.copyNextSampleBuffer() {
+            try Task.checkCancellation()
+            let pts = sample.presentationTimeStamp.seconds
+            guard pts.isFinite, CMSampleBufferGetNumSamples(sample) == 1 else {
+                throw ExportError.writer("Invalid compressed video sample.")
+            }
+            timestamps.append(pts)
+            guard timestamps.count <= expectedFrames else { throw ExportError.writer("Extra video frames.") }
+        }
+        guard reader.status == .completed, timestamps.count == expectedFrames else {
+            throw ExportError.writer("Benchmark video frame count: \(timestamps.count), expected \(expectedFrames).")
+        }
+        timestamps.sort()
+        let tolerance = 0.25 / Double(fps)
+        for (index, pts) in timestamps.enumerated() {
+            guard abs(pts - Double(index) / Double(fps)) <= tolerance else {
+                throw ExportError.writer("Benchmark video timestamp mismatch at frame \(index).")
+            }
+        }
+        return timestamps.count
     }
 
     private static func peakRSSKb() -> Int64 {
         var r: rusage = rusage()
         Darwin.getrusage(RUSAGE_SELF, &r)
-        return Int64(r.ru_maxrss)
+        // Darwin reports bytes (Linux reports KiB).
+        return Int64(r.ru_maxrss) / 1024
     }
 }
