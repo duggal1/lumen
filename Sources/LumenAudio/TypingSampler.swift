@@ -101,6 +101,12 @@ public final class TypingSampler {
     public func playVaried(keyCode: Int, phase: KeyPhase, gain: Float = 1,
                            hostTime: UInt64? = nil) {
         guard usingCC0 else { return }
+        if recordedLibrary.usesExactKeys {
+            guard let take = recordedLibrary.takes(keyCode: keyCode, phase: phase).first,
+                  let pcm = buffer(take.samples) else { return }
+            schedule(pcm, gain: gain, variation: KeyVariation(variant: 0, pitchCents: 0, gainDb: 0), hostTime: hostTime)
+            return
+        }
         let keyClass = KeyClass.forCode(keyCode)
         let takes = phase == .down ? cc0Down[keyClass] ?? [] : cc0Up[keyClass] ?? []
         guard let variation = router.next(keyClass, phase: phase, key: keyCode, variantCount: takes.count),

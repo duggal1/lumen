@@ -111,8 +111,9 @@ import LumenProject
         try AudioIO.writeMonoWAV([0.1, 0.2, 0.1, 0], sampleRate: AudioIO.fs,
                                  to: clicks.appendingPathComponent("mouse-click-2.wav"))
         let lib = KeySoundLibrary.load(root: root)
-        #expect(lib.clickTake(.click1) == nil)
-        #expect(lib.clickTake(.click2)?.id == "mouse-click-2")
+        #expect(lib.clickTake(.fresh)?.id == "mouse-click-2")
+        #expect(lib.clickTake(.click1)?.id == "mouse-click-2")
+        #expect(lib.clickTake(.studioCrisp)?.id != "mouse-click-2")
     }
 
     @Test func hostileCueTimesAndGainsAreIgnored() {

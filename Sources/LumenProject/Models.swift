@@ -364,9 +364,16 @@ public enum ClickSound: String, Codable, CaseIterable, Sendable {
     case studioSnap, studioTick, studioLight, studioTap
 
     public static let studioCollection: [Self] = [
-        .studioCrisp, .studioSoft, .studioMechanical, .studioRelease,
-        .studioSnap, .studioTick, .studioLight, .studioTap
+        .studioCrisp, .studioSoft, .studioMechanical
     ]
+
+    /// Only the approved Fresh recording and the three authored retro clicks
+    /// are exposed. All legacy IDs stay Codable for existing project files.
+    public static let activeCollection: [Self] = [.fresh] + studioCollection
+
+    public var activeTone: Self {
+        Self.activeCollection.contains(self) ? self : .fresh
+    }
 
     /// Studio tiles resolve from the Audio bundle. Legacy tone names resolve
     /// from the canonical 48 kHz `Sounds` catalog; the retired MP3/touch files
@@ -390,9 +397,9 @@ public enum ClickSound: String, Codable, CaseIterable, Sendable {
 
     public var title: String {
         switch self {
-        case .studioCrisp: "Crisp"
-        case .studioSoft: "Soft"
-        case .studioMechanical: "Mechanical"
+        case .studioCrisp: "Retro Classic"
+        case .studioSoft: "Retro Soft"
+        case .studioMechanical: "Retro Crisp"
         case .studioRelease: "Release"
         case .studioSnap: "Snap"
         case .studioTick: "Tick"

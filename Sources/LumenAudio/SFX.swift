@@ -9,9 +9,9 @@ public struct SFXBank: Sendable {
         let library = KeySoundLibraryCache.shared
         switch kind {
         case .key:
-            return (library.takes(.alpha, .down).first?.samples ?? [], 0)
+            return (library.takes(keyCode: 0, phase: .down).first?.samples ?? [], 0)
         case .keyUp:
-            return (library.takes(.alpha, .up).first?.samples ?? [], 0)
+            return (library.takes(keyCode: 0, phase: .up).first?.samples ?? [], 0)
         case .click:
             return (library.clickTake(clickTone)?.samples ?? [], 0)
         case .whooshIn, .whooshOut:

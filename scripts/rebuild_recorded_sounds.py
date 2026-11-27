@@ -575,8 +575,8 @@ def verify(entries: list[dict]) -> None:
             if n != count:
                 errors.append(f"{key_class}/{phase}: {n} files, expected {count}")
     clicks = [e for e in entries if e["keyClass"] == "click"]
-    if len(clicks) != len(CLICK_NAMES):
-        errors.append(f"{len(clicks)} click files, expected {len(CLICK_NAMES)}")
+    if {e["path"] for e in clicks} != {"clicks/mouse-click-2.wav"}:
+        errors.append("only the approved Fresh click may remain")
     if errors:
         raise RuntimeError("verification failed:\n  " + "\n  ".join(errors))
 
@@ -592,7 +592,8 @@ def main() -> int:
         return 0
     originals: dict[str, Path] = {}
     OUT.mkdir(parents=True, exist_ok=True)
-    entries = build_key_classes(originals) + build_clicks(originals)
+    # Retired sounds must never be regenerated into the shipping checkout.
+    raise RuntimeError("Historical class catalog is frozen; use --verify-only. The runtime uses exact Mechvibes keys.")
     MANIFEST.write_text(json.dumps({
         "schemaVersion": 2,
         "sampleRate": FS,

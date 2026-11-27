@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "sampleRate": 48000,
   "masteringPolicy": "static-gain-transient-preserved",
-  "targetPeakDb": -6.0,
+  "targetPeakDb": -6,
   "files": [
     {
       "id": "typing/alpha/alpha-down-1.wav",
@@ -24,8 +24,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 7.135,
         "sampleRate": 48000
       }
@@ -50,8 +50,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 12.084,
         "sampleRate": 48000
       }
@@ -76,8 +76,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 9.684,
         "sampleRate": 48000
       }
@@ -102,8 +102,8 @@
       "bytes": 3308,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 9.793,
         "sampleRate": 48000
       }
@@ -128,8 +128,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 9.128,
         "sampleRate": 48000
       }
@@ -154,13 +154,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 8.011,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 196.0,
+      "releaseDeltaMs": 196,
       "releaseAmplitudeRatio": 0.31
     },
     {
@@ -183,13 +183,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 11.056,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 61.0,
+      "releaseDeltaMs": 61,
       "releaseAmplitudeRatio": 0.508
     },
     {
@@ -212,13 +212,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 10.718,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 66.0,
+      "releaseDeltaMs": 66,
       "releaseAmplitudeRatio": 0.662
     },
     {
@@ -241,13 +241,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 7.094,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 121.0,
+      "releaseDeltaMs": 121,
       "releaseAmplitudeRatio": 0.842
     },
     {
@@ -270,8 +270,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 2.413,
         "sampleRate": 48000
       }
@@ -296,8 +296,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 1.344,
         "sampleRate": 48000
       }
@@ -322,8 +322,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 3.784,
         "sampleRate": 48000
       }
@@ -348,8 +348,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 8.575,
         "sampleRate": 48000
       }
@@ -374,8 +374,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 19.851,
         "sampleRate": 48000
       }
@@ -400,13 +400,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 2.497,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 141.0,
+      "releaseDeltaMs": 141,
       "releaseAmplitudeRatio": 0.806
     },
     {
@@ -429,13 +429,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 5.412,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 121.0,
+      "releaseDeltaMs": 121,
       "releaseAmplitudeRatio": 0.531
     },
     {
@@ -458,13 +458,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 3.06,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 96.0,
+      "releaseDeltaMs": 96,
       "releaseAmplitudeRatio": 0.814
     },
     {
@@ -487,13 +487,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 13.614,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 96.0,
+      "releaseDeltaMs": 96,
       "releaseAmplitudeRatio": 0.703
     },
     {
@@ -516,8 +516,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 0.801,
         "sampleRate": 48000
       }
@@ -542,8 +542,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 25.543,
         "sampleRate": 48000
       }
@@ -568,8 +568,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 14.074,
         "sampleRate": 48000
       }
@@ -594,9 +594,9 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
-        "gainDb": 15.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
+        "gainDb": 15,
         "sampleRate": 48000
       }
     },
@@ -620,8 +620,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 19.902,
         "sampleRate": 48000
       }
@@ -646,13 +646,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 16.988,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 66.0,
+      "releaseDeltaMs": 66,
       "releaseAmplitudeRatio": 0.72
     },
     {
@@ -675,13 +675,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 14.688,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 201.0,
+      "releaseDeltaMs": 201,
       "releaseAmplitudeRatio": 0.815
     },
     {
@@ -704,13 +704,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 25.907,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 76.0,
+      "releaseDeltaMs": 76,
       "releaseAmplitudeRatio": 0.413
     },
     {
@@ -733,13 +733,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 21.72,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 71.0,
+      "releaseDeltaMs": 71,
       "releaseAmplitudeRatio": 0.415
     },
     {
@@ -762,8 +762,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 7.699,
         "sampleRate": 48000
       }
@@ -788,8 +788,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 17.038,
         "sampleRate": 48000
       }
@@ -814,8 +814,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 7.52,
         "sampleRate": 48000
       }
@@ -840,8 +840,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 14.953,
         "sampleRate": 48000
       }
@@ -866,8 +866,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 6.166,
         "sampleRate": 48000
       }
@@ -892,13 +892,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 13.915,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 156.0,
+      "releaseDeltaMs": 156,
       "releaseAmplitudeRatio": 0.423
     },
     {
@@ -921,13 +921,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 5.591,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 111.0,
+      "releaseDeltaMs": 111,
       "releaseAmplitudeRatio": 0.784
     },
     {
@@ -950,13 +950,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 0.656,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 156.0,
+      "releaseDeltaMs": 156,
       "releaseAmplitudeRatio": 0.729
     },
     {
@@ -979,13 +979,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 5.076,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 181.0,
+      "releaseDeltaMs": 181,
       "releaseAmplitudeRatio": 0.824
     },
     {
@@ -1008,8 +1008,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 7.152,
         "sampleRate": 48000
       }
@@ -1034,8 +1034,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 7.004,
         "sampleRate": 48000
       }
@@ -1060,8 +1060,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 17.407,
         "sampleRate": 48000
       }
@@ -1086,8 +1086,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 8.567,
         "sampleRate": 48000
       }
@@ -1112,8 +1112,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 10.811,
         "sampleRate": 48000
       }
@@ -1138,13 +1138,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 0.247,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 76.0,
+      "releaseDeltaMs": 76,
       "releaseAmplitudeRatio": 0.788
     },
     {
@@ -1167,13 +1167,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 14.387,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 71.0,
+      "releaseDeltaMs": 71,
       "releaseAmplitudeRatio": 0.523
     },
     {
@@ -1196,13 +1196,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 13.711,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 166.0,
+      "releaseDeltaMs": 166,
       "releaseAmplitudeRatio": 0.518
     },
     {
@@ -1225,13 +1225,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 9.55,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 186.0,
+      "releaseDeltaMs": 186,
       "releaseAmplitudeRatio": 0.566
     },
     {
@@ -1254,8 +1254,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 7.783,
         "sampleRate": 48000
       }
@@ -1280,8 +1280,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 10.826,
         "sampleRate": 48000
       }
@@ -1306,8 +1306,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 9.055,
         "sampleRate": 48000
       }
@@ -1332,8 +1332,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 12.479,
         "sampleRate": 48000
       }
@@ -1358,8 +1358,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 13.977,
         "sampleRate": 48000
       }
@@ -1384,13 +1384,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 8.536,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 76.0,
+      "releaseDeltaMs": 76,
       "releaseAmplitudeRatio": 0.677
     },
     {
@@ -1413,13 +1413,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 9.186,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 66.0,
+      "releaseDeltaMs": 66,
       "releaseAmplitudeRatio": 0.71
     },
     {
@@ -1442,13 +1442,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 8.643,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 56.0,
+      "releaseDeltaMs": 56,
       "releaseAmplitudeRatio": 0.758
     },
     {
@@ -1471,13 +1471,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 12.617,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 91.0,
+      "releaseDeltaMs": 91,
       "releaseAmplitudeRatio": 0.581
     },
     {
@@ -1500,8 +1500,8 @@
       "bytes": 6188,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 15.835,
         "sampleRate": 48000
       }
@@ -1526,8 +1526,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 10.255,
         "sampleRate": 48000
       }
@@ -1552,8 +1552,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 8.953,
         "sampleRate": 48000
       }
@@ -1578,8 +1578,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 12.355,
         "sampleRate": 48000
       }
@@ -1604,8 +1604,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 0.489,
         "sampleRate": 48000
       }
@@ -1630,13 +1630,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 11.293,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 81.0,
+      "releaseDeltaMs": 81,
       "releaseAmplitudeRatio": 0.831
     },
     {
@@ -1659,13 +1659,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 19.855,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 91.0,
+      "releaseDeltaMs": 91,
       "releaseAmplitudeRatio": 0.34
     },
     {
@@ -1688,13 +1688,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 16.631,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 96.0,
+      "releaseDeltaMs": 96,
       "releaseAmplitudeRatio": 0.727
     },
     {
@@ -1717,13 +1717,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 1.019,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 151.0,
+      "releaseDeltaMs": 151,
       "releaseAmplitudeRatio": 0.844
     },
     {
@@ -1746,8 +1746,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 10.213,
         "sampleRate": 48000
       }
@@ -1772,8 +1772,8 @@
       "bytes": 6572,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 0.329,
         "sampleRate": 48000
       }
@@ -1798,8 +1798,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 3.306,
         "sampleRate": 48000
       }
@@ -1824,8 +1824,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 4.562,
         "sampleRate": 48000
       }
@@ -1850,8 +1850,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": -5.091,
         "sampleRate": 48000
       }
@@ -1876,13 +1876,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 16.205,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 141.0,
+      "releaseDeltaMs": 141,
       "releaseAmplitudeRatio": 0.708
     },
     {
@@ -1905,13 +1905,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 4.178,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 166.0,
+      "releaseDeltaMs": 166,
       "releaseAmplitudeRatio": 0.699
     },
     {
@@ -1934,13 +1934,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 3.279,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 66.0,
+      "releaseDeltaMs": 66,
       "releaseAmplitudeRatio": 0.647
     },
     {
@@ -1963,13 +1963,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 8.962,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 171.0,
+      "releaseDeltaMs": 171,
       "releaseAmplitudeRatio": 0.279
     },
     {
@@ -1992,8 +1992,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 7.847,
         "sampleRate": 48000
       }
@@ -2018,8 +2018,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 7.534,
         "sampleRate": 48000
       }
@@ -2044,8 +2044,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 9.035,
         "sampleRate": 48000
       }
@@ -2070,8 +2070,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 8.154,
         "sampleRate": 48000
       }
@@ -2096,8 +2096,8 @@
       "bytes": 8492,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 27.515,
         "sampleRate": 48000
       }
@@ -2122,13 +2122,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 8.808,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 186.0,
+      "releaseDeltaMs": 186,
       "releaseAmplitudeRatio": 0.609
     },
     {
@@ -2151,13 +2151,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 13.95,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 51.0,
+      "releaseDeltaMs": 51,
       "releaseAmplitudeRatio": 0.722
     },
     {
@@ -2180,13 +2180,13 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 13.074,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 76.0,
+      "releaseDeltaMs": 76,
       "releaseAmplitudeRatio": 0.638
     },
     {
@@ -2209,40 +2209,14 @@
       "bytes": 4556,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 6.759,
         "sampleRate": 48000
       },
       "releaseEvidence": "detected-secondary-transient",
-      "releaseDeltaMs": 51.0,
+      "releaseDeltaMs": 51,
       "releaseAmplitudeRatio": 0.817
-    },
-    {
-      "id": "clicks/mouse-click-1.wav",
-      "path": "clicks/mouse-click-1.wav",
-      "keyClass": "click",
-      "phase": "down",
-      "variant": 1,
-      "source": "click-mouse-1",
-      "sourceUrl": "https://assets.sfx.woven.video/sfx/mouse-click-1.wav",
-      "pageUrl": "https://www.woven.video/sfx/click-sound-effect",
-      "author": "Woven SFX",
-      "license": "CC0 1.0",
-      "sourceSha256": "37e68fb3fe7fcdc21abde7bb9464f5ff99424899ca49bb74397801dc451c4510",
-      "sourceWindow": {
-        "startSeconds": 0.277,
-        "endSeconds": 0.315
-      },
-      "sha256": "d4117368f40a07d4f7cba3d7b5f506fa7cd9d29867cd3dd9288d2ac5ed34fa03",
-      "bytes": 3692,
-      "mastering": {
-        "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
-        "gainDb": 1.284,
-        "sampleRate": 48000
-      }
     },
     {
       "id": "clicks/mouse-click-2.wav",
@@ -2264,87 +2238,9 @@
       "bytes": 4172,
       "mastering": {
         "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
+        "targetPeakDb": -6,
+        "peakDb": -6,
         "gainDb": 2.244,
-        "sampleRate": 48000
-      }
-    },
-    {
-      "id": "clicks/tick.wav",
-      "path": "clicks/tick.wav",
-      "keyClass": "click",
-      "phase": "down",
-      "variant": 3,
-      "source": "click-tick",
-      "sourceUrl": "https://assets.sfx.woven.video/sfx/tick-sound.wav",
-      "pageUrl": "https://www.woven.video/sfx/click-sound-effect",
-      "author": "Woven SFX",
-      "license": "CC0 1.0",
-      "sourceSha256": "4f0cbac876d2514c36fba7f859eb9b41cfb360eba49f3bd27c2b9c2ffbd2bf71",
-      "sourceWindow": {
-        "startSeconds": 0.017,
-        "endSeconds": 0.05
-      },
-      "sha256": "ebedabd72271fb3828a00d5c8a692e61ec6a206659461fcc29e31dfb6e0769d7",
-      "bytes": 3212,
-      "mastering": {
-        "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
-        "gainDb": 4.271,
-        "sampleRate": 48000
-      }
-    },
-    {
-      "id": "clicks/snap.wav",
-      "path": "clicks/snap.wav",
-      "keyClass": "click",
-      "phase": "down",
-      "variant": 4,
-      "source": "click-shutter",
-      "sourceUrl": "https://assets.sfx.woven.video/sfx/camera-shutter-1-shot.wav",
-      "pageUrl": "https://www.woven.video/sfx/click-sound-effect",
-      "author": "Woven SFX",
-      "license": "CC0 1.0",
-      "sourceSha256": "a34e1c2447eef7322016445478777c255fab98a3aa0aa0b287918d796384c69f",
-      "sourceWindow": {
-        "startSeconds": 0.032,
-        "endSeconds": 0.155
-      },
-      "sha256": "775879d20b8711d1864d31b402257a98eb50e25a4080035c45514bb5eb64ebb8",
-      "bytes": 11852,
-      "mastering": {
-        "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
-        "gainDb": -5.957,
-        "sampleRate": 48000
-      }
-    },
-    {
-      "id": "clicks/analog.wav",
-      "path": "clicks/analog.wav",
-      "keyClass": "click",
-      "phase": "down",
-      "variant": 5,
-      "source": "click-analog",
-      "sourceUrl": "https://assets.sfx.woven.video/sfx/camera-analog.wav",
-      "pageUrl": "https://www.woven.video/sfx/click-sound-effect",
-      "author": "Woven SFX",
-      "license": "CC0 1.0",
-      "sourceSha256": "c910763a81c3b03f70c5d18ec2923ee840a16bb14522d4a470f2e0d8af27d2d9",
-      "sourceWindow": {
-        "startSeconds": 0.062,
-        "endSeconds": 0.23
-      },
-      "sha256": "99a971d6b743fab76acd9455565e0902f9e19e301baad97ffeb6ae1435ff797e",
-      "bytes": 16172,
-      "mastering": {
-        "policy": "static-gain-transient-preserved",
-        "targetPeakDb": -6.0,
-        "peakDb": -6.0,
-        "gainDb": -4.382,
         "sampleRate": 48000
       }
     }

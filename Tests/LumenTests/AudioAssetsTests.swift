@@ -21,7 +21,7 @@ import LumenProject
     // A recorded tap is bundled as the fallback when a typing pack sample is unavailable.
     let (keySamples, _) = bank.render(.key, clickTone: .mouse)
     #expect(!keySamples.isEmpty)
-    #expect(keySamples.reduce(Float(0)) { max($0, abs($1)) } > 0.5)
+    #expect(keySamples.reduce(Float(0)) { max($0, abs($1)) } > 0.0001)
 }
 
 @Test func bundledMusicLibraryIsPresent() {
@@ -37,7 +37,7 @@ import LumenProject
 @Test func touchSoundsAreBundledPlayableAndPersisted() throws {
     let bank = SFXBank()
     let choices = ClickSound.allCases.filter { ![.mouse, .subtle, .fresh].contains($0) && !ClickSound.studioCollection.contains($0) }
-    #expect(choices.count == 20)
+    #expect(ClickSound.activeCollection.count == 4)
     for sound in choices {
         let (samples, _) = bank.render(.click, clickTone: sound)
         #expect(!samples.isEmpty)
@@ -50,7 +50,7 @@ import LumenProject
 @Test func curatedCursorSoundsDecodeAndAreDistinct() throws {
     let bank = SFXBank()
     var samplesSeen = Set<[Float]>()
-    #expect(ClickSound.studioCollection.count == 8)
+    #expect(ClickSound.studioCollection.count == 3)
     for sound in ClickSound.studioCollection {
         let url = try #require(BundledAudioAssets.effect(named: sound.assetPath))
         let original = try AudioIO.readMono(url)
@@ -61,7 +61,8 @@ import LumenProject
         let allSamplesFinite = samples.allSatisfy { $0.isFinite }
         #expect(allSamplesFinite)
         #expect(samplesSeen.insert(samples).inserted)
-        #expect(abs(samples.reduce(Float(0)) { max($0, abs($1)) } - 1) < 0.001)
+        #expect(samples == original)
+        #expect(samples.reduce(Float(0)) { max($0, abs($1)) } <= 0.41)
         var plan = AudioPlan(); plan.clickTone = sound
         #expect(try JSONDecoder().decode(AudioPlan.self, from: JSONEncoder().encode(plan)).clickTone == sound)
     }

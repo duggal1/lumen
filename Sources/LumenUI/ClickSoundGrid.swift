@@ -11,14 +11,10 @@ struct ClickSoundGrid: View {
     @State private var peaks: [ClickSound: [Float]] = [:]
     @State private var playing: ClickSound?
     @State private var previewReset: Task<Void, Never>?
-    @State private var legacyExpanded = false
-    @State private var ready = false
+     @State private var ready = false
 
     private let columns = [GridItem(.adaptive(minimum: 88), spacing: 4)]
-    private var legacy: [ClickSound] {
-        ClickSound.allCases.filter { !ClickSound.studioCollection.contains($0) }
-    }
-
+ 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -29,22 +25,15 @@ struct ClickSoundGrid: View {
                 }
             }
             LazyVGrid(columns: columns, spacing: 4) {
-                ForEach(ClickSound.studioCollection, id: \.self) { tile($0) }
-                if legacy.contains(selected), !legacyExpanded { tile(selected) }
+                ForEach(ClickSound.activeCollection, id: \.self) { tile($0) }
             }
-            DisclosureGroup("Previous sounds", isExpanded: $legacyExpanded) {
-                LazyVGrid(columns: columns, spacing: 4) {
-                    ForEach(legacy, id: \.self) { tile($0) }
-                }
-            }
-            .font(AppType.caption).foregroundStyle(Tok.text2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .task {
             let loaded = await Task.detached(priority: .utility) {
                 let bank = SFXBank()
                 var result: [ClickSound: [Float]] = [:]
-                for sound in ClickSound.allCases {
+                for sound in ClickSound.activeCollection {
                     let pcm = bank.render(.click, clickTone: sound).samples
                     if !pcm.isEmpty { result[sound] = Self.combed(pcm, buckets: 24) }
                 }
@@ -57,7 +46,7 @@ struct ClickSoundGrid: View {
     }
 
     private func tile(_ sound: ClickSound) -> some View {
-        let isSelected = sound == selected
+        let isSelected = sound == selected.activeTone
         let isPlaying = sound == playing
         let available = peaks[sound] != nil
         return Button {

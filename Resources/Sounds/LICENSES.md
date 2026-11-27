@@ -98,11 +98,7 @@ and 3 ms boundary fades at 48 kHz. No per-take loudness compression.
 
 | File | Class | Phase | Source | SHA-256 |
 |---|---|---|---|---|
-| `clicks/analog.wav` | click | down | [click-analog](https://www.woven.video/sfx/click-sound-effect) | `99a971d6b743fab76acd9455565e0902f9e19e301baad97ffeb6ae1435ff797e` |
-| `clicks/mouse-click-1.wav` | click | down | [click-mouse-1](https://www.woven.video/sfx/click-sound-effect) | `d4117368f40a07d4f7cba3d7b5f506fa7cd9d29867cd3dd9288d2ac5ed34fa03` |
 | `clicks/mouse-click-2.wav` | click | down | [click-mouse-2](https://www.woven.video/sfx/click-sound-effect) | `c4fe9519c657139e02bc0f4942c2c9426e9a68331137d238e8a9a262de595af4` |
-| `clicks/snap.wav` | click | down | [click-shutter](https://www.woven.video/sfx/click-sound-effect) | `775879d20b8711d1864d31b402257a98eb50e25a4080035c45514bb5eb64ebb8` |
-| `clicks/tick.wav` | click | down | [click-tick](https://www.woven.video/sfx/click-sound-effect) | `ebedabd72271fb3828a00d5c8a692e61ec6a206659461fcc29e31dfb6e0769d7` |
 | `typing/alpha/alpha-down-1.wav` | alpha | down | [fs-whitefox](https://freesound.org/s/546167/) | `5c73a49680f3c03a4384d566054d5fd43a9d8cf5908f82ca3e412caa66be93d2` |
 | `typing/alpha/alpha-down-2.wav` | alpha | down | [fs-whitefox](https://freesound.org/s/546167/) | `5f80ebb4c4ae06b74d36af363bec89e7e1c50a87791973f27a8f9483938ab9f4` |
 | `typing/alpha/alpha-down-3.wav` | alpha | down | [fs-whitefox](https://freesound.org/s/546167/) | `8bb55bba5576c721f798ed55e7544c7a924b13ddaeacd9753645fc0a4a5d4148` |

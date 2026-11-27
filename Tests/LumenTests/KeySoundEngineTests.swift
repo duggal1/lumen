@@ -42,7 +42,7 @@ private let library = KeySoundLibrary.load()
             #expect(take.samples.allSatisfy { $0.isFinite && abs($0) <= 1.0 })
         }
     }
-    #expect(library.clicks.count >= 4)
+    #expect(library.clicks.count == 1)
 }
 
 @Test func roundRobinCyclesEveryVariantAndStaysDeterministic() {
@@ -102,16 +102,21 @@ private let library = KeySoundLibrary.load()
     #expect(out.r.allSatisfy { $0.isFinite && abs($0) <= 0.9 })
 }
 
-@Test func clickDownAndUpUseDistinctRecordedVariants() {
-    var router = KeyVariationRouter()
-    guard let pair = router.clickPair(library.clicks.count) else {
-        Issue.record("no click pair"); return
+@Test func onlyFreshRecordedClickIsUsedAndNoReleaseIsInvented() throws {
+    #expect(library.clicks.count == 1)
+    let take = try #require(library.clickTake(.fresh))
+    #expect(take.id == "mouse-click-2")
+    for tone in ClickSound.allCases where !ClickSound.studioCollection.contains(tone) {
+        #expect(library.clickTake(tone)?.id == take.id)
     }
-    #expect(pair.down != pair.up)
-    let out = KeySoundEngine.render(cues: [SFXCue(t: 0.1, kind: .click, gainDb: 0)],
-                                    library: library, router: &router,
-                                    settings: KeyMixSettings(), frames: 48_000)
-    #expect(out.l.contains { abs($0) > 1e-4 })
+    var settings = KeyMixSettings()
+    settings.clickTone = .fresh; settings.clickLevelDb = 0; settings.limiterCeiling = 1
+    var router = KeyVariationRouter()
+    let out = KeySoundEngine.render(cues: [SFXCue(t: 0, kind: .click, gainDb: 0)],
+                                    library: library, router: &router, settings: settings,
+                                    frames: take.samples.count + 1000)
+    #expect(Array(out.l.prefix(take.samples.count)) == take.samples)
+    #expect(out.l.dropFirst(take.samples.count).allSatisfy { $0 == 0 })
 }
 
 @Test func selectedStudioClickUsesItsCuratedRecording() throws {
@@ -136,7 +141,7 @@ private let library = KeySoundLibrary.load()
     #expect(manifest.sampleRate == 48_000)
     #expect(manifest.masteringPolicy == "static-gain-transient-preserved")
     #expect(manifest.targetPeakDb == -6)
-    #expect(manifest.files.count >= 86)
+    #expect(manifest.files.count == 82)
     let licenseText = try String(contentsOf: manifestURL.deletingLastPathComponent()
         .appendingPathComponent("LICENSES.md"), encoding: .utf8)
     var seenHashes = Set<String>()
