@@ -587,10 +587,11 @@ public final class AudioMixer: @unchecked Sendable {
     /// reused: reopening a project must not re-run a multi-minute DSP pass to
     /// produce a buffer that is already on disk.
     public func mix(_ tl: Timeline, cancelled: (@Sendable () -> Bool)? = nil) -> MixedAudio? {
-        guard let d = tl.derived else { return nil }
-        let n = Int(tl.compositionDuration * AudioIO.fs) + 1
-        guard n > 0 else { return nil }
-        if let cached = mixCacheRead(tl, n: n) { return cached }
+        guard let d = tl.derived, cancelled?() != true else { return nil }
+        let duration = tl.compositionDuration
+        guard duration.isFinite, duration >= 0, duration * AudioIO.fs < Double(Int.max / 2) else { return nil }
+        let n = Int(duration * AudioIO.fs) + 1
+        if let cached = mixCacheRead(tl, n: n) { return cancelled?() == true ? nil : cached }
         let out = render(tl, derived: d, n: n, range: .whole, cancelled: cancelled)
         if let out, cancelled?() != true { mixCacheWrite(tl, n: n, mix: out) }
         return out
@@ -622,31 +623,32 @@ public final class AudioMixer: @unchecked Sendable {
 
     private func render(_ tl: Timeline, derived d: DerivedTracks, n: Int, range: AudioRange,
                         cancelled: (@Sendable () -> Bool)?) -> MixedAudio? {
+        guard cancelled?() != true else { return nil }
         let fs = AudioIO.fs, a = tl.audio, tm = tl.timeMap
         var L = [Float](repeating: 0, count: n), R = L
         var hasProgram = false                                   // voice / system / music (not just SFX)
 
         if a.micMode != .off, let v = voiceChain(a, micIndex: 0, range: range, cancelled: cancelled) {
-            let y = Self.mapped(v, offset: micOffset, tm: tm, n: n, muteRamps: a.muteMicInRamps)
             let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
-            for i in 0..<n { L[i] += y[i] * gain; R[i] += y[i] * gain }
+            guard Self.addMappedMono(v, offset: micOffset, tm: tm, muteRamps: a.muteMicInRamps,
+                                     gain: gain, left: &L, right: &R, cancelled: cancelled) else { return nil }
             hasProgram = true
         }
         if a.micMode != .off {
             for index in 0..<extraCount() {
                 guard let processed = voiceChain(a, micIndex: index + 1, range: range, cancelled: cancelled) else { continue }
-                let mapped = Self.mapped(processed, offset: extraSource(index).offset,
-                                         tm: tm, n: n, muteRamps: a.muteMicInRamps)
                 let gain = Float(pow(10, clamp(a.micGainDb, -60, 24) / 20))
-                for i in 0..<n { L[i] += mapped[i] * gain; R[i] += mapped[i] * gain }
+                guard Self.addMappedMono(processed, offset: extraSource(index).offset, tm: tm,
+                    muteRamps: a.muteMicInRamps, gain: gain, left: &L, right: &R, cancelled: cancelled) else { return nil }
                 hasProgram = true
             }
         }
         if let (left, right) = systemSamples(range) {
-            let l = Self.mapped(left, offset: sysOffset, tm: tm, n: n, muteRamps: true)
-            let r = Self.mapped(right, offset: sysOffset, tm: tm, n: n, muteRamps: true)
             let gain = Float(pow(10, clamp(a.systemGainDb, -60, 24) / 20))
-            for i in 0..<n { L[i] += l[i] * gain; R[i] += r[i] * gain }
+            guard Self.addMappedChannel(left, offset: sysOffset, tm: tm, muteRamps: true,
+                gain: gain, output: &L, cancelled: cancelled),
+                Self.addMappedChannel(right, offset: sysOffset, tm: tm, muteRamps: true,
+                gain: gain, output: &R, cancelled: cancelled) else { return nil }
             hasProgram = true
         }
         for lane in a.lanes where !lane.mute && (lane.role == .voiceover || lane.role == .sfx) {
@@ -716,8 +718,10 @@ public final class AudioMixer: @unchecked Sendable {
                                             router: &router, settings: settings, frames: n)
             for i in 0..<n { L[i] += sfx.l[i]; R[i] += sfx.r[i] }
         }
+        guard cancelled?() != true else { return nil }
         Self.silenceClips(tl, &L, &R, fs: fs)
-        return AudioMaster.process([L, R], plan: a, hasProgram: hasProgram)
+        let result = AudioMaster.process([L, R], plan: a, hasProgram: hasProgram)
+        return cancelled?() == true ? nil : result
     }
 
     private func renderCues(_ tl: Timeline, startFrame: Int64, left: inout [Float], right: inout [Float],
