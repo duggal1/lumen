@@ -84,7 +84,7 @@ non-mutating tool and for the six mutating tools where repeating an identical ca
 `add_music`, `remove_music`, `reorder_clips`, `set_speed`, `set_zoom`, `trim_clip`. Every other
 mutating tool is `false`.
 
-**One catalog, 52 tools.** There is exactly one canonical verb per operation. The typed edit verbs
+**One catalog, 53 tools.** There is exactly one canonical verb per operation. The typed edit verbs
 (`cut_span`, `split_clip`, `trim_clip`, `reorder_clips`, `set_speed`, `add_music`, `remove_music`,
 `add_caption`, `set_zoom`, `get_edit`, `render_preview`, `export_final`) are the only editing
 vocabulary. The older overlapping verbs they replaced (`cut_range`, `speed_ramp_set`, `zoom_add`,
@@ -145,7 +145,7 @@ ui_act | actuate | actuate | actions,bundle_id | yes | no | no | no | no | no | 
 ui_snapshot | actuate | actuate | bundle_id | no | yes | no | no | no | no | -
 ui_wait_for | actuate | actuate | bundle_id | no | yes | no | no | no | no | -
 undo | edit | edit | project_id | yes | no | yes | no | no | no | -
-voiceover_generate | network | network | project_id,text | yes | no | no | no | no | no | -
+voiceover_generate | network | edit,network | project_id,text | yes | no | no | no | no | no | edit
 zoom_remove | edit | edit | id,project_id | yes | no | yes | no | no | no | -
 zoom_replan | edit | edit | project_id | yes | no | no | no | no | no | -
 ```
@@ -219,7 +219,7 @@ possible: a second is a guess, a marker is a fact.
 | `add_music` | `project_id`, `path` (mp3/wav/m4a/aac/flac/aiff/caf), `at` (output seconds, default 0), `gain_db?=0`, `duration?` | engine edit result; idempotent, so re-adding the same bed at the same place does not stack it |
 | `remove_music` | `project_id`, `id?` or `path?` (the bed to remove; every bed when both are omitted) | engine edit result; idempotent |
 | `audio_mix_set` | `project_id`, optional `target_lufs` (-24...-10), `music_gain_db`/`mic_gain_db`/`output_gain_db` (-60...12), `duck_depth_db` (0...36), `normalize` | engine edit result |
-| `voiceover_generate` | `project_id`, `text`, `voice?`, `model?`, `at_marker?`, `at_output?`, `offset_ms?=0`, `gain_db?=0` | engine edit result + `network` (disclosure string) + `audio_path`. Requires `network`. |
+| `voiceover_generate` | `project_id`, `text`, `voice?`, `model?`, `at_marker?`, `at_output?`, `offset_ms?=0`, `gain_db?=0` | engine edit result + `network` (disclosure string) + `audio_path`. Requires `network` and `edit`. |
 
 ### 4.5 Verification, export and jobs
 

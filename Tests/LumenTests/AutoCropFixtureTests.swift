@@ -91,6 +91,17 @@ import LumenCapture
         #expect(Self.plan(samples).track.rect(at: 5) == PxRect(x: 2, y: 2, w: 1918, h: 896))
     }
 
+    @Test func missingViewportObservationsExpireAndRecover() {
+        let page = PxRect(x: 0, y: 90, w: 1920, h: 990)
+        let initial = Self.makeSamples(0, 1, web: page, window: Self.source)
+        let resumed = Self.makeSamples(5, 7, web: page, window: Self.source)
+        let crop = Self.plan(initial + resumed).track
+        #expect(crop.rect(at: 0.5).y > 89)
+        #expect(crop.rect(at: 4) == Self.source)
+        #expect(crop.rect(at: 6.5).y > 89)
+        #expect(crop.rect(at: 9) == Self.source)
+    }
+
     @Test func singleAddressBarKeyRevealsChromeUnderDefaultPolicy() {
         let page = PxRect(x: 0, y: 90, w: 1920, h: 990)
         var samples = Self.makeSamples(0, 8, web: page, window: Self.source)

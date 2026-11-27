@@ -1,5 +1,7 @@
 import Foundation
 import Security
+import CryptoKit
+@preconcurrency import AVFoundation
 import LumenCore
 
 /// A text-to-speech provider. The ElevenLabs implementation keeps the key in
@@ -11,14 +13,16 @@ public protocol VoiceProvider: Sendable {
     func generate(text: String, voice: String, model: String) async throws -> (data: Data, disclosure: String)
 }
 
-public enum VoiceError: Error, Sendable {
+public enum VoiceError: LocalizedError, Sendable {
     case noKey
     case failed(String)
+
+    public var errorDescription: String? { message }
 
     public var message: String {
         switch self {
         case .noKey:
-            return "No voice-over provider key is stored. Store one in the Keychain (service: com.lumen.studio, account: elevenlabs) or import an audio file with add_music."
+            return "No voice-over provider key is stored. Store one in the Keychain (service: com.lumen.studio, account: elevenlabs) or import an audio file with audio_edit_v2."
         case .failed(let m):
             return "The voice provider failed: \(m)"
         }
@@ -83,16 +87,20 @@ public struct ElevenLabsProvider: VoiceProvider {
         guard let apiKey, !apiKey.isEmpty else { throw VoiceError.noKey }
         let voiceID = voice.isEmpty ? Self.defaultVoice : voice
         let modelID = model.isEmpty ? Self.defaultModel : model
-        let key = hash(text + voiceID + modelID)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= 40_000 else { throw VoiceError.failed("Narration must contain 1–40,000 UTF-8 bytes.") }
+        guard voiceID.range(of: "^[A-Za-z0-9_-]{1,128}$", options: .regularExpression) != nil,
+              modelID.range(of: "^[A-Za-z0-9_-]{1,128}$", options: .regularExpression) != nil else { throw VoiceError.failed("Invalid voice or model identifier.") }
+        let key = SHA256.hash(data: try JSONEncoder().encode([text, voiceID, modelID])).map { String(format: "%02x", $0) }.joined()
         if let cacheDirectory {
             let cached = cacheDirectory.appendingPathComponent("voice-" + key + ".mp3")
-            if let data = try? Data(contentsOf: cached) {
+            if let data = try? Data(contentsOf: cached), !data.isEmpty {
                 return (data, "Read cached narration for voice \(voiceID) (no network call).")
             }
         }
         // The current ElevenLabs text-to-speech endpoint. The output format
         // is explicit so the cached file always matches what we asked for.
-        var request = URLRequest(url: URL(string: endpoint + "/" + voiceID + "?output_format=mp3_44100_128")!)
+        guard let url = URL(string: endpoint + "/" + voiceID + "?output_format=mp3_44100_128"), url.scheme == "https" else { throw VoiceError.failed("Invalid HTTPS provider endpoint.") }
+        var request = URLRequest(url: url, timeoutInterval: 90)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "xi-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -103,23 +111,20 @@ public struct ElevenLabsProvider: VoiceProvider {
             "voice_settings": ["stability": 0.5, "similarity_boost": 0.75],
         ])
         let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw VoiceError.failed("HTTP \(http.statusCode): \(body.prefix(200))")
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw VoiceError.failed("HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0). Check the key, quota and voice.")
         }
+        guard !data.isEmpty, data.count <= 64 * 1024 * 1024,
+              http.mimeType?.hasPrefix("audio/") == true else { throw VoiceError.failed("Provider returned invalid audio.") }
+        try Task.checkCancellation()
         if let cacheDirectory {
             try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
             let cached = cacheDirectory.appendingPathComponent("voice-" + key + ".mp3")
-            try? data.write(to: cached)
+            try? data.write(to: cached, options: .atomic)
         }
         return (data, "Sent \(text.count) characters to ElevenLabs (voice \(voiceID), model \(modelID)).")
     }
 
-    private func hash(_ text: String) -> String {
-        var h: UInt64 = 0xcbf29ce484222325
-        for byte in text.utf8 { h ^= UInt64(byte); h = h &* 0x100000001b3 }
-        return String(h, radix: 16)
-    }
 }
 
 /// The provider the tools use.
@@ -130,5 +135,35 @@ public struct DefaultVoiceProvider: VoiceProvider {
     }
     public func generate(text: String, voice: String, model: String) async throws -> (data: Data, disclosure: String) {
         try await inner.generate(text: text, voice: voice, model: model)
+    }
+}
+
+/// Generated narration is project-owned media, never a disposable derived cache.
+public enum NarrationAsset {
+    public static func generate(in project: URL, text: String, voice: String = "", model: String = "",
+                                provider: any VoiceProvider) async throws -> (url: URL, duration: Double, disclosure: String) {
+        let result = try await provider.generate(text: text, voice: voice, model: model)
+        try Task.checkCancellation()
+        let directory = project.appendingPathComponent("assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("narration-" + UUID().uuidString + ".mp3")
+        do {
+            try result.data.write(to: url, options: .atomic)
+            let audio = try AVAudioFile(forReading: url)
+            let sampleRate = audio.processingFormat.sampleRate
+            guard sampleRate.isFinite, sampleRate > 0, audio.length > 0,
+                  let probe = AVAudioPCMBuffer(pcmFormat: audio.processingFormat,
+                                               frameCapacity: AVAudioFrameCount(min(audio.length, 4096))) else {
+                throw VoiceError.failed("Generated audio cannot be decoded.")
+            }
+            try audio.read(into: probe)
+            guard probe.frameLength > 0 else { throw VoiceError.failed("Generated audio cannot be decoded.") }
+            let duration = Double(audio.length) / sampleRate
+            try Task.checkCancellation()
+            return (url, duration, result.disclosure)
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
     }
 }

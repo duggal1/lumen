@@ -76,11 +76,13 @@ struct EditorView: View {
     let model: EditorModel
     @State private var inspectorTab: Inspector.Tab = .studio
     @State private var showsInspector = true
+    @State private var showsNarration = false
 
     var body: some View {
         VStack(spacing: 0) {
             PageBar(title: "Lumen Studio") {
                 HStack(spacing: 8) {
+                    LIconButton(icon: "waveform.and.mic", label: "Generate narration") { showsNarration = true }
                     LIconButton(icon: "cursorarrow", label: "Choose cursor skins") { showsInspector = true; inspectorTab = .cursor }
                     LIconButton(icon: "sidebar.right", label: showsInspector ? "Hide inspector" : "Show inspector") {
                         showsInspector.toggle()
@@ -131,6 +133,7 @@ struct EditorView: View {
                 .frame(maxWidth: .infinity)
         }
         .background(StudioInk.rail)
+        .sheet(isPresented: $showsNarration) { NarrationPanel(model: model) }
         .onChange(of: model.exportPanelRequest) { _, _ in showsInspector = true; inspectorTab = .export }
         .focusable().focusEffectDisabled()
         .onKeyPress(.space) { model.togglePlay(); return .handled }

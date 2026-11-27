@@ -21,14 +21,14 @@ capture and editing; never try to drive the GUI instead.
 ```
 
 `initialize` negotiates the protocol version (supported: 2025-03-26, 2025-06-18, 2025-11-25).
-`tools/list` returns all 52 tools with their schemas and safety annotations. `tools/call` returns a
+`tools/list` returns all 53 tools with their schemas and safety annotations. `tools/call` returns a
 `content` array, an `isError` flag, and `structuredContent` when the tool declares an output schema.
 Preview frames and window captures come back as `image` content blocks — look at them; do not just
 read metadata.
 
 ## The contract at a glance
 
-Fifty-two tools in six capability groups: read (13), record (5), actuate (6), edit (25),
+Fifty-two tools in six capability groups: read (13), record (5), actuate (6), edit (26),
 network (1), export (2). Names are `verb_noun` in snake_case. Every mutating tool accepts `dry_run`.
 
 The five phases of any editing job:
@@ -152,3 +152,5 @@ an agent's job easier, and never send a recording off the Mac without telling th
 
 ## Agent skill resources (v2)
 Use `resources/list` and `resources/read` for `lumen://skills/record-edit-export`, `lumen://skills/audio-edit`, and `lumen://skills/react-video`. React resource documents the current external-render-and-import boundary, not a native rendering capability. Prefer `audio_edit_v2` to legacy whole-project music tools for finite audio clips. Always re-read persisted revision after an edit.
+
+A failed composite demo may expose `project_path` and `project_id` in the job result. Reopen that project instead of repeating capture. Export results contain encoded-media verification evidence (duration, dimensions, audio track count and decoded boundary frames). This is technical proof, not cinematic judgment. In-memory checkpoints are not durable daemon-restart receipts.

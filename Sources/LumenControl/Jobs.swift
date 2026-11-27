@@ -113,9 +113,11 @@ public final class JobManager: @unchecked Sendable {
             s.jobs[id] = job; s.order.append(id)
             let task = Task { [weak self] in
             guard let self else { return }
-            let reporter = JobReporter(jobID: id) { [weak self] progress, message in
+            let reporter = JobReporter(jobID: id, report: { [weak self] progress, message in
                 self?.progress(id, progress, message)
-            }
+            }, saveCheckpoint: { [weak self] checkpoint in
+                self?.update(id) { $0.result = checkpoint; $0.updated = Date().timeIntervalSince1970 }
+            })
             do {
                 try Task.checkCancellation()
                 self.update(id) { j in if j.state == .queued { j.state = .running } }
@@ -130,7 +132,7 @@ public final class JobManager: @unchecked Sendable {
             } catch {
                 self.update(id) { j in
                     j.state = Task.isCancelled ? .cancelled : .failed
-                    j.error = String(describing: error)
+                    j.error = (error as? ToolError).map { "\($0.code): \($0.hint)" } ?? error.localizedDescription
                     j.updated = Date().timeIntervalSince1970
                 }
             }
@@ -142,7 +144,8 @@ public final class JobManager: @unchecked Sendable {
     }
 
     private func progress(_ id: String, _ value: Double, _ message: String?) {
-        update(id) { j in j.progress = min(max(value, 0), 1); j.message = message; j.updated = Date().timeIntervalSince1970 }
+        guard value.isFinite else { return }
+        update(id) { j in j.progress = max(j.progress, min(max(value, 0), 1)); j.message = message; j.updated = Date().timeIntervalSince1970 }
         let listener = state.withLock { $0.listeners[id] }
         listener?(Event(jobID: id, progress: value, message: message))
     }
@@ -150,6 +153,9 @@ public final class JobManager: @unchecked Sendable {
     private func update(_ id: String, _ body: @Sendable (inout Job) -> Void) {
         state.withLock { s in
             guard var job = s.jobs[id] else { return }
+            // Terminal states are immutable. Late progress or a worker that ignores
+            // cancellation must not resurrect a cancelled job.
+            guard job.state == .queued || job.state == .running else { return }
             body(&job)
             s.jobs[id] = job
         }
@@ -160,6 +166,8 @@ public final class JobManager: @unchecked Sendable {
 public struct JobReporter: Sendable {
     public let jobID: String
     let report: @Sendable (Double, String?) -> Void
+    let saveCheckpoint: @Sendable (JSONValue) -> Void
+    public func checkpoint(_ value: JSONValue) { saveCheckpoint(value) }
     public func progress(_ value: Double, _ message: String? = nil) { report(value, message) }
 }
 

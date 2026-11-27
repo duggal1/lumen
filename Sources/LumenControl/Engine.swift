@@ -602,18 +602,18 @@ public actor Engine {
 
         // Zoom accuracy — the existing measurement.
         let accuracy = AccuracyReport.measure(timeline, events: events)
-        let zoomTargetsMet = accuracy.zoomedClicks > 0
-            && accuracy.centeredClicks == accuracy.zoomedClicks
-            && accuracy.settled == accuracy.zoomedClicks
+        let zoomTargetsMet = AgentQualityPolicy.zoomPass(clicks: accuracy.clicks,
+            zoomed: accuracy.zoomedClicks, centered: accuracy.centeredClicks, settled: accuracy.settled,
+            automatic: timeline.camera.autoZoom && timeline.camera.preset != .fixed)
 
         // Loudness — the existing mixer measurement.
-        var loudness: Double = 0
-        var truePeak: Double = 0
-        if let mixed = await derivationLane.mix(session, timeline: timeline) {
-            loudness = mixed.lufs
-            truePeak = mixed.truePeakDb
-        }
-        let loudnessOK = loudness <= -14 && loudness >= -24 && truePeak <= -1.0
+        let expectsAudio = session.mixer.hasProgram(timeline)
+        let mixed = expectsAudio ? await derivationLane.mix(session, timeline: timeline) : nil
+        let loudness = mixed?.lufs ?? -120
+        let truePeak = mixed?.truePeakDb ?? -120
+        let audio = AgentQualityPolicy.audioPass(expected: expectsAudio, measured: mixed != nil,
+                                                 loudness: loudness, truePeak: truePeak)
+        let loudnessOK = audio.level
 
         // Privacy: only a completed scan can pass, and a mask must actually cover.
         let plan = timeline.overlays.privacy
@@ -647,7 +647,7 @@ public actor Engine {
         let droppedOK = dropped == 0
 
         // Silence: an all-zero master is a bug, not a mix.
-        let silenceOK = loudness > -70
+        let silenceOK = audio.audible
 
         func check(_ name: String, _ ok: Bool, _ detail: String) -> JSONValue {
             .object(["name": .string(name), "ok": .bool(ok), "detail": .string(detail)])
@@ -724,29 +724,32 @@ public actor Engine {
         let gpuLane = self.gpuLane
         return jobs.start(kind: "export") { reporter in
             try await gpuLane.withPermit {
-                var finished = false
-                let staging = output.deletingLastPathComponent()
-                    .appendingPathComponent(".lumen-\(UUID().uuidString)-\(output.lastPathComponent)")
+                let directory = output.deletingLastPathComponent()
+                    .appendingPathComponent(".lumen-\(UUID().uuidString)", isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+                var keepRecoveryFiles = false
                 defer {
-                    // AGENT: a cancelled or failed export must not leave a partial movie that looks complete.
-                    if !finished || Task.isCancelled { try? FileManager.default.removeItem(at: staging) }
+                    if !keepRecoveryFiles { try? FileManager.default.removeItem(at: directory) }
                 }
+                let staging = directory.appendingPathComponent(output.lastPathComponent)
                 await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
                 try await Exporter.run(session: session, timeline: timeline, preset: preset, to: staging,
                                        includeAudio: includeAudio, exportStems: exportStems) { progress in
                     reporter.progress(progress.total > 0 ? Double(progress.frame) / Double(progress.total) : 0,
                                       progress.notice)
                 }
-                if FileManager.default.fileExists(atPath: output.path) {
-                    guard overwrite else {
-                        throw ToolError(code: "EXPORT_OUTPUT_EXISTS", hint: "The output path appeared during export; choose another path.")
-                    }
-                    _ = try FileManager.default.replaceItemAt(output, withItemAt: staging)
-                } else {
-                    try FileManager.default.moveItem(at: staging, to: output)
+                let proof = try await AgentExportProof.verify(staging, expectedDuration: timeline.compositionDuration,
+                    fps: preset.fps, expectsAudio: includeAudio && session.mixer.hasProgram(timeline),
+                    expectedSize: CGSize(width: preset.width(aspect: timeline.style.aspectRatio), height: preset.height))
+                let stems: [URL]
+                do {
+                    stems = try AgentExportProof.publish(staging, to: output, overwrite: overwrite)
+                } catch let failure as ToolError where failure.code == "EXPORT_RECOVERY_REQUIRED" {
+                    keepRecoveryFiles = true
+                    throw failure
                 }
-                finished = true
-                return .object(["output": .string(output.path)])
+                return .object(["output": .string(output.path), "verification": proof,
+                                "stems": .array(stems.map { .string($0.path) })])
             }
         }
     }
