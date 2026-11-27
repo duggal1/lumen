@@ -58,6 +58,7 @@ enum ZoomPlanner {
         /// Intent kinds by segment id, so the camera solver can tell a typing
         /// shot (stable target) from a follow shot.
         var kinds: [UUID: IntentKind] = [:]
+        var protectedVisual: Set<UUID> = []
     }
     enum IntentKind { case click, typing, visual, marker, dialog }
     struct Intent {
@@ -70,12 +71,18 @@ enum ZoomPlanner {
         /// Set for marker beats, for clicks centred on their control, and for
         /// the resolved text field of a typing burst.
         var frameRect: CGRect? = nil
+        var visualSubjectID: Int? = nil
+        var sustainedVisual = false
+        var visualActionTime: Double? = nil
+        var visualEnd: Double? = nil
     }
     private struct Open {
         var start: Double, scale: Double, c: SIMD2<Double>
         var path: [FollowPoint] = []
         var kind: IntentKind = .click
         var frameRect: CGRect? = nil
+        var visualSubjectID: Int? = nil
+        var visualEnd: Double? = nil
     }
 
     /// Same source-time window -> same id across replans.
@@ -354,7 +361,12 @@ enum ZoomPlanner {
         // a `.visual` intent displace a click/typing/dialog subject.
         // F2: activity grids replace the old detector; click/typing still outrank
         // these `.visual` shots. Do NOT also call VisualZoom.intents here.
-        intents += VisualAutofocus.intents(shots: activityShots, input: intents, src: src, tm: tm)
+        let visual = VisualAutofocus.intents(shots: activityShots, input: intents, src: src, tm: tm)
+        // Only a corroborated result can replace its own initiating click.
+        // Never remove manual/marker/dialog/typing intent or an unrelated click.
+        let replacedClicks = Set(visual.compactMap(\.visualActionTime))
+        intents.removeAll { $0.kind == .click && replacedClicks.contains($0.t) }
+        intents += visual
         intents = intents.filter { ok($0.t) && $0.tEnd.isFinite && $0.x.isFinite && $0.y.isFinite }
         intents.sort { a, b in
             if a.t != b.t { return a.t < b.t }
@@ -403,6 +415,7 @@ enum ZoomPlanner {
         var shots: [ZoomSegment] = []
         var followPaths: [UUID: [FollowPoint]] = [:]
         var kinds: [UUID: IntentKind] = [:]
+        var protectedVisual: Set<UUID> = []
         var centers: [UUID: SIMD2<Double>] = [:]
         var cur: Open?
         var shotCap = maxShot                     // effective ceiling for the open shot
@@ -412,7 +425,7 @@ enum ZoomPlanner {
         func close(at end: Double) {
             guard let o = cur else { return }
             cur = nil
-            let e = min(end, o.start + shotCap, tm.trimEnd)
+            let e = min(end, o.start + shotCap, tm.trimEnd, o.visualEnd ?? .infinity)
             guard e - o.start > 0.02, o.scale > 1.001 else { return }
             let id = stableID(o.start, e)
             var path = o.path.filter { $0.t >= o.start - 1e-6 && $0.t <= e + 1e-6 }
@@ -433,6 +446,7 @@ enum ZoomPlanner {
                 focus = .fixed(x: o.c.x / W, y: o.c.y / H)
             }
             kinds[id] = o.kind
+            if o.kind == .visual, o.visualEnd != nil { protectedVisual.insert(id) }
             centers[id] = o.c
             shots.append(ZoomSegment(id: id, start: o.start, end: e, scale: o.scale, focus: focus, origin: .auto))
         }
@@ -507,7 +521,7 @@ enum ZoomPlanner {
             // to be clipped down to the cadence cap of a rapid click run.
             let cap = it.kind == .typing
                 ? max(6.5, it.tEnd - it.t + 0.6)
-                : maxShot
+                : (it.sustainedVisual ? max(maxShot, it.tEnd - it.t + hold) : maxShot)
             if var o = cur {
                 if force {
                     // A dialog or a resolved typing field is a different
@@ -538,7 +552,8 @@ enum ZoomPlanner {
                     }
                 }
             }
-            var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect)
+            var fresh = Open(start: it.t, scale: want, c: clampC(anchor, want), kind: it.kind, frameRect: it.frameRect,
+                             visualSubjectID: it.visualSubjectID, visualEnd: it.visualEnd)
             fresh = withPoint(fresh, it.t, anchor)
             cur = fresh
             shotCap = cap
@@ -547,6 +562,9 @@ enum ZoomPlanner {
         }
 
         for it in intents {
+            if let o = cur, let end = o.visualEnd, it.t >= end {
+                close(at: end)
+            }
             if let o = cur {
                 if it.kind == .visual, o.kind != .visual {
                     if it.t <= last + hold { continue }
@@ -555,6 +573,10 @@ enum ZoomPlanner {
                 if o.kind == .typing, it.kind == .click, it.t <= last,
                    o.frameRect?.contains(CGPoint(x: it.x, y: it.y)) == true { continue }
                 if o.kind == .visual, it.kind != .visual { close(at: it.t) }
+                if o.kind == .visual, it.kind == .visual,
+                   let old = o.visualSubjectID, let new = it.visualSubjectID, old != new {
+                    close(at: min(it.t, last + hold))
+                }
             }
             // A shot never outlives its action window, even under a dense run
             // of clicks that would otherwise keep pushing `last` forward.
@@ -677,7 +699,8 @@ enum ZoomPlanner {
         // Only the paths of segments that survived the filter travel on.
         let ids = Set(kept.map(\.id))
         return ZoomPlan(segments: kept, follow: followPaths.filter { ids.contains($0.key) },
-                        kinds: kinds.filter { ids.contains($0.key) })
+                        kinds: kinds.filter { ids.contains($0.key) },
+                        protectedVisual: protectedVisual.intersection(ids))
     }
 
 }

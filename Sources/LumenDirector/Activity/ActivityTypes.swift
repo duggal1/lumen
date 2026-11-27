@@ -23,6 +23,13 @@ public struct VisualShot: Sendable, Equatable {
     public var waypoints: [Waypoint]
     public var strength: Double
     public var kind: Kind
+    /// Source-evidence-local identity; stable for identical replay inputs.
+    public var subjectID: Int? = nil
+    /// Corroborated action-associated geometric progression, not an AI label.
+    public var sustained: Bool = false
+    /// Corroborated initiating action for either a sustained response or a
+    /// distinct revealed destination; nil for ordinary passive activity.
+    public var actionTime: Double? = nil
 
     public init(start: Double, end: Double, waypoints: [Waypoint], strength: Double, kind: Kind) {
         self.start = start; self.end = end; self.waypoints = waypoints
@@ -63,6 +70,10 @@ public struct ActivityInputs: Sendable {
     public var moveT: [Double] = []
     public var moveX: [Float] = []
     public var moveY: [Float] = []
+    /// Only explicit primary clicks and non-repeated Return/Enter can seed a
+    /// prospective result. Neither mouse motion nor a modifier can seed it.
+    var actions: [Double] = []
+    var primaryClicks: [InputEvent] = []
 
     public init() {}
 
@@ -72,9 +83,17 @@ public struct ActivityInputs: Sendable {
         var a = ActivityInputs()
         for e in events.filter({ $0.t.isFinite }).sorted(by: { $0.t < $1.t }) {
             switch e.kind {
-            case .keyDown: a.keys.append(e.t)
+            case .keyDown:
+                a.keys.append(e.t)
+                if (e.keyCode == 36 || e.keyCode == 76), !e.isKeyRepeat, e.flags & 0x14 == 0 {
+                    a.actions.append(e.t)
+                }
             case .scroll, .drag: a.scrolls.append(e.t)
-            case .down: a.clicks.append(e.t)
+            case .down:
+                a.clicks.append(e.t)
+                if e.button == 0, e.flags & 0x14 == 0, e.x.isFinite, e.y.isFinite {
+                    a.actions.append(e.t); a.primaryClicks.append(e)
+                }
             case .move:
                 guard e.x.isFinite, e.y.isFinite else { continue }
                 a.moveT.append(e.t); a.moveX.append(e.x); a.moveY.append(e.y)
@@ -116,6 +135,38 @@ public struct ActivityInputs: Sendable {
         guard let i = lastIndex(moveT, at: t),
               moveX.indices.contains(i), moveY.indices.contains(i) else { return nil }
         return (Double(moveX[i]), Double(moveY[i]))
+    }
+
+    func recentAction(at t: Double) -> Double? {
+        guard let i = lastIndex(actions, at: t), t - actions[i] <= 1.8 else { return nil }
+        return actions[i]
+    }
+
+    /// The first distinct action after the owner, not a second press from
+    /// the same event instant. Used to freeze evidence at a handoff.
+    func nextAction(after t: Double) -> Double? {
+        let i = lowerBound(actions, t + 0.000001)
+        return actions.indices.contains(i) ? actions[i] : nil
+    }
+
+    func primaryClick(at t: Double) -> InputEvent? {
+        // Primary clicks are sorted with the event log. Avoid a full scan.
+        var lo = 0, hi = primaryClicks.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if primaryClicks[mid].t < t { lo = mid + 1 } else { hi = mid }
+        }
+        guard primaryClicks.indices.contains(lo), primaryClicks[lo].t == t else { return nil }
+        return primaryClicks[lo]
+    }
+
+    func localHover(at t: Double, box: CellBox, cw: Double, ch: Double, radius: Double) -> Bool {
+        guard let i = lastIndex(moveT, at: t), let cursor = cursor(at: t),
+              lastTime(clicks, at: t) < moveT[i] else { return false }
+        let x = cursor.x / cw, y = cursor.y / ch
+        let dx = max(Double(box.x0) - x, x - Double(box.x1 + 1), 0)
+        let dy = max(Double(box.y0) - y, y - Double(box.y1 + 1), 0)
+        return hypot(dx, dy) <= max(radius, 0)
     }
 
     /// A stationary pointer can still own a delayed tooltip. For remote

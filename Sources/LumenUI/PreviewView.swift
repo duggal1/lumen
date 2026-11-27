@@ -294,8 +294,10 @@ struct PreviewView: NSViewRepresentable {
         if let screen = window?.screen {
             let maximum = Float(screen.maximumFramesPerSecond)
             if maximum > 0 {
-                let target = min(60, maximum)
-                l.preferredFrameRateRange = CAFrameRateRange(minimum: target, maximum: target, preferred: target)
+                // Keep 60 Hz on ordinary panels; allow native ProMotion
+                // scheduling on capable displays without forcing 120 Hz.
+                let target = min(120, maximum)
+                l.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, target), maximum: target, preferred: target)
             }
         }
         let box = Unsafe(v: l)
