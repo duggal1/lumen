@@ -273,6 +273,12 @@ public extension ProjectBundle {
         guard isUnfinished else { return nil }
         if let existing = try? load(), existing.meta.source.duration.isFinite,
            existing.meta.source.duration > 0 {
+            // The app supplies a real media probe. Do not clear recovery
+            // evidence if the already-published project exceeds that media.
+            if let playableScreenDuration {
+                guard playableScreenDuration.isFinite, playableScreenDuration > 0,
+                      existing.meta.source.duration <= playableScreenDuration + 0.05 else { return nil }
+            }
             try clearJournal().get()
             return existing
         }

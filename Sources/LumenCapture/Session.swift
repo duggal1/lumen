@@ -337,10 +337,9 @@ public actor RecordingSession {
             startWatchdog()
             transition(to: .recording)
         } catch {
-            if let bundle, case .failure(let clearError) = bundle.clearJournal() {
-                logger.error("could not clear failed-start journal: \(clearError.localizedDescription, privacy: .public)")
-            }
-            RecordingGate.recordingStopped()
+            // A start may fail after opening media. Keep its checkpoint
+            // for recovery, and release the power/activity token.
+            releaseRecordingActivity()
             transition(to: .failed("Starting stalled. \(error)"))
             throw error
         }
@@ -489,9 +488,9 @@ public actor RecordingSession {
             await pendingJournal?.value
             stopWatchdog()
             if isPaused {
-                // Close the pause interval without transitioning the session
-                // back to recording while the stop operation is in progress.
-                engine.resume()
+                // Keep capture paused until the stream is stopped. The
+                // unrecorded trailing pause is outside the playable media;
+                // reopening the input would capture content the user hid.
             }
             isPaused = false
             viewport?.stop(); viewport = nil; viewportPaused = nil
@@ -504,6 +503,7 @@ public actor RecordingSession {
             // accepted frame, even if the app dies during post-processing.
             try await writeJournal()
         } catch {
+            releaseRecordingActivity()
             transition(to: .failed("Stopping stalled. \(error)"))
             throw error
         }
@@ -516,11 +516,24 @@ public actor RecordingSession {
         if let finalizeTask { return try await finalizeTask.value }
         guard let stopTask else { throw CaptureError.noSource }
         let task = Task {
-            try await stopTask.value
-            return try await self.performFinalize(progress: progress)
+            do {
+                try await stopTask.value
+                return try await self.performFinalize(progress: progress)
+            } catch {
+                self.releaseRecordingActivity()
+                self.transition(to: .failed("Finalization failed: \(error)"))
+                throw error
+            }
         }
         finalizeTask = task
         return try await task.value
+    }
+
+    private func releaseRecordingActivity() {
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+        activity = nil
+        RecordingGate.recordingStopped()
+        MainThreadWatchdog.shared.stop()
     }
 
     private func performFinalize(progress: @escaping @Sendable (Double) -> Void) async throws -> ProjectBundle {
@@ -531,7 +544,6 @@ public actor RecordingSession {
             transition(to: .failed("No bundle to finalize."))
             throw CaptureError.noSource
         }
-        let activityToken = activity
         guard let origin = engine.firstPTS else { throw CaptureError.writer("Recording has no source clock anchor.") }
         // Use the finalized video track, not the wall clock after stopping.
         // Metadata loading is cheap and avoids a phantom tail after idle/stop.
@@ -602,14 +614,9 @@ public actor RecordingSession {
                 progress(1)
             }.value
         } catch {
-            RecordingGate.recordingStopped()
-            transition(to: .failed("Finalizing stalled. \(error)"))
             throw error
         }
-        if let a = activityToken { ProcessInfo.processInfo.endActivity(a) }
-        activity = nil
-        RecordingGate.recordingStopped()
-        MainThreadWatchdog.shared.stop()
+        releaseRecordingActivity()
         transition(to: .ready)
         return b
     }

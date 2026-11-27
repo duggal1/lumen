@@ -5,3 +5,5 @@
 - Screen stop drains video and audio callback queues, closes audio writers even on writer failure, and accepts only completed video output. Requested webcam is exact.
 - Concurrent stop/finalize callers share tasks. The final checkpoint survives a crash during post-processing. Final duration is read from the finalized video track rather than host wall time.
 - Added three disk-backed regression tests. CI, forced process termination and target-device latency measurements pending. No claim of two-second actual recovery, and audio container durability still requires proof.
+
+Follow-up: stopping a paused take never reopens capture; reject duplicate/regressing video timestamps, release recording power activity on failure, retain failed-start journal, and check existing project duration against available footage before clearing recovery evidence.

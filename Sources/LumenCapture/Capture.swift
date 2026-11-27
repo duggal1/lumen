@@ -735,6 +735,7 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
               let info = arr.first, let raw = info[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete,
               let pb = CMSampleBufferGetImageBuffer(sb), let w = writer, vin != nil, adaptor != nil else { return }
         let pts = sb.presentationTimeStamp
+        guard pts.seconds.isFinite, pts.seconds >= 0 else { return }
         // Generic-app window capture: AX gave no content rect. Inspect pixels
         // and drive the SAME chromeFraction → FrameCropper path as the AX case.
         if visionFallback.withLock({ $0 }) {
@@ -852,6 +853,9 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private func drainVideo() {
         guard let vin, vin.isReadyForMoreMediaData, let pending = pendingVideo else { return }
         pendingVideo = nil
+        if writtenFrames > 0, pending.pts.seconds <= lastPTS {
+            dropped.withLock { $0 += 1 }; return
+        }
         if adaptor?.append(pending.buffer, withPresentationTime: pending.pts) == true {
             let seconds = pending.pts.seconds
             ptsRange.withLock { $0.last = seconds }
