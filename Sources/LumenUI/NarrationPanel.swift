@@ -101,6 +101,7 @@ struct NarrationPanel: View {
         guard let url = generatedURL, placement + seconds <= model.duration + 0.05 else { return }
         var lane = AudioLane(role: .voiceover, path: url.path, placement: placement)
         lane.loops = false
+        lane.trimDuration = seconds
         model.dispatch(.addAudioLane(lane))
         guard model.timeline.audio.lanes.contains(where: { $0.id == lane.id }) else {
             issue = model.editIssue ?? "Could not add narration."; return

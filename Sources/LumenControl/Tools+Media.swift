@@ -278,24 +278,27 @@ public extension ToolRegistry {
 
         register(ToolDefinition<VoiceoverGenerateInput>(name: "voiceover_generate",
             description: "Generates narration with the configured voice provider and lays it on the timeline. This makes a network call and says so in the result. Needs the network capability.",
-            capability: .network, required: ["project_id", "text"], mutating: true) { input, ctx in
+            capability: .network, required: ["project_id", "text"], mutating: true, additionalCapabilities: [.edit]) { input, ctx in
                 let placement = try await self.resolvePlacement(projectID: input.projectID, ctx: ctx,
                                                           atMarker: input.atMarker, atOutput: input.atOutput,
                                                           offsetMs: input.offsetMs)
                 let gain = try Self.validated(input.gainDb ?? 0, name: "gain_db", range: -60 ... 12)
+                let initial = try await ctx.engine.timelineValue(projectID: input.projectID)
+                guard let revision = initial["revision"]?.intValue else { throw ToolError.failed("Project revision unavailable.") }
                 let cache = ctx.engine.cacheDirectory(projectID: input.projectID)
                 let provider = DefaultVoiceProvider(cacheDirectory: cache)
                 let generated = try await NarrationAsset.generate(in: cache.deletingLastPathComponent(), text: input.text,
                                                                   voice: input.voice, model: input.model, provider: provider)
                 do {
                     try Task.checkCancellation()
-                    let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: nil,
+                    let result = try await ctx.engine.edit(projectID: input.projectID, expectRevision: revision,
                                                           describe: "voice-over") { timeline in
                         guard placement + generated.duration <= timeline.compositionDuration + 0.05 else {
                             throw ToolError.invalidArguments("Narration exceeds remaining video duration. Shorten text or move placement.")
                         }
                         var lane = AudioLane(role: .voiceover, path: generated.url.path, placement: placement, gainDb: gain)
                         lane.loops = false
+                        lane.trimDuration = generated.duration
                         try applyCommand(.addAudioLane(lane), to: &timeline)
                     }
                     var payload = result

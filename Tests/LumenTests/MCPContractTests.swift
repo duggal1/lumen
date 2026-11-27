@@ -152,7 +152,7 @@ private func rpc(_ object: [String: Any]) throws -> String {
     #expect(specs.filter(\.longRunning).count == 4)
     #expect(specs.filter(\.customDryRun).count == 14)
     #expect(specs.filter { $0.outputSchema != nil }.count == 20)
-    #expect(specs.filter { $0.additionalCapabilities.isEmpty }.count == 52)
+    #expect(specs.filter { $0.additionalCapabilities.isEmpty }.count == 51)
 }
 
 @Test func exactlyOneVideoEditVocabularyIsRegistered() throws {

@@ -176,7 +176,9 @@ public extension ToolRegistry {
                         let projectURL = try await runtime.stopRecording()
                         isRecording = false
                         recoveryProject = projectURL.path
+                        reporter.checkpoint(.object(["project_path": .string(projectURL.path), "stage": .string("captured")]))
                         let project = try await engine.openProject(at: projectURL.path)
+                        reporter.checkpoint(.object(["project_path": .string(projectURL.path), "project_id": .string(project.identifier), "stage": .string("editing")]))
                         reporter.progress(0.50, "privacy scan")
                         let scanID = try await engine.startPrivacyScan(projectID: project.identifier)
                         let scan = try await jobs.waitForCompletion(scanID) { progress, message in
@@ -218,6 +220,7 @@ public extension ToolRegistry {
                                         }
                                         var lane = AudioLane(role: .voiceover, path: generated.url.path, placement: placement)
                                         lane.loops = false
+                        lane.trimDuration = generated.duration
                                         try applyCommand(.addAudioLane(lane), to: &timeline)
                                     }
                                 } catch {
@@ -238,9 +241,12 @@ public extension ToolRegistry {
                         let finalExport = try await jobs.waitForCompletion(exportID) { progress, message in
                             reporter.progress(0.80 + progress * 0.20, message ?? "Exporting")
                         }
-                        let output = finalExport.result?["output"]?.stringValue ?? outputURL.path
+                        guard let output = finalExport.result?["output"]?.stringValue,
+                              let proof = finalExport.result?["verification"] else {
+                            throw ToolError(code: "EXPORT_VERIFICATION_FAILED", hint: "Export job did not return verification evidence.")
+                        }
                         return .object(["project_id": .string(project.identifier), "output": .string(output),
-                                        "qa": qa, "markers": .int(markers.count)])
+                                        "qa": qa, "verification": proof, "markers": .int(markers.count)])
                     } catch {
                         if isRecording {
                             if let recovered = try? await runtime.stopRecording() { recoveryProject = recovered.path }
