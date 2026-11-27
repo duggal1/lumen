@@ -249,8 +249,12 @@ public enum RenderBenchmark {
                                quality: RenderQuality) throws -> Bool {
         let request = RenderRequest(timeline: timeline, t: t, screen: screen, canvas: canvas, fps: fps,
                                     backingScale: 1, quality: quality)
-        guard renderer.render(request, into: output, completion: { completion.signal() }) else { return false }
+        let result = OSAllocatedUnfairLock(initialState: false)
+        guard renderer.renderChecked(request, into: output, completion: { success in
+            result.withLock { $0 = success }; completion.signal()
+        }) else { throw RenderError.pipeline("benchmark submission failed") }
         guard completion.wait(timeout: .now() + 30) == .success else { throw RenderError.pipeline("frame timeout") }
+        guard result.withLock({ $0 }) else { throw RenderError.pipeline("benchmark GPU command failed") }
         return true
     }
 

@@ -308,15 +308,26 @@ enum TimelineSelection: Equatable {
             || ((!old.camera.autoZoom || old.camera.preset == .fixed)
                 && new.camera.autoZoom && new.camera.preset != .fixed)
         if analysisChanged { analyzeInBackground(new) }
-        if derivePending || old.overlays.privacy != new.overlays.privacy || old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap
-            || old.audio != new.audio || old.webcam != new.webcam || old.overlays.taps != new.overlays.taps
+        let audioChanged = old.audio != new.audio
+        let audioNeedsDerivation = audioChanged && !old.audio.hasSameDerivation(as: new.audio)
+        if derivePending || new.derived == nil || old.overlays.privacy != new.overlays.privacy || old.cursor != new.cursor || old.camera != new.camera || old.zoom != new.zoom || old.timeMap != new.timeMap
+            || audioNeedsDerivation || old.webcam != new.webcam || old.overlays.taps != new.overlays.taps
             || old.clips != new.clips || old.cropSettings != new.cropSettings || old.smartCrop != new.smartCrop || old.activity != new.activity
             || old.layouts != new.layouts || old.layoutSettings != new.layoutSettings
             || old.captions != new.captions
             || old.style.aspectRatio != new.style.aspectRatio || old.style.padding != new.style.padding
-            || old.style.paddingInsets != new.style.paddingInsets {
-            replan(remixAudio: old.audio != new.audio || old.timeMap != new.timeMap || old.clips != new.clips, debounce: coalesce)
-        } else { session.save(new) }
+            || old.style.paddingInsets != new.style.paddingInsets
+            || old.style.contentScale != new.style.contentScale {
+            replan(remixAudio: audioChanged || old.timeMap != new.timeMap || old.clips != new.clips, debounce: coalesce)
+        } else {
+            // Retain the existing immutable derived tracks on mix-only edits.
+            // Publish the new audio settings before restarting playback work.
+            session.save(new)
+            if audioChanged, !needsInitialMix {
+                invalidateAudio()
+                scheduleIdleMaster()
+            }
+        }
     }
 
     private func analyzeInBackground(_ snapshot: Timeline) {

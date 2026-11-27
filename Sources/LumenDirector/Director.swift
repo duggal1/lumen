@@ -90,7 +90,10 @@ public struct DeriveCache: Sendable {
 
     /// Same idea for the speed-ramp planner.
     struct RampKey: Equatable {
-        var audio: AudioPlan
+        // Only controls actually consumed by SpeedRamps.plan. Gain, sound
+        // selection and mastering must not invalidate the speed-ramp cache.
+        var minIdle: Double
+        var maxSpeed: Double
         var activity: ActivitySettings
         var signature: [Double]
         var vad: [ClosedRange<Double>]
@@ -213,7 +216,8 @@ public enum Director {
         // time map first: camera runs in output time
         if t.audio.speedRampsAuto {
             let manualRamps = tm.ramps.filter { $0.origin == .manual }
-            let rkey = DeriveCache.RampKey(audio: t.audio, activity: t.activity, signature: tm.sourceSignature,
+            let rkey = DeriveCache.RampKey(minIdle: t.audio.speedRampMinIdle, maxSpeed: t.audio.speedRampMaxSpeed,
+                                               activity: t.activity, signature: tm.sourceSignature,
                                            vad: input.vad, digest: digest, backing: src.backingScale)
             let planned: [SpeedRamp]
             if cache.rampKey == rkey, let cached = cache.ramps {

@@ -178,6 +178,8 @@ private final class MipCache {
     private var tick: UInt64 = 0
     private let capacity = 4
 
+    func invalidate() { entries.removeAll(keepingCapacity: true) }
+
     func texture(for f: SourceFrame, levels: Int, device: MTLDevice, cb: MTLCommandBuffer) -> MTLTexture? {
         tick &+= 1
         let w = f.texture.width, h = f.texture.height
@@ -279,7 +281,10 @@ public final class Renderer: @unchecked Sendable {
     /// allocation after warm-up, and no buffer shared between simultaneous frames.
     private var stateBuffers: [[FrameState]] = [[], [], []]
     private var slot = 0
-    private var work: [MTLTexture] = [], accum: [MTLTexture] = []
+    private var work: [MTLTexture] = []
+    // Motion-blur accumulation is only needed for multi-sample frames.
+    private var accum: [MTLTexture?] = [nil, nil, nil]
+    private let failedGPU = OSAllocatedUnfairLock(initialState: false)
     /// One blurred copy per in-flight slot, allocated only when a caption card
     /// is actually on screen. The caption pass may not sample the render
     /// target it is writing, so the scene is copied before the card is drawn.
@@ -558,30 +563,32 @@ public final class Renderer: @unchecked Sendable {
         return tex
     }
 
-    private func ensureTargets(_ s: SIMD2<Int>) {
-        guard s != size else { return }
+    private func makeSceneTarget(_ s: SIMD2<Int>) -> MTLTexture? {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float,
+            width: s.x, height: s.y, mipmapped: false)
+        d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
+        return device.makeTexture(descriptor: d)
+    }
+
+    private func ensureTargets(_ s: SIMD2<Int>) -> Bool {
+        guard s != size else { return true }
         // SMOOTHNESS: no GPU drain on a size change. Metal keeps every resource
         // an encoded command buffer touches alive until that buffer completes,
         // so the old targets stay valid on their own — waiting for them only
         // stalls the frame that triggered the resize.
-        func mk() -> MTLTexture? {
-            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float,
-                                                               width: s.x, height: s.y, mipmapped: false)
-            d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
-            return device.makeTexture(descriptor: d)
-        }
-        var w: [MTLTexture] = [], a: [MTLTexture] = []
+        var w: [MTLTexture] = []
         for _ in 0..<3 {
-            guard let t = mk(), let u = mk() else { return }
-            w.append(t); a.append(u)
+            guard let t = makeSceneTarget(s) else { return false }
+            w.append(t)
         }
-        guard let b = mk() else { return }
-        work = w; accum = a; backdrop = b
+        guard let b = makeSceneTarget(s) else { return false }
+        work = w; accum = [nil, nil, nil]; backdrop = b
         backdropKey = nil
         captionSrc = [nil, nil, nil]; blurA = [nil, nil, nil]; blurB = [nil, nil, nil]
         maskedSources = [nil, nil, nil]; maskKey = [nil, nil, nil]
         size = s
         fadePrev = nil; fadeMix = nil; fadeValid = false; fadeSize = s
+        return true
     }
 
     // MARK: Entry points
@@ -619,6 +626,13 @@ public final class Renderer: @unchecked Sendable {
 
     /// Export: renders into an IOSurface-backed BGRA8 or ARGB2101010 pixel buffer. `completion` fires when the GPU is done.
     public func render(_ r: RenderRequest, into pb: CVPixelBuffer, completion: @escaping @Sendable () -> Void = {}) -> Bool {
+        renderChecked(r, into: pb) { _ in completion() }
+    }
+
+    /// Distinguish successful submission from successful GPU execution.
+    /// Delivery paths must use this checked completion before publishing pixels.
+    public func renderChecked(_ r: RenderRequest, into pb: CVPixelBuffer,
+                              completion: @escaping @Sendable (Bool) -> Void) -> Bool {
         let fmt: MTLPixelFormat
         switch CVPixelBufferGetPixelFormatType(pb) {
         case kCVPixelFormatType_32BGRA: fmt = .bgra8Unorm
@@ -632,7 +646,10 @@ public final class Renderer: @unchecked Sendable {
               let cv, let tex = CVMetalTextureGetTexture(cv), let cb = queue.makeCommandBuffer() else { return false }
         guard encode(r, output: tex, commandBuffer: cb) else { return false }
         let keep = Keep(o: cv)
-        cb.addCompletedHandler { _ in withExtendedLifetime(keep) {}; completion() }
+        cb.addCompletedHandler { buffer in
+            withExtendedLifetime(keep) {}
+            completion(buffer.status == .completed)
+        }
         cb.commit(); return true
     }
 
@@ -648,15 +665,38 @@ public final class Renderer: @unchecked Sendable {
         // A non-finite request time must never reach timeline evaluation or a
         // shader uniform. Holding the frame at t=0 is the honest fallback.
         let t = r.t.isFinite ? r.t : 0
-        ensureTargets(cs)
         if wait { sem.wait() } else if sem.wait(timeout: .now()) != .success { return false }
+        guard ensureTargets(cs) else { sem.signal(); return false }
+        let invalidate = failedGPU.withLock { value -> Bool in
+            let old = value; value = false; return old
+        }
+        if invalidate {
+            backdropKey = nil; maskKey = [nil, nil, nil]; fadeValid = false
+            screenMip.invalidate(); webMip.invalidate()
+        }
         let s = slot; slot = (slot + 1) % 3
+        // A partially encoded but uncommitted frame must never publish cache
+        // metadata that claims the corresponding GPU writes happened.
+        var submitted = false
+        defer {
+            if !submitted {
+                backdropKey = nil; maskKey = [nil, nil, nil]; fadeValid = false
+                screenMip.invalidate(); webMip.invalidate()
+                sem.signal()
+            }
+        }
         let g = Geometry(canvas: cs, src: SIMD2(Double(r.screen.texture.width), Double(r.screen.texture.height)), style: tl.style)
 
         // SMOOTHNESS: the sub-frame states are evaluated once, up front. They
         // decide the mip depth of this frame, and the loop below reuses them
         // instead of re-evaluating the timeline per sample.
         let K = sampleCount(r, g)
+        var accumulation: MTLTexture?
+        if K > 1 {
+            if accum[s] == nil { accum[s] = makeSceneTarget(cs) }
+            guard let target = accum[s] else { return false }
+            accumulation = target
+        }
         let dt = 1 / max(r.fps, 1)
         let tiltMode = tl.camera.tilt
         stateBuffers[s].removeAll(keepingCapacity: true)
@@ -684,11 +724,11 @@ public final class Renderer: @unchecked Sendable {
         let levelsNeeded = minifAtRest <= 1 ? 1 : min(Int(ceil(log2(minifAtRest))) + 1, fullLevels)
         let needMips = levelsNeeded > 1 && (g.src.x / sMin) / g.content.z > 1.0
 
-        guard let bd = backdrop else { sem.signal(); return false }
+        guard let bd = backdrop else { return false }
         let srcTex: MTLTexture? = needMips
             ? screenMip.texture(for: r.screen, levels: levelsNeeded, device: device, cb: cb)
             : r.screen.texture
-        guard let srcTex else { sem.signal(); return false }
+        guard let srcTex else { return false }
         var webTex: MTLTexture?
         if tl.webcam != nil, let w = r.webcam {
             let bubbleW = tl.derived == nil
@@ -741,7 +781,8 @@ public final class Renderer: @unchecked Sendable {
             backdropKey = key
             let pd = MTLRenderPassDescriptor()
             pd.colorAttachments[0].texture = bd; pd.colorAttachments[0].loadAction = .dontCare; pd.colorAttachments[0].storeAction = .store
-            if let e = cb.makeRenderCommandEncoder(descriptor: pd) {
+            guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return false }
+            do {
                 e.setRenderPipelineState(pBackdrop)
                 quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
                 let st = tl.style
@@ -801,17 +842,18 @@ public final class Renderer: @unchecked Sendable {
             guard let protectedSource = maskedSource(srcTex, sourceID: r.screen.id, masks: st.emphasis.masks,
                                                        pixelSize: Float(tl.overlays.privacy.pixelSize),
                                                        levels: levelsNeeded, slot: s, cb: cb) else {
-                sem.signal(); return false
+                return false
             }
             let frameGeometry = hasLayout ? g.positioned(in: st.layout, contentScale: tl.style.contentScale) : g
             let screenOpacity = hasLayout ? min(max(st.layout.screenOpacity, 0), 1) : 1
-            scene(cb, into: work[s], slot: s, st: st, r: r, g: frameGeometry, screenOpacity: screenOpacity,
-                  subframes: K, src: protectedSource, web: webTex, matte: matte)
-            if K > 1 {
+            guard scene(cb, into: work[s], slot: s, st: st, r: r, g: frameGeometry, screenOpacity: screenOpacity,
+                  subframes: K, src: protectedSource, web: webTex, matte: matte) else { return false }
+            if let accumulation {
                 let pd = MTLRenderPassDescriptor()
-                pd.colorAttachments[0].texture = accum[s]; pd.colorAttachments[0].loadAction = i == 0 ? .clear : .load
+                pd.colorAttachments[0].texture = accumulation; pd.colorAttachments[0].loadAction = i == 0 ? .clear : .load
                 pd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0); pd.colorAttachments[0].storeAction = .store
-                if let e = cb.makeRenderCommandEncoder(descriptor: pd) {
+                guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return false }
+                do {
                     e.setRenderPipelineState(pAccum); quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
                     frag(e, AccU(weight: 1 / Float(K))); e.setFragmentTexture(work[s], index: 0)
                     e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); e.endEncoding()
@@ -823,7 +865,7 @@ public final class Renderer: @unchecked Sendable {
         // frame's incoming scene BEFORE the backdrop resolve, so both sides are
         // composited once and the dissolve is a real two-sided mix, not a fade
         // to black. `effectiveCrossfade` is the project-wide usable window.
-        let currentScene = K > 1 ? accum[s] : work[s]
+        let currentScene = accumulation ?? work[s]
         var sceneForResolve = currentScene
         let joinWeight = crossfadeWeight(tl, t)
         let frameInterval = 1 / max(r.fps, 1)
@@ -872,10 +914,11 @@ public final class Renderer: @unchecked Sendable {
         // 3. resolve
         let fmt = output.pixelFormat
         if pResolve[fmt] == nil { pResolve[fmt] = try? Self.pipe(device, lib, "resolveFS", fmt, 0) }
-        guard let pr = pResolve[fmt] else { sem.signal(); return false }
+        guard let pr = pResolve[fmt] else { return false }
         let pd = MTLRenderPassDescriptor()
         pd.colorAttachments[0].texture = output; pd.colorAttachments[0].loadAction = .dontCare; pd.colorAttachments[0].storeAction = .store
-        if let e = cb.makeRenderCommandEncoder(descriptor: pd) {
+        guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return false }
+        do {
             e.setRenderPipelineState(pr); quad(e, SIMD4(0, 0, canvasF.x, canvasF.y), canvasF)
             frag(e, ResU(levels: fmt == .bgr10a2Unorm ? 1023 : 255,
                          seed: UInt32(truncatingIfNeeded: Int(min(max(t * 1000, 0), 1e9))),
@@ -884,12 +927,15 @@ public final class Renderer: @unchecked Sendable {
             e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); e.endEncoding()
         }
         let sem = self.sem, keep = Keep(o: (r.screen, r.webcam)), cost = perSample, samples = Double(K)
+        let failedGPU = self.failedGPU
         cb.addCompletedHandler { b in
             withExtendedLifetime(keep) {}
+            if b.status != .completed { failedGPU.withLock { $0 = true } }
             let gpu = b.gpuEndTime - b.gpuStartTime
             if gpu > 0 { cost.withLock { $0 = $0 == 0 ? gpu / samples : $0 * 0.9 + 0.1 * gpu / samples } }
             sem.signal()
         }
+        submitted = true
         return true
     }
 
@@ -973,7 +1019,7 @@ public final class Renderer: @unchecked Sendable {
     }
 
     private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, slot: Int, st: FrameState, r: RenderRequest, g: Geometry,
-                       screenOpacity: Float, subframes: Int, src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) {
+                       screenOpacity: Float, subframes: Int, src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) -> Bool {
         let tl = r.timeline
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y)), content = SIMD4<Float>(g.content)
         let tiltMode = tl.camera.tilt
@@ -1041,7 +1087,7 @@ public final class Renderer: @unchecked Sendable {
         let pd = MTLRenderPassDescriptor()
         pd.colorAttachments[0].texture = tex; pd.colorAttachments[0].loadAction = .clear; pd.colorAttachments[0].storeAction = .store
         pd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return }
+        guard let e = cb.makeRenderCommandEncoder(descriptor: pd) else { return false }
         // After a scene copy the encoder is reopened; `enc` is the live one.
         var enc = e
         func draw() { enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
@@ -1153,9 +1199,8 @@ public final class Renderer: @unchecked Sendable {
                     rp.colorAttachments[0].texture = tex
                     rp.colorAttachments[0].loadAction = .load
                     rp.colorAttachments[0].storeAction = .store
-                    if let reopened = cb.makeRenderCommandEncoder(descriptor: rp) {
-                        enc = reopened; ringSource = cap
-                    }
+                    guard let reopened = cb.makeRenderCommandEncoder(descriptor: rp) else { return false }
+                    enc = reopened; ringSource = cap
                 }
             }
             enc.setRenderPipelineState(pRing)
@@ -1291,7 +1336,7 @@ public final class Renderer: @unchecked Sendable {
                 pd.colorAttachments[0].texture = tex
                 pd.colorAttachments[0].loadAction = .load
                 pd.colorAttachments[0].storeAction = .store
-                guard let reopened = cb.makeRenderCommandEncoder(descriptor: pd) else { return }
+                guard let reopened = cb.makeRenderCommandEncoder(descriptor: pd) else { return false }
                 encoder = reopened
             }
             if let cardTexture {
@@ -1321,6 +1366,7 @@ public final class Renderer: @unchecked Sendable {
         } else {
             enc.endEncoding()
         }
+        return true
     }
 
     private func maskedSource(_ source: MTLTexture, sourceID: UInt64, masks: [MaskFrame], pixelSize: Float,
@@ -1348,9 +1394,11 @@ public final class Renderer: @unchecked Sendable {
         }
         let key = UInt64(bitPattern: Int64(hasher.finalize()))
         if maskKey[slot] == key { return target }
-        maskKey[slot] = key
+        // Never cache a missing privacy copy or compute command.
+        maskKey[slot] = nil
         // 1. pure bandwidth copy: the frame outside every mask is unchanged.
-        if let blit = cb.makeBlitCommandEncoder() {
+        guard let blit = cb.makeBlitCommandEncoder() else { return nil }
+        do {
             blit.copy(from: source, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
                       sourceSize: MTLSize(width: source.width, height: source.height, depth: 1),
                       to: target, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
@@ -1383,7 +1431,11 @@ public final class Renderer: @unchecked Sendable {
                                     threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
         }
         encoder.endEncoding()
-        if levels > 1, let blit = cb.makeBlitCommandEncoder() { blit.generateMipmaps(for: target); blit.endEncoding() }
+        if levels > 1 {
+            guard let blit = cb.makeBlitCommandEncoder() else { return nil }
+            blit.generateMipmaps(for: target); blit.endEncoding()
+        }
+        maskKey[slot] = key
         return target
     }
 

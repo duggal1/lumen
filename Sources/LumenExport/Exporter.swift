@@ -25,12 +25,22 @@ public struct ExportProgress: Sendable {
 
 /// Await-able GPU completion.
 final class Latch: @unchecked Sendable {
-    private let s = OSAllocatedUnfairLock<(done: Bool, c: CheckedContinuation<Void, Never>?)>(uncheckedState: (false, nil))
-    func fire() { let c = s.withLock { st -> CheckedContinuation<Void, Never>? in st.done = true; let c = st.c; st.c = nil; return c }; c?.resume() }
-    func wait() async {
-        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            let now = s.withLock { st -> Bool in if st.done { return true }; st.c = c; return false }
-            if now { c.resume() }
+    private let s = OSAllocatedUnfairLock<(result: Bool?, c: CheckedContinuation<Bool, Never>?)>(uncheckedState: (nil, nil))
+    func fire(_ success: Bool) {
+        let c = s.withLock { st -> CheckedContinuation<Bool, Never>? in
+            guard st.result == nil else { return nil }
+            st.result = success; let c = st.c; st.c = nil; return c
+        }
+        c?.resume(returning: success)
+    }
+    func wait() async -> Bool {
+        await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+            let result = s.withLock { st -> Bool? in
+                if let result = st.result { return result }
+                precondition(st.c == nil, "GPU latch has one consumer")
+                st.c = c; return nil
+            }
+            if let result { c.resume(returning: result) }
         }
     }
 }
@@ -52,15 +62,26 @@ public enum FrameImage {
     /// One frame, fully rendered (CLI `frame`, GIF, cursor sidecar).
     public static func render(renderer: Renderer, session: ProjectSession, timeline tl: Timeline, t: Double, canvas: SIMD2<Int>,
                               fps: Double = 60, transparent: Bool = false, cursorOnly: Bool = false) async throws -> CVPixelBuffer {
-        let (sf, wf) = try await session.frames(atOutput: t, timeline: tl)
+        try await renderFrame(renderer: renderer, session: session, timeline: tl, t: t, canvas: canvas,
+                              fps: fps, transparent: transparent, cursorOnly: cursorOnly, reader: nil)
+    }
+
+    static func renderFrame(renderer: Renderer, session: ProjectSession, timeline tl: Timeline, t: Double, canvas: SIMD2<Int>,
+                            fps: Double = 60, transparent: Bool = false, cursorOnly: Bool = false,
+                            reader: ProjectFrameReader?) async throws -> CVPixelBuffer {
+        let (sf, wf): (SourceFrame, SourceFrame?)
+        if let reader { (sf, wf) = try await reader.frames(atOutput: t, timeline: tl) }
+        else { (sf, wf) = try await session.frames(atOutput: t, timeline: tl) }
         guard let pb = makeBuffer(canvas.x, canvas.y) else { throw ExportError.render }
         let latch = Latch()
         let req = RenderRequest(timeline: tl, t: t, screen: sf, webcam: wf, canvas: canvas, fps: fps,
                                 backingScale: session.meta.source.backingScale,
                                 personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true),
                                 transparent: transparent, cursorOnly: cursorOnly)
-        guard renderer.render(req, into: pb, completion: { latch.fire() }) else { throw ExportError.render }
-        await latch.wait(); return pb
+        guard renderer.renderChecked(req, into: pb, completion: { latch.fire($0) }) else { throw ExportError.render }
+        guard await latch.wait() else { throw ExportError.render }
+        try Task.checkCancellation()
+        return pb
     }
     /// Renders one frame and returns it as a CGImage so callers in isolated contexts
     /// never have to receive a non-Sendable CVPixelBuffer across an actor boundary.
@@ -133,6 +154,7 @@ public enum Exporter {
             throw ExportError.writer("This Mac cannot encode the selected resolution, frame rate and codec.")
         }
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
+        let reader = try await session.makeExportFrameReader()
         let h = preset.height, w = preset.width(aspect: aspect), fps = preset.fps
         let compositionDuration = tl.compositionDuration
         let total = max(Int(ceil(compositionDuration * Double(fps) - 1e-8)), 1)
@@ -144,12 +166,22 @@ public enum Exporter {
         // write overlap the render/encode loop and are joined before finalize.
         let audioPrep: Task<Bool, Error>? = includeAudio
             ? Task.detached(priority: .utility) {
-                guard let m = session.mixer.mix(tl) else { return false }
+                try Task.checkCancellation()
+                guard let m = session.mixer.mix(tl, cancelled: { Task.isCancelled }) else {
+                    try Task.checkCancellation()
+                    if session.mixer.hasProgram(tl) { throw ExportError.writer("Audio mix failed.") }
+                    return false
+                }
+                try Task.checkCancellation()
                 try AudioIO.writeCAF(m.l, m.r, to: caf)
+                try Task.checkCancellation()
                 return true
               }
             : nil
 
+        // A detached DSP worker must be joined before the temporary CAF is
+        // removed, including on GPU failure or user cancellation.
+        do {
         // Render into the destination directory and publish only after success.
         // Cancellation or an encoder error must not erase the previous export.
         let stagedURL = url.deletingLastPathComponent().appendingPathComponent(".lumen-export-\(UUID().uuidString).\(url.pathExtension)")
@@ -198,7 +230,8 @@ public enum Exporter {
             let ai = AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48000,
                                                                                AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: max(64_000, min(audioBitrate, 320_000))])
             ai.expectsMediaDataInRealTime = false
-            if writer.canAdd(ai) { writer.add(ai); audioInput = ai }
+            guard writer.canAdd(ai) else { throw ExportError.writer("cannot add requested audio input") }
+            writer.add(ai); audioInput = ai
         }
         guard writer.startWriting() else { throw ExportError.writer(writer.error?.localizedDescription ?? "startWriting failed") }
         writer.startSession(atSourceTime: .zero)
@@ -209,7 +242,8 @@ public enum Exporter {
             let waitStart = HostClock.now()
             os_signpost(.begin, log: exportLog, name: "export.encode.wait")
             let gpuStart = HostClock.now()
-            await item.0.wait()
+            guard await item.0.wait() else { throw ExportError.render }
+            try Task.checkCancellation()
             gpuWaitSeconds += HostClock.now() - gpuStart
             let encoderStart = HostClock.now()
             while !vi.isReadyForMoreMediaData {
@@ -237,7 +271,7 @@ public enum Exporter {
             let t = Double(i) / Double(fps)
             let readStart = HostClock.now()
             os_signpost(.begin, log: exportLog, name: "export.decode")
-            let (sf, wf) = try await session.frames(atOutput: t, timeline: tl)
+            let (sf, wf) = try await reader.frames(atOutput: t, timeline: tl)
             os_signpost(.end, log: exportLog, name: "export.decode")
             decodeSeconds += HostClock.now() - readStart
             var pbo: CVPixelBuffer?
@@ -250,9 +284,9 @@ public enum Exporter {
                                     transparent: preset.alpha)
             let compositeStart = HostClock.now()
             os_signpost(.begin, log: exportLog, name: "export.composite")
-            guard renderer.render(req, into: pb, completion: {
+            guard renderer.renderChecked(req, into: pb, completion: { success in
                 os_signpost(.event, log: exportLog, name: "export.gpu.done")
-                latch.fire()
+                latch.fire(success)
             }) else { throw ExportError.render }
             os_signpost(.end, log: exportLog, name: "export.composite")
             compositeSeconds += HostClock.now() - compositeStart
@@ -287,7 +321,7 @@ public enum Exporter {
                         try await Task.sleep(for: .milliseconds(10))
                     }
                     if let failure = feeder.result.failure { throw ExportError.writer(failure) }
-                } else { ai.markAsFinished() }
+                } else { throw ExportError.writer("Mixed audio could not be read.") }
             } else { audioInput?.markAsFinished() }
         }
         let finishStart = HostClock.now()
@@ -354,6 +388,11 @@ public enum Exporter {
                                  max(0, elapsed - decodeSeconds - compositeSeconds - encodeWaitSeconds - mixSeconds - finishSeconds))
             FileHandle.standardError.write(Data(message.utf8))
         }
+        } catch {
+            audioPrep?.cancel()
+            _ = try? await audioPrep?.value
+            throw error
+        }
     }
 
     /// Cursor-only movie with an alpha channel, for editors that want the
@@ -366,6 +405,7 @@ public enum Exporter {
         let staged = url.deletingLastPathComponent().appendingPathComponent(".lumen-cursor-\(UUID().uuidString).mov")
         defer { try? FileManager.default.removeItem(at: staged) }
         let writer = try AVAssetWriter(outputURL: staged, fileType: .mov)
+        defer { if writer.status != .completed { writer.cancelWriting() } }
         let vi = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.proRes4444, AVVideoWidthKey: w, AVVideoHeightKey: h,
             AVVideoCompressionPropertiesKey: [AVVideoExpectedSourceFrameRateKey: fps]])
@@ -381,10 +421,11 @@ public enum Exporter {
         writer.startSession(atSourceTime: .zero)
         guard let pool = adaptor.pixelBufferPool else { throw ExportError.writer("no cursor layer buffer pool") }
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
+        let reader = try await session.makeExportFrameReader()
         for i in 0..<total {
             try Task.checkCancellation()
             let t = Double(i) / Double(fps)
-            let (sf, _) = try await session.frames(atOutput: t, timeline: tl)
+            let (sf, _) = try await reader.frames(atOutput: t, timeline: tl)
             var pbo: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pbo)
             guard let pb = pbo else { throw ExportError.render }
@@ -393,8 +434,9 @@ public enum Exporter {
                                     backingScale: session.meta.source.backingScale,
                                     personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true),
                                     transparent: true, cursorOnly: true)
-            guard renderer.render(req, into: pb, completion: { latch.fire() }) else { throw ExportError.render }
-            await latch.wait()
+            guard renderer.renderChecked(req, into: pb, completion: { latch.fire($0) }) else { throw ExportError.render }
+            guard await latch.wait() else { throw ExportError.render }
+            try Task.checkCancellation()
             while !vi.isReadyForMoreMediaData {
                 try Task.checkCancellation()
                 guard writer.status == .writing else { throw ExportError.writer(writer.error?.localizedDescription ?? "cursor layer stopped") }
@@ -410,6 +452,7 @@ public enum Exporter {
         vi.markAsFinished()
         await writer.finishWriting()
         if writer.status != .completed { throw ExportError.writer(writer.error?.localizedDescription ?? "cursor layer export failed") }
+        try Task.checkCancellation()
         if FileManager.default.fileExists(atPath: url.path) {
             _ = try FileManager.default.replaceItemAt(url, withItemAt: staged)
         } else {
@@ -424,13 +467,14 @@ public enum Exporter {
         let w = 800, h = (Int((Double(w) / tl.style.aspectRatio).rounded()) + 1) & ~1, fps = 15
         let total = max(Int(ceil(tl.compositionDuration * Double(fps) - 1e-8)), 1)
         let renderer = try Renderer(); renderer.setCustomCursors(session.cursors)
+        let reader = try await session.makeExportFrameReader()
         let staged = url.deletingLastPathComponent().appendingPathComponent(".lumen-gif-\(UUID().uuidString).gif")
         defer { try? FileManager.default.removeItem(at: staged) }
         guard let dest = CGImageDestinationCreateWithURL(staged as CFURL, UTType.gif.identifier as CFString, total, nil) else { throw ExportError.writer("gif") }
         CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
         for i in 0..<total {
             try Task.checkCancellation()
-            let pb = try await FrameImage.render(renderer: renderer, session: session, timeline: tl, t: Double(i) / Double(fps), canvas: SIMD2(w, h), fps: Double(fps))
+            let pb = try await FrameImage.renderFrame(renderer: renderer, session: session, timeline: tl, t: Double(i) / Double(fps), canvas: SIMD2(w, h), fps: Double(fps), reader: reader)
             guard let img = FrameImage.cgImage(pb) else { throw ExportError.render }
             CGImageDestinationAddImage(dest, img, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(fps)]] as CFDictionary)
             progress(ExportProgress(frame: i + 1, total: total, notice: nil))
