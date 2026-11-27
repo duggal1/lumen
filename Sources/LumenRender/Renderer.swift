@@ -67,6 +67,39 @@ public struct Geometry: Sendable {
         result.content = SIMD4(center.x - size.x / 2, center.y - size.y / 2, size.x, size.y)
         return result
     }
+    /// Spend part of the existing camera magnification on the screen frame.
+    /// Multiplying frame growth by the remaining optical zoom preserves the
+    /// Director's requested magnification. Canvas and webcam stay independent.
+    func framing(_ state: FrameState) -> (geometry: Geometry, zoom: Double) {
+        let zoom = state.cameraScale.isFinite ? max(Double(state.cameraScale), 1) : 1
+        guard zoom > 1, state.layoutKind != .split, state.layoutKind != .cameraFullscreen,
+              content.z > 0, content.w > 0 else { return (self, zoom) }
+        let crop = state.crop.isValid ? state.crop : (state.cropRect.isEmpty
+            ? PxRect(x: 0, y: 0, w: src.x, h: src.y)
+            : PxRect(x: state.cropRect.minX, y: state.cropRect.minY,
+                     w: state.cropRect.width, h: state.cropRect.height))
+        let view = CropSpace.baseView(crop: crop, aspect: content.z / content.w)
+        let center = Self.containedCenter(SIMD2<Double>(state.cameraCenter), crop: crop,
+                                          aspect: content.z / content.w, scale: zoom)
+        let travel = 1 - 1 / zoom
+        func weight(_ coordinate: Double, _ midpoint: Double, _ extent: Double) -> Double {
+            min(max(0.5 + (coordinate - midpoint) / max(extent * travel, 0.000001), 0), 1)
+        }
+        let right = weight(center.x, crop.cx, view.w)
+        let bottom = weight(center.y, crop.cy, view.h)
+        // One gutter of travel keeps some context on the opposite edge.
+        let gutterX = max(content.x, canvas.x - content.x - content.z)
+        let gutterY = max(content.y, canvas.y - content.y - content.w)
+        let growth = min(sqrt(zoom), 1 + max(0, gutterX / content.z, gutterY / content.w))
+        let dw = content.z * (growth - 1), dh = content.w * (growth - 1)
+        var framed = self
+        framed.content = SIMD4(content.x - dw * (1 - right), content.y - dh * (1 - bottom),
+                               content.z * growth, content.w * growth)
+        framed.radius *= growth
+        framed.radii *= growth
+        return (framed, zoom / growth)
+    }
+
     /// Contained camera centre: the sampled view (`baseView / scale`, where the
     /// base view is the largest rect of `aspect` inside the crop) stays inside
     /// the crop — and therefore inside the source. A no-op for a feasible
@@ -770,7 +803,8 @@ public final class Renderer: @unchecked Sendable {
         let pointer = dither && r.quality == .preview ? r.pointer : .zero
         let hasLayout = r.live == nil && tl.derived?.layout.samples.isEmpty == false && tl.clipSource(atOutput: t) == nil
         let layout = hasLayout ? states[states.count / 2].layout : nil
-        let shadowRect = layout.map { g.positioned(in: $0, contentScale: tl.style.contentScale).content } ?? g.content
+        let shadowGeometry = (layout.map { g.positioned(in: $0, contentScale: tl.style.contentScale) } ?? g).framing(states[states.count / 2]).geometry
+        let shadowRect = shadowGeometry.content
         let shadowOpacity = Float(tl.style.shadow) * (layout.map { min(max($0.screenOpacity, 0), 1) } ?? 1)
         let key = BackdropKey(style: tl.style, size: cs,
                               wall: tl.style.background == .wallpaper ? a.wallID : (tl.style.background == .image ? a.styleImageID : ""),
@@ -820,7 +854,7 @@ public final class Renderer: @unchecked Sendable {
                 if hasStyleImage, let styleImage = a.styleImage?.tex { e.setFragmentTexture(styleImage, index: 0) }
                 frag(e, BackdropU(content: SIMD4<Float>(shadowRect), canvas: canvasF, angle: Float(st.gradientAngle * .pi / 180),
                                   count: Int32(colorCount), kind: kind, canvasStyle: canvasStyle,
-                                  radius: Float(g.radius), shadow: shadowOpacity, scale: Float(g.ui * 1.33),
+                                  radius: Float(shadowGeometry.radius), shadow: shadowOpacity, scale: Float(g.ui * 1.33),
                                   cell: Float(max(2, st.ditherCell * g.ui)), density: Float(st.ditherDensity),
                                   hasWall: (st.background == .wallpaper && a.wall != nil) || hasStyleImage ? 1 : 0,
                                   time: Float(backgroundTime), pointer: pointer,
@@ -1018,19 +1052,15 @@ public final class Renderer: @unchecked Sendable {
         return min(blurK, cap)
     }
 
-    private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, slot: Int, st: FrameState, r: RenderRequest, g: Geometry,
+    private func scene(_ cb: MTLCommandBuffer, into tex: MTLTexture, slot: Int, st: FrameState, r: RenderRequest, g placement: Geometry,
                        screenOpacity: Float, subframes: Int, src: MTLTexture, web: MTLTexture?, matte: PersonMatteSequence.Pair?) -> Bool {
+        let (g, sc) = placement.framing(st)
         let tl = r.timeline
         let canvasF = SIMD2<Float>(Float(g.canvas.x), Float(g.canvas.y)), content = SIMD4<Float>(g.content)
         let tiltMode = tl.camera.tilt
         let tilt = CameraTilt.effective(st.cameraTilt, mode: tiltMode,
                                         maxYaw: tl.camera.maxYaw,
                                         maxPitch: tl.camera.maxPitch)
-        let sc = st.cameraScale.isFinite ? max(Double(st.cameraScale), 1) : 1
-        // The camera NEVER scales the content rect. Reveal's entrance shrink is
-        // gone from the renderer entirely (it was the reported "shrink"); the
-        // drawn rect is always `content`, and the .off (default) path applies
-        // no warp, no tilt and no extra scale — a pure viewport magnification.
         let contentRect = content
         // Browser-content crop: the dense AXWebArea track is authoritative; a
         // legacy Area crop is the fallback, then the full source. The Director

@@ -114,7 +114,7 @@ public struct Style: Codable, Equatable, Sendable {
     public var ditherCell: Double = 4, ditherDensity: Double = 0.55, contentScale: Double = 1
     public var ditherSaturation = true
     public var padding: Double = 0.025
-    public var cornerRadius: Double = 14
+    public var cornerRadius: Double = 18
     public var shadow: Double = 0.45
     public var innerBorder = true
     public var canvas: CanvasAspect = .r16x9

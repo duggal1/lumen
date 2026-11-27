@@ -61,8 +61,9 @@ public struct ZoomTransform: Sendable {
 
         self.source = source
         canvas = placed.canvas
-        videoRect = placed.content
-        scale = state.cameraScale.isFinite ? max(Double(state.cameraScale), 1) : 1
+        let framing = placed.framing(state)
+        videoRect = framing.geometry.content
+        scale = framing.zoom
         cameraCenter = Geometry.containedCenter(timeline.derived == nil ? source / 2 : SIMD2<Double>(state.cameraCenter),
                                                  crop: crop, aspect: aspect, scale: scale)
         baseSize = SIMD2(base.w, base.h)

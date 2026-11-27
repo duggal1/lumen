@@ -56,18 +56,11 @@ import LumenCapture
         #expect(r == nil, "\(String(describing: r))")
     }
 
-    /// A web area whose aspect is ~2.5× the source aspect gets aspect-fitted:
-    /// the crop rect carries the source aspect.
-    @Test func aspectFitAppliesWhenRectIsNotSourceAspect() {
+    @Test func widePageExcludesChromeAndPreservesBothSidebars() {
         let web = PxRect(x: 100, y: 100, w: 800, h: 300)
-        let samples = Self.makeSamples(0, 10, web: web, window: PxRect(x: 0, y: 0, w: 1920, h: 1080))
-        let p = Self.plan(samples)
-        let r = p.track.rect(at: 5)
-        let expected = SmartCropPlanner.aspectFit(PxRect(x: 102, y: 102, w: 796, h: 296), source: Self.source)
-        #expect(abs(r.x - expected.x) < 0.5 && abs(r.y - expected.y) < 0.5 &&
-                abs(r.w - expected.w) < 0.5 && abs(r.h - expected.h) < 0.5,
-                "\(r) != \(expected)")
-        #expect(abs(r.aspect - 1.7778) < 0.02, "\(r.aspect)")
+        let samples = Self.makeSamples(0, 10, web: web, window: Self.source)
+        let actual = Self.plan(samples).track.rect(at: 5)
+        #expect(actual == PxRect(x: 102, y: 102, w: 796, h: 296))
     }
 
     /// A web area already within 0.5% of the source aspect passes through
@@ -92,16 +85,21 @@ import LumenCapture
                 abs(r.w - 1916) < 1 && abs(r.h - 1076) < 1, "\(r)")
     }
 
-    /// A wide web area (wider than the source aspect) is fitted to the source
-    /// aspect and clamped into the source.
     @Test func wideWebContentIsClampedIntoSource() {
         let web = PxRect(x: 0, y: 0, w: 2400, h: 900)
-        let samples = Self.makeSamples(0, 10, web: web, window: PxRect(x: 0, y: 0, w: 1920, h: 1080))
-        let r = Self.plan(samples).track.rect(at: 5)
-        #expect(r.maxX <= 1920.5 && r.maxY <= 1080.5, "\(r)")
-        #expect(abs(r.x - 0) < 0.5 && abs(r.y - 0) < 0.5 &&
-                abs(r.w - 1920) < 0.5 && abs(r.h - 1080) < 0.5, "\(r)")
-        #expect(abs(r.aspect - 1.7778) < 0.02, "\(r.aspect)")
+        let samples = Self.makeSamples(0, 10, web: web, window: Self.source)
+        #expect(Self.plan(samples).track.rect(at: 5) == PxRect(x: 2, y: 2, w: 1918, h: 896))
+    }
+
+    @Test func singleAddressBarKeyRevealsChromeUnderDefaultPolicy() {
+        let page = PxRect(x: 0, y: 90, w: 1920, h: 990)
+        var samples = Self.makeSamples(0, 8, web: page, window: Self.source)
+        for i in samples.indices { samples[i].ui = (2...2.5).contains(samples[i].t) }
+        let plan = CropPlanner.plan(samples: samples, inputs: CropInputs(keys: [2.1], uiClicks: []),
+                                    duration: 8, source: Self.source, settings: CropSettings())
+        #expect(plan.track.rect(at: 1).y > 89)
+        #expect(plan.track.rect(at: 2.6).y < 1)
+        #expect(plan.track.rect(at: 6).y > 89)
     }
 
     /// Manual override: `CropSettings.overrides` produce `.window` spans in the
@@ -119,7 +117,7 @@ import LumenCapture
     }
 
     /// Multi-display: crops computed for a display whose coords are the source
-    /// origin stay within the source and carry the source aspect.
+    /// origin preserve the visible page bounds.
     @Test func multiDisplayCropsStayInSource() {
         let window = PxRect(x: 60, y: 30, w: 1200, h: 800)
         let web = PxRect(x: 100, y: 50, w: 1000, h: 400)
@@ -127,7 +125,7 @@ import LumenCapture
         let r = Self.plan(samples, source: Self.source).track.rect(at: 5)
         #expect(r.isValid, "\(r)")
         #expect(r.x >= -0.5 && r.y >= -0.5 && r.maxX <= 1920.5 && r.maxY <= 1080.5, "\(r)")
-        #expect(abs(r.aspect - 1.7778) < 0.03, "\(r.aspect)")
+        #expect(abs(r.aspect - 996.0 / 396.0) < 0.001, "\(r.aspect)")
     }
 
     /// Jitter on the web rect must not produce jumping crops: the track is
