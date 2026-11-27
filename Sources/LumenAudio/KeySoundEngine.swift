@@ -99,7 +99,12 @@ public struct KeySoundLibrary: Sendable {
                 return result
             }
             let exactDown = convert(down, phase: .down)
-            guard !exactDown.isEmpty else { continue }
+            // A corrupt or partial local pack must not replace a usable
+            // keyboard. Require the actual letter keys and basic editing keys.
+            let required = Set(TypingPackLoader.macToMechvibes.compactMap { code, name in
+                name.hasPrefix("Key") || ["Space", "Enter", "Backspace"].contains(name) ? code : nil
+            })
+            guard required.isSubset(of: Set(exactDown.keys)) else { continue }
             library.exactDown = exactDown
             library.exactUp = convert(TypingPackLoader.releaseBuffers(in: dir), phase: .up)
             break
@@ -118,10 +123,19 @@ public struct KeySoundLibrary: Sendable {
                 take.samples.withUnsafeBytes { hash.update(bufferPointer: $0) }
             }
         }
+        for tone in ClickSound.activeCollection {
+            if let take = clickTake(tone) {
+                hash.update(data: Data("\(tone.rawValue)|\(take.id)|\(take.samples.count)".utf8))
+                take.samples.withUnsafeBytes { hash.update(bufferPointer: $0) }
+            }
+        }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    public var isEmpty: Bool { down.isEmpty && clicks.isEmpty && studioClicks.isEmpty }
+    public var isEmpty: Bool {
+        let noKeys = usesExactKeys ? exactDown.isEmpty && exactUp.isEmpty : down.isEmpty && up.isEmpty
+        return noKeys && clicks.isEmpty && studioClicks.isEmpty
+    }
 
     public init() {}
 

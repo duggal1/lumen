@@ -18,7 +18,7 @@ import LumenProject
         #expect(peak > 0.5)
         #expect(gain == 0)
     }
-    // A recorded tap is bundled as the fallback when a typing pack sample is unavailable.
+    // Production uses the actual A-key recording, not a generic tap fallback.
     let (keySamples, _) = bank.render(.key, clickTone: .mouse)
     #expect(!keySamples.isEmpty)
     #expect(keySamples.reduce(Float(0)) { max($0, abs($1)) } > 0.0001)

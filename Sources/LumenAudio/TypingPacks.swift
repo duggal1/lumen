@@ -154,11 +154,19 @@ public enum TypingPackLoader {
     }
 
     private static func v2Buffers(_ pack: KeyPack, in packDir: URL, release: Bool = false) -> [Int: AVAudioPCMBuffer] {
-        guard let name = pack.audio_file else { return [:] }
-        guard let f = try? AVAudioFile(forReading: packDir.appendingPathComponent(name)) else { return [:] }
+        guard let name = pack.audio_file, !name.isEmpty,
+              name == URL(fileURLWithPath: name).lastPathComponent,
+              name != ".", name != ".." else { return [:] }
+        let audioURL = packDir.appendingPathComponent(name)
+        let root = packDir.resolvingSymlinksInPath().standardizedFileURL
+        guard audioURL.resolvingSymlinksInPath().standardizedFileURL.deletingLastPathComponent() == root,
+              let f = try? AVAudioFile(forReading: audioURL) else { return [:] }
         var out: [Int: AVAudioPCMBuffer] = [:]
         for (keyName, value) in pack.definitions {
-            guard let def = value, let slice = release ? def.upSlice : def.downSlice, let mac = mechvibesToMac[keyName] else { continue }
+            guard let def = value, let slice = release ? def.upSlice : def.downSlice,
+                  slice.duration <= 2000, let mac = mechvibesToMac[keyName] else { continue }
+            if release, let down = def.downSlice,
+               slice.start < down.start + down.duration { continue }
             if let buf = try? sliceBuffer(f, startMs: slice.start, durMs: slice.duration) { out[mac] = trimmedToAttack(buf) }
         }
         // Fn (mac 63) has no W3C code upstream. Give it a real recorded modifier sound

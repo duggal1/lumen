@@ -375,9 +375,8 @@ public enum ClickSound: String, Codable, CaseIterable, Sendable {
         Self.activeCollection.contains(self) ? self : .fresh
     }
 
-    /// Studio tiles resolve from the Audio bundle. Legacy tone names resolve
-    /// from the canonical 48 kHz `Sounds` catalog; the retired MP3/touch files
-    /// are no longer shipped or loaded.
+    /// Active retro tones resolve from the Audio bundle; all other persisted
+    /// click IDs migrate to the single approved Fresh recording.
     public var assetPath: String {
         switch self {
         case .studioCrisp: "cursor-clicks/crisp.wav"

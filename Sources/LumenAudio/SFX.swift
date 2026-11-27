@@ -1,7 +1,7 @@
 import Foundation
 import LumenProject
 
-/// Inspector audition and offline export share the same selected recording.
+/// Inspector audition and offline export share the same selected effect.
 public struct SFXBank: Sendable {
     public init() {}
 

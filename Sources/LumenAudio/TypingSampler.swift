@@ -88,9 +88,12 @@ public final class TypingSampler {
     /// Load the prepared CC0 library. Missing files degrade to silence; no
     /// oscillator or procedural sound is ever generated.
     public func loadCC0Library(_ library: KeySoundLibrary = KeySoundLibraryCache.shared) {
-        for keyClass in KeyClass.allCases where keyClass != .click {
-            cc0Down[keyClass] = library.takes(keyClass, .down).compactMap { buffer($0.samples) }
-            cc0Up[keyClass] = library.takes(keyClass, .up).compactMap { buffer($0.samples) }
+        cc0Down.removeAll(); cc0Up.removeAll()
+        if !library.usesExactKeys {
+            for keyClass in KeyClass.allCases where keyClass != .click {
+                cc0Down[keyClass] = library.takes(keyClass, .down).compactMap { buffer($0.samples) }
+                cc0Up[keyClass] = library.takes(keyClass, .up).compactMap { buffer($0.samples) }
+            }
         }
         recordedLibrary = library
         router = KeyVariationRouter()

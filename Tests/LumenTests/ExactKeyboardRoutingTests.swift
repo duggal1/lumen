@@ -23,3 +23,14 @@ import LumenProject
     #expect(output.l[960] == -0.25)
     #expect(output.l[1440] == 0)
 }
+
+@Test func productionKeyboardUsesRealExactMechvibesKeys() throws {
+    let library = KeySoundLibrary.loadProduction()
+    #expect(library.usesExactKeys)
+    let a = try #require(library.takes(keyCode: 0, phase: .down).first)
+    let s = try #require(library.takes(keyCode: 1, phase: .down).first)
+    #expect(a.id != s.id)
+    #expect(a.samples != s.samples)
+    #expect(library.takes(keyCode: 10000, phase: .down).isEmpty)
+    #expect(library.takes(keyCode: 10000, phase: .up).isEmpty)
+}
