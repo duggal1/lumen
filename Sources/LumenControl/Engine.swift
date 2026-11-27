@@ -724,31 +724,32 @@ public actor Engine {
         let gpuLane = self.gpuLane
         return jobs.start(kind: "export") { reporter in
             try await gpuLane.withPermit {
-                var finished = false
-                let staging = output.deletingLastPathComponent()
-                    .appendingPathComponent(".lumen-\(UUID().uuidString)-\(output.lastPathComponent)")
+                let directory = output.deletingLastPathComponent()
+                    .appendingPathComponent(".lumen-\(UUID().uuidString)", isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+                var keepRecoveryFiles = false
                 defer {
-                    // AGENT: a cancelled or failed export must not leave a partial movie that looks complete.
-                    if !finished || Task.isCancelled { try? FileManager.default.removeItem(at: staging) }
+                    if !keepRecoveryFiles { try? FileManager.default.removeItem(at: directory) }
                 }
+                let staging = directory.appendingPathComponent(output.lastPathComponent)
                 await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
                 try await Exporter.run(session: session, timeline: timeline, preset: preset, to: staging,
                                        includeAudio: includeAudio, exportStems: exportStems) { progress in
                     reporter.progress(progress.total > 0 ? Double(progress.frame) / Double(progress.total) : 0,
                                       progress.notice)
                 }
-                let proof = try await AgentExportProof.verify(staging, expectedDuration: timeline.compositionDuration, fps: Double(preset.fps), expectsAudio: includeAudio && session.mixer.hasProgram(timeline))
-                try Task.checkCancellation()
-                if FileManager.default.fileExists(atPath: output.path) {
-                    guard overwrite else {
-                        throw ToolError(code: "EXPORT_OUTPUT_EXISTS", hint: "The output path appeared during export; choose another path.")
-                    }
-                    _ = try FileManager.default.replaceItemAt(output, withItemAt: staging)
-                } else {
-                    try FileManager.default.moveItem(at: staging, to: output)
+                let proof = try await AgentExportProof.verify(staging, expectedDuration: timeline.compositionDuration,
+                    fps: preset.fps, expectsAudio: includeAudio && session.mixer.hasProgram(timeline),
+                    expectedSize: CGSize(width: preset.width(aspect: timeline.style.aspectRatio), height: preset.height))
+                let stems: [URL]
+                do {
+                    stems = try AgentExportProof.publish(staging, to: output, overwrite: overwrite)
+                } catch let failure as ToolError where failure.code == "EXPORT_RECOVERY_REQUIRED" {
+                    keepRecoveryFiles = true
+                    throw failure
                 }
-                finished = true
-                return .object(["output": .string(output.path), "verification": proof])
+                return .object(["output": .string(output.path), "verification": proof,
+                                "stems": .array(stems.map { .string($0.path) })])
             }
         }
     }

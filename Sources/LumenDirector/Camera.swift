@@ -43,6 +43,7 @@ enum CameraSolver {
                       src: SIMD2<Double>, outDur: Double, loop: Double?,
                       crop: DenseCropTrack = DenseCropTrack(), aspect: Double? = nil,
                       kinds: [UUID: ZoomPlanner.IntentKind] = [:],
+                      protectedVisual: Set<UUID> = [],
                       follow: [UUID: [(t: Double, c: SIMD2<Double>)]],
                       cancelled: () -> Bool) -> CameraTrack? {
         guard outDur.isFinite, outDur > 0, src.x.isFinite, src.y.isFinite, src.x > 0, src.y > 0 else {
@@ -52,7 +53,8 @@ enum CameraSolver {
         let ctx = Context(rate: cameraRate, n: max(Int(outDur * cameraRate) + 1, 2), src: src,
                           cropAtTick: denseCropTicks(crop, tm: tm, rate: cameraRate, outDur: outDur, src: src),
                           aspect: aspect, p: p)
-        let scenes = buildScenes(zoom: zoom, tm: tm, ctx: ctx, kinds: kinds, follow: follow)
+        let scenes = buildScenes(zoom: zoom, tm: tm, ctx: ctx, kinds: kinds,
+                                 protectedVisual: protectedVisual, follow: follow)
         if scenes.isEmpty, p.tilt != .reveal { return CameraTrack(count: 2, rate: cameraRate) }
         return solveScenes(scenes, context: ctx, cursor: cursor, params: p, loop: loop,
                            kinds: kinds, cancelled: cancelled)
@@ -242,6 +244,7 @@ enum CameraSolver {
         var segment: ZoomSegment
         var path: [(t: Double, c: SIMD2<Double>)]
         var chainStart: Bool // true: this shot starts a fresh chain
+        var protectedHold: Bool = false
     }
 
     private struct Context {
@@ -344,6 +347,7 @@ enum CameraSolver {
 
     private static func buildScenes(zoom: [ZoomSegment], tm: TimeMap, ctx: Context,
                                     kinds: [UUID: ZoomPlanner.IntentKind],
+                                    protectedVisual: Set<UUID>,
                                     follow: [UUID: [(t: Double, c: SIMD2<Double>)]]) -> [Scene] {
         func leadFor(_ ease: Double) -> Double { clamp(ctx.leadBase / max(ease, 0.55), 0.20, 1.6) }
         func manualRise(_ ease: Double) -> Double { clamp(0.9 / max(ease, 0.3), 0.25, 2.0) }
@@ -353,11 +357,17 @@ enum CameraSolver {
         // whether a longer anticipation has room. Also protects manual edits.
         var previousEnds = [Double](repeating: tm.trimStart, count: finiteZoom.count)
         var previousEnd = tm.trimStart
+        var precedingProtected = [Double?](repeating: nil, count: finiteZoom.count)
+        var previousProtectedEnd: Double?
         for (index, z) in finiteZoom.enumerated().sorted(by: {
             ($0.element.start, $0.offset) < ($1.element.start, $1.offset)
         }) {
             previousEnds[index] = previousEnd
+            precedingProtected[index] = previousProtectedEnd
             previousEnd = max(previousEnd, z.end)
+            if z.origin == .auto, protectedVisual.contains(z.id) {
+                previousProtectedEnd = max(previousProtectedEnd ?? z.end, z.end)
+            }
         }
         // Total (on, lz, offset) order keeps the bake bit-for-bit stable.
         return finiteZoom.enumerated().compactMap { offset, z -> (Int, Scene)? in
@@ -396,10 +406,17 @@ enum CameraSolver {
                 lead = max(lead, min(desired, gap - 0.30, limit))
             }
             let settle = z.origin == .auto ? min(clamp(0.11 / max(ease, 0.6), 0.06, 0.18), 0.35 * lead) : 0
-            let on = z.origin == .auto ? max(a - lead - settle, 0) : a
+            var on = z.origin == .auto ? max(a - lead - settle, 0) : a
+            // Ordinary cinematic look-ahead must never steal a confirmed
+            // response's reading interval. The successor can begin its
+            // existing smooth move only once that interval is over.
+            if z.origin == .auto, let end = precedingProtected[offset], end <= z.start {
+                on = max(on, tm.output(atSource: end))
+            }
             let omega = clamp(min(clamp(ctx.omegaZoomBase * ease, 2, 40), safeZoomOmega(lz, rate: ctx.rate)), 2, 40)
             return (offset, Scene(on: on, off: max(b, event + 0.02), event: event, lz: lz, omega: omega,
-                                  center: center, segment: z, path: path, chainStart: true))
+                                  center: center, segment: z, path: path, chainStart: true,
+                                  protectedHold: z.origin == .auto && protectedVisual.contains(z.id)))
         }
         .sorted { ($0.1.on, $0.1.lz, $0.0) < ($1.1.on, $1.1.lz, $1.0) }
         .map(\.1)
@@ -420,20 +437,24 @@ enum CameraSolver {
             let gap = baked[i].segment.start - baked[i - 1].segment.end
             let far = gap > mergeHorizon
             let runOver = baked[i].segment.start - chainStart >= chainLimit
-            if far || runOver {
+            // A long held response does not require a forced zoom-out
+            // immediately before its next subject. Bridge at the boundary.
+            let protectedPredecessor = baked[i - 1].protectedHold
+            if far || (runOver && !protectedPredecessor) {
                 baked[i].chainStart = true
                 chainStart = baked[i].segment.start
                 // Lead-ins overlap the previous shot's tail in a dense chain,
                 // so `activeAt` never goes idle and the run never breaks. End
                 // the previous shot early enough for a real full-frame return
                 // before this new chain takes over.
-                if i > 0 {
+                if i > 0, !protectedPredecessor {
                     let releaseEnd = baked[i].on - 0.18
                     let floor = baked[i - 1].segment.start + 0.1
                     baked[i - 1].off = max(min(baked[i - 1].off, releaseEnd), floor)
                 }
             } else {
                 baked[i].chainStart = false
+                if protectedPredecessor { chainStart = baked[i].segment.start }
             }
         }
         return baked

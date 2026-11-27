@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import LumenCore
 import LumenProject
-import LumenRender
+@testable import LumenRender
 import LumenDirector
 
 @Test(arguments: [1.0, 2.0])
@@ -82,4 +82,25 @@ func zoomTransformRespectsCanvasComposition(_ padding: Double, _ size: Double) {
             #expect(rect.y + rect.w <= source.y + 0.0001)
         }
     }
+}
+
+@Test func frameZoomConsumesTheGutterOnTheFocusedSide() {
+    let source = SIMD2<Double>(1600, 900)
+    let base = Geometry(canvas: SIMD2(1600, 900), src: source, style: Style())
+    var state = Timeline(duration: 2).evaluate(at: 0)
+    state.cameraScale = 2
+    for right in [false, true] {
+        state.cameraCenter = SIMD2(right ? 1200 : 400, 450)
+        let (framed, optical) = base.framing(state)
+        let rect = framed.content
+        #expect(rect.z > base.content.z)
+        #expect(abs(rect.z / base.content.z * optical - 2) < 1e-9)
+        if right {
+            #expect(rect.x > 0 && rect.x + rect.z >= 1599.99)
+        } else {
+            #expect(rect.x <= 0.01 && rect.x + rect.z < 1600)
+        }
+    }
+    state.cameraScale = 1
+    #expect(base.framing(state).geometry.content == base.content)
 }

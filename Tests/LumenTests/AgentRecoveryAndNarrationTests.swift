@@ -49,3 +49,32 @@ private struct InvalidNarrationProvider: VoiceProvider {
         // Rejected either by AVFoundation or the explicit verification gate.
     }
 }
+
+@Test func agentExportPublishesStemsUnderTheFinalNameAndRollsBackOnCollision() throws {
+    let files = FileManager.default
+    let root = files.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let staging = root.appendingPathComponent("stage", isDirectory: true)
+    try files.createDirectory(at: staging, withIntermediateDirectories: true)
+    defer { try? files.removeItem(at: root) }
+
+    let output = root.appendingPathComponent("demo.mp4")
+    let stagedMovie = staging.appendingPathComponent(output.lastPathComponent)
+    let stem = root.appendingPathComponent("demo-voiceover-1.wav")
+    let stagedStem = staging.appendingPathComponent(stem.lastPathComponent)
+    let original = Data("existing movie".utf8)
+    let movie = Data("staged movie".utf8)
+    let audio = Data("staged audio".utf8)
+    try original.write(to: output)
+    try movie.write(to: stagedMovie)
+    try audio.write(to: stagedStem)
+    #expect(throws: ToolError.self) {
+        try AgentExportProof.publish(stagedMovie, to: output, overwrite: false)
+    }
+    #expect(try Data(contentsOf: output) == original)
+    #expect(!files.fileExists(atPath: stem.path))
+
+    try audio.write(to: stagedStem)
+    #expect(try AgentExportProof.publish(stagedMovie, to: output, overwrite: true) == [stem])
+    #expect(try Data(contentsOf: output) == movie)
+    #expect(try Data(contentsOf: stem) == audio)
+}

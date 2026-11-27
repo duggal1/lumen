@@ -107,7 +107,10 @@ public enum CropPlanner {
     static let srate = 20.0
     private static let signpost = OSLog(subsystem: "com.lumen.studio", category: "crop")
 
-    struct Run { var start: Double; var end: Double; var mode: CropMode }
+    struct Run {
+        var start: Double; var end: Double; var mode: CropMode
+        var expired = false
+    }
 
     struct Smoothed {
         var data: [SIMD4<Double>]                    // .x=x .y=y .z=width .w=height
@@ -159,13 +162,10 @@ public enum CropPlanner {
             switch m {
             case .full: return source
             case .content:
-                // TRUE CROP of the AXWebArea source rect: inset the chrome
-                // divider, then grow to the OUTPUT aspect so the compositor
-                // never stretches the picture. No camera zoom factor is used.
-                let detected = web.at(t).insetBy(s.insetPx)
-                return SmartCropPlanner.aspectFit(detected, source: source)
-                    .intersection(source)
-            case .window: return win.at(t).intersection(source)
+                // Layout fits the card to this page. Expanding the source rect
+                // to the desktop aspect can bring the address bar back in.
+                return contained(web.at(t).insetBy(s.insetPx))
+            case .window: return contained(win.at(t))
             }
         }
         var rects: [SIMD4<Float>] = []
@@ -233,18 +233,41 @@ public enum CropPlanner {
         return Smoothed(data: out)
     }
 
+    private static let maxObservationAge = 1.0
+
     static func baseRuns(_ samples: [ViewportSample], _ s: CropSettings, _ duration: Double) -> [Run] {
-        func mode(_ m: ViewportSample) -> CropMode {
-            (m.front && m.webValid && m.web.w >= s.minWebWidthPx && m.web.h >= s.minWebHeightPx)
-                ? .content : .full
+        var runs = [Run(start: 0, end: duration, mode: .full)]
+        func change(to mode: CropMode, at time: Double, expired: Bool = false) {
+            guard time < duration, runs.last?.mode != mode else { return }
+            if time <= runs[runs.count - 1].start {
+                runs[runs.count - 1].mode = mode
+            } else {
+                runs[runs.count - 1].end = time
+                runs.append(Run(start: time, end: duration, mode: mode, expired: expired))
+            }
         }
-        var runs: [Run] = []
-        for (i, sm) in samples.enumerated() {
-            let m = mode(sm)
-            if runs.last?.mode == m { continue }
-            let a = i == 0 ? 0 : (samples[i - 1].t + sm.t) / 2
-            if !runs.isEmpty { runs[runs.count - 1].end = a }
-            runs.append(Run(start: a, end: duration, mode: m))
+
+        var previousTime: Double?
+        for sample in samples {
+            var start = sample.t
+            if let previousTime {
+                let expires = previousTime + maxObservationAge
+                if sample.t > expires {
+                    change(to: .full, at: expires, expired: true)
+                } else {
+                    start = (previousTime + sample.t) / 2
+                }
+            } else if sample.t <= 0.15 {
+                // The viewport timer may start one tick after the first source frame.
+                start = 0
+            }
+            let valid = sample.front && sample.webValid && sample.web.isValid &&
+                sample.web.w >= s.minWebWidthPx && sample.web.h >= s.minWebHeightPx
+            change(to: valid ? .content : .full, at: start)
+            previousTime = sample.t
+        }
+        if let previousTime {
+            change(to: .full, at: previousTime + maxObservationAge, expired: true)
         }
         return runs
     }
@@ -252,7 +275,7 @@ public enum CropPlanner {
     static func mergeShortRuns(_ runs: inout [Run], _ minDwell: Double) {
         var i = 1
         while i < runs.count - 1 {
-            if runs[i].end - runs[i].start < minDwell {
+            if !runs[i].expired, runs[i].end - runs[i].start < minDwell {
                 runs[i - 1].end = runs[i].end
                 runs.remove(at: i)
                 if i < runs.count, runs[i].mode == runs[i - 1].mode {
@@ -270,26 +293,33 @@ public enum CropPlanner {
                             _ duration: Double) -> [(Double, Double)] {
         guard s.uncrop != .never else { return [] }
         var raw: [(Double, Double)] = []
-        func keys(_ a: Double, _ b: Double) -> [Double] { inp.keys.filter { $0 >= a && $0 <= b } }
-        if s.uncrop == .chromeTyping {
-            var start: Double?
-            var last = 0.0
-            func close() {
-                guard let st = start else { return }
-                let k = keys(st - 0.2, last + 0.5)
-                if let f = k.first, let l = k.last {
-                    raw.append((min(st, f) - s.uncropLead, max(last, l) + s.holdAfterTyping))
-                }
-                start = nil
+        var keyIndex = 0
+        // Focused browser chrome should be visible from the first key, even
+        // with the broader any-typing policy selected.
+        var start: Double?
+        var last = 0.0
+        func close() {
+            guard let st = start else { return }
+            while keyIndex < inp.keys.count, inp.keys[keyIndex] < st - 0.2 { keyIndex += 1 }
+            let first = keyIndex
+            while keyIndex < inp.keys.count, inp.keys[keyIndex] <= last + 0.5 { keyIndex += 1 }
+            if first < keyIndex {
+                let firstKey = inp.keys[first], lastKey = inp.keys[keyIndex - 1]
+                let reveal = s.uncrop == .chromeTyping ? min(st, firstKey) : firstKey
+                let release = s.uncrop == .chromeTyping ? max(last, lastKey) : lastKey
+                raw.append((reveal - s.uncropLead, release + s.holdAfterTyping))
             }
-            for sm in samples {
-                if sm.front && sm.ui {
-                    if start == nil { start = sm.t }
-                    last = sm.t
-                } else if start != nil, sm.t - last > 0.3 { close() }
-            }
-            close()
-        } else {
+            start = nil
+        }
+        for sm in samples {
+            if sm.front && sm.ui {
+                if start == nil { start = sm.t }
+                last = sm.t
+            } else if start != nil, sm.t - last > 0.3 { close() }
+        }
+        close()
+
+        if s.uncrop == .anyTyping {
             var group: [Double] = []
             func flush() {
                 if group.count >= 4, let f = group.first, let l = group.last {

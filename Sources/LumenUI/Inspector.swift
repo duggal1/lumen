@@ -229,12 +229,14 @@ struct Inspector: View {
                 StudioColorSwatches(selected: m.timeline.cursor.ink) { color in m.edit { $0.cursor.ink = color } }
                 StudioButton(title: "Original color", icon: "arrow.counterclockwise", kind: .quiet) { m.edit { $0.cursor.ink = nil } }
             }
-            StudioSection("Click color") {
-                StudioColorSwatches(selected: m.timeline.cursor.clickColor) { color in
-                    m.edit { $0.cursor.clickColor = color }
+            if m.timeline.cursor.clickEffect != .none {
+                StudioSection("Click color") {
+                    StudioColorSwatches(selected: m.timeline.cursor.clickColor) { color in
+                        m.edit { $0.cursor.clickColor = color }
+                    }
+                    StudioButton(title: "Original ripple", icon: "arrow.counterclockwise", kind: .quiet) { m.edit { $0.cursor.clickColor = RGBA(0xFFFFFF, a: 0) } }
+                    StudioSliderRow(label: "Click intensity", v: m.bind(\.cursor.clickIntensity), range: 0...1.5)
                 }
-                StudioButton(title: "Original ripple", icon: "arrow.counterclockwise", kind: .quiet) { m.edit { $0.cursor.clickColor = RGBA(0xFFFFFF, a: 0) } }
-                StudioSliderRow(label: "Click intensity", v: m.bind(\.cursor.clickIntensity), range: 0...1.5)
             }
         }
     }

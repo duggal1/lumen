@@ -149,10 +149,16 @@ public enum NarrationAsset {
         let url = directory.appendingPathComponent("narration-" + UUID().uuidString + ".mp3")
         do {
             try result.data.write(to: url, options: .atomic)
-            let asset = AVURLAsset(url: url)
-            let duration = try await asset.load(.duration).seconds
-            let tracks = try await asset.loadTracks(withMediaType: .audio)
-            guard duration.isFinite, duration > 0, !tracks.isEmpty else { throw VoiceError.failed("Generated audio cannot be decoded.") }
+            let audio = try AVAudioFile(forReading: url)
+            let sampleRate = audio.processingFormat.sampleRate
+            guard sampleRate.isFinite, sampleRate > 0, audio.length > 0,
+                  let probe = AVAudioPCMBuffer(pcmFormat: audio.processingFormat,
+                                               frameCapacity: AVAudioFrameCount(min(audio.length, 4096))) else {
+                throw VoiceError.failed("Generated audio cannot be decoded.")
+            }
+            try audio.read(into: probe)
+            guard probe.frameLength > 0 else { throw VoiceError.failed("Generated audio cannot be decoded.") }
+            let duration = Double(audio.length) / sampleRate
             try Task.checkCancellation()
             return (url, duration, result.disclosure)
         } catch {
