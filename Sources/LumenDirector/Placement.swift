@@ -74,7 +74,8 @@ enum WebcamPlacement {
             return false
         }
         func behind(_ k: Int, _ t: Double) -> Bool {
-            if s.avoidCursor, let p = cursorCanvas(t), p.z > 0.3 { return inside(rects[k], p, 0, 0) }
+            // Hide/fade is a separate explicit policy from corner movement.
+            if let p = cursorCanvas(t), p.z > 0.3 { return inside(rects[k], p, 0, 0) }
             return false
         }
 
