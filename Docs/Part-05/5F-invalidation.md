@@ -1,0 +1,3 @@
+# 5F — Editor dependency invalidation (first slice)
+
+Speed ramp key now tracks actual ramp settings rather than the entire AudioPlan. Explicitly whitelisted mix-only gain controls and click tone preserve derived tracks when no derivation is pending, and restart audio playback/mix work against the new timeline instead. Cue-embedded click gain, ducking, ramp settings, enable flags and unknown/new fields conservatively require derivation. If a derive is already pending, restart against the latest snapshot to avoid losing edits. Content scale is now an explicit composition invalidation (webcam placement uses it). Two focused dependency tests. Scrub coalescing, full revision stress, visual invalidation audit and target-hardware response measurements remain open.
