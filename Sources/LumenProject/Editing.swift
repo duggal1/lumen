@@ -119,6 +119,7 @@ public extension Timeline {
     /// Everything inside is gone, the gap closes, anchored content inside is
     /// removed and content straddling an edge is trimmed back to the survivor.
     mutating func removeOutputRange(_ a0: Double, _ b0: Double, frame: Double) throws {
+        guard a0.isFinite, b0.isFinite, frame.isFinite, frame > 0 else { throw EditError.emptyRange }
         let tm = timeMap
         let live = max(tm.outputDuration, 0)
         guard live > frame else { throw EditError.removesEverything }
@@ -140,6 +141,7 @@ public extension Timeline {
     /// Move one edge of an existing cut. Widening removes more source, narrowing
     /// restores it. A cut that collapses to one frame or less becomes a join.
     mutating func trimCut(id: UUID, isStart: Bool, toSource raw: Double, frame: Double) throws {
+        guard raw.isFinite, frame.isFinite, frame > 0 else { throw EditError.emptyRange }
         guard let i = timeMap.cuts.firstIndex(where: { $0.id == id }) else { throw EditError.tooShort }
         let original = timeMap.cuts[i]
         let tm = timeMap
@@ -153,14 +155,14 @@ public extension Timeline {
         }
         guard cut.end - cut.start > 0 else { throw EditError.tooShort }
         // Take the edited cut out of the trim so the fold cannot eat it, then
-        // put it back with its identity. Narrowing (the cut grows) removes the
-        // extra content; widening only restores source and leaves survivors
-        // alone, since content destroyed by the original cut is gone for good.
+        // put it back with its identity. Expanding the removed interval
+        // trims newly hidden source; shrinking the cut restores source and
+        // must not delete content in the restored interval.
         timeMap.cuts.remove(at: i)
-        if isStart, cut.start > original.start {
-            trimAnchoredContent(removedSource: original.start...cut.start)
-        } else if !isStart, cut.end < original.end {
-            trimAnchoredContent(removedSource: cut.end...original.end)
+        if isStart, cut.start < original.start {
+            trimAnchoredContent(removedSource: cut.start...original.start)
+        } else if !isStart, cut.end > original.end {
+            trimAnchoredContent(removedSource: original.end...cut.end)
         }
         timeMap.cuts.append(cut)
         timeMap.cuts = Self.merged(timeMap.cuts)
@@ -198,7 +200,9 @@ public extension Timeline {
     mutating func rippleSoundtrack(afterOutput start: Double, by delta: Double) {
         for i in audio.lanes.indices {
             let p = audio.lanes[i].placement
-            if p >= start { audio.lanes[i].placement = max(p + delta, 0) }
+            if p >= start {
+                audio.lanes[i].placement = delta < 0 ? max(p + delta, start) : p + delta
+            }
         }
     }
 

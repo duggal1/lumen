@@ -49,11 +49,13 @@ public enum ActivityFetch {
     public static func cached(url: URL, directory: URL, hz: Double = 10,
                               produce: @Sendable () async throws -> ActivityCache) async -> (ActivityCache?, String?) {
         do {
+            try Task.checkCancellation()
             let key = try await AnalysisCache.key(media: url, analyzer: ActivityAnalyzer.analyzerID,
                                                   version: ActivityAnalyzer.analyzerVersion,
                                                   parameters: Parameters(offset: 0, fps: hz))
             if let cached = ActivityCache.load(key: key, directory: directory) { return (cached, nil) }
             let value = try await produce()
+            try Task.checkCancellation()
             try value.save(key: key, directory: directory)
             return (value, nil)
         } catch is CancellationError {

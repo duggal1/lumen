@@ -13,6 +13,7 @@ private actor MediaDigestCache {
     private var order: [Fingerprint] = []
 
     func digest(for media: URL) throws -> Data {
+        try Task.checkCancellation()
         let attributes = try media.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         let fingerprint = Fingerprint(path: media.standardizedFileURL.path, size: attributes.fileSize ?? 0,
                                       modified: attributes.contentModificationDate?.timeIntervalSince1970 ?? 0)
@@ -21,7 +22,18 @@ private actor MediaDigestCache {
         let handle = try FileHandle(forReadingFrom: media)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+            try Task.checkCancellation()
+            hasher.update(data: chunk)
+        }
+        try Task.checkCancellation()
+        // Never cache a hash under the pre-read identity if the media changed
+        // during hashing (e.g. unfinished capture or external replacement).
+        let after = try media.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        guard after.fileSize == attributes.fileSize,
+              after.contentModificationDate == attributes.contentModificationDate else {
+            throw CocoaError(.fileReadUnknown)
+        }
         let digest = Data(hasher.finalize())
         values[fingerprint] = digest
         order.append(fingerprint)
