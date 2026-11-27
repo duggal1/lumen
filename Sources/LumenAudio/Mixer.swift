@@ -705,15 +705,10 @@ public final class AudioMixer: @unchecked Sendable {
             case .whooshIn, .whooshOut: return false
             }
         }
-        for cue in activeCues {
-            NotificationCenter.default.post(
-                name: Notification.Name("lumen.focus.feedback.tap"),
-                object: nil,
-                userInfo: ["kind": cue.kind == .click ? "click" : "key"])
-        }
+        // An offline mix must not emit real-time UI feedback for every cue.
         if !activeCues.isEmpty {
             var settings = KeyMixSettings()
-            settings.keyLevelDb = a.typingLevelDb + 2   // preserve shipped typing level
+            settings.keyLevelDb = a.typingLevelDb - 5   // one gain stage; preserve default headroom
             settings.clickLevelDb = a.sfxGainDb
             settings.clickTone = a.clickTone
             var router = KeyVariationRouter()
@@ -738,7 +733,7 @@ public final class AudioMixer: @unchecked Sendable {
             }
         }
         var settings = KeyMixSettings()
-        settings.keyLevelDb = a.typingLevelDb + 2
+        settings.keyLevelDb = a.typingLevelDb - 5
         settings.clickLevelDb = a.sfxGainDb
         settings.clickTone = a.clickTone
         var router = KeyVariationRouter()
@@ -1020,15 +1015,20 @@ public final class PreviewAudioPlayer: @unchecked Sendable {
 
     public func previewClick(_ plan: AudioPlan) {
         guard plan.soundEffectsEnabled, plan.clickSounds else { return }
-        let (samples, bankGain) = SFXBank().render(.click, clickTone: plan.clickTone)
-        guard !samples.isEmpty,
-              let buffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
-        let db = plan.sfxGainDb + plan.clickGainDb + bankGain
-        let amp = Float(pow(10, clamp(db.isFinite ? db : -9, -60, 0) / 20))
-        buffer.frameLength = AVAudioFrameCount(samples.count)
-        for i in samples.indices {
-            buffer.floatChannelData![0][i] = samples[i] * amp
-            buffer.floatChannelData![1][i] = samples[i] * amp
+        let library = KeySoundLibraryCache.shared
+        guard let take = library.clickTake(plan.clickTone), !take.samples.isEmpty else { return }
+        var settings = KeyMixSettings()
+        settings.clickTone = plan.clickTone; settings.clickLevelDb = plan.sfxGainDb
+        var router = KeyVariationRouter()
+        let audition = KeySoundEngine.render(
+            cues: [SFXCue(t: 0, kind: .click, gainDb: plan.clickGainDb)],
+            library: library, router: &router, settings: settings, frames: take.samples.count)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: fmt,
+                                            frameCapacity: AVAudioFrameCount(audition.l.count)) else { return }
+        buffer.frameLength = AVAudioFrameCount(audition.l.count)
+        for i in audition.l.indices {
+            buffer.floatChannelData![0][i] = audition.l[i]
+            buffer.floatChannelData![1][i] = audition.r[i]
         }
         if !engine.isRunning { try? engine.start() }
         previewNode.stop()

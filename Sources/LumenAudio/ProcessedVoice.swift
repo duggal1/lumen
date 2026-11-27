@@ -10,11 +10,11 @@ struct ProcessedVoiceCache {
     /// Bump whenever the processing semantics change: every persisted voice
     /// and mix cache below is keyed by it, so an algorithm change can never
     /// be served a result produced by the old one.
-    static let revision = "voice-v18-single-studio-policy"
+    static let revision = "voice-v20-evidence-gated-expansion"
     /// Full-program mix cache. Keyed by revision + exact settings + time map.
     /// Bumped when key samples were trimmed to their acoustic attack: an older
     /// cached mix still carries the pre-strike silence and must not be reused.
-    static let mixRevision = "mix-v8-single-studio-policy"
+    static let mixRevision = "mix-v10-boundary-safe-recorded-cues"
 
     private struct Settings: Encodable {
         let noiseStrength: Double
@@ -115,7 +115,12 @@ struct ProcessedVoiceCache {
             // mid-run; the cancellation check keeps a cancelled job from paying
             // for any further stage (declick, dereverb) on top of it.
             if stopped() { return [] }
-            voice = processed
+            // Third-party and injected denoisers must preserve sample count
+            // and finite output. An invalid result must never shift the voice
+            // relative to video or poison the persisted cache.
+            if processed.count == voice.count, processed.allSatisfy(\.isFinite) {
+                voice = processed
+            }
         }
 
         let echo = plan.dereverb.isFinite ? clamp(plan.dereverb, 0, 1) : 0

@@ -45,14 +45,6 @@ public enum BundledAudioAssets {
     /// the removal is testable without importing a whoosh file path anywhere else.
     public static let whooshAssetsBundled = false
 
-    /// Fresh click sfx (new-click.mp3) — default clickTone .fresh.
-    public static var freshClick: [Float] {
-        guard let url = effect(named: "new-click.mp3"),
-              let pcm = try? AudioIO.readMono(url), !pcm.isEmpty else { return [] }
-        let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
-        return peak > 0.0001 ? pcm.map { $0 * (1.0 / peak) } : []
-    }
-
     /// Clean, real, concise titles for the bundled tracks, keyed by the file's
     /// stem. YouTube dumps carry channel names and copyright tags in the
     /// filename; none of that belongs in the UI. A track without an entry

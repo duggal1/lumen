@@ -32,6 +32,10 @@ private let library = KeySoundLibrary.load()
         let ups = library.up[keyClass] ?? []
         #expect(downs.count >= 5, "\(keyClass) has \(downs.count) down takes, need 5")
         #expect(ups.count >= 4, "\(keyClass) has \(ups.count) up takes, need 4")
+        // Releases must be playable, not merely present in the raw inventory:
+        // a catalog entry without recorded release evidence is gated silent.
+        let playableUps = library.takes(keyClass, .up)
+        #expect(playableUps.count >= 4, "\(keyClass) has \(playableUps.count) playable releases")
         #expect(Set(downs.map(\.id)).count == downs.count, "duplicate down take in \(keyClass)")
         for take in downs + ups {
             #expect(!take.samples.isEmpty)
@@ -130,39 +134,53 @@ private let library = KeySoundLibrary.load()
     let data = try Data(contentsOf: manifestURL)
     let manifest = try JSONDecoder().decode(Manifest.self, from: data)
     #expect(manifest.sampleRate == 48_000)
-    #expect(manifest.targetLUFS == -16)
+    #expect(manifest.masteringPolicy == "static-gain-transient-preserved")
+    #expect(manifest.targetPeakDb == -6)
     #expect(manifest.files.count >= 86)
     let licenseText = try String(contentsOf: manifestURL.deletingLastPathComponent()
         .appendingPathComponent("LICENSES.md"), encoding: .utf8)
+    var seenHashes = Set<String>()
     for file in manifest.files {
         #expect(file.license == "CC0 1.0", "\(file.path) is not CC0")
-        #expect(file.sourceUrl.hasPrefix("http"))
-        #expect(!file.pageUrl.isEmpty)
+        #expect(file.sourceUrl.hasPrefix("https://"))
+        #expect(file.pageUrl.hasPrefix("https://"))
         #expect(file.sha256.count == 64)
+        #expect(file.sourceSha256.count == 64, "\(file.path) lacks an original hash")
+        #expect(file.mastering.sampleRate == 48_000)
+        #expect(seenHashes.insert(file.sha256).inserted, "\(file.path) reuses another recording")
         #expect(licenseText.contains("`\(file.path)`"), "\(file.path) missing from LICENSES.md")
-        #expect(abs(file.mastering.outputLufs + 16) <= 1.0, "\(file.path) at \(file.mastering.outputLufs) LUFS")
-        #expect(file.mastering.peakDb <= -1.0, "\(file.path) peaks at \(file.mastering.peakDb) dBFS")
+        // One static gain to a -6 dBFS peak: transients are preserved instead
+        // of being compressed to a loudness target.
+        #expect(abs(file.mastering.peakDb - -6.0) <= 0.5,
+                "\(file.path) peaks at \(file.mastering.peakDb) dBFS")
+        if file.phase == "up" {
+            #expect(file.releaseEvidence != nil, "\(file.path) release has no recorded evidence")
+        }
     }
 }
 
 private struct Manifest: Decodable {
     let sampleRate: Int
-    let targetLUFS: Double
+    let masteringPolicy: String
+    let targetPeakDb: Double
     let files: [ManifestFile]
 }
 private struct ManifestFile: Decodable {
     let path: String
+    let phase: String
     let license: String
     let sourceUrl: String
     let pageUrl: String
     let sha256: String
+    let sourceSha256: String
+    let releaseEvidence: String?
     let mastering: Mastering
 }
 private struct Mastering: Decodable {
-    let outputLufs: Double
+    let sampleRate: Int
     let peakDb: Double
     enum CodingKeys: String, CodingKey {
-        case outputLufs = "output_lufs"
-        case peakDb = "peak_db"
+        case sampleRate
+        case peakDb
     }
 }

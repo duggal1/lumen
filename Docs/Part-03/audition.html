@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumen — Part 3 interaction sound audition</title>
+<style>
+  :root { color-scheme: light dark; --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e8ebf0; --muted:#9aa4b2; --accent:#8ab4ff; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --text:#16181d; --muted:#5c6673; --accent:#2457c5; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif; }
+  header { padding:28px 32px 18px; border-bottom:1px solid var(--line); }
+  h1 { margin:0 0 6px; font-size:20px; letter-spacing:-0.01em; }
+  p { margin:0; color:var(--muted); max-width:78ch; }
+  main { padding:24px 32px 64px; display:grid; gap:18px; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); }
+  .row { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  button { font:inherit; color:var(--text); background:transparent; border:1px solid var(--line); border-radius:7px; padding:5px 9px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.on { border-color:var(--accent); color:var(--accent); }
+  .seq { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .seq button { background:var(--accent); color:#0b0d10; border-color:transparent; font-weight:600; }
+  @media (prefers-color-scheme: dark) { .seq button { color:#0b0d10; } }
+  label { color:var(--muted); display:flex; gap:8px; align-items:center; }
+  input[type=range] { width:160px; }
+  code { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--muted); word-break:break-all; }
+  .now { color:var(--accent); font-variant-numeric:tabular-nums; }
+  footer { padding:0 32px 40px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Part 3 — interaction sound audition</h1>
+  <p>Every sound below is a real CC0 recording shipped in <code>Resources/Sounds</code>, 48 kHz mono.
+  Sequences are scheduled at exact AudioContext times. Judge the attack, the body and the release:
+  reject hollow, metallic, exaggerated, robotic or over-loud takes.</p>
+</header>
+<main id="grid"></main>
+<footer>
+  <p id="meta"></p>
+</footer>
+<script>
+const DATA = {"clicks": ["clicks/analog.wav", "clicks/mouse-click-1.wav", "clicks/mouse-click-2.wav", "clicks/snap.wav", "clicks/tick.wav"], "groups": {"alpha": {"down": ["typing/alpha/alpha-down-1.wav", "typing/alpha/alpha-down-2.wav", "typing/alpha/alpha-down-3.wav", "typing/alpha/alpha-down-4.wav", "typing/alpha/alpha-down-5.wav"], "up": ["typing/alpha/alpha-up-1.wav", "typing/alpha/alpha-up-2.wav", "typing/alpha/alpha-up-3.wav", "typing/alpha/alpha-up-4.wav"]}, "number": {"down": ["typing/number/number-down-1.wav", "typing/number/number-down-2.wav", "typing/number/number-down-3.wav", "typing/number/number-down-4.wav", "typing/number/number-down-5.wav"], "up": ["typing/number/number-up-1.wav", "typing/number/number-up-2.wav", "typing/number/number-up-3.wav", "typing/number/number-up-4.wav"]}, "space": {"down": ["typing/space/space-down-1.wav", "typing/space/space-down-2.wav", "typing/space/space-down-3.wav", "typing/space/space-down-4.wav", "typing/space/space-down-5.wav"], "up": ["typing/space/space-up-1.wav", "typing/space/space-up-2.wav", "typing/space/space-up-3.wav", "typing/space/space-up-4.wav"]}, "enter": {"down": ["typing/enter/enter-down-1.wav", "typing/enter/enter-down-2.wav", "typing/enter/enter-down-3.wav", "typing/enter/enter-down-4.wav", "typing/enter/enter-down-5.wav"], "up": ["typing/enter/enter-up-1.wav", "typing/enter/enter-up-2.wav", "typing/enter/enter-up-3.wav", "typing/enter/enter-up-4.wav"]}, "backspace": {"down": ["typing/backspace/backspace-down-1.wav", "typing/backspace/backspace-down-2.wav", "typing/backspace/backspace-down-3.wav", "typing/backspace/backspace-down-4.wav", "typing/backspace/backspace-down-5.wav"], "up": ["typing/backspace/backspace-up-1.wav", "typing/backspace/backspace-up-2.wav", "typing/backspace/backspace-up-3.wav", "typing/backspace/backspace-up-4.wav"]}, "shift": {"down": ["typing/shift/shift-down-1.wav", "typing/shift/shift-down-2.wav", "typing/shift/shift-down-3.wav", "typing/shift/shift-down-4.wav", "typing/shift/shift-down-5.wav"], "up": ["typing/shift/shift-up-1.wav", "typing/shift/shift-up-2.wav", "typing/shift/shift-up-3.wav", "typing/shift/shift-up-4.wav"]}, "modifier": {"down": ["typing/modifier/modifier-down-1.wav", "typing/modifier/modifier-down-2.wav", "typing/modifier/modifier-down-3.wav", "typing/modifier/modifier-down-4.wav", "typing/modifier/modifier-down-5.wav"], "up": ["typing/modifier/modifier-up-1.wav", "typing/modifier/modifier-up-2.wav", "typing/modifier/modifier-up-3.wav", "typing/modifier/modifier-up-4.wav"]}, "nav": {"down": ["typing/nav/nav-down-1.wav", "typing/nav/nav-down-2.wav", "typing/nav/nav-down-3.wav", "typing/nav/nav-down-4.wav", "typing/nav/nav-down-5.wav"], "up": ["typing/nav/nav-up-1.wav", "typing/nav/nav-up-2.wav", "typing/nav/nav-up-3.wav", "typing/nav/nav-up-4.wav"]}, "fn": {"down": ["typing/fn/fn-down-1.wav", "typing/fn/fn-down-2.wav", "typing/fn/fn-down-3.wav", "typing/fn/fn-down-4.wav", "typing/fn/fn-down-5.wav"], "up": ["typing/fn/fn-up-1.wav", "typing/fn/fn-up-2.wav", "typing/fn/fn-up-3.wav", "typing/fn/fn-up-4.wav"]}}, "meta": {"typing/alpha/alpha-down-1.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "5c73a49680f3c03a4384d566054d5fd43a9d8cf5908f82ca3e412caa66be93d2", "releaseEvidence": null}, "typing/alpha/alpha-down-2.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "5f80ebb4c4ae06b74d36af363bec89e7e1c50a87791973f27a8f9483938ab9f4", "releaseEvidence": null}, "typing/alpha/alpha-down-3.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "8bb55bba5576c721f798ed55e7544c7a924b13ddaeacd9753645fc0a4a5d4148", "releaseEvidence": null}, "typing/alpha/alpha-down-4.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "68f968b025fac45322f03b009f038f5704dd9edbf93b0cfb064e4c6ad67a4808", "releaseEvidence": null}, "typing/alpha/alpha-down-5.wav": {"author": "Woven SFX", "pageUrl": "https://www.woven.video/sfx/keyboard-typing-sound-effect", "license": "CC0 1.0", "sha256": "9201591e432873b9cdf5db384ad46a1b34ba78f02d3516320a0f41af740c0aa4", "releaseEvidence": null}, "typing/alpha/alpha-up-1.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "8a2cb702d3eee996c2c5e066a879c0a9896e1049bb0a769a4730e10c5d235981", "releaseEvidence": "detected-secondary-transient"}, "typing/alpha/alpha-up-2.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "b351a05efd7fa825222da2b9e27889b4a9f12c7f84112fc9fa8570585f131af7", "releaseEvidence": "detected-secondary-transient"}, "typing/alpha/alpha-up-3.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "c90200e55c6091857a153b12a0ee3a2e6d45de0ce8dba0c277fd13e7a97cc8fc", "releaseEvidence": "detected-secondary-transient"}, "typing/alpha/alpha-up-4.wav": {"author": "Woven SFX", "pageUrl": "https://www.woven.video/sfx/keyboard-typing-sound-effect", "license": "CC0 1.0", "sha256": "e238232113e62ce78155b3b02ddb6ebc22ca4dad6a25a5ca6bd845c70c608ba7", "releaseEvidence": "detected-secondary-transient"}, "typing/number/number-down-1.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "95345a94497fbf2c3f56c8425af53305e2e1f7d848b8062fc84c6ef55f7c7b9a", "releaseEvidence": null}, "typing/number/number-down-2.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "45e633dbbe6973b50dbbb798bbf6f703071db58c05395aea23ae67cd4b7e31cb", "releaseEvidence": null}, "typing/number/number-down-3.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "5d288605dc16a51c182cf55f1e7268af66eba65129f0e653a4d10757e5f13755", "releaseEvidence": null}, "typing/number/number-down-4.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "340a613d14ab5cff55dbcb58446c08a80990396dd0636b2d267bedfbece9b90d", "releaseEvidence": null}, "typing/number/number-down-5.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "e16934c730fb685c30b0de076d404596c8d466bfe13dba18721a9582258ece02", "releaseEvidence": null}, "typing/number/number-up-1.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "856a3256c70bf01bf51fda1fff01a456565a9e649dd22975bada0def90f8ae4f", "releaseEvidence": "detected-secondary-transient"}, "typing/number/number-up-2.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "4ea9c31216e821d2a225187802b732a08bd8198663307b7a05e62ca977e933ed", "releaseEvidence": "detected-secondary-transient"}, "typing/number/number-up-3.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "075b252520d0f0f682aa3fa90b9d65fe1a13308bf5a51f213101157fc57ca299", "releaseEvidence": "detected-secondary-transient"}, "typing/number/number-up-4.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "6bd3b67243e94af95bda433ae232d9faf8597070c60a6e49d3d7d98ac490a616", "releaseEvidence": "detected-secondary-transient"}, "typing/space/space-down-1.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "b732c29f8e4bd05149979bcdc542aff82397536e060525bde320f4793b521cde", "releaseEvidence": null}, "typing/space/space-down-2.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "2da7b9fee75e25da33fdff9f4614965fbedb78b25cbfaca697513b7157af4876", "releaseEvidence": null}, "typing/space/space-down-3.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "91c3d88ddb2bc8ab1cababdcef05bc284709853e17f58cda60707a7f262b3780", "releaseEvidence": null}, "typing/space/space-down-4.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "13c61770427f6792076f666578b2df1ecace54996b46ee3170a12e1b0debf6cd", "releaseEvidence": null}, "typing/space/space-down-5.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "e1bf30d3513bbcd9e4719ca3e3816569a659f2aaed496dda2523f29b46ec5ca0", "releaseEvidence": null}, "typing/space/space-up-1.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "19ed6aa04f174d30a3a82345058a2f399f835c5063c3fb05388f31eb1d7b646f", "releaseEvidence": "detected-secondary-transient"}, "typing/space/space-up-2.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "a644dc177d09e95b13f403b9618008946a81af37e2df5c3d2493ab2f48f58feb", "releaseEvidence": "detected-secondary-transient"}, "typing/space/space-up-3.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "6e8e762aa572bdc927aaa44160bf76849152e5afbe489ae8f8768ebb4dd34fd7", "releaseEvidence": "detected-secondary-transient"}, "typing/space/space-up-4.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "f4f925994bd25d33a9ef4dfed5fdf6e25354939ea4fd2abab07325cac0b354e3", "releaseEvidence": "detected-secondary-transient"}, "typing/enter/enter-down-1.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "fe9e813bf66c925d073dad344b8585167fbe92de8b5a6118ee5aa52e5b7b6136", "releaseEvidence": null}, "typing/enter/enter-down-2.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "36f22fedaa0cce3dff9569dd126a2ad1ff5d559f8cdbff3a9ff21c1045264afb", "releaseEvidence": null}, "typing/enter/enter-down-3.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "c88ac57b55142afb603e973e046a78b59359d4cac0e7ee267d075fa879705390", "releaseEvidence": null}, "typing/enter/enter-down-4.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "a9260f04a930e126f99f6111b95c6fc6b6bd6b4816253fc510d3e3a28a36a93c", "releaseEvidence": null}, "typing/enter/enter-down-5.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "e19cabb222d496b6ed4eb1e8d837c9ec1cdba8a362c73495667b2c0dc0936a5d", "releaseEvidence": null}, "typing/enter/enter-up-1.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "1c0a99ad58bb6df611c9e10164a190d0fb5e5a5a8cf24a917e666e5073a4a45e", "releaseEvidence": "detected-secondary-transient"}, "typing/enter/enter-up-2.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "6536566eec0783ff9eb299ee2e9069bcbd9a1f3293424d18826bb5a34d9a001c", "releaseEvidence": "detected-secondary-transient"}, "typing/enter/enter-up-3.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "1e3d369375dd2684e65b1a59fab017e2bdd63abe8b95f57050234270e171a2eb", "releaseEvidence": "detected-secondary-transient"}, "typing/enter/enter-up-4.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "ba44d0adedc8d525157627a005da0c774912d0e948cde64b8990ba17422d7b81", "releaseEvidence": "detected-secondary-transient"}, "typing/backspace/backspace-down-1.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "eba697a41a8facd2d07ad45ba0b0e0ad0831ac5b167f472a977cb6e27038b05b", "releaseEvidence": null}, "typing/backspace/backspace-down-2.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "d3f2a3b5c6412f65b9f05aa96010736d341d96540373f78d531b5fe8aeb35be1", "releaseEvidence": null}, "typing/backspace/backspace-down-3.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "499609419836237f2a9338b965b9e12b1e8258a2ca7b2bfd801f050bee6d9940", "releaseEvidence": null}, "typing/backspace/backspace-down-4.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "da958d7ba6089b14ca06dd04e9bbe698bb9a8fabe9324dd62c4a78e0e51117db", "releaseEvidence": null}, "typing/backspace/backspace-down-5.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "8ee1164def40df35df8c6e33c87339a60087aaa6001f49c2a111e4d57c6d4966", "releaseEvidence": null}, "typing/backspace/backspace-up-1.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "dc15f73eeb1403764a636fc88a706c910c936ea97f84451ab5cb51d559cf6459", "releaseEvidence": "detected-secondary-transient"}, "typing/backspace/backspace-up-2.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "8fc9d667be458d32c00a8cdaeda8518ec7131e9d575e1b7664886d6bda91ec49", "releaseEvidence": "detected-secondary-transient"}, "typing/backspace/backspace-up-3.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "ac5137d2eba3b7cbf5dd1b00b43fa82eaf92b5d489b743ff35f6fd5df16836ff", "releaseEvidence": "detected-secondary-transient"}, "typing/backspace/backspace-up-4.wav": {"author": "ujonathan", "pageUrl": "https://freesound.org/s/628325/", "license": "CC0 1.0", "sha256": "269688981d89944fd78832fcf54e9c90276ce34e9972c632a13df437742e531f", "releaseEvidence": "detected-secondary-transient"}, "typing/shift/shift-down-1.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "9240959a9867ce95df23da867be7a7b01f3d2e2064dffe33e0443f280335dec9", "releaseEvidence": null}, "typing/shift/shift-down-2.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "ba36c15556c76d6ffc130f99938895ec985b5e5abf671fcb0e470615bdea768b", "releaseEvidence": null}, "typing/shift/shift-down-3.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "30dbc54eeb992c32e3d58bd36ec4c70dca5f75e189c2ea7c7026dda7643b8fc9", "releaseEvidence": null}, "typing/shift/shift-down-4.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "8c81a079d0c9adab3f8da59c51cf709ab080adfbace3855d6f1ea0b49a8be03e", "releaseEvidence": null}, "typing/shift/shift-down-5.wav": {"author": "IRF1010N", "pageUrl": "https://freesound.org/s/583085/", "license": "CC0 1.0", "sha256": "d89af3e15c40e9279d771139c7faccb7cd5396aee4cd01a8b5146092c02d8fe3", "releaseEvidence": null}, "typing/shift/shift-up-1.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "a8363ea0320f5af313983bee545b4bd2048e09a8b944769dee9d2c9cf7f79a10", "releaseEvidence": "detected-secondary-transient"}, "typing/shift/shift-up-2.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "a150251cd5345ac7908875b24fbd88211de667308ba7af3a13a381df5f629480", "releaseEvidence": "detected-secondary-transient"}, "typing/shift/shift-up-3.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546167/", "license": "CC0 1.0", "sha256": "3685edb5aaf36a28b32f1041766967e7156996e8876a9ade713912be3946396d", "releaseEvidence": "detected-secondary-transient"}, "typing/shift/shift-up-4.wav": {"author": "IRF1010N", "pageUrl": "https://freesound.org/s/583085/", "license": "CC0 1.0", "sha256": "bedf88a761b949ee899dca69bd740a16e47edade7bc688ea3eeac81be6312c30", "releaseEvidence": "detected-secondary-transient"}, "typing/modifier/modifier-down-1.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "10d3c97d2ad4a2ac9118fee1b4bd8b283308d26dc7bc948988e8e5329f904a2b", "releaseEvidence": null}, "typing/modifier/modifier-down-2.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "8c13492971008fcd0b1f752bbcb0f7fab745d5e42b78e99578dba6d714bb1da1", "releaseEvidence": null}, "typing/modifier/modifier-down-3.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "ff31e06c6a4116776ee6c677924e275de66d60e0edbc2387096064189a2ba150", "releaseEvidence": null}, "typing/modifier/modifier-down-4.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "fcd188617bb98b620b5f8607bb18fae32caa9956dceaf008c7c55eee6f3945ce", "releaseEvidence": null}, "typing/modifier/modifier-down-5.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "c253e99fcd15ca50a76bdee623d125d6ef8f9836c88735951697bc71cd58ebbd", "releaseEvidence": null}, "typing/modifier/modifier-up-1.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "e24751a629f94dc16058eb2e60e3eaee8fe3162c5c64528bf4ec2e74f87aaebe", "releaseEvidence": "detected-secondary-transient"}, "typing/modifier/modifier-up-2.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "d834640edf931b7443d91f2033962003b2231449e9c1e353d08ae0d917a06a0c", "releaseEvidence": "detected-secondary-transient"}, "typing/modifier/modifier-up-3.wav": {"author": "grcekh", "pageUrl": "https://freesound.org/s/546033/", "license": "CC0 1.0", "sha256": "606f4c8d0d16788a8ad6ee7f20ab91ae286007c0631d7f0252a432c5a8a0f652", "releaseEvidence": "detected-secondary-transient"}, "typing/modifier/modifier-up-4.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "9945cdecdeb916d2a8f34eb956632e64624b618d17559b292ea72d7b30a41057", "releaseEvidence": "detected-secondary-transient"}, "typing/nav/nav-down-1.wav": {"author": "khenshom", "pageUrl": "https://freesound.org/s/565645/", "license": "CC0 1.0", "sha256": "4ae76dc4efd2315b43630ecbe2fab35b45db0f9c9f7214399f968366c70706ef", "releaseEvidence": null}, "typing/nav/nav-down-2.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "a7ee6ecbaa1d4210e4a4b1fb379d63c52a3e3c1f7f8accd0365e9c3f146972d7", "releaseEvidence": null}, "typing/nav/nav-down-3.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "6a654ab612961e7dbae5104a034b6f86edc15faadd854930ed487c863550c652", "releaseEvidence": null}, "typing/nav/nav-down-4.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "d1d0bf064e4ae84d51b10e6382610b6e6604a87d265af999f4d9b8198bc9f9de", "releaseEvidence": null}, "typing/nav/nav-down-5.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "3be9263aaf42df2ebb5f59647b034a375d75597b184bbdb542ff0d2afe4e7e1c", "releaseEvidence": null}, "typing/nav/nav-up-1.wav": {"author": "khenshom", "pageUrl": "https://freesound.org/s/565645/", "license": "CC0 1.0", "sha256": "8fe5a80c60843c6522bdea4ff458015d483a9a461ec909d8ea30b5498bb2920d", "releaseEvidence": "detected-secondary-transient"}, "typing/nav/nav-up-2.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "645b86f64ae88af2da23a4801baf83e41c4f82b0b6657383b6fa2185fc4f577c", "releaseEvidence": "detected-secondary-transient"}, "typing/nav/nav-up-3.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "634a5ee696a56ac69ecd465406b2f620308c853017d39da30c938f4a5267ea5d", "releaseEvidence": "detected-secondary-transient"}, "typing/nav/nav-up-4.wav": {"author": "EricsSoundschmiede", "pageUrl": "https://freesound.org/s/382057/", "license": "CC0 1.0", "sha256": "0c0c8976b38b4b897cd90037a209fa2a488a7b6f4d8e1452665addcd1cafe1d8", "releaseEvidence": "detected-secondary-transient"}, "typing/fn/fn-down-1.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "64dcdc7422af93a88b65c8530f051c790301bb1ec089ea1ae93424ff89fe845b", "releaseEvidence": null}, "typing/fn/fn-down-2.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "217d60ea011a542b31affbf2f9126513c0e2b5aa238bf28a0d3da4b7e150954e", "releaseEvidence": null}, "typing/fn/fn-down-3.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "8da0ab261d8b2d1cf790cf8b68888b3d2d8fcb63f8451b260eb5bf4f90f4b2d3", "releaseEvidence": null}, "typing/fn/fn-down-4.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "3948b7af21ffe5562dcdceaa8ce52167a026f2790a24d2e23cefeae8f76f43ed", "releaseEvidence": null}, "typing/fn/fn-down-5.wav": {"author": "khenshom", "pageUrl": "https://freesound.org/s/565645/", "license": "CC0 1.0", "sha256": "3daad278cb63e1af5618df0f0d4b72fe5a321258e5a369a626efb16df46902ee", "releaseEvidence": null}, "typing/fn/fn-up-1.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "ca52a3bcbbc39c43e3c502d88bf4c96d7eb7fb95a2f0fd6ac3e11ff21c516a55", "releaseEvidence": "detected-secondary-transient"}, "typing/fn/fn-up-2.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "e61a5be60ccedfb0e6c68bf1735f4fe68eaeb21a1a07c703d2aa2e3b89d8aa13", "releaseEvidence": "detected-secondary-transient"}, "typing/fn/fn-up-3.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "5e8392e6c6d32f10051418f035f04d622babd24a397961f086b0e7fba40c858a", "releaseEvidence": "detected-secondary-transient"}, "typing/fn/fn-up-4.wav": {"author": "Fractal_", "pageUrl": "https://freesound.org/s/500430/", "license": "CC0 1.0", "sha256": "d4c851da2835260111d927f81ae4d1f33a68cd0509983b318fdf88e5d712e1e8", "releaseEvidence": "detected-secondary-transient"}, "clicks/mouse-click-1.wav": {"author": "Woven SFX", "pageUrl": "https://www.woven.video/sfx/click-sound-effect", "license": "CC0 1.0", "sha256": "d4117368f40a07d4f7cba3d7b5f506fa7cd9d29867cd3dd9288d2ac5ed34fa03", "releaseEvidence": null}, "clicks/mouse-click-2.wav": {"author": "Woven SFX", "pageUrl": "https://www.woven.video/sfx/click-sound-effect", "license": "CC0 1.0", "sha256": "c4fe9519c657139e02bc0f4942c2c9426e9a68331137d238e8a9a262de595af4", "releaseEvidence": null}, "clicks/tick.wav": {"author": "Woven SFX", "pageUrl": "https://www.woven.video/sfx/click-sound-effect", "license": "CC0 1.0", "sha256": "ebedabd72271fb3828a00d5c8a692e61ec6a206659461fcc29e31dfb6e0769d7", "releaseEvidence": null}, "clicks/snap.wav": {"author": "Woven SFX", "pageUrl": "https://www.woven.video/sfx/click-sound-effect", "license": "CC0 1.0", "sha256": "775879d20b8711d1864d31b402257a98eb50e25a4080035c45514bb5eb64ebb8", "releaseEvidence": null}, "clicks/analog.wav": {"author": "Woven SFX", "pageUrl": "https://www.woven.video/sfx/click-sound-effect", "license": "CC0 1.0", "sha256": "99a971d6b743fab76acd9455565e0902f9e19e301baad97ffeb6ae1435ff797e", "releaseEvidence": null}}, "sources": ["click-analog", "click-mouse-1", "click-mouse-2", "click-shutter", "click-tick", "fs-gateron", "fs-macbook", "fs-model-f", "fs-mx-black", "fs-mx-blue", "fs-topre", "fs-whitefox", "woven-typing"], "sampleRate": 48000};
+const BASE = "../../Resources/Sounds/";
+const ctx = new (window.AudioContext || window.webkitAudioContext)();
+const cache = new Map();
+let master = null;
+async function decode(path) {
+  if (cache.has(path)) return cache.get(path);
+  const res = await fetch(BASE + path);
+  if (!res.ok) throw new Error(path + ": " + res.status);
+  const buf = await ctx.decodeAudioData(await res.arrayBuffer());
+  cache.set(path, buf);
+  return buf;
+}
+function ensureMaster() {
+  if (!master) {
+    master = ctx.createGain();
+    master.gain.value = Number(document.getElementById("gain")?.value ?? 0.8);
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -6; comp.knee.value = 6; comp.ratio.value = 2;
+    comp.attack.value = 0.003; comp.release.value = 0.12;
+    master.connect(comp).connect(ctx.destination);
+  }
+  return master;
+}
+async function play(path, when = 0, gain = 1) {
+  const buf = await decode(path);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const g = ctx.createGain(); g.gain.value = gain;
+  src.connect(g).connect(ensureMaster());
+  src.start(Math.max(ctx.currentTime + 0.01, when));
+  return buf.duration;
+}
+function button(text, fn) {
+  const b = document.createElement("button"); b.textContent = text; b.onclick = fn; return b;
+}
+function section(title) {
+  const s = document.createElement("section");
+  const h = document.createElement("h2"); h.textContent = title; s.appendChild(h);
+  document.getElementById("grid").appendChild(s);
+  return s;
+}
+function row(s) { const d = document.createElement("div"); d.className = "row"; s.appendChild(d); return d; }
+
+function build() {
+  const clicks = section("Mouse clicks");
+  const cr = row(clicks);
+  DATA.clicks.forEach(p => cr.appendChild(button(p.split("/").pop(), () => play(p))));
+
+  const typing = section("Keys — individual down / release");
+  for (const key of Object.keys(DATA.groups)) {
+    const wrap = document.createElement("div");
+    const label = document.createElement("div");
+    label.innerHTML = `<strong>${key}</strong> <code>${DATA.groups[key].down.length} down · ${DATA.groups[key].up.length} release</code>`;
+    wrap.appendChild(label);
+    const d = row(wrap);
+    DATA.groups[key].down.forEach(p => d.appendChild(button("↓" + p.match(/-(\d+)\.wav$/)[1], () => play(p))));
+    DATA.groups[key].up.forEach(p => d.appendChild(button("↑" + p.match(/-(\d+)\.wav$/)[1], () => play(p, 0, 0.9))));
+    typing.appendChild(wrap);
+  }
+
+  const seq = section("Sequences");
+  const controls = document.createElement("div"); controls.className = "seq";
+  const gainWrap = document.createElement("label");
+  gainWrap.innerHTML = 'Level <input id="gain" type="range" min="0.1" max="1" step="0.05" value="0.8">';
+  controls.appendChild(gainWrap);
+  seq.appendChild(controls);
+
+  const srow = row(seq);
+  const phrases = {
+    "Rapid letters (120 wpm)": { keys: ["alpha"], count: 40, gap: 0.05 },
+    "Numbers": { keys: ["number"], count: 24, gap: 0.08 },
+    "Sentence (letters + space)": { keys: ["alpha", "space"], count: 44, gap: 0.075 },
+    "Code (letters + numbers + enter)": { keys: ["alpha", "number", "enter"], count: 48, gap: 0.07 },
+    "Editing (backspace + nav + enter)": { keys: ["backspace", "nav", "enter"], count: 28, gap: 0.11 },
+    "Modifiers + shortcuts": { keys: ["modifier", "alpha", "shift"], count: 20, gap: 0.12 },
+    "Mixed click + typing": { keys: ["alpha", "space", "click"], count: 36, gap: 0.09 },
+  };
+  for (const [name, spec] of Object.entries(phrases)) {
+    srow.appendChild(button(name, () => runPhrase(spec)));
+  }
+
+  const meta = document.getElementById("meta");
+  const first = DATA.meta[DATA.clicks[0]];
+  meta.innerHTML = `${DATA.sources.length} CC0 sources · ${Object.keys(DATA.meta).length} files · 48 kHz. ` +
+    `Example: ${first.author}, ${first.license}, <a href="${first.pageUrl}">${first.pageUrl}</a>. ` +
+    `Full hashes and source URLs are in <code>Resources/Sounds/manifest.json</code>.`;
+}
+
+async function runPhrase(spec) {
+  const start = ctx.currentTime + 0.15;
+  let t = 0;
+  let prev = null;
+  for (let i = 0; i < spec.count; i++) {
+    const key = spec.keys[i % spec.keys.length];
+    let path;
+    if (key === "click") {
+      path = DATA.clicks[i % DATA.clicks.length];
+      t += 0.22;
+    } else {
+      const downs = DATA.groups[key].down;
+      path = downs[i % downs.length];
+      // Fast typing is slightly quieter, as in the editor.
+      const gain = spec.gap < 0.06 ? 0.78 : spec.gap < 0.1 ? 0.9 : 1;
+      const dur = await play(path, start + t, gain);
+      // Release 55–90 ms later, from the same class, with its own recording.
+      const ups = DATA.groups[key].up;
+      if (ups.length && Math.random() < 0.55) {
+        await play(ups[i % ups.length], start + t + 0.055 + Math.random() * 0.03, gain * 0.75);
+      }
+      prev = dur;
+    }
+    t += spec.gap * (0.75 + Math.random() * 0.5);
+  }
+}
+
+build();
+document.addEventListener("click", () => { if (ctx.state === "suspended") ctx.resume(); }, { once: true });
+</script>
+</body>
+</html>

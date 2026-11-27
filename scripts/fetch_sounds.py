@@ -422,18 +422,17 @@ def build_key_classes(force: bool) -> list[dict]:
         if len(down_takes) < VARIANTS_PER_CLASS:
             raise RuntimeError(f"{key_class}: only {len(down_takes)} down takes detected")
         if len(up_takes) < RELEASES_PER_CLASS:
-            # Some close-miked boards have no separable release. Derive the
-            # release from a different recorded down take, never from noise.
-            up_takes += down_takes[:RELEASES_PER_CLASS]
+            raise RuntimeError(
+                f"{key_class}: only {len(up_takes)} candidate releases; "
+                "supply separate recorded release material; down-strike substitution is forbidden"
+            )
         for phase, takes, count in (("down", down_takes, VARIANTS_PER_CLASS),
                                     ("up", up_takes, RELEASES_PER_CLASS)):
             for index, (sid, raw) in enumerate(pick_evenly(takes, count)):
                 name = f"{key_class}-{phase}-{index + 1}.wav"
                 dest = class_dir / name
-                if not force and dest.exists():
-                    stats = {"input_lufs": None, "output_lufs": None, "gain_db": None, "peak_db": None}
-                else:
-                    stats = master_take(raw, dest)
+                # Never assign fresh source metadata to an old rendered file.
+                stats = master_take(raw, dest)
                 entries.append({"id": f"typing/{key_class}/{name}", "path": f"typing/{key_class}/{name}",
                                 "keyClass": key_class, "phase": phase, "variant": index + 1,
                                 "source": sid, "sourceUrl": SOURCES[sid]["url"],
@@ -456,10 +455,7 @@ def build_clicks(force: bool) -> list[dict]:
             decode_48k_mono(src, decoded)
         pcm = read_wav_mono(decoded)
         dest = click_dir / f"{name}.wav"
-        if not force and dest.exists():
-            stats = {"input_lufs": None, "output_lufs": None, "gain_db": None, "peak_db": None}
-        else:
-            stats = master_take(pcm, dest)
+        stats = master_take(pcm, dest)
         entries.append({"id": f"clicks/{name}.wav", "path": f"clicks/{name}.wav",
                         "keyClass": "click", "phase": "down", "variant": CLICK_NAMES.index(name) + 1,
                         "source": sid, "sourceUrl": spec["url"], "pageUrl": spec["page"],
@@ -523,7 +519,7 @@ def verify(entries: list[dict]) -> None:
         if abs(e["mastering"]["output_lufs"] + 16.0) > 1.0:
             errors.append(f"{e['path']} is {e['mastering']['output_lufs']} LUFS, expected -16")
         if e["mastering"]["peak_db"] > -1.0:
-            errors.append(f"{e['path']} true peak {e['mastering']['true_peak_db']} dBTP")
+            errors.append(f"{e['path']} true peak {e['mastering']['peak_db']} dBTP")
     for key_class in KEY_CLASS_SOURCES:
         for phase, count in (("down", VARIANTS_PER_CLASS), ("up", RELEASES_PER_CLASS)):
             n = sum(1 for e in entries if e["keyClass"] == key_class and e["phase"] == phase)
@@ -548,6 +544,14 @@ def main() -> int:
     if args.verify_only:
         entries = json.loads(MANIFEST.read_text(encoding="utf-8"))["files"]
     else:
+        # This legacy classifier only estimates release windows; it cannot
+        # certify independently recorded up strokes. The new runtime keeps
+        # such releases silent. Do not regenerate the shipping catalog in
+        # place. The reviewed-source importer produces a separate candidate.
+        raise RuntimeError(
+            "Legacy automatic acquisition retired; use scripts/stage_recorded_sounds.py "
+            "with reviewed, hash-pinned sources. --verify-only still verifies the old catalog."
+        )
         entries = build_key_classes(args.force) + build_clicks(args.force)
         MANIFEST.write_text(json.dumps({"sampleRate": FS, "targetLUFS": -16.0, "files": entries},
                                        indent=2) + "\n", encoding="utf-8")

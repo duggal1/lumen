@@ -368,11 +368,11 @@ public enum ClickSound: String, Codable, CaseIterable, Sendable {
         .studioSnap, .studioTick, .studioLight, .studioTap
     ]
 
+    /// Studio tiles resolve from the Audio bundle. Legacy tone names resolve
+    /// from the canonical 48 kHz `Sounds` catalog; the retired MP3/touch files
+    /// are no longer shipped or loaded.
     public var assetPath: String {
         switch self {
-        case .mouse: "mouse-click.mp3"
-        case .subtle: "Subtle-ui-tap-interactions.mp3"
-        case .fresh: "new-click.mp3"
         case .studioCrisp: "cursor-clicks/crisp.wav"
         case .studioSoft: "cursor-clicks/soft.wav"
         case .studioMechanical: "cursor-clicks/mechanical.wav"
@@ -381,7 +381,10 @@ public enum ClickSound: String, Codable, CaseIterable, Sendable {
         case .studioTick: "cursor-clicks/tick.wav"
         case .studioLight: "cursor-clicks/light.wav"
         case .studioTap: "cursor-clicks/tap.wav"
-        default: "touches/\(rawValue).wav"
+        case .mouse: "clicks/mouse-click-1.wav"
+        case .subtle: "clicks/tick.wav"
+        case .fresh: "clicks/mouse-click-2.wav"
+        default: "clicks/analog.wav"
         }
     }
 
