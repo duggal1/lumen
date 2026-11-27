@@ -137,12 +137,28 @@ public enum ExportBenchmark {
         timestamps.reserveCapacity(min(expectedFrames, 100_000))
         while let sample = output.copyNextSampleBuffer() {
             try Task.checkCancellation()
-            let pts = sample.presentationTimeStamp.seconds
-            guard pts.isFinite, CMSampleBufferGetNumSamples(sample) == 1 else {
-                throw ExportError.writer("Invalid compressed video sample.")
+            let count = CMSampleBufferGetNumSamples(sample)
+            // MOV/HEVC edit lists can yield zero-sample priming markers at
+            // either boundary. These contain no picture and are not frames.
+            guard count > 0 else { continue }
+            guard count <= expectedFrames - timestamps.count else {
+                throw ExportError.writer("Extra video frames.")
             }
-            timestamps.append(pts)
-            guard timestamps.count <= expectedFrames else { throw ExportError.writer("Extra video frames.") }
+            if count == 1 {
+                let pts = sample.presentationTimeStamp.seconds
+                guard pts.isFinite else { throw ExportError.writer("Invalid video presentation timestamp.") }
+                timestamps.append(pts)
+            } else {
+                for index in 0..<count {
+                    var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: .invalid, decodeTimeStamp: .invalid)
+                    let status = CMSampleBufferGetSampleTimingInfo(sample, at: index, timingInfoOut: &timing)
+                    let pts = timing.presentationTimeStamp.seconds
+                    guard status == noErr, pts.isFinite else {
+                        throw ExportError.writer("Invalid timing for compressed video sample.")
+                    }
+                    timestamps.append(pts)
+                }
+            }
         }
         guard reader.status == .completed, timestamps.count == expectedFrames else {
             throw ExportError.writer("Benchmark video frame count: \(timestamps.count), expected \(expectedFrames).")
