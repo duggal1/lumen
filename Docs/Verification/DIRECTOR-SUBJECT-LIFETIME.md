@@ -26,3 +26,12 @@ Run `bash Tools/director-replay-proof.sh /path/to/project.lumen /path/to/truth.j
 ```
 
 The test copies the source project, runs local analysis, asserts source-time ownership, checks actual derived zoom and projected subject geometry in both 16:9 and 9:16, and saves actual GPU-rendered PNG samples plus a commit-stamped report. It fails on missing evidence or clipping; it does not assert semantic recognition, caption/webcam occlusion, or presentation intervals. No user recording is available in the remote editing environment. Review PNGs and use actual editor playback on the target Mac with presented-time instrumentation for final cadence sign-off. The normal CI must report this opt-in test as skipped, not real-proof success.
+
+## Follow-up: bounded evidence ownership and delayed handoff
+
+- Freeze provisional as well as confirmed action-owned tracks at the next explicit action. No later growth can corroborate an earlier action retroactively.
+- An action-associated observed non-local seed with at least two observations can bridge up to two seconds of missing activity. A confirmed subject can bridge up to three seconds; its separate fallback reading tail is two seconds. These are bounded heuristics, not generation-completion or URL recognition.
+- Before confirmation, pointer-local evidence can disqualify a candidate even after onset. After confirmation, normal pointer movement cannot revoke historical ownership.
+- After natural wide release, a subsequent click within the prior response region (one grid cell tolerance, within eight seconds of its last activity) may still be linked to a unique, distinct destination. Arbitrary late clicks do not inherit this exception. Ordinary explicit click fallback is preserved.
+- Added five synthetic regressions covering delayed seed versus stationary hover, provisional ownership crossing a new action, late local hover, a longer token pause, and late click after wide release versus unrelated click. Require CI to compile and execute these on the exact follow-up head.
+- Remaining sign-off: no wholly unobserved delayed-onset attribution, semantic URL/completion signal, overlay-aware legibility guarantee, or measured target-Mac cadence. The real replay harness must be run with independently annotated actual footage, then frame intervals measured on the M1. Keep this change isolated; do not merge on synthetic evidence alone.

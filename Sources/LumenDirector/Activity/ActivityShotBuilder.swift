@@ -6,6 +6,13 @@ import LumenProject
 /// Owns no state; safe to call from any task. Click/typing/scroll and hover-only
 /// evidence are suppressed here; explicit input keeps priority in the planner.
 public enum ActivityShotBuilder {
+    // Distinct budgets: continuity bridges evidence gaps; reading hold is the
+    // visible editorial tail. Neither is a semantic completion detector.
+    private static let pendingGap = 2.0
+    private static let continuationGap = 3.0
+    private static let readingHold = 2.0
+    private static let destinationLookback = 8.0
+
     struct Comp {
         var box: CellBox
         var cells: Int
@@ -87,11 +94,21 @@ public enum ActivityShotBuilder {
         for g in grids where g.cells.count == ActivityConst.cells && g.t.isFinite {
             live.removeAll {
                 let track = tracks[$0]
-                // Only confirmed progression earns a longer token-pause grace.
-                let grace = track.sustained ? max(s.settleHold, 1.6) : s.settleHold
-                // Freeze the preceding response's region at the action
-                // boundary; never let its union absorb the next destination.
-                if track.sustained, let end = track.actionEnd, g.t >= end { return true }
+                // Freeze ALL action-owned evidence, including provisional
+                // tracks. Post-click growth cannot retroactively prove the
+                // previous action or change its historical framing.
+                if let end = track.actionEnd, g.t >= end { return true }
+                let grace: Double
+                if track.sustained {
+                    grace = max(s.settleHold, continuationGap)
+                } else if track.actionTime != nil, !track.localHoverTainted,
+                          track.samples >= max(2, s.onsetSamples) {
+                    // An observed seed may bridge a bounded loading gap.
+                    // A wholly unobserved delayed result earns no exception.
+                    grace = max(s.settleHold, pendingGap)
+                } else {
+                    grace = s.settleHold
+                }
                 return g.t - track.lastT > grace + 1e-6
             }
             let active = mask(for: g, t: g.t, inputs: inputs, settings: s, cw: cw, ch: ch)
@@ -119,7 +136,12 @@ public enum ActivityShotBuilder {
                                           radius: s.hoverRadiusCells) {
                     tracks[best].hoverTainted = true
                 }
-                if g.t - tracks[best].firstT <= 0.25,
+                // Until corroborated, pointer-local growth is still hover
+                // evidence even if the pointer arrived after track onset.
+                // Once confirmed, reading the response with the pointer must
+                // not revoke the already established subject.
+                if (g.t - tracks[best].firstT <= 0.25 ||
+                    (tracks[best].actionTime != nil && !tracks[best].sustained)),
                    inputs.localHover(at: g.t, box: c.box, cw: cw, ch: ch, radius: s.hoverRadiusCells) {
                     tracks[best].localHoverTainted = true
                 }
@@ -164,8 +186,19 @@ public enum ActivityShotBuilder {
         var precedingResponses: [Double: Track] = [:]
         for tr in tracks where tr.sustained && !tr.progressionOverflow {
             guard let owner = tr.actionTime, confirmedPerAction[owner] == 1,
-                  let boundary = tr.actionEnd,
-                  boundary >= tr.lastT, boundary - tr.lastT <= max(s.settleHold, 1.6) else { continue }
+                  let boundary = tr.actionEnd, boundary >= tr.lastT else { continue }
+            let quiet = boundary - tr.lastT
+            if quiet > max(s.settleHold, readingHold) {
+                // After returning wide, a click on the earlier response can
+                // still own a destination. Do not link arbitrary late clicks
+                // elsewhere, or retain unbounded historical context.
+                guard quiet <= destinationLookback,
+                      let click = inputs.primaryClick(at: boundary) else { continue }
+                let x = Double(click.x) / cw, y = Double(click.y) / ch
+                let box = tr.union.inflated(1)
+                guard x >= Double(box.x0), x <= Double(box.x1 + 1),
+                      y >= Double(box.y0), y <= Double(box.y1 + 1) else { continue }
+            }
             precedingResponses[boundary] = tr
         }
         var destinations: [Double: [Int]] = [:]
@@ -205,10 +238,12 @@ public enum ActivityShotBuilder {
             let associated = sustained || destination
             let start = max(grids[0].t, tr.firstT - s.lead,
                             associated ? (tr.actionTime ?? tr.firstT) : -.infinity)
-            let settle = sustained ? max(s.settleHold, 1.6) : s.settleHold
+            let settle = sustained ? max(s.settleHold, readingHold) : s.settleHold
             let naturalEnd = max((sustained ? tr.lastT : (tr.capT ?? tr.lastT)) + settle, start + s.minHold)
             let end = associated ? min(naturalEnd, tr.actionEnd ?? .infinity) : naturalEnd
-            busy.append(start...(max(start, tr.lastT + settle)))
+            // Protect the entire editorial reading interval from idle ramps,
+            // including a minimum hold longer than the observed activity.
+            busy.append(start...max(start, end, tr.lastT + settle))
             guard end > start + 0.02 else { continue }
             // Recorded look-ahead can frame the eventual growing subject from
             // the start. No per-token camera chase; if it cannot fit, stay wide.
