@@ -46,7 +46,7 @@ import LumenProject
         let result = ActivityShotBuilder.build(grids: fixture.grids, source: (1920, 1080),
             inputs: ActivityInputs.make(events: fixture.events), settings: ActivitySettings())
         let plan = ZoomPlanner.plan(events: fixture.events, ax: [], typing: [], activity: [], src: src,
-            p: CameraParams(), tm: TimeMap(sourceDuration: 16), activityShots: result.shots)
+            p: CameraParams(), tm: TimeMap(sourceDuration: 16), avoid: [], activityShots: result.shots)
         let segment = try #require(plan.segments.first)
         #expect(plan.segments.count == 1)
         #expect(plan.kinds[segment.id] == .visual)
