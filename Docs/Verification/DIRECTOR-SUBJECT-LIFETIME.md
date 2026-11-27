@@ -16,3 +16,13 @@ Based on the approved Director plan. Keep the existing 480 Hz solver and all man
 4. Remaining actual acceptance: real captured pair, URL/generation completion evidence from supported local observations, ambiguity and delayed-output fixtures, geometry across crops/captions/webcam, actual presented intervals on M1 and high refresh. This synthetic evidence is not hardware or semantic sign-off. Require green full CI on exact head before merge.
 
 The planner now carries protected visual segment IDs into camera scheduling. A following automatic shot cannot anticipate across their end, and the chain builder cannot truncate a protected response to force a full-frame return. Adjacent shots may transition using the original motion equations at the boundary. Regression samples the actual 480 Hz baked track before and after the handoff, asserting stable reading hold and bounded per-tick motion. No claim that presented FPS was measured.
+
+## Real recording proof (opt-in)
+
+Run `bash Tools/director-replay-proof.sh /path/to/project.lumen /path/to/truth.json /path/to/new-output-directory` on a clean macOS checkout. Use an unedited actual capture with autozoom and activity enabled. Annotate the actual submit/click source timestamps, at least two response samples (including the reading beat), destination samples and at least one disjoint hover-only interval. Rectangles are normalized source coordinates [x,y,w,h] and minimumOutputHeight is the independently chosen minimum legible height in a 1080p/portrait output. These numbers must come from the actual recording, not from Director's predicted rectangles. Example structure (illustrative placeholders, not proof):
+
+```json
+{"submit":0.5,"click":13.0,"response":[{"time":5.0,"rect":[0.55,0.3,0.15,0.08],"minimumOutputHeight":24},{"time":12.8,"rect":[0.55,0.5,0.15,0.04],"minimumOutputHeight":20}],"destination":[{"time":14.0,"rect":[0.1,0.2,0.2,0.15],"minimumOutputHeight":24}],"hoverOnly":[[16.0,18.0]]}
+```
+
+The test copies the source project, runs local analysis, asserts source-time ownership, checks actual derived zoom and projected subject geometry in both 16:9 and 9:16, and saves actual GPU-rendered PNG samples plus a commit-stamped report. It fails on missing evidence or clipping; it does not assert semantic recognition, caption/webcam occlusion, or presentation intervals. No user recording is available in the remote editing environment. Review PNGs and use actual editor playback on the target Mac with presented-time instrumentation for final cadence sign-off. The normal CI must report this opt-in test as skipped, not real-proof success.
