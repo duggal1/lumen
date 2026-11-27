@@ -737,7 +737,7 @@ public actor Engine {
                     reporter.progress(progress.total > 0 ? Double(progress.frame) / Double(progress.total) : 0,
                                       progress.notice)
                 }
-                let proof = try await AgentExportProof.verify(staging, expectedDuration: timeline.compositionDuration, fps: Double(preset.fps))
+                let proof = try await AgentExportProof.verify(staging, expectedDuration: timeline.compositionDuration, fps: Double(preset.fps), expectsAudio: includeAudio && session.mixer.hasProgram(timeline))
                 try Task.checkCancellation()
                 if FileManager.default.fileExists(atPath: output.path) {
                     guard overwrite else {

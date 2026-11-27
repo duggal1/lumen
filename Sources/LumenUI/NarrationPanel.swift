@@ -20,6 +20,7 @@ struct NarrationPanel: View {
     @State private var disclosure = ""
     @State private var player: AVAudioPlayer?
     @State private var placement: Double = 0
+    @State private var baseRevision = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -63,6 +64,7 @@ struct NarrationPanel: View {
         .foregroundStyle(Tok.text).background(Tok.bg)
         .onAppear {
             placement = model.playhead
+            baseRevision = model.session.currentProjectRevision
             configured = !(Keychain.read(service: ElevenLabsProvider.keychainService, account: ElevenLabsProvider.keychainAccount) ?? "").isEmpty
         }
         .onDisappear { task?.cancel(); player?.stop(); discard() }
@@ -99,6 +101,10 @@ struct NarrationPanel: View {
 
     private func insert() {
         guard let url = generatedURL, placement + seconds <= model.duration + 0.05 else { return }
+        guard model.session.currentProjectRevision == baseRevision else {
+            issue = "Project changed while generating narration. Close and reopen the panel to choose the current placement."
+            return
+        }
         var lane = AudioLane(role: .voiceover, path: url.path, placement: placement)
         lane.loops = false
         lane.trimDuration = seconds

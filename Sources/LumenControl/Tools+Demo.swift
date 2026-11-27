@@ -220,7 +220,7 @@ public extension ToolRegistry {
                                         }
                                         var lane = AudioLane(role: .voiceover, path: generated.url.path, placement: placement)
                                         lane.loops = false
-                        lane.trimDuration = generated.duration
+                                        lane.trimDuration = generated.duration
                                         try applyCommand(.addAudioLane(lane), to: &timeline)
                                     }
                                 } catch {

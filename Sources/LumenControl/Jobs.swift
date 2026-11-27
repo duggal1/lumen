@@ -116,7 +116,7 @@ public final class JobManager: @unchecked Sendable {
             let reporter = JobReporter(jobID: id, report: { [weak self] progress, message in
                 self?.progress(id, progress, message)
             }, saveCheckpoint: { [weak self] checkpoint in
-                self?.update(id) { $0.result = checkpoint }
+                self?.update(id) { $0.result = checkpoint; $0.updated = Date().timeIntervalSince1970 }
             })
             do {
                 try Task.checkCancellation()
