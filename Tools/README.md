@@ -68,3 +68,7 @@ Rules: executable scripts in `./tools/` called via bash, one job per tool,
 structured output (JSON preferred), non-zero exit on failure. Document each
 new tool here the moment you create it. Hold no secrets; never touch production
 or anything outside scope.
+
+## Agent autonomy target-Mac proof
+
+Run `bash Tools/agent-autonomy-proof.sh chrome.lumen truth.json 40s-project.lumen /new/proof-directory` on the target M1/8 GiB Mac. Follow its printed Studio launch command using a build from the exact checkout. Play for at least 12 uninterrupted seconds; then run the printed Python gate. The gate checks local media evidence only. Actual forced-restart and cinematic review remain separate release criteria.

@@ -630,7 +630,8 @@ public final class Renderer: @unchecked Sendable {
     /// `presentAt` lets the caller present on an exact host-clock instant, so a
     /// frame rendered one vsync ahead has a full frame of scheduling slack.
     @discardableResult
-    public func draw(_ r: RenderRequest, to layer: CAMetalLayer, presentAt: Double? = nil) -> Bool {
+    public func draw(_ r: RenderRequest, to layer: CAMetalLayer, presentAt: Double? = nil,
+                     onPresented: (@Sendable (Double) -> Void)? = nil) -> Bool {
         // SMOOTHNESS: cap drawables in flight at two. `nextDrawable()` blocks
         // once the pool (3) is exhausted, stalling the render thread behind the
         // window server; dropping the frame is strictly cheaper.
@@ -649,7 +650,12 @@ public final class Renderer: @unchecked Sendable {
         }
         let stats = presentStats, expected = 1 / max(r.fps, 1)
         let slot = FrameSlot(count: inFlight)
-        dr.addPresentedHandler { d in slot.release(); stats.record(d.presentedTime, expected: expected) }
+        dr.addPresentedHandler { d in
+            slot.release()
+            let actual = d.presentedTime
+            stats.record(actual, expected: expected)
+            onPresented?(actual)
+        }
         // Fallback release when presentation is skipped (encoding error, layer
         // torn down mid-flight); the slot itself is one-shot.
         cb.addCompletedHandler { _ in slot.release() }
