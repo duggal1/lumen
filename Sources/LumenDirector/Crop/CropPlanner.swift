@@ -24,7 +24,11 @@ public struct CropInputs: Sendable {
                 while si + 1 < samples.count && samples[si + 1].t <= e.t { si += 1 }
                 guard samples.indices.contains(si) else { continue }
                 let s = samples[si]
-                if s.front, s.webValid,
+                // Never use a future or expired browser observation to
+                // classify an unrelated desktop click as browser chrome.
+                if s.t.isFinite, e.t.isFinite, s.t <= e.t,
+                   e.t - s.t <= CropPlanner.maxObservationAge,
+                   s.front, s.webValid, s.window.isValid, s.web.isValid,
                    s.window.contains(Double(e.x), Double(e.y)),
                    !s.web.contains(Double(e.x), Double(e.y)) {
                     clicks.append(e.t)
@@ -233,7 +237,7 @@ public enum CropPlanner {
         return Smoothed(data: out)
     }
 
-    private static let maxObservationAge = 1.0
+    fileprivate static let maxObservationAge = 1.0
 
     static func baseRuns(_ samples: [ViewportSample], _ s: CropSettings, _ duration: Double) -> [Run] {
         var runs = [Run(start: 0, end: duration, mode: .full)]
@@ -312,6 +316,7 @@ public enum CropPlanner {
             start = nil
         }
         for sm in samples {
+            if start != nil, sm.t - last > maxObservationAge { close() }
             if sm.front && sm.ui {
                 if start == nil { start = sm.t }
                 last = sm.t
