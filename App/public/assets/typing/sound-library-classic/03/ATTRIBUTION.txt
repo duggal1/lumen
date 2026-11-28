@@ -1,0 +1,14 @@
+CC0-1.0; unicaegames; https://opengameart.org/content/keyboard-soundpack-1-typing-and-single-keystrokes
+Sound-Library da2d497cb0a734b642c4b7635793f5300d1f24e2
+KeyP: Human Typing/human_vel-006.wav (48 kHz mono frames 35472–40032) | 4261490766a892f5e24ee5116409c9e330ae7add
+BracketLeft: Human Typing/human_vel-006.wav (48 kHz mono frames 42096–46656) | 90f9f15752f4987e15b5cef9c528320ff60b7a44
+BracketRight: Human Typing/human_vel-007.wav (48 kHz mono frames 17712–22272) | a0ea64f27a8ec6a6c726c34c72780f176b535818
+Backslash: Single Keys/keypress-001.wav | eecfc7ee5e03251c8b78c17a942848a7ce3a5e41
+CapsLock: Single Keys/keypress-004.wav | e8c5618af9e4f685ec762192ede07fb4e7b7da85
+KeyA: Human Typing/human_vel-007.wav (48 kHz mono frames 45072–49632) | c09e155e015e58c2c5e5f2ed9bf3bc9906c1ae38
+KeyS: Human Typing/human_vel-007.wav (48 kHz mono frames 79824–84384) | e3378de8c5133f4d9fe19b726817438c8f78ff72
+KeyD: Human Typing/human_vel-007.wav (48 kHz mono frames 87024–91584) | 7621abc21bb7c52eceac1bb1828f213fdd662305
+KeyF: Human Typing/human_vel-008.wav (48 kHz mono frames 29328–33888) | 54404f4bb0197d80782c3b092ea2936db9d84a16
+KeyG: Single Keys/keypress-008.wav | 967d7a7efe969f3e8b207cdaa0291e1b83460fa3
+KeyH: Single Keys/keypress-032.wav | c21079a5276eea3c44b96252f9c82c30b9392a7a
+KeyJ: Single Keys/keypress-024.wav | f5527c8708fafb04b118f3647611d7d9c5d05219
