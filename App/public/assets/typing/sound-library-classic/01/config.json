@@ -1,0 +1,105 @@
+{
+  "id": "classic-01",
+  "name": "Classic 01",
+  "author": "unicaegames",
+  "definition_method": "single",
+  "audio_file": "classic.wav",
+  "definitions": {
+    "Escape": {
+      "timing": [
+        [
+          0,
+          95
+        ]
+      ]
+    },
+    "Digit1": {
+      "timing": [
+        [
+          95,
+          182
+        ]
+      ]
+    },
+    "Digit2": {
+      "timing": [
+        [
+          182,
+          257
+        ]
+      ]
+    },
+    "Digit3": {
+      "timing": [
+        [
+          257,
+          318
+        ]
+      ]
+    },
+    "Digit4": {
+      "timing": [
+        [
+          318,
+          403
+        ]
+      ]
+    },
+    "Digit5": {
+      "timing": [
+        [
+          403,
+          498
+        ]
+      ]
+    },
+    "Digit6": {
+      "timing": [
+        [
+          498,
+          583
+        ]
+      ]
+    },
+    "Digit7": {
+      "timing": [
+        [
+          583,
+          666
+        ]
+      ]
+    },
+    "Digit8": {
+      "timing": [
+        [
+          666,
+          745
+        ]
+      ]
+    },
+    "Digit9": {
+      "timing": [
+        [
+          745,
+          832
+        ]
+      ]
+    },
+    "Digit0": {
+      "timing": [
+        [
+          832,
+          895
+        ]
+      ]
+    },
+    "Minus": {
+      "timing": [
+        [
+          895,
+          950
+        ]
+      ]
+    }
+  }
+}
