@@ -1,0 +1,105 @@
+{
+  "id": "classic-02",
+  "name": "Classic 02",
+  "author": "unicaegames",
+  "definition_method": "single",
+  "audio_file": "classic.wav",
+  "definitions": {
+    "Equal": {
+      "timing": [
+        [
+          0,
+          95
+        ]
+      ]
+    },
+    "Backspace": {
+      "timing": [
+        [
+          95,
+          218
+        ]
+      ]
+    },
+    "Tab": {
+      "timing": [
+        [
+          218,
+          343
+        ]
+      ]
+    },
+    "KeyQ": {
+      "timing": [
+        [
+          343,
+          394
+        ]
+      ]
+    },
+    "KeyW": {
+      "timing": [
+        [
+          394,
+          447
+        ]
+      ]
+    },
+    "KeyE": {
+      "timing": [
+        [
+          447,
+          532
+        ]
+      ]
+    },
+    "KeyR": {
+      "timing": [
+        [
+          532,
+          623
+        ]
+      ]
+    },
+    "KeyT": {
+      "timing": [
+        [
+          623,
+          670
+        ]
+      ]
+    },
+    "KeyY": {
+      "timing": [
+        [
+          670,
+          709
+        ]
+      ]
+    },
+    "KeyU": {
+      "timing": [
+        [
+          709,
+          774
+        ]
+      ]
+    },
+    "KeyI": {
+      "timing": [
+        [
+          774,
+          857
+        ]
+      ]
+    },
+    "KeyO": {
+      "timing": [
+        [
+          857,
+          910
+        ]
+      ]
+    }
+  }
+}
