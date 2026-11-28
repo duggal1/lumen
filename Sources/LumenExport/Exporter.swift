@@ -23,28 +23,6 @@ public struct ExportProgress: Sendable {
     public init(frame: Int, total: Int, notice: String?) { self.frame = frame; self.total = total; self.notice = notice }
 }
 
-/// Await-able GPU completion.
-final class Latch: @unchecked Sendable {
-    private let s = OSAllocatedUnfairLock<(result: Bool?, c: CheckedContinuation<Bool, Never>?)>(uncheckedState: (nil, nil))
-    func fire(_ success: Bool) {
-        let c = s.withLock { st -> CheckedContinuation<Bool, Never>? in
-            guard st.result == nil else { return nil }
-            st.result = success; let c = st.c; st.c = nil; return c
-        }
-        c?.resume(returning: success)
-    }
-    func wait() async -> Bool {
-        await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
-            let result = s.withLock { st -> Bool? in
-                if let result = st.result { return result }
-                precondition(st.c == nil, "GPU latch has one consumer")
-                st.c = c; return nil
-            }
-            if let result { c.resume(returning: result) }
-        }
-    }
-}
-
 public enum FrameImage {
     public static func makeBuffer(_ w: Int, _ h: Int, format: OSType = kCVPixelFormatType_32BGRA) -> CVPixelBuffer? {
         var pb: CVPixelBuffer?
@@ -79,7 +57,7 @@ public enum FrameImage {
                                 personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true),
                                 transparent: transparent, cursorOnly: cursorOnly)
         guard renderer.renderChecked(req, into: pb, completion: { latch.fire($0) }) else { throw ExportError.render }
-        guard await latch.wait() else { throw ExportError.render }
+        try await latch.waitChecked(stage: .render)
         try Task.checkCancellation()
         return pb
     }
@@ -101,7 +79,9 @@ public enum FrameImage {
 private final class AudioFeeder: @unchecked Sendable {
     let reader: AVAssetReader, out: AVAssetReaderTrackOutput, input: AVAssetWriterInput
     private let state = OSAllocatedUnfairLock<(finished: Bool, failure: String?)>(initialState: (false, nil))
+    private let sampleCount = OSAllocatedUnfairLock<Int64>(initialState: 0)
     var result: (finished: Bool, failure: String?) { state.withLock { $0 } }
+    var appendedSamples: Int64 { sampleCount.withLock { $0 } }
     init(_ r: AVAssetReader, _ o: AVAssetReaderTrackOutput, _ i: AVAssetWriterInput) { reader = r; out = o; input = i }
     func start(on q: DispatchQueue) {
         input.requestMediaDataWhenReady(on: q) { [self] in
@@ -111,6 +91,8 @@ private final class AudioFeeder: @unchecked Sendable {
                         state.withLock { $0 = (true, "Audio encoder rejected a sample.") }
                         return
                     }
+                    let count = Int64(CMSampleBufferGetNumSamples(sb))
+                    sampleCount.withLock { $0 += count }
                 } else {
                     let failure = reader.status == .completed ? nil : (reader.error?.localizedDescription ?? "Audio reader stopped before completion.")
                     if failure == nil { input.markAsFinished() }
@@ -127,11 +109,21 @@ private final class AudioFeeder: @unchecked Sendable {
 }
 
 public enum Exporter {
+    private static func finish(_ writer: AVAssetWriter, duration: Double) async throws {
+        let latch = Latch()
+        // AVAssetWriter exposes no byte-level finalization progress here.
+        // Use a workload-scaled absolute deadline, not fabricated progress.
+        let timeout = min(1800, max(120, 120 + max(duration, 0) * 0.25))
+        writer.finishWriting { latch.fire(true) }
+        try await latch.waitChecked(stage: .finalize, timeout: .seconds(timeout))
+    }
+
     /// Offline export: GPU renders frame i+1 while the encoder consumes frame i (depth-2 pipeline).
+    @discardableResult
     public static func run(session: ProjectSession, timeline tl: Timeline, preset p: ExportPreset, to url: URL,
                            includeAudio: Bool = true, audioBitrate: Int = 320_000, exportStems: Bool = false,
                            exportCursorLayer: Bool = false,
-                           progress: @escaping @Sendable (ExportProgress) -> Void) async throws {
+                           progress: @escaping @Sendable (ExportProgress) -> Void) async throws -> ExportMediaProof {
         guard let d = tl.derived else { throw ExportError.noTimeline }
         if p.alpha && !p.codec.supportsAlpha {
             throw ExportError.writer("Transparent delivery needs ProRes 4444.")
@@ -242,11 +234,13 @@ public enum Exporter {
             let waitStart = HostClock.now()
             os_signpost(.begin, log: exportLog, name: "export.encode.wait")
             let gpuStart = HostClock.now()
-            guard await item.0.wait() else { throw ExportError.render }
+            try await item.0.waitChecked(stage: .render)
             try Task.checkCancellation()
             gpuWaitSeconds += HostClock.now() - gpuStart
             let encoderStart = HostClock.now()
+            var readiness = ExportStallGuard(stage: .encoder, idleSeconds: 30, now: encoderStart)
             while !vi.isReadyForMoreMediaData {
+                try readiness.observe(progress: 0, now: HostClock.now())
                 try Task.checkCancellation()
                 guard writer.status == .writing else { throw ExportError.writer(writer.error?.localizedDescription ?? "encoder stopped") }
                 try await Task.sleep(for: .milliseconds(1))
@@ -315,8 +309,10 @@ public enum Exporter {
                     guard r.startReading() else { throw ExportError.writer(r.error?.localizedDescription ?? "Audio reader failed to start.") }
                     defer { feeder.cancel() }
                     feeder.start(on: DispatchQueue(label: "lumen.export.audio"))
+                    var audioProgress = ExportStallGuard(stage: .audio, idleSeconds: 60, now: HostClock.now())
                     while !feeder.result.finished {
                         try Task.checkCancellation()
+                        try audioProgress.observe(progress: feeder.appendedSamples, now: HostClock.now())
                         guard writer.status == .writing else { throw ExportError.writer(writer.error?.localizedDescription ?? "Audio encoder stopped.") }
                         try await Task.sleep(for: .milliseconds(10))
                     }
@@ -325,9 +321,15 @@ public enum Exporter {
             } else { audioInput?.markAsFinished() }
         }
         let finishStart = HostClock.now()
-        await writer.finishWriting()
+        try await finish(writer, duration: compositionDuration)
         finishSeconds = HostClock.now() - finishStart
         if writer.status != .completed { throw ExportError.writer(writer.error?.localizedDescription ?? "export failed") }
+        try Task.checkCancellation()
+
+        // Validate staged media before any existing destination is replaced.
+        let proof = try await ExportMediaProof.verify(stagedURL, expectedDuration: compositionDuration,
+            fps: fps, expectsAudio: includeAudio && session.mixer.hasProgram(tl),
+            expectedSize: CGSize(width: w, height: h))
         try Task.checkCancellation()
 
         // Optionally export independent, unmastered float-WAV files for editing
@@ -388,6 +390,7 @@ public enum Exporter {
                                  max(0, elapsed - decodeSeconds - compositeSeconds - encodeWaitSeconds - mixSeconds - finishSeconds))
             FileHandle.standardError.write(Data(message.utf8))
         }
+        return proof
         } catch {
             audioPrep?.cancel()
             _ = try? await audioPrep?.value
@@ -435,10 +438,12 @@ public enum Exporter {
                                     personMaskDirectory: session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true),
                                     transparent: true, cursorOnly: true)
             guard renderer.renderChecked(req, into: pb, completion: { latch.fire($0) }) else { throw ExportError.render }
-            guard await latch.wait() else { throw ExportError.render }
+            try await latch.waitChecked(stage: .render)
             try Task.checkCancellation()
+            var readiness = ExportStallGuard(stage: .encoder, idleSeconds: 30, now: HostClock.now())
             while !vi.isReadyForMoreMediaData {
                 try Task.checkCancellation()
+                try readiness.observe(progress: 0, now: HostClock.now())
                 guard writer.status == .writing else { throw ExportError.writer(writer.error?.localizedDescription ?? "cursor layer stopped") }
                 try await Task.sleep(for: .milliseconds(1))
             }
@@ -450,7 +455,7 @@ public enum Exporter {
             }
         }
         vi.markAsFinished()
-        await writer.finishWriting()
+        try await finish(writer, duration: tl.compositionDuration)
         if writer.status != .completed { throw ExportError.writer(writer.error?.localizedDescription ?? "cursor layer export failed") }
         try Task.checkCancellation()
         if FileManager.default.fileExists(atPath: url.path) {

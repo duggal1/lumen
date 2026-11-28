@@ -8,63 +8,23 @@ import LumenExport
 /// Validate encoded media before the agent can publish its staged file.
 enum AgentExportProof {
     static func verify(_ url: URL, expectedDuration: Double, fps: Int, expectsAudio: Bool, expectedSize: CGSize? = nil) async throws -> JSONValue {
-        try Task.checkCancellation()
-        let asset = AVURLAsset(url: url)
-        let duration = try await asset.load(.duration).seconds
-        let tracks = try await asset.loadTracks(withMediaType: .video)
-        guard let track = tracks.first, duration.isFinite, duration > 0,
-              expectedDuration.isFinite, expectedDuration > 0,
-              abs(duration - expectedDuration) <= max(0.15, 2 / Double(max(fps, 1))) else {
-            throw ToolError(code: "EXPORT_VERIFICATION_FAILED", hint: "Encoded video track or duration is invalid.")
-        }
-        let size = try await track.load(.naturalSize)
-        guard size.width > 0, size.height > 0, expectedSize.map({ $0 == size }) ?? true else {
-            throw ToolError(code: "EXPORT_VERIFICATION_FAILED", hint: "Invalid encoded video dimensions.")
-        }
-        let count = ceil(expectedDuration * Double(fps) - 1e-8)
-        guard fps > 0, count.isFinite, count < Double(Int.max) else {
-            throw ToolError(code: "EXPORT_VERIFICATION_FAILED", hint: "Invalid expected frame count.")
-        }
-        let frames: Int
         do {
-            frames = try await ExportBenchmark.validateVideo(at: url, expectedFrames: max(Int(count), 1), fps: fps)
+            let proof = try await ExportMediaProof.verify(url, expectedDuration: expectedDuration, fps: fps,
+                                                         expectsAudio: expectsAudio, expectedSize: expectedSize)
+            return json(proof)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
             throw ToolError(code: "EXPORT_VERIFICATION_FAILED", hint: error.localizedDescription)
         }
-        // Decode representative images in addition to checking compressed sample timing.
-        for time in [0.0, duration / 2, max(0, duration - max(0.25, 3 / Double(max(fps, 1))))] {
-            try Task.checkCancellation()
-            let reader = try AVAssetReader(asset: asset)
-            reader.timeRange = CMTimeRange(start: CMTime(seconds: time, preferredTimescale: 60000), duration: .positiveInfinity)
-            let output = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
-            guard reader.canAdd(output) else { throw ToolError.failed("Cannot decode exported video.") }
-            reader.add(output)
-            guard reader.startReading(), let sample = output.copyNextSampleBuffer(), CMSampleBufferGetImageBuffer(sample) != nil else {
-                throw ToolError(code: "EXPORT_VERIFICATION_FAILED", hint: "Encoded frame failed to decode.")
-            }
-            reader.cancelReading()
-        }
-        let audio = try await asset.loadTracks(withMediaType: .audio)
-        if expectsAudio {
-            guard let track = audio.first else {
-                throw ToolError(code: "EXPORT_VERIFICATION_FAILED", hint: "Expected an audio track in the encoded output.")
-            }
-            let reader = try AVAssetReader(asset: asset)
-            let output = AVAssetReaderTrackOutput(track: track, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
-            guard reader.canAdd(output) else { throw ToolError.failed("Cannot decode exported audio.") }
-            reader.add(output)
-            guard reader.startReading(), let sample = output.copyNextSampleBuffer(), CMSampleBufferGetNumSamples(sample) > 0 else {
-                throw ToolError(code: "EXPORT_VERIFICATION_FAILED", hint: "Encoded audio failed to decode.")
-            }
-            reader.cancelReading()
-        }
-        return .object(["duration": .number(duration), "width": .number(Double(size.width)),
-                        "height": .number(Double(size.height)), "audio_tracks": .int(audio.count), "video_frames": .int(frames),
-                        "presentation_timestamps_verified": .bool(true),
-                        "boundary_frames_decoded": .bool(true), "midpoint_frame_decoded": .bool(true),
-                        "required_audio_decoded": .bool(expectsAudio)])
+    }
+
+    static func json(_ proof: ExportMediaProof) -> JSONValue {
+        .object(["duration": .number(proof.duration), "width": .number(Double(proof.width)),
+                 "height": .number(Double(proof.height)), "audio_tracks": .int(proof.audioTracks),
+                 "video_frames": .int(proof.videoFrames), "presentation_timestamps_verified": .bool(true),
+                 "boundary_frames_decoded": .bool(true), "midpoint_frame_decoded": .bool(true),
+                 "required_audio_decoded": .bool(proof.requiredAudioDecoded)])
     }
 
     /// The movie is published last. Existing stems must survive a failed delivery.
