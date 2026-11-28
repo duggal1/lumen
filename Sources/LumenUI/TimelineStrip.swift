@@ -315,7 +315,7 @@ struct TimelineStrip: View {
         // revision: SwiftUI must still invalidate when an edit publishes.
         let tl = model.timeline, tm = tl.timeMap
         let revision = model.box.get().1
-        return eventIndex.snapshot(revision: revision) {
+        return eventIndex.snapshot(owner: ObjectIdentifier(model), revision: revision) {
             var markers: [Marker] = []
             if let d = tl.derived {
                 markers += d.clicks.map { Marker(t: $0.t, kind: "Click", isTap: false) }

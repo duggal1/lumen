@@ -38,13 +38,14 @@ import Foundation
         }
     }
 
+    private var owner: ObjectIdentifier?
     private var revision: Int?
     private var cached: Snapshot?
 
-    func snapshot(revision next: Int, build: () -> Snapshot) -> Snapshot {
-        if revision == next, let cached { return cached }
+    func snapshot(owner nextOwner: ObjectIdentifier? = nil, revision next: Int, build: () -> Snapshot) -> Snapshot {
+        if owner == nextOwner, revision == next, let cached { return cached }
         let value = build()
-        revision = next; cached = value
+        owner = nextOwner; revision = next; cached = value
         return value
     }
 }

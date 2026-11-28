@@ -76,7 +76,7 @@ struct LIconButton: View {
     }
 }
 
-private struct StudioIconPressStyle: ButtonStyle {
+struct StudioIconPressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduce
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -123,7 +123,8 @@ struct LSlider: View {
                 c.fill(Path(CGRect(x: CGFloat(i) * 4, y: (size.height - h) / 2, width: 2, height: h)),
                        with: .color(on ? Ramp.o[3] : Tok.controlPressed), style: FillStyle(antialiased: false))
             }
-            c.fill(Path(CGRect(x: CGFloat(lit) * 4, y: (size.height - 16) / 2, width: 2, height: 16)), with: .color(Tok.text), style: FillStyle(antialiased: false))
+            let position = CGFloat(frac.isFinite ? min(max(frac, 0), 1) : 0) * max(size.width - 2, 0)
+            c.fill(Path(CGRect(x: position, y: (size.height - 16) / 2, width: 2, height: 16)), with: .color(Tok.text))
         }
         .frame(width: width, height: 24).contentShape(Rectangle())
         .opacity(enabled ? 1 : 0.4)
@@ -134,8 +135,10 @@ struct LSlider: View {
                     .gesture(DragGesture(minimumDistance: 0)
                         .onChanged { g in
                             dragging = true
-                            var v = range.lowerBound + min(max(g.location.x / width, 0), 1) * (range.upperBound - range.lowerBound)
-                            if step > 0 { v = (v / step).rounded() * step }
+                            let fraction = min(max(g.location.x / max(width, 1), 0), 1)
+                            var v = range.lowerBound + fraction * (range.upperBound - range.lowerBound)
+                            if step > 0 { v = range.lowerBound + ((v - range.lowerBound) / step).rounded() * step }
+                            v = min(max(v, range.lowerBound), range.upperBound)
                             if v != value { value = v }
                         }
                         .onEnded { _ in dragging = false })

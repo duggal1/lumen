@@ -38,10 +38,10 @@ struct StudioRailItem: View {
                 .foregroundStyle(selected ? accent : StudioInk.secondary)
                 .frame(width: 36, height: 36)
                 .background(RoundedRectangle(cornerRadius: 7).fill(selected ? StudioInk.selected : hover ? StudioInk.hover : .clear))
-        }.buttonStyle(.plain).onHover { hover = $0 }.clickable().focusRing()
+        }.buttonStyle(StudioIconPressStyle()).onHover { hover = $0 }.clickable().focusRing()
             .help(title).accessibilityLabel(title).accessibilityAddTraits(selected ? .isSelected : [])
-            .animation(reduce ? nil : StudioInk.ease(0.12), value: hover)
-            .animation(reduce ? nil : StudioInk.ease(0.17), value: selected)
+            .animation(reduce ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
+            .animation(reduce ? nil : Motion.selection, value: selected)
     }
 }
 struct StudioSection<Content: View>: View {
@@ -191,11 +191,14 @@ struct StudioSliderRow: View {
                                       y: thumb.size.height / 2)
                     }.allowsHitTesting(false)
                 }.contentShape(Rectangle())
-                    .background(RoundedRectangle(cornerRadius: 5).fill(hovering || drag != nil ? StudioInk.hover : .clear))
+                    .background {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(hovering || drag != nil ? StudioInk.hover : .clear)
+                            .animation(reduce ? nil : (hovering ? Motion.hoverIn : Motion.hoverOut), value: hovering)
+                            .animation(reduce ? nil : (drag != nil ? Motion.press : Motion.release), value: drag != nil)
+                    }
                     .onHover { hovering = $0 }
                     .pointerStyle(drag != nil ? .grabActive : .grabIdle)
-                    .animation(reduce ? nil : (hovering ? Motion.hoverIn : Motion.hoverOut), value: hovering)
-                    .animation(reduce ? nil : (drag != nil ? Motion.press : Motion.release), value: drag != nil)
                     .gesture(DragGesture(minimumDistance: 0).updating($drag) { event, state, _ in
                         state = range.lowerBound + Double(min(max(event.location.x / max(g.size.width, 1), 0), 1)) * (range.upperBound-range.lowerBound)
                     }.onChanged { event in
@@ -216,7 +219,7 @@ struct StudioColorSwatches: View {
                 Button { choose(RGBA(hex)) } label: {
                     StudioDitherMark(tint: Color(hex: hex)).frame(width: 18, height: 18)
                         .padding(3).background(RoundedRectangle(cornerRadius: 5).fill(selected == RGBA(hex) ? StudioInk.selected : StudioInk.well))
-                }.buttonStyle(.plain).help(String(format: "#%06X", hex)).accessibilityLabel(String(format: "Color #%06X", hex))
+                }.buttonStyle(StudioIconPressStyle()).help(String(format: "#%06X", hex)).accessibilityLabel(String(format: "Color #%06X", hex))
             }
         }
     }
