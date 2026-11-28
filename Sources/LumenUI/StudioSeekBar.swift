@@ -20,7 +20,7 @@ struct StudioSeekBar: View {
                 let usable = max(g.size.width - 4, 0)
                 ZStack(alignment: .leading) {
                     Capsule().fill(StudioInk.well).frame(height: 4)
-                    Capsule().fill(StudioInk.blue).frame(width: usable * CGFloat(progress) + 4, height: 4)
+                    Capsule().fill(StudioInk.blue).frame(width: max(g.size.width, 0) * CGFloat(progress), height: 4)
                     Capsule().fill(StudioInk.text)
                         .frame(width: 4, height: dragging || hovering ? 14 : 10)
                         .offset(x: usable * CGFloat(progress))

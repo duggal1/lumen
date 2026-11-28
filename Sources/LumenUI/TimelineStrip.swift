@@ -73,7 +73,7 @@ struct TimelineStrip: View {
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { change($0, width) }
                 .onEnded { value in
-                    if drag?.kind == .pan, abs(value.translation.width) < 3, abs(value.translation.height) < 3 {
+                    if drag?.kind == .pan, !panning, abs(value.translation.width) < 3, abs(value.translation.height) < 3 {
                         model.seek(viewport(width: width).t(atX: value.location.x))
                     }
                     if drag?.kind == .seek { model.endScrub() }
@@ -82,6 +82,7 @@ struct TimelineStrip: View {
                         model.commitPendingCut()
                     }
                     drag = nil
+                    panning = false
                 })
             .onDisappear { if drag?.kind == .seek { model.endScrub() } }
             .onContinuousHover { phase in
@@ -263,11 +264,12 @@ struct TimelineStrip: View {
     /// Keep the head in view while playing: nudge only when it crosses 80% or
     /// leaves the left edge, so the strip does not crawl every frame.
     func follow(_ t: Double, width: CGFloat) {
-        guard model.isPlaying else { return }
+        guard drag == nil, t.isFinite else { return }
         let vp = viewport(width: width)
         let x = vp.x(t)
         let left = vp.lattice.x0
-        if x > left + vp.span * 0.8 || x < left {
+        let right = left + vp.span * (model.isPlaying ? 0.8 : 1)
+        if x > right || x < left {
             applyOrigin(t - vp.visible * 0.2, width: width)
         }
     }

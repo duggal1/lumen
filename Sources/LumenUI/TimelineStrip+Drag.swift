@@ -197,7 +197,8 @@ extension TimelineStrip {
         switch d.kind {
         case .pan:
             let dx = v.translation.width
-            if abs(dx) >= 3 { applyOrigin(d.o0 - Double(dx / vp.pps), width: w) }
+            if abs(dx) >= 3 { panning = true }
+            if panning { applyOrigin(d.o0 - Double(dx / vp.pps), width: w) }
         case .seek: model.scrub(to: viewport(width: w).t(atX: v.location.x))
         case .pendingStart:
             let snapped = snapTime(t, dur: dur, vp: vp)

@@ -477,7 +477,7 @@ enum TimelineSelection: Equatable {
     /// Whole-program mastering is admitted while transport is idle.
     private func scheduleIdleMaster() {
         masterDelayTask?.cancel()
-        guard !wantsPlayback else { return }
+        guard !wantsPlayback, resumeAfterScrub == nil else { return }
         masterDelayTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(900))
             guard !Task.isCancelled, let self, !self.wantsPlayback else { return }
@@ -551,6 +551,8 @@ enum TimelineSelection: Equatable {
         resumeAfterScrub = wantsPlayback
         wantsPlayback = false
         cancelWindowRequests()
+        yieldMasterToTransport()
+        if editIssue == "Preparing audio…" { editIssue = nil }
         clock.pause(at: HostClock.now())
         player.stop()
         isPlaying = false
