@@ -254,3 +254,30 @@ enum BCProbe {
         #expect(failures.isEmpty, Comment(rawValue: failures.joined(separator: "\n")))
     }
 }
+
+@Test func browserChromeClicksRequireFreshCausalEvidence() {
+    let click = InputEvent(t: 2, kind: .down, x: 500, y: 18, button: 0)
+    let samples = BCProbe.samples()
+    let stale = samples.filter { $0.t == 0 }
+    let future = samples.filter { $0.t == 3 }
+    let fresh = samples.filter { $0.t == 1.9 }
+    #expect(CropInputs.make(events: [click], samples: stale).uiClicks.isEmpty)
+    #expect(CropInputs.make(events: [click], samples: future).uiClicks.isEmpty)
+    #expect(CropInputs.make(events: [click], samples: fresh).uiClicks == [2])
+}
+
+@Test func pageTypingKeepsChromeHiddenByDefault() {
+    let duration = 8.0
+    let observations = BCProbe.samples(duration)
+    let inputs = CropInputs(keys: [2, 2.1, 2.2, 2.3, 2.4], uiClicks: [])
+    let source = PxRect(x: 0, y: 0, w: BCProbe.W, h: BCProbe.H)
+    var settings = CropSettings()
+    #expect(settings.uncrop == .chromeTyping)
+    let page = CropPlanner.plan(samples: observations, inputs: inputs, duration: duration,
+                                source: source, settings: settings)
+    #expect(!page.changes.contains { $0.mode == .window })
+    settings.uncrop = .anyTyping
+    let legacy = CropPlanner.plan(samples: observations, inputs: inputs, duration: duration,
+                                  source: source, settings: settings)
+    #expect(legacy.changes.contains { $0.mode == .window })
+}
