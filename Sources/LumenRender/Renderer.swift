@@ -1267,7 +1267,7 @@ public final class Renderer: @unchecked Sendable {
         let cursorOpacity = Float(min(max(Double(cs.opacity) * cropFade, 0), 1)) * screenOpacity
         if cursorOpacity > 0.01, let atlas, let ent = atlas.entry(cs.shape) {
             let S = 32 * r.backingScale * tl.cursor.size * pxPerSrc * pow(sc, 1 - tl.cursor.effectiveCompensation) * Double(cs.press)
-            let c = g.toCanvas(SIMD2<Double>(Double(cs.position.x), Double(cs.position.y)), cam: cam, scale: sc, crop: cropBounds, tilt: tilt)
+            let c = placement.toCanvas(SIMD2<Double>(Double(cs.position.x), Double(cs.position.y)), cam: cam, scale: sc, crop: cropBounds, tilt: tilt)
             enc.setRenderPipelineState(pCursor)
             quad(enc, SIMD4<Float>(Float(c.x - ent.hot.x * S), Float(c.y - ent.hot.y * S), Float(S), Float(S)), canvasF)
             frag(enc, CursorU(content: content, radius: Float(g.radius), opacity: cursorOpacity, layer: UInt32(ent.layer), p: 0))
