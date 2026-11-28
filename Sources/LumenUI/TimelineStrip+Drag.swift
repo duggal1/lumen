@@ -55,7 +55,7 @@ extension TimelineStrip {
             }
         } else if p.y >= TimelineStrip.Lanes.events && p.y < TimelineStrip.Lanes.audio {
             var bestD: CGFloat = 6
-            for m in outEvents() {
+            for m in visibleMarkers(from: vp.t(atX: p.x - 10), through: vp.t(atX: p.x + 10)) {
                 let d = abs(vp.cx(m.t) - p.x)
                 if d < bestD { bestD = d; col = vp.col(m.t) }
             }
@@ -179,7 +179,7 @@ extension TimelineStrip {
             // Clicking a marker seeks to it exactly.
             if drag?.kind == .seek, v.startLocation.y >= TimelineStrip.Lanes.events, v.startLocation.y < TimelineStrip.Lanes.audio {
                 var bestT: Double? = nil, bestD: CGFloat = 6
-                for m in outEvents() {
+                for m in visibleMarkers(from: vp.t(atX: v.startLocation.x - 10), through: vp.t(atX: v.startLocation.x + 10)) {
                     let d = abs(vp.cx(m.t) - v.startLocation.x)
                     if d < bestD { bestD = d; bestT = m.t }
                 }

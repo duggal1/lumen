@@ -43,10 +43,10 @@ struct LButtonStyle: ButtonStyle {
             let fg: Color = kind == .primary ? (off ? Tok.text2 : Tok.onAccent) : kind == .quiet && !hover ? Tok.text2 : Tok.text
             c.label.font(AppType.label).foregroundStyle(fg).padding(.horizontal, 12).frame(height: height)
                 .background(Capsule().fill(bg))
-                .scaleEffect(c.isPressed ? 0.98 : 1).opacity(kind != .primary && off ? 0.4 : 1)
+                .scaleEffect(c.isPressed && !reduceMotion ? 0.98 : 1).opacity(kind != .primary && off ? 0.4 : 1)
                 .onHover { hover = $0 }.pointerStyle(enabled ? .link : .default)
                 .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
-                .animation(reduceMotion ? nil : Motion.hoverIn, value: c.isPressed)
+                .animation(reduceMotion ? nil : (c.isPressed ? Motion.press : Motion.release), value: c.isPressed)
         }
     }
 }
@@ -70,9 +70,18 @@ struct LIconButton: View {
     var body: some View {
         Button(action: action) { PixelSymbol(icon, size: 12).frame(width: 28, height: 28)
             .background(RoundedRectangle(cornerRadius: 8).fill(hover ? Tok.controlHover : .clear)) }
-            .buttonStyle(.plain).foregroundStyle(Tok.text).onHover { hover = $0 }
+            .buttonStyle(StudioIconPressStyle()).foregroundStyle(Tok.text).onHover { hover = $0 }
             .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
             .pointerStyle(.link).accessibilityLabel(label)
+    }
+}
+
+private struct StudioIconPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduce
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduce ? 0.94 : 1)
+            .animation(reduce ? nil : (configuration.isPressed ? Motion.press : Motion.release), value: configuration.isPressed)
     }
 }
 

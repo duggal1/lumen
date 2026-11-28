@@ -149,16 +149,20 @@ enum Pixel {
 }
 
 enum Motion {
-    static let hoverIn = Animation.easeOut(duration: 0.10)
-    static let hoverOut = Animation.easeOut(duration: 0.22)
-    static let route = Animation.easeOut(duration: 0.18)
-    static let slide = Animation.smooth(duration: 0.30)
+    static func spring(_ duration: Double) -> Animation { .smooth(duration: duration, extraBounce: 0) }
+    static let hoverIn = spring(0.13)
+    static let hoverOut = spring(0.20)
+    static let press = spring(0.10)
+    static let release = spring(0.20)
+    static let selection = spring(0.20)
+    static let route = spring(0.18)
+    static let slide = spring(0.28)
     static let menuOpen = Animation.smooth(duration: 0.20)
     static let menuClose = Animation.easeOut(duration: 0.12)
     static let menuHighlight = Animation.smooth(duration: 0.18)
     static let floatingHighlight = Animation.smooth(duration: 0.28)
     static let floatingTransition = Animation.smooth(duration: 0.32)
-    static let toggle = Animation.smooth(duration: 0.22, extraBounce: 0)
+    static let toggle = spring(0.22)
     static let settle = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.28)
 }
 

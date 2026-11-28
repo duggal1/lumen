@@ -16,6 +16,10 @@ struct TimelineScrollCatcher: NSViewRepresentable {
         return v
     }
 
+    static func dismantleNSView(_ v: NSView, coordinator: ()) {
+        (v as? Catcher)?.detach()
+    }
+
     func updateNSView(_ v: NSView, context: Context) {
         guard let c = v as? Catcher else { return }
         c.onScroll = onScroll
@@ -27,17 +31,18 @@ struct TimelineScrollCatcher: NSViewRepresentable {
         var onMagnify: ((CGFloat, CGFloat) -> Void)?
         private var monitor: Any?
         private var link: CADisplayLink?
-        private var remaining: CGFloat = 0
+        private var wheel = StudioWheelSpring()
         private var lastTick: CFTimeInterval = 0
 
         /// Only discrete mouse wheel steps get a short, non-overshooting
         /// settling tail. Precise trackpads already supply native momentum.
         private func enqueue(_ delta: CGFloat) {
             guard delta.isFinite else { return }
-            remaining = min(max(remaining + delta, -1200), 1200)
+            wheel.add(Double(delta))
             if link == nil {
                 let display = displayLink(target: self, selector: #selector(advanceWheel(_:)))
                 lastTick = 0
+                display.preferredFrameRateRange = StudioDisplayRate.range(screenMaximum: window?.screen?.maximumFramesPerSecond ?? 60)
                 display.add(to: .main, forMode: .common)
                 link = display
             }
@@ -47,16 +52,15 @@ struct TimelineScrollCatcher: NSViewRepresentable {
             let now = display.timestamp
             let dt = lastTick > 0 ? min(max(now - lastTick, 0), 0.1) : 1.0 / 60
             lastTick = now
-            let amount = abs(remaining) < 0.5 ? remaining : remaining * CGFloat(1 - exp(-dt * 28))
-            remaining -= amount
-            onScroll?(amount, 0, false)
-            if abs(remaining) < 0.001 { stopWheel() }
+            let amount = wheel.advance(dt: dt)
+            if amount != 0 { onScroll?(CGFloat(amount), 0, false) }
+            if wheel.isIdle { stopWheel() }
         }
 
         private func stopWheel() {
             link?.invalidate()
             link = nil
-            remaining = 0
+            wheel = StudioWheelSpring()
             lastTick = 0
         }
 
@@ -99,6 +103,8 @@ struct TimelineScrollCatcher: NSViewRepresentable {
                 }
             }
         }
+
+        func detach() { removeMonitor() }
 
         private func removeMonitor() {
             stopWheel()

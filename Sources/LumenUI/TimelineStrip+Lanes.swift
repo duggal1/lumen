@@ -268,7 +268,7 @@ extension TimelineStrip {
     @ViewBuilder func eventsLane(_ vp: Viewport) -> some View {
         Canvas { c, size in
             let lat = vp.lattice
-            let markers = outEvents().filter { $0.t >= vp.origin - 0.2 && $0.t <= vp.origin + vp.visible + 0.2 }
+            let markers = visibleMarkers(from: vp.origin - 0.2, through: vp.origin + vp.visible + 0.2)
             let spans = autoZoomSpansOut()
             let focus = focusSpan()
             var byCol: [Int: [Marker]] = [:]
@@ -297,7 +297,7 @@ extension TimelineStrip {
 
             // Typing bursts: runs of low cells.
             var typing = Path()
-            for b in TimelineGeometry.bursts(times: keyOutputs(), gap: 0.5) {
+            for b in eventSnapshot().visibleBursts(from: vp.origin, through: vp.origin + vp.visible) {
                 let c0 = max(vp.colFloor(b.start), 0), c1 = min(max(vp.colCeil(b.end), c0 + 1), lat.cols)
                 guard c1 > c0 else { continue }
                 for col in c0..<c1 { typing.addRect(CGRect(x: lat.x(col: col), y: 28, width: TimelineStrip.Lattice.cell, height: 4)) }

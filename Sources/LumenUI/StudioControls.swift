@@ -11,7 +11,7 @@ enum StudioInk {
     static let text = Color(hex: 0xF5F5F5), secondary = Color(hex: 0xA3A3A3)
     static let blue = Color(hex: 0x1688FF), orange = Color(hex: 0x1688FF), violet = Color(hex: 0xA7DFFF)
     static let cyan = Color(hex: 0xA7DFFF), pink = Color(hex: 0xA7DFFF), green = Color(hex: 0x1688FF), rose = Color(hex: 0xA7DFFF)
-    static func ease(_ duration: Double) -> Animation { .smooth(duration: duration, extraBounce: 0) }
+    static func ease(_ duration: Double) -> Animation { Motion.spring(duration) }
 }
 private struct StudioHueKey: EnvironmentKey { static let defaultValue = StudioInk.orange }
 extension EnvironmentValues { var studioHue: Color { get { self[StudioHueKey.self] } set { self[StudioHueKey.self] = newValue } } }
@@ -84,9 +84,9 @@ struct StudioControlStyle: ButtonStyle {
                 .scaleEffect(configuration.isPressed && !reduce ? 0.97 : 1)
                 .opacity(enabled ? 1 : 0.45)
                 .onHover { hover = $0 }
-                .animation(reduce ? nil : StudioInk.ease(0.11), value: hover)
-                .animation(reduce ? nil : StudioInk.ease(configuration.isPressed ? 0.10 : 0.20), value: configuration.isPressed)
-                .animation(reduce ? nil : StudioInk.ease(0.18), value: selected)
+                .animation(reduce ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
+                .animation(reduce ? nil : (configuration.isPressed ? Motion.press : Motion.release), value: configuration.isPressed)
+                .animation(reduce ? nil : Motion.selection, value: selected)
         }
     }
 }
@@ -140,12 +140,13 @@ struct StudioToggle: View {
     @Environment(\.accessibilityReduceMotion) private var reduce
     var body: some View {
         Button { on.toggle() } label: {
-            ZStack(alignment: on ? .trailing : .leading) {
+            ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 6).fill(on ? hue.opacity(0.22) : StudioInk.well)
-                StudioDitherMark(tint: on ? hue : StudioInk.secondary).frame(width: 13, height: 13).padding(4)
+                StudioDitherMark(tint: on ? hue : StudioInk.secondary)
+                    .frame(width: 13, height: 13).offset(x: on ? 19 : 4)
             }.frame(width: 36, height: 22)
         }.buttonStyle(.plain).clickable().focusRing()
-            .animation(reduce ? nil : StudioInk.ease(0.17), value: on)
+            .animation(reduce ? nil : Motion.toggle, value: on)
             .accessibilityLabel(label).accessibilityValue(on ? "On" : "Off")
     }
 }
@@ -178,14 +179,23 @@ struct StudioSliderRow: View {
                         let height: CGFloat = i < filled ? 9 : 4
                         c.fill(Path(CGRect(x: CGFloat(i)*4, y: (size.height-height)/2, width: 2, height: height)), with: .color(i < filled ? hue : StudioInk.pressed), style: FillStyle(antialiased: false))
                     }
-                    let x = CGFloat(unit.isFinite ? unit : 0) * max(size.width-2, 0)
-                    c.fill(Path(CGRect(x: x, y: 2, width: 2, height: size.height-4)), with: .color(StudioInk.text))
+                }.overlay(alignment: .leading) {
+                    // Keep the animated thumb's height separate from its
+                    // direct-manipulation position: no spring on the value.
+                    GeometryReader { thumb in
+                        Capsule().fill(StudioInk.text)
+                            .frame(width: 2, height: drag != nil ? 17 : hovering ? 15 : 11)
+                            .animation(reduce ? nil : Motion.selection, value: hovering)
+                            .animation(reduce ? nil : (drag != nil ? Motion.press : Motion.release), value: drag != nil)
+                            .position(x: 1 + CGFloat(unit.isFinite ? unit : 0) * max(thumb.size.width - 2, 0),
+                                      y: thumb.size.height / 2)
+                    }.allowsHitTesting(false)
                 }.contentShape(Rectangle())
                     .background(RoundedRectangle(cornerRadius: 5).fill(hovering || drag != nil ? StudioInk.hover : .clear))
                     .onHover { hovering = $0 }
                     .pointerStyle(drag != nil ? .grabActive : .grabIdle)
-                    .animation(reduce ? nil : StudioInk.ease(0.14), value: hovering)
-                    .animation(reduce ? nil : StudioInk.ease(0.14), value: drag != nil)
+                    .animation(reduce ? nil : (hovering ? Motion.hoverIn : Motion.hoverOut), value: hovering)
+                    .animation(reduce ? nil : (drag != nil ? Motion.press : Motion.release), value: drag != nil)
                     .gesture(DragGesture(minimumDistance: 0).updating($drag) { event, state, _ in
                         state = range.lowerBound + Double(min(max(event.location.x / max(g.size.width, 1), 0), 1)) * (range.upperBound-range.lowerBound)
                     }.onChanged { event in

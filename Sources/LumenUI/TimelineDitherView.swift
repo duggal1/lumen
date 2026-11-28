@@ -139,7 +139,7 @@ final class TimelineDitherNSView: NSView {
             l.add(to: .main, forMode: .common)
             link = l
         }
-        link?.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        link?.preferredFrameRateRange = StudioDisplayRate.range(screenMaximum: window.screen?.maximumFramesPerSecond ?? 60)
     }
 
     @objc private func tick(_ link: CADisplayLink) {
