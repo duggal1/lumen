@@ -1,5 +1,4 @@
 import Foundation
-import os
 import LumenProject
 import LumenRender
 
@@ -11,18 +10,13 @@ final class ProjectFrameReader: @unchecked Sendable {
     private let device: SendableMetalDevice
     private let cacheBudget: Int
     private let maxCachedFrames: Int
-    private let maxClipReaders: Int
-    private struct ClipCache {
-        var readers: [String: ReaderFrameSource] = [:]
-        var order: [String] = []
-    }
-    private let clipSources = OSAllocatedUnfairLock(initialState: ClipCache())
+    private let clipSources: ClipReaderCache<ReaderFrameSource>
 
     init(screen: ReaderFrameSource, webcam: (any FrameSource)?, device: SendableMetalDevice,
          cacheBudget: Int = 32 * 1024 * 1024, maxCachedFrames: Int = 4, maxClipReaders: Int = 2) {
         self.screen = screen; self.webcam = webcam; self.device = device
         self.cacheBudget = cacheBudget; self.maxCachedFrames = maxCachedFrames
-        self.maxClipReaders = maxClipReaders
+        self.clipSources = ClipReaderCache(capacity: maxClipReaders)
     }
 
     /// One frame for an OUTPUT time. Recording times read the screen track at
@@ -47,21 +41,9 @@ final class ProjectFrameReader: @unchecked Sendable {
 
     private func clipSource(for url: URL) async throws -> ReaderFrameSource {
         let key = url.standardizedFileURL.path
-        if let existing = clipSources.withLock({ cache -> ReaderFrameSource? in
-            guard let reader = cache.readers[key] else { return nil }
-            cache.order.removeAll { $0 == key }; cache.order.append(key)
-            return reader
-        }) { return existing }
-        let source = try await ReaderFrameSource(url: url, device: device, cacheBudget: cacheBudget, maxCachedFrames: maxCachedFrames)
-        return clipSources.withLock { cache in
-            if let existing = cache.readers[key] { return existing }
-            // Each reader owns decoded frames and Metal textures. Retaining
-            // every clip in a long project needlessly grows GPU memory.
-            while cache.order.count >= maxClipReaders {
-                cache.readers.removeValue(forKey: cache.order.removeFirst())
-            }
-            cache.readers[key] = source; cache.order.append(key)
-            return source
+        let device = device, budget = cacheBudget, frames = maxCachedFrames
+        return try await clipSources.value(for: key) {
+            try await ReaderFrameSource(url: url, device: device, cacheBudget: budget, maxCachedFrames: frames)
         }
     }
 
