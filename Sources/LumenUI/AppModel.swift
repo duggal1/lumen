@@ -847,6 +847,13 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                     }
                     let now = ContinuousClock.now
                     if now >= nextStatus {
+                        if await session.interruption != nil {
+                            // Join the recording actor's single terminal task
+                            // via the ordinary UI stop path (markers, activity,
+                            // lastProjectURL and library state stay consistent).
+                            Task { @MainActor [weak self] in await self?.stop() }
+                            return
+                        }
                         stats = sample
                         switch quality.observe(sample, paused: paused) {
                         case .nominal: break
@@ -932,6 +939,9 @@ public enum WebcamQuality: String, CaseIterable, Sendable { case auto, q4k, q108
                 pendingMarkers = []
             }
             lastProjectURL = b.url
+            if let interruption = await session.interruption {
+                self.error = "Recording interrupted (\(interruption.kind.userDescription)). Playable footage was saved."
+            }
             paused = false
             phase = .idle; refresh()
             let finished = b.url
