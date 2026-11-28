@@ -1,0 +1,113 @@
+{
+  "id": "classic-05",
+  "name": "Classic 05",
+  "author": "unicaegames",
+  "definition_method": "single",
+  "audio_file": "classic.wav",
+  "definitions": {
+    "KeyM": {
+      "timing": [
+        [
+          0,
+          129
+        ]
+      ]
+    },
+    "Comma": {
+      "timing": [
+        [
+          129,
+          322
+        ]
+      ]
+    },
+    "Period": {
+      "timing": [
+        [
+          322,
+          572
+        ]
+      ]
+    },
+    "Slash": {
+      "timing": [
+        [
+          572,
+          753
+        ]
+      ]
+    },
+    "ShiftRight": {
+      "timing": [
+        [
+          753,
+          870
+        ]
+      ]
+    },
+    "ControlLeft": {
+      "timing": [
+        [
+          870,
+          973
+        ]
+      ]
+    },
+    "MetaLeft": {
+      "timing": [
+        [
+          973,
+          1064
+        ]
+      ]
+    },
+    "AltLeft": {
+      "timing": [
+        [
+          1064,
+          1193
+        ]
+      ]
+    },
+    "Space": {
+      "timing": [
+        [
+          1193,
+          1308
+        ]
+      ]
+    },
+    "AltRight": {
+      "timing": [
+        [
+          1308,
+          1431
+        ]
+      ]
+    },
+    "MetaRight": {
+      "timing": [
+        [
+          1431,
+          1564
+        ]
+      ]
+    },
+    "ContextMenu": {
+      "timing": [
+        [
+          1564,
+          1727
+        ]
+      ]
+    },
+    "ControlRight": {
+      "timing": [
+        [
+          1727,
+          1862
+        ]
+      ]
+    }
+  }
+}

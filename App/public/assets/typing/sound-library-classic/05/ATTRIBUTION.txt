@@ -1,0 +1,15 @@
+CC0-1.0; unicaegames; https://opengameart.org/content/keyboard-soundpack-1-typing-and-single-keystrokes
+Sound-Library da2d497cb0a734b642c4b7635793f5300d1f24e2
+KeyM: Single Keys/keypress-002.wav | 3578fa0bc93823426fb6d979a881b71871588c67
+Comma: Single Keys/keypress-012.wav | 8dac94dd60db31e899c06104e85b139631346d9c
+Period: Single Keys/keypress-009.wav | c5afadf410c926f585e7bedb5bad7ebce3707dfd
+Slash: Single Keys/keypress-020.wav | 2d9a6c0100ae03546135177e16746e7127f67007
+ShiftRight: Single Keys/keypress-013.wav | ffcfdc44190cc9d927c171293dc9f47d61382455
+ControlLeft: Single Keys/keypress-029.wav | 0a8bd72dbb62f72220997b40a11f0a02222cae59
+MetaLeft: Single Keys/keypress-007.wav | fa4ba63ed04c81e139694d88a5e0a610be928f6f
+AltLeft: Single Keys/keypress-027.wav | 13713711b495c2781dad96d0e1a890f5593cd639
+Space: Single Keys/keypress-010.wav | 748c8510620dc90e9e8d294578b15870f8fbfa4c
+AltRight: Single Keys/keypress-028.wav | ba2c3d593f7d79a6ab19fb1ab472e3a6682c1fbb
+MetaRight: Single Keys/keypress-022.wav | c8ce942eecd725e8f1e9eef702bf13f96d3fc764
+ContextMenu: Single Keys/keypress-026.wav | 62f7638014babd9f78b38d81a54e1044338c3929
+ControlRight: Single Keys/keypress-011.wav | 525bbcc9076cb297532aca781b65134acce9faec
