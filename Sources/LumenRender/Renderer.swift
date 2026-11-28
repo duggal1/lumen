@@ -100,6 +100,14 @@ public struct Geometry: Sendable {
         return (framed, zoom / growth)
     }
 
+    /// Maximum displacement of the actual drawn card corners. Optical zoom
+    /// alone cannot describe card travel during a connected pan or layout change.
+    static func edgeTravel(from a: Geometry, to b: Geometry) -> Double {
+        let d = b.content - a.content
+        return max(hypot(d.x, d.y), hypot(d.x + d.z, d.y),
+                   hypot(d.x, d.y + d.w), hypot(d.x + d.z, d.y + d.w))
+    }
+
     /// Contained camera centre: the sampled view (`baseView / scale`, where the
     /// base view is the largest rect of `aspect` inside the crop) stays inside
     /// the crop — and therefore inside the source. A no-op for a feasible
@@ -998,7 +1006,13 @@ public final class Renderer: @unchecked Sendable {
         let tiltB = CameraTilt.effective(b.cameraTilt, mode: tl.camera.tilt, maxYaw: tl.camera.maxYaw,
                                          maxPitch: tl.camera.maxPitch)
         let tiltDelta = max(abs(Double(tiltB.x - tiltA.x)), abs(Double(tiltB.y - tiltA.y)))
-        return max(cam, zoom, cur, tiltDelta * g.content.z * 0.004)
+        // Match the placement used by scene(), including crop-driven layout
+        // and the moving rounded frame. Retain the conservative optical bound.
+        let hasLayout = r.live == nil && tl.derived?.layout.samples.isEmpty == false
+            && tl.clipSource(atOutput: r.t.isFinite ? r.t : 0) == nil
+        let ga = (hasLayout ? g.positioned(in: a.layout, contentScale: tl.style.contentScale) : g).framing(a).geometry
+        let gb = (hasLayout ? g.positioned(in: b.layout, contentScale: tl.style.contentScale) : g).framing(b).geometry
+        return max(cam, zoom, cur, tiltDelta * g.content.z * 0.004, Geometry.edgeTravel(from: ga, to: gb))
     }
 
     /// Adaptive shutter sampling; preview stays sharp below a three-pixel streak.
