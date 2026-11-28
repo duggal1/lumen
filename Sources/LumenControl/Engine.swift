@@ -648,12 +648,22 @@ public actor Engine {
 
         // Silence: an all-zero master is a bug, not a mix.
         let silenceOK = audio.audible
+        let cinematic = AgentCinematicEvidence.measure(timeline)
+        let current = try await requireHandle(projectID)
+        guard current.revision == h.revision else {
+            throw ToolError.revisionConflict(expected: h.revision, actual: current.revision)
+        }
 
         func check(_ name: String, _ ok: Bool, _ detail: String) -> JSONValue {
             .object(["name": .string(name), "ok": .bool(ok), "detail": .string(detail)])
         }
         return .object([
             "project_id": .string(projectID),
+            "revision": .int(h.revision),
+            "cinematic_review": cinematic.report,
+            "audio_measurement": .object(["expected": .bool(expectsAudio), "measured": .bool(mixed != nil),
+                "lufs": loudness.isFinite ? .number(loudness) : .null,
+                "true_peak_db": truePeak.isFinite ? .number(truePeak) : .null]),
             "checks": .array([
                 check("zoom_targets", zoomTargetsMet,
                       "clicks=\(accuracy.clicks) zoomed=\(accuracy.zoomedClicks) settled=\(accuracy.settled) centered=\(accuracy.centeredClicks) arrival=\(String(format: "%.3f", accuracy.medianArrival))"),
@@ -662,6 +672,7 @@ public actor Engine {
                       String(format: "%.1f LUFS, true peak %.2f dBTP", loudness, truePeak)),
                 check("not_silent", silenceOK, String(format: "%.1f LUFS", loudness)),
                 check("no_dropped_frames", droppedOK, "\(dropped) dropped"),
+                check("camera_track_valid", cinematic.valid, "Finite, aligned camera trajectory and valid shot ranges"),
             ]),
             "zoom_accuracy": .object([
                 "clicks": .int(accuracy.clicks),
@@ -679,9 +690,8 @@ public actor Engine {
     /// Starts an export as a job. Uses the existing exporter, unchanged.
     public func startExport(projectID: String, presetName: String, outputPath: String,
                             includeAudio: Bool, exportStems: Bool, overwrite: Bool = false,
-                            client: String? = nil) async throws -> String {
+                            client: String? = nil, expectedRevision: Int? = nil) async throws -> String {
         // The client identity is recorded by the job manager for approvals and audit.
-        _ = client
         // AGENT: capture and export compete for the same GPU and must not run together.
         guard !RecordingGate.isRecordingActive else {
             throw ToolError(code: "RECORDING_ACTIVE", hint: "Stop recording before exporting.")
@@ -689,6 +699,9 @@ public actor Engine {
         let h = try await requireHandle(projectID)
         guard let session = h.session else {
             throw ToolError.failed("This project cannot be opened for export (no Metal device).")
+        }
+        if let expectedRevision, expectedRevision != h.revision {
+            throw ToolError.revisionConflict(expected: expectedRevision, actual: h.revision)
         }
         guard let preset = ExportPresets.parse(presetName) else {
             throw ToolError.invalidArguments("Unknown preset \(presetName). Use one of: "
@@ -721,8 +734,13 @@ public actor Engine {
         if FileManager.default.fileExists(atPath: output.path) && !overwrite {
             throw ToolError(code: "EXPORT_OUTPUT_EXISTS", hint: "Choose a different output path or set overwrite=true.")
         }
+        let current = try await requireHandle(projectID)
+        guard current.revision == h.revision else {
+            throw ToolError.revisionConflict(expected: h.revision, actual: current.revision)
+        }
         let gpuLane = self.gpuLane
-        return jobs.start(kind: "export") { reporter in
+        let exportRevision = h.revision
+        return jobs.start(kind: "export", owner: client) { reporter in
             try await gpuLane.withPermit {
                 let directory = output.deletingLastPathComponent()
                     .appendingPathComponent(".lumen-\(UUID().uuidString)", isDirectory: true)
@@ -752,7 +770,7 @@ public actor Engine {
                     keepRecoveryFiles = true
                     throw failure
                 }
-                return .object(["output": .string(output.path), "verification": proof,
+                return .object(["output": .string(output.path), "revision": .int(exportRevision), "verification": proof,
                                 "stems": .array(stems.map { .string($0.path) })])
             }
         }

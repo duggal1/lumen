@@ -18,6 +18,7 @@ public final class JobManager: @unchecked Sendable {
         public var error: String?
         public var created: Double
         public var updated: Double
+        public var owner: String? = nil
     }
 
     /// Progress notifications for the MCP client.
@@ -88,6 +89,15 @@ public final class JobManager: @unchecked Sendable {
         }
     }
 
+    /// Persisted receipts must not cross the authenticated MCP client boundary.
+    public func job(_ id: String, forClient client: String) -> Job? {
+        guard let job = job(id) else { return nil }
+        if let owner = job.owner { return owner == client ? job : nil }
+        // Legacy durable receipts have no trustworthy owner. Internal callers
+        // can recover them; do not expose them through MCP by guessing an ID.
+        return AgentJobJournal.isDurable(job.kind) ? nil : job
+    }
+
     public func recentJobs() -> [Job] {
         state.withLock { s in s.order.compactMap { s.jobs[$0] } }
     }
@@ -137,10 +147,10 @@ public final class JobManager: @unchecked Sendable {
 
     /// Starts a job. The body reports progress; it is never run on main.
     @discardableResult
-    public func start(kind: String, _ body: @escaping @Sendable (JobReporter) async throws -> JSONValue) -> String {
+    public func start(kind: String, owner: String? = nil, _ body: @escaping @Sendable (JobReporter) async throws -> JSONValue) -> String {
         let id = "job_" + UUID().uuidString.lowercased()
         let job = Job(id: id, kind: kind, state: .queued, progress: 0, message: nil, result: nil, error: nil,
-                      created: Date().timeIntervalSince1970, updated: Date().timeIntervalSince1970)
+                      created: Date().timeIntervalSince1970, updated: Date().timeIntervalSince1970, owner: owner)
         // AGENT: install the task while holding the store lock so fast completion cannot leave a stale handle.
         state.withLock { s in
             let cutoff = Date().timeIntervalSince1970 - 3600

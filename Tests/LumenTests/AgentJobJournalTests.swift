@@ -43,3 +43,19 @@ import Testing
     let persisted = receipt?["job"] as? [String: Any]
     #expect(persisted?["state"] as? String == "done")
 }
+
+@Test func durableReceiptsAreScopedToAuthenticatedClient() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let id = "job_" + UUID().uuidString.lowercased()
+    let now = Date().timeIntervalSince1970
+    do {
+        let journal = try AgentJobJournal(directory: root)
+        try journal.write(JobManager.Job(id: id, kind: "export", state: .done, progress: 1,
+            message: nil, result: .object(["output": .string("/fixture/demo.mp4")]),
+            error: nil, created: now, updated: now, owner: "client-a"))
+    }
+    let jobs = JobManager(journalDirectory: root)
+    #expect(jobs.job(id, forClient: "client-a") != nil)
+    #expect(jobs.job(id, forClient: "client-b") == nil)
+}

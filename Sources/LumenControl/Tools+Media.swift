@@ -324,7 +324,7 @@ public extension ToolRegistry {
                 guard (0...25_000).contains(input.waitMs) else {
                     throw ToolError.invalidArguments("wait_ms must be between 0 and 25000.")
                 }
-                guard let initial = ctx.jobs.job(input.jobID) else {
+                guard let initial = ctx.jobs.job(input.jobID, forClient: ctx.clientID) else {
                     throw ToolError.failed("No job with id \(input.jobID).")
                 }
                 var job = initial
@@ -334,7 +334,7 @@ public extension ToolRegistry {
                     while clock.now < deadline {
                         try Task.checkCancellation()
                         try await Task.sleep(for: .milliseconds(200))
-                        guard let latest = ctx.jobs.job(input.jobID) else { break }
+                        guard let latest = ctx.jobs.job(input.jobID, forClient: ctx.clientID) else { break }
                         job = latest
                         if job.updated > initial.updated || (job.state != .queued && job.state != .running) { break }
                     }
@@ -353,6 +353,9 @@ public extension ToolRegistry {
         register(ToolDefinition<ExportCancelInput>(name: "export_cancel",
             description: "Cancels a running job.",
             capability: .export, required: ["job_id"], mutating: true, destructive: true) { input, ctx in
+                guard ctx.jobs.job(input.jobID, forClient: ctx.clientID) != nil else {
+                    throw ToolError.failed("No job with id \(input.jobID).")
+                }
                 let cancelled = ctx.jobs.cancel(input.jobID)
                 return .object(["job_id": .string(input.jobID), "cancelled": .bool(cancelled)])
             })
