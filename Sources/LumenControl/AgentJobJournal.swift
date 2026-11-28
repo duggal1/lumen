@@ -31,6 +31,13 @@ final class AgentJobJournal: Sendable {
         directory.appendingPathComponent(id).appendingPathExtension("json")
     }
 
+    /// Filesystem identity, insensitive to `/private` symlink resolution and `.`/`..`.
+    /// `contentsOfDirectory` returns symlink-resolved URLs while `directory` keeps
+    /// the caller's spelling (e.g. `/var/...` vs `/private/var/...` on macOS).
+    private static func canonicalPath(_ url: URL) -> String {
+        url.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
     func write(_ job: JobManager.Job) throws {
         guard Self.isDurable(job.kind), job.id.range(of: "^job_[a-f0-9-]+$", options: .regularExpression) != nil else {
             throw ToolError.invalidArguments("Invalid durable job identity.")
@@ -56,7 +63,8 @@ final class AgentJobJournal: Sendable {
         var recovered: [JobManager.Job] = []
         for file in files where file.pathExtension == "json" {
             let record = try JSONDecoder().decode(Record.self, from: Data(contentsOf: file))
-            guard record.version == 1, Self.isDurable(record.job.kind), path(record.job.id).path == file.path else {
+            guard record.version == 1, Self.isDurable(record.job.kind),
+                  Self.canonicalPath(path(record.job.id)) == Self.canonicalPath(file) else {
                 throw ToolError(code: "JOB_JOURNAL_INVALID", hint: "Unsupported or mismatched job receipt.")
             }
             var job = record.job

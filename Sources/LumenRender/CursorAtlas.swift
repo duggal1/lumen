@@ -443,10 +443,8 @@ public final class CursorAtlas {
             return [16, 16]
         }
         if pack == .dot {
-            shadowed {
-                c.addEllipse(in: CGRect(x: 11, y: 11, width: 10, height: 10)); c.setFillColor(ink); c.setStrokeColor(paper); c.setLineWidth(1.8)
-                c.drawPath(using: .fillStroke)
-            }
+            c.addEllipse(in: CGRect(x: 11, y: 11, width: 10, height: 10)); c.setFillColor(ink); c.setStrokeColor(paper); c.setLineWidth(1.8)
+            c.drawPath(using: .fillStroke)
             return [16, 16]
         }
         if pack == .pixel {

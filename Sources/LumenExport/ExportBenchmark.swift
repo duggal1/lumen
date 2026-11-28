@@ -165,8 +165,15 @@ public enum ExportBenchmark {
         }
         timestamps.sort()
         let tolerance = 0.25 / Double(fps)
+        // Uniform 1/fps cadence + exact frame count. Container `edit list`s and
+        // encoder delay can offset the absolute start; the first presented frame
+        // may legitimately sit one vsync in (or the priming frame is dropped),
+        // so anchor cadence on the first frame instead of demanding pts[0] == 0.
+        guard let first = timestamps.first else {
+            throw ExportError.writer("Benchmark output has no frames.")
+        }
         for (index, pts) in timestamps.enumerated() {
-            guard abs(pts - Double(index) / Double(fps)) <= tolerance else {
+            guard abs((pts - first) - Double(index) / Double(fps)) <= tolerance else {
                 throw ExportError.writer("Benchmark video timestamp mismatch at frame \(index).")
             }
         }
