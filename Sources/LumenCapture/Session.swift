@@ -250,6 +250,12 @@ public actor RecordingSession {
     public func prepare(_ config: RecordingConfig, library: URL) async throws {
         // A previous terminal task owns its files until it has returned.
         if let interruptionTask { await interruptionTask.value }
+        if let stopTask { _ = try? await stopTask.value }
+        if let finalizeTask { _ = try? await finalizeTask.value }
+        switch stage {
+        case .idle, .ready, .failed: break
+        default: throw CaptureError.writer("The previous recording is still active.")
+        }
         stopTask = nil; finalizeTask = nil; interruptionTask = nil
         let generation = interruptionState.begin()
         MainThreadWatchdog.shared.start()
@@ -315,6 +321,10 @@ public actor RecordingSession {
 
     public func start() async throws {
         guard let engine, let input else { transition(to: .failed("No capture source.")); throw CaptureError.noSource }
+        if let reason = interruptionState.reason {
+            transition(to: .failed("Capture unavailable: \(reason.kind.userDescription)."))
+            throw CaptureError.writer("Capture unavailable: \(reason.kind.userDescription).")
+        }
         // Input Monitoring is checked here (at Start), not after the fact.
         if !Permissions.input {
             Permissions.requestInput()
@@ -430,7 +440,7 @@ public actor RecordingSession {
     private func startWatchdog() {
         watchdogTask?.cancel()
         let generation = interruptionState.generation
-        sleepObserver = NotificationCenter.default.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
             Task { await self?.receiveInterruption(.init(kind: .sleep), generation: generation) }
         }
         terminateObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
@@ -458,7 +468,7 @@ public actor RecordingSession {
 
     private func stopWatchdog() {
         watchdogTask?.cancel(); watchdogTask = nil
-        if let s = sleepObserver { NotificationCenter.default.removeObserver(s) }
+        if let s = sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(s) }
         if let s = terminateObserver { NotificationCenter.default.removeObserver(s) }
         sleepObserver = nil; terminateObserver = nil
     }
@@ -700,6 +710,7 @@ public actor RecordingSession {
         interruptionState.invalidate()
         engine?.setInterruptionHook(nil)
         if let interruptionTask { await interruptionTask.value }
+        let alreadyStopped = stopTask != nil
         if let stopTask { _ = try? await stopTask.value }
         if let finalizeTask { _ = try? await finalizeTask.value }
         let pendingJournal = journalTask
@@ -707,16 +718,19 @@ public actor RecordingSession {
         pendingJournal?.cancel()
         await pendingJournal?.value
         stopWatchdog()
-        if isPaused {
-            engine?.resume()
-            isPaused = false
+        // Never mark a completed AVAssetWriter input finished a second time.
+        // A terminal stop already owns all writer shutdown operations.
+        if !alreadyStopped {
+            if isPaused { engine?.resume() }
+            for recorder in extraMicrophones { await recorder.stop() }
+            viewport?.stop()
+            if let webcam { await webcam.stop() }
+            if let input { await input.stop() }
+            if let engine { await engine.cancel() }
         }
-        for recorder in extraMicrophones { await recorder.stop() }
+        isPaused = false
         extraMicrophones = []
-        viewport?.stop(); viewport = nil; viewportPaused = nil
-        if let webcam { await webcam.stop() }
-        if let input { await input.stop() }
-        if let engine { await engine.cancel() }
+        viewport = nil; viewportPaused = nil
         releaseRecordingActivity()
         var discardError: String?
         if let bundleURL = bundle?.url {
