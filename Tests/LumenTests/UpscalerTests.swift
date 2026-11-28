@@ -90,3 +90,39 @@ import LumenProject
     #expect(avg < 0.0167, "average upscale \(avg * 1000)ms exceeds 60fps budget")
     #expect(worst < 0.033, "worst upscale \(worst * 1000)ms exceeds 30fps floor")
 }
+
+@Test func cropAwareUpscaleUsesTheDisplayedSourcePixels() throws {
+    let layout = ContentLayout(canvas: SIMD2(320, 180), contentRect: SIMD4(80, 45, 160, 90),
+                               radii: .zero, srcSize: SIMD2(1024, 768),
+                               sampledBaseSize: SIMD2(16, 9))
+    let uncropped = ContentLayout(canvas: layout.canvas, contentRect: layout.contentRect,
+                                  radii: .zero, srcSize: layout.srcSize)
+    #expect(uncropped.baseMagnification < 1)
+    #expect(layout.baseMagnification == 10)
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let kernels = try FXKernels(device: device)
+    let upscaler = Upscaler(kernels: kernels)
+    let pass = ContentPass(kernels: kernels)
+    let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1024,
+                                                        height: 768, mipmapped: false)
+    desc.usage = [.shaderRead, .shaderWrite]
+    desc.storageMode = .shared
+    let source = try #require(device.makeTexture(descriptor: desc))
+    let queue = try #require(device.makeCommandQueue())
+    let cb = try #require(queue.makeCommandBuffer())
+    var params = UpscaleParams()
+    params.maxFactor = 10
+    let prepared = try pass.prepareUpscale(upscaler, cb, layout: layout,
+        camCenter: SIMD2(512, 384), zoom: 1, source: source, sourceID: 777,
+        params: params, pixelLimit: 524_288)
+    let (result, blend) = try #require(prepared)
+    cb.commit()
+    cb.waitUntilCompleted()
+    #expect(cb.status == .completed)
+    #expect(result.factor == 10)
+    #expect(blend == 1)
+    #expect(result.region.x <= 504 && result.region.x + result.region.z >= 520)
+    #expect(result.region.y <= 379 && result.region.y + result.region.w >= 389)
+    #expect(result.texSize.x >= Float(result.region.z) * result.factor)
+    #expect(result.texSize.y >= Float(result.region.w) * result.factor)
+}

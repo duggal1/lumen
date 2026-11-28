@@ -1119,7 +1119,7 @@ public final class Renderer: @unchecked Sendable {
            r.quality == .export || subframes == 1 {
             let layout = ContentLayout(canvas: SIMD2<Int32>(Int32(g.canvas.x), Int32(g.canvas.y)),
                                        contentRect: content, radii: SIMD4<Float>(g.radii),
-                                       srcSize: SIMD2<Float>(g.src))
+                                       srcSize: SIMD2<Float>(g.src), sampledBaseSize: cropSize)
             var params = UpscaleParams()
             params.maxFactor = tl.camera.upscaleMaxFactor
             if r.quality == .preview { params.shockIterations = 0; params.finalSharpen = 0 }
