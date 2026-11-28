@@ -43,10 +43,10 @@ struct LButtonStyle: ButtonStyle {
             let fg: Color = kind == .primary ? (off ? Tok.text2 : Tok.onAccent) : kind == .quiet && !hover ? Tok.text2 : Tok.text
             c.label.font(AppType.label).foregroundStyle(fg).padding(.horizontal, 12).frame(height: height)
                 .background(Capsule().fill(bg))
-                .scaleEffect(c.isPressed ? 0.98 : 1).opacity(kind != .primary && off ? 0.4 : 1)
+                .scaleEffect(c.isPressed && !reduceMotion ? 0.98 : 1).opacity(kind != .primary && off ? 0.4 : 1)
                 .onHover { hover = $0 }.pointerStyle(enabled ? .link : .default)
                 .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
-                .animation(reduceMotion ? nil : Motion.hoverIn, value: c.isPressed)
+                .animation(reduceMotion ? nil : (c.isPressed ? Motion.press : Motion.release), value: c.isPressed)
         }
     }
 }
@@ -70,9 +70,18 @@ struct LIconButton: View {
     var body: some View {
         Button(action: action) { PixelSymbol(icon, size: 12).frame(width: 28, height: 28)
             .background(RoundedRectangle(cornerRadius: 8).fill(hover ? Tok.controlHover : .clear)) }
-            .buttonStyle(.plain).foregroundStyle(Tok.text).onHover { hover = $0 }
+            .buttonStyle(StudioIconPressStyle()).foregroundStyle(Tok.text).onHover { hover = $0 }
             .animation(reduceMotion ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
             .pointerStyle(.link).accessibilityLabel(label)
+    }
+}
+
+struct StudioIconPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduce
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduce ? 0.94 : 1)
+            .animation(reduce ? nil : (configuration.isPressed ? Motion.press : Motion.release), value: configuration.isPressed)
     }
 }
 
@@ -114,7 +123,8 @@ struct LSlider: View {
                 c.fill(Path(CGRect(x: CGFloat(i) * 4, y: (size.height - h) / 2, width: 2, height: h)),
                        with: .color(on ? Ramp.o[3] : Tok.controlPressed), style: FillStyle(antialiased: false))
             }
-            c.fill(Path(CGRect(x: CGFloat(lit) * 4, y: (size.height - 16) / 2, width: 2, height: 16)), with: .color(Tok.text), style: FillStyle(antialiased: false))
+            let position = CGFloat(frac.isFinite ? min(max(frac, 0), 1) : 0) * max(size.width - 2, 0)
+            c.fill(Path(CGRect(x: position, y: (size.height - 16) / 2, width: 2, height: 16)), with: .color(Tok.text))
         }
         .frame(width: width, height: 24).contentShape(Rectangle())
         .opacity(enabled ? 1 : 0.4)
@@ -125,8 +135,10 @@ struct LSlider: View {
                     .gesture(DragGesture(minimumDistance: 0)
                         .onChanged { g in
                             dragging = true
-                            var v = range.lowerBound + min(max(g.location.x / width, 0), 1) * (range.upperBound - range.lowerBound)
-                            if step > 0 { v = (v / step).rounded() * step }
+                            let fraction = min(max(g.location.x / max(width, 1), 0), 1)
+                            var v = range.lowerBound + fraction * (range.upperBound - range.lowerBound)
+                            if step > 0 { v = range.lowerBound + ((v - range.lowerBound) / step).rounded() * step }
+                            v = min(max(v, range.lowerBound), range.upperBound)
                             if v != value { value = v }
                         }
                         .onEnded { _ in dragging = false })

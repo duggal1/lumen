@@ -1,0 +1,14 @@
+CC0-1.0; unicaegames; https://opengameart.org/content/keyboard-soundpack-1-typing-and-single-keystrokes
+Sound-Library da2d497cb0a734b642c4b7635793f5300d1f24e2
+KeyK: Single Keys/keypress-014.wav | 779444f77a5546409902d44ed617212ddd2c2d08
+KeyL: Single Keys/keypress-015.wav | d4024727f2d7297b5bdac97511e7412a39a4819c
+Semicolon: Single Keys/keypress-016.wav | a18765f8e39410e7b6f7898fc2ccc0ece3622a94
+Quote: Single Keys/keypress-021.wav | 6c09162831c659da0724de4297e2d1000c1e234c
+Enter: Single Keys/keypress-006.wav | feb9b184fe7f33c57f10f48e3952bfa75513dbb4
+ShiftLeft: Single Keys/keypress-019.wav | 16ffcd14acb64cf36170aec7e031b0d200e9493a
+KeyZ: Single Keys/keypress-003.wav | 54b3df33cf076303790dc79c498cce15dd109261
+KeyX: Single Keys/keypress-031.wav | 625009d61bde2f1b24c057d1a654b070aea069b1
+KeyC: Single Keys/keypress-025.wav | 7f8296ca68cfa4a5783f7aa45202063ce8257e0a
+KeyV: Single Keys/keypress-023.wav | 048c2e21fad2d0c008fd7a58c59292d921b73aab
+KeyB: Single Keys/keypress-018.wav | 2151c0b7674f2acf3cafbef5ed895748a3e55c5e
+KeyN: Single Keys/keypress-005.wav | 9a9b5d3469a9fb873474d2b4ace56b349acef151

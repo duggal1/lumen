@@ -209,6 +209,7 @@ struct EditorView: View {
                 LButton(title: "Add zoom", icon: "plus.magnifyingglass", kind: .quiet) { model.addZoom() }
                 LButton(title: "Tools", icon: "slider.horizontal.3", kind: .secondary) { openTools() }
             }
+            StudioSeekBar(model: model)
             HStack(spacing: 12) {
                 // One control per action beside the readout line. The timeline
                 // is full at 184pt (ruler + 4 lanes), so there is no toolbar.

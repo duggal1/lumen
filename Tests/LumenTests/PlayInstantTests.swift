@@ -390,3 +390,41 @@ func editorOpenReturnsBeforeHeavyPreparationFinishes() async throws {
     let mixed = try #require(second.mixer.mix(derived))
     #expect(mixed.l.isEmpty == false)
 }
+
+/// The transport remains paused while the pointer moves and commits its exact
+/// final time, restoring playback only if it was requested before the gesture.
+@MainActor
+@Test func studioScrubbingCommitsExactPositionAndRestoresPlaybackIntent() async throws {
+    let fx = try makeStudioFixture(named: "Scrub", seconds: 6, systemAudio: false)
+    defer { try? FileManager.default.removeItem(at: fx.bundle.url.deletingLastPathComponent()) }
+    var file = try fx.bundle.load()
+    file.meta.mic = nil
+    file.timeline.audio.soundEffectsEnabled = false
+    try fx.bundle.save(file)
+    let renderer = try Renderer()
+    let (session, timeline) = try await ProjectSession.open(fx.bundle, device: renderer.device)
+    let derived = session.derive(timeline, revision: 1)
+    #expect(!session.mixer.hasProgram(derived))
+    let model = EditorModel(session: session, renderer: renderer, timeline: derived,
+                            exportSettings: ExportSettings(), transcript: nil)
+    model.beginScrub()
+    model.scrub(to: 2.125)
+    #expect(model.playhead == 2.125)
+    #expect(model.clock.time(at: HostClock.now()) == 2.125)
+    model.endScrub()
+    #expect(!model.clock.playing)
+    model.play()
+    #expect(model.clock.playing)
+    model.beginScrub()
+    for position in [0.25, 4.75, 1.5, 3.125] {
+        model.scrub(to: position)
+        #expect(!model.clock.playing)
+        #expect(model.playhead == position)
+        #expect(model.clock.time(at: HostClock.now()) == position)
+        #expect(!model.preparingPlayback)
+    }
+    model.endScrub()
+    #expect(model.clock.playing)
+    #expect(model.clock.startedAt == 3.125)
+    model.pause()
+}

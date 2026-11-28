@@ -1,4 +1,5 @@
 import Testing
+import AVFoundation
 import LumenProject
 @testable import LumenAudio
 
@@ -33,4 +34,27 @@ import LumenProject
     #expect(a.samples != s.samples)
     #expect(library.takes(keyCode: 10000, phase: .down).isEmpty)
     #expect(library.takes(keyCode: 10000, phase: .up).isEmpty)
+}
+
+@Test func classicKeyboardHasAllRecordedPressesAndKeepsMouseUnchanged() throws {
+    let buffers = TypingPackLoader.classicPressBuffers()
+    #expect(buffers.count == 61)
+    #expect(buffers[63] == nil)
+    #expect(buffers[123] == nil)
+    for code in [0, 1, 36, 49, 51, 54, 55, 56, 60] {
+        let buf = try #require(buffers[code])
+        #expect(buf.format.sampleRate == 48_000)
+        #expect(buf.format.channelCount == 1)
+        #expect(buf.frameLength > 0)
+    }
+    let production = KeySoundLibrary.loadProduction()
+    if production.exactDown[0]?.id.hasPrefix("orange-deluxe/") != true {
+        #expect(production.exactDown[0]?.id == "sound-library-classic/0/down")
+        #expect(production.takes(keyCode: 0, phase: .up).isEmpty)
+        #expect(production.exactDown[123] != nil)
+    }
+    let original = KeySoundLibrary.load()
+    for tone in ClickSound.activeCollection {
+        #expect(production.clickTake(tone)?.samples == original.clickTake(tone)?.samples)
+    }
 }

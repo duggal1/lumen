@@ -11,7 +11,7 @@ enum StudioInk {
     static let text = Color(hex: 0xF5F5F5), secondary = Color(hex: 0xA3A3A3)
     static let blue = Color(hex: 0x1688FF), orange = Color(hex: 0x1688FF), violet = Color(hex: 0xA7DFFF)
     static let cyan = Color(hex: 0xA7DFFF), pink = Color(hex: 0xA7DFFF), green = Color(hex: 0x1688FF), rose = Color(hex: 0xA7DFFF)
-    static func ease(_ duration: Double) -> Animation { .timingCurve(0.2, 0.8, 0.2, 1, duration: duration) }
+    static func ease(_ duration: Double) -> Animation { Motion.spring(duration) }
 }
 private struct StudioHueKey: EnvironmentKey { static let defaultValue = StudioInk.orange }
 extension EnvironmentValues { var studioHue: Color { get { self[StudioHueKey.self] } set { self[StudioHueKey.self] = newValue } } }
@@ -38,10 +38,10 @@ struct StudioRailItem: View {
                 .foregroundStyle(selected ? accent : StudioInk.secondary)
                 .frame(width: 36, height: 36)
                 .background(RoundedRectangle(cornerRadius: 7).fill(selected ? StudioInk.selected : hover ? StudioInk.hover : .clear))
-        }.buttonStyle(.plain).onHover { hover = $0 }.clickable().focusRing()
+        }.buttonStyle(StudioIconPressStyle()).onHover { hover = $0 }.clickable().focusRing()
             .help(title).accessibilityLabel(title).accessibilityAddTraits(selected ? .isSelected : [])
-            .animation(reduce ? nil : StudioInk.ease(0.12), value: hover)
-            .animation(reduce ? nil : StudioInk.ease(0.17), value: selected)
+            .animation(reduce ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
+            .animation(reduce ? nil : Motion.selection, value: selected)
     }
 }
 struct StudioSection<Content: View>: View {
@@ -84,8 +84,9 @@ struct StudioControlStyle: ButtonStyle {
                 .scaleEffect(configuration.isPressed && !reduce ? 0.97 : 1)
                 .opacity(enabled ? 1 : 0.45)
                 .onHover { hover = $0 }
-                .animation(reduce ? nil : StudioInk.ease(0.11), value: hover)
-                .animation(reduce ? nil : StudioInk.ease(0.16), value: configuration.isPressed)
+                .animation(reduce ? nil : (hover ? Motion.hoverIn : Motion.hoverOut), value: hover)
+                .animation(reduce ? nil : (configuration.isPressed ? Motion.press : Motion.release), value: configuration.isPressed)
+                .animation(reduce ? nil : Motion.selection, value: selected)
         }
     }
 }
@@ -139,12 +140,13 @@ struct StudioToggle: View {
     @Environment(\.accessibilityReduceMotion) private var reduce
     var body: some View {
         Button { on.toggle() } label: {
-            ZStack(alignment: on ? .trailing : .leading) {
+            ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 6).fill(on ? hue.opacity(0.22) : StudioInk.well)
-                StudioDitherMark(tint: on ? hue : StudioInk.secondary).frame(width: 13, height: 13).padding(4)
+                StudioDitherMark(tint: on ? hue : StudioInk.secondary)
+                    .frame(width: 13, height: 13).offset(x: on ? 19 : 4)
             }.frame(width: 36, height: 22)
         }.buttonStyle(.plain).clickable().focusRing()
-            .animation(reduce ? nil : StudioInk.ease(0.17), value: on)
+            .animation(reduce ? nil : Motion.toggle, value: on)
             .accessibilityLabel(label).accessibilityValue(on ? "On" : "Off")
     }
 }
@@ -157,6 +159,8 @@ struct StudioSliderRow: View {
     var fmt: (Double) -> String = { String(format: "%.2f", $0) }
     var live = false
     @GestureState private var drag: Double?
+    @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduce
     @Environment(\.studioHue) private var hue
     var body: some View {
         let shown = drag ?? v
@@ -175,9 +179,26 @@ struct StudioSliderRow: View {
                         let height: CGFloat = i < filled ? 9 : 4
                         c.fill(Path(CGRect(x: CGFloat(i)*4, y: (size.height-height)/2, width: 2, height: height)), with: .color(i < filled ? hue : StudioInk.pressed), style: FillStyle(antialiased: false))
                     }
-                    let x = CGFloat(unit.isFinite ? unit : 0) * max(size.width-2, 0)
-                    c.fill(Path(CGRect(x: x.rounded(), y: 2, width: 2, height: size.height-4)), with: .color(StudioInk.text))
+                }.overlay(alignment: .leading) {
+                    // Keep the animated thumb's height separate from its
+                    // direct-manipulation position: no spring on the value.
+                    GeometryReader { thumb in
+                        Capsule().fill(StudioInk.text)
+                            .frame(width: 2, height: drag != nil ? 17 : hovering ? 15 : 11)
+                            .animation(reduce ? nil : Motion.selection, value: hovering)
+                            .animation(reduce ? nil : (drag != nil ? Motion.press : Motion.release), value: drag != nil)
+                            .position(x: 1 + CGFloat(unit.isFinite ? unit : 0) * max(thumb.size.width - 2, 0),
+                                      y: thumb.size.height / 2)
+                    }.allowsHitTesting(false)
                 }.contentShape(Rectangle())
+                    .background {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(hovering || drag != nil ? StudioInk.hover : .clear)
+                            .animation(reduce ? nil : (hovering ? Motion.hoverIn : Motion.hoverOut), value: hovering)
+                            .animation(reduce ? nil : (drag != nil ? Motion.press : Motion.release), value: drag != nil)
+                    }
+                    .onHover { hovering = $0 }
+                    .pointerStyle(drag != nil ? .grabActive : .grabIdle)
                     .gesture(DragGesture(minimumDistance: 0).updating($drag) { event, state, _ in
                         state = range.lowerBound + Double(min(max(event.location.x / max(g.size.width, 1), 0), 1)) * (range.upperBound-range.lowerBound)
                     }.onChanged { event in
@@ -198,7 +219,7 @@ struct StudioColorSwatches: View {
                 Button { choose(RGBA(hex)) } label: {
                     StudioDitherMark(tint: Color(hex: hex)).frame(width: 18, height: 18)
                         .padding(3).background(RoundedRectangle(cornerRadius: 5).fill(selected == RGBA(hex) ? StudioInk.selected : StudioInk.well))
-                }.buttonStyle(.plain).help(String(format: "#%06X", hex)).accessibilityLabel(String(format: "Color #%06X", hex))
+                }.buttonStyle(StudioIconPressStyle()).help(String(format: "#%06X", hex)).accessibilityLabel(String(format: "Color #%06X", hex))
             }
         }
     }

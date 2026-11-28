@@ -55,7 +55,7 @@ extension TimelineStrip {
             }
         } else if p.y >= TimelineStrip.Lanes.events && p.y < TimelineStrip.Lanes.audio {
             var bestD: CGFloat = 6
-            for m in outEvents() {
+            for m in visibleMarkers(from: vp.t(atX: p.x - 10), through: vp.t(atX: p.x + 10)) {
                 let d = abs(vp.cx(m.t) - p.x)
                 if d < bestD { bestD = d; col = vp.col(m.t) }
             }
@@ -171,6 +171,7 @@ extension TimelineStrip {
         let dur = model.timeline.compositionDuration, t = vp.t(atX: v.location.x)
         if drag == nil {
             drag = hit(v.startLocation, w)
+            if drag?.kind == .seek { model.beginScrub() }
             if let d = drag, d.isMusic {
                 musicDragOrigin = musicLanes().first { $0.id == d.id }
             }
@@ -178,7 +179,7 @@ extension TimelineStrip {
             // Clicking a marker seeks to it exactly.
             if drag?.kind == .seek, v.startLocation.y >= TimelineStrip.Lanes.events, v.startLocation.y < TimelineStrip.Lanes.audio {
                 var bestT: Double? = nil, bestD: CGFloat = 6
-                for m in outEvents() {
+                for m in visibleMarkers(from: vp.t(atX: v.startLocation.x - 10), through: vp.t(atX: v.startLocation.x + 10)) {
                     let d = abs(vp.cx(m.t) - v.startLocation.x)
                     if d < bestD { bestD = d; bestT = m.t }
                 }
@@ -186,15 +187,19 @@ extension TimelineStrip {
             }
         }
         guard let d = drag else { return }
-        // Auto-scroll when the pointer is near the viewport edge.
-        let leftEdge = vp.lattice.x0, rightEdge = vp.lattice.x0 + vp.span
-        if v.location.x < leftEdge + 16 { applyOrigin(vp.origin - vp.visible * 0.02, width: w) }
-        else if v.location.x > rightEdge - 16 { applyOrigin(vp.origin + vp.visible * 0.02, width: w) }
+        // Ruler panning is already direct manipulation; don't apply a second
+        // edge-scroll delta or move the viewport on a simple ruler click.
+        if d.kind != .pan {
+            let leftEdge = vp.lattice.x0, rightEdge = vp.lattice.x0 + vp.span
+            if v.location.x < leftEdge + 16 { applyOrigin(vp.origin - vp.visible * 0.02, width: w) }
+            else if v.location.x > rightEdge - 16 { applyOrigin(vp.origin + vp.visible * 0.02, width: w) }
+        }
         switch d.kind {
         case .pan:
-            let dx = v.location.x - v.startLocation.x
-            applyOrigin(d.o0 - Double(dx / vp.pps), width: w)
-        case .seek: model.seek(vp.t(atX: v.location.x))
+            let dx = v.translation.width
+            if abs(dx) >= 3 { panning = true }
+            if panning { applyOrigin(d.o0 - Double(dx / vp.pps), width: w) }
+        case .seek: model.scrub(to: viewport(width: w).t(atX: v.location.x))
         case .pendingStart:
             let snapped = snapTime(t, dur: dur, vp: vp)
             model.setPendingStart(snapped); model.seek(snapped)

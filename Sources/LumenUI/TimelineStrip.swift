@@ -29,6 +29,7 @@ struct TimelineStrip: View {
     @State var zoom: CGFloat = 1  // 1 = the default readable window
     @State var origin: Double = 0 // output second at the strip's left edge
     @State var panning = false
+    @State private var eventIndex = StudioTimelineEventIndex()
 
     struct Drag {
         enum Kind { case seek, move, left, right, reorder, tapMove, pan, pendingStart, pendingEnd, pendingBody, cutStart, cutEnd, clipStart, clipEnd, seam, musicMove, musicLeft, musicRight }
@@ -38,7 +39,7 @@ struct TimelineStrip: View {
 
         var isMusic: Bool { switch kind { case .musicMove, .musicLeft, .musicRight: return true; default: return false } }
     }
-    struct Marker { var t: Double; var kind: String; var isTap: Bool }
+    struct Marker: Equatable { var t: Double; var kind: String; var isTap: Bool }
 
     var body: some View {
         GeometryReader { geometry in
@@ -72,17 +73,19 @@ struct TimelineStrip: View {
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { change($0, width) }
-                .onEnded { _ in
+                .onEnded { value in
+                    if drag?.kind == .pan, !panning, abs(value.translation.width) < 3, abs(value.translation.height) < 3 {
+                        model.seek(viewport(width: width).t(atX: value.location.x))
+                    }
+                    if drag?.kind == .seek { model.endScrub() }
                     if let kind = drag?.kind,
                        kind == .pendingStart || kind == .pendingEnd || kind == .pendingBody {
                         model.commitPendingCut()
                     }
                     drag = nil
+                    panning = false
                 })
-            .simultaneousGesture(MagnifyGesture().onChanged { value in
-                zoomBy(1 + CGFloat(value.magnification - 1) * 2,
-                       anchorX: value.startLocation.x, width: width)
-            })
+            .onDisappear { if drag?.kind == .seek { model.endScrub() } }
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let point): setHover(at: point, width: width)
@@ -101,7 +104,7 @@ struct TimelineStrip: View {
                     scroll(dx: dx, dy: dy, command: command, width: width)
                 },
                 onMagnify: { delta, x in
-                    zoomBy(1 + delta * 2, anchorX: x, width: width)
+                    zoomBy(exp(delta * 2), anchorX: x, width: width)
                 }))
     }
 
@@ -162,7 +165,7 @@ struct TimelineStrip: View {
         }
 
         // 2 — typing bursts; clicks are a separate set of tall slats.
-        for burst in TimelineGeometry.bursts(times: keyOutputs(), gap: 0.5) {
+        for burst in eventSnapshot().visibleBursts(from: vp.origin, through: vp.origin + vp.visible) {
             if let s = span(burst.start, burst.end, 3, 0.7) { lanes[2].append(s) }
         }
 
@@ -197,9 +200,7 @@ struct TimelineStrip: View {
                     srcStart: tm.source(atOutput: t0), srcEnd: tm.source(atOutput: t1)))
             }
         }
-        let clicks = Set(outEvents()
-            .filter { $0.t >= vp.origin && $0.t <= vp.origin + vp.visible }
-            .filter { $0.t.isFinite }
+        let clicks = Set(visibleMarkers(from: vp.origin, through: vp.origin + vp.visible)
             .map { vp.col($0.t) })
         return TimelineDitherRenderer.Frame(
             spans: lanes, peaks: peaks, musicPeaks: musicPeaks, clicks: clicks,
@@ -237,8 +238,9 @@ struct TimelineStrip: View {
     /// expects over a timeline.
     func scroll(dx: CGFloat, dy: CGFloat, command: Bool, width: CGFloat) {
         let vp = viewport(width: width)
+        guard drag == nil, dx.isFinite, dy.isFinite else { return }
         if command {
-            zoomBy(1 - dy * 0.012, anchorX: width / 2, width: width)
+            zoomBy(exp(-dy * 0.012), anchorX: width / 2, width: width)
             return
         }
         let delta = abs(dx) >= abs(dy) ? dx : dy
@@ -247,23 +249,26 @@ struct TimelineStrip: View {
     }
 
     func zoomBy(_ factor: CGFloat, anchorX: CGFloat, width: CGFloat) {
+        guard factor.isFinite, factor > 0, anchorX.isFinite, drag == nil else { return }
         let before = viewport(width: width)
-        let anchorTime = before.t(atX: min(max(anchorX, before.lattice.x0), width - Lattice.inset))
+        let anchor = min(max(anchorX, before.lattice.x0), before.lattice.x0 + before.span)
+        let anchorTime = before.t(atX: anchor)
         let lo = minZoom(width: width)
         zoom = min(max(zoom * factor, lo), 12)
         let after = viewport(width: width)
-        let o = anchorTime - Double((anchorX - after.lattice.x0) / after.pps)
+        let o = anchorTime - Double((anchor - after.lattice.x0) / after.pps)
         applyOrigin(o, width: width)
     }
 
     /// Keep the head in view while playing: nudge only when it crosses 80% or
     /// leaves the left edge, so the strip does not crawl every frame.
     func follow(_ t: Double, width: CGFloat) {
-        guard model.isPlaying else { return }
+        guard drag == nil, t.isFinite else { return }
         let vp = viewport(width: width)
         let x = vp.x(t)
         let left = vp.lattice.x0
-        if x > left + vp.span * 0.8 || x < left {
+        let right = left + vp.span * (model.isPlaying ? 0.8 : 1)
+        if x > right || x < left {
             applyOrigin(t - vp.visible * 0.2, width: width)
         }
     }
@@ -305,24 +310,30 @@ struct TimelineStrip: View {
         }
     }
 
-    func outEvents() -> [Marker] {
+    func eventSnapshot() -> StudioTimelineEventIndex.Snapshot {
+        // Read the observable timeline before looking at the immutable box
+        // revision: SwiftUI must still invalidate when an edit publishes.
         let tl = model.timeline, tm = tl.timeMap
-        var markers: [Marker] = []
-        if let d = tl.derived {
-            markers += d.clicks.map { Marker(t: $0.t, kind: "Click", isTap: false) }
+        let revision = model.box.get().1
+        return eventIndex.snapshot(owner: ObjectIdentifier(model), revision: revision) {
+            var markers: [Marker] = []
+            if let d = tl.derived {
+                markers += d.clicks.map { Marker(t: $0.t, kind: "Click", isTap: false) }
+            }
+            markers += tl.overlays.taps.map { Marker(t: tm.output(atSource: $0.t), kind: "Tap", isTap: true) }
+            let keys = model.session.input.events
+                .filter { $0.kind == .keyDown && $0.t.isFinite && !tm.isCut($0.t) }
+                .map { tm.output(atSource: $0.t) }
+            return .init(markers: markers, keys: keys)
         }
-        markers += tl.overlays.taps.map { Marker(t: tm.output(atSource: $0.t), kind: "Tap", isTap: true) }
-        return markers.sorted { $0.t < $1.t }
     }
-    func clickCount() -> Int { outEvents().count }
+    func outEvents() -> [Marker] { eventSnapshot().markers }
+    func visibleMarkers(from start: Double, through end: Double) -> ArraySlice<Marker> {
+        eventSnapshot().visibleMarkers(from: start, through: end)
+    }
+    func clickCount() -> Int { eventSnapshot().markers.count }
     func eventsSummary() -> String { "\(clickCount()) clicks" }
-    func keyOutputs() -> [Double] {
-        let tm = model.timeline.timeMap
-        return model.session.input.events
-            .filter { $0.kind == .keyDown && !tm.isCut($0.t) }
-            .map { tm.output(atSource: $0.t) }
-            .sorted()
-    }
+    func keyOutputs() -> [Double] { eventSnapshot().keys }
     func autoZoomSpansOut() -> [(start: Double, end: Double)] {
         let tm = model.timeline.timeMap
         return model.timeline.zoom.filter { $0.origin == .auto }
