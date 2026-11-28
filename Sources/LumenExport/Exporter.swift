@@ -91,7 +91,8 @@ private final class AudioFeeder: @unchecked Sendable {
                         state.withLock { $0 = (true, "Audio encoder rejected a sample.") }
                         return
                     }
-                    sampleCount.withLock { $0 += Int64(CMSampleBufferGetNumSamples(sb)) }
+                    let count = Int64(CMSampleBufferGetNumSamples(sb))
+                    sampleCount.withLock { $0 += count }
                 } else {
                     let failure = reader.status == .completed ? nil : (reader.error?.localizedDescription ?? "Audio reader stopped before completion.")
                     if failure == nil { input.markAsFinished() }
