@@ -112,9 +112,10 @@ import LumenProject
     let cb = try #require(queue.makeCommandBuffer())
     var params = UpscaleParams()
     params.maxFactor = 10
-    let (result, blend) = try #require(pass.prepareUpscale(upscaler, cb, layout: layout,
+    let prepared = try pass.prepareUpscale(upscaler, cb, layout: layout,
         camCenter: SIMD2(512, 384), zoom: 1, source: source, sourceID: 777,
-        params: params, pixelLimit: 524_288))
+        params: params, pixelLimit: 524_288)
+    let (result, blend) = try #require(prepared)
     cb.commit()
     cb.waitUntilCompleted()
     #expect(cb.status == .completed)
