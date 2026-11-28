@@ -199,6 +199,11 @@ enum TimelineSelection: Equatable {
                 self?.notice = "Project updated by an agent. Reloading revision \(actual)."
             }
         }
+        session.setSaveFailureHandler { [weak self] message in
+            Task { @MainActor [weak self] in
+                self?.notice = "Project changes have not been saved: \(message)"
+            }
+        }
         // AGENT: edits from the daemon must replace the editor's stale in-memory copy, not merely show a warning.
         session.setProjectChangeHandler { [weak self] file in
             Task { @MainActor [weak self] in self?.acceptExternalProjectFile(file) }

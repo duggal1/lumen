@@ -25,10 +25,9 @@ public final class ProjectSession: @unchecked Sendable {
     public let meta: ProjectMeta
     public let screen: ReaderFrameSource
     public let webcam: (any FrameSource)?
-    private let saveQueue = DispatchQueue(label: "lumen.project.save", qos: .userInitiated)
-    // AGENT: editor saves must compare the last on-disk revision before replacing an agent's update.
-    private let projectRevision: OSAllocatedUnfairLock<Int>
+    private let saveCoordinator: ProjectSaveCoordinator<Timeline>
     private let saveConflictHandler = OSAllocatedUnfairLock<(@Sendable (Int, Int) -> Void)?>(initialState: nil)
+    private let saveFailureHandler = OSAllocatedUnfairLock<(@Sendable (String) -> Void)?>(initialState: nil)
     // AGENT: an open editor watches atomic project-file replacements to receive newer agent timelines.
     private let projectChangeHandler = OSAllocatedUnfairLock<(@Sendable (ProjectFile) -> Void)?>(initialState: nil)
     private var projectWatcher: DispatchSourceFileSystemObject?
@@ -36,7 +35,8 @@ public final class ProjectSession: @unchecked Sendable {
     private let analysisSequence = OSAllocatedUnfairLock<Int>(initialState: 0)
     private let inputState: OSAllocatedUnfairLock<DirectorInput>
     public var input: DirectorInput { inputState.withLock { $0 } }
-    public var currentProjectRevision: Int { projectRevision.withLock { $0 } }
+    public var currentProjectRevision: Int { saveCoordinator.revision }
+    public var lastSaveFailure: String? { saveCoordinator.lastFailure }
     public let mixer: AudioMixer
     public let transcriptFile: TranscriptFile?
     public let micOffset: Double
@@ -56,10 +56,20 @@ public final class ProjectSession: @unchecked Sendable {
          mixer: AudioMixer, transcriptFile: TranscriptFile?, micOffset: Double, waveform: [Float], cursors: [CustomCursor], device: SendableMetalDevice) {
         self.bundle = bundle; self.meta = meta; self.screen = screen; self.webcam = webcam
         self.frameReader = ProjectFrameReader(screen: screen, webcam: webcam, device: device)
-        projectRevision = OSAllocatedUnfairLock(initialState: revision)
+        saveCoordinator = ProjectSaveCoordinator(revision: revision) { timeline, expected in
+            try bundle.save(ProjectFile(meta: meta, timeline: timeline), expectingRevision: expected)
+        }
         inputState = OSAllocatedUnfairLock(initialState: input)
         self.mixer = mixer; self.transcriptFile = transcriptFile; self.micOffset = micOffset; self.cursors = cursors; self.device = device
         audioState.withLock { $0.waveform = waveform; $0.state = .ready }
+        saveCoordinator.setCallbacks(onFailure: { [weak self] error in
+            guard let self else { return }
+            if case ProjectError.conflict(let expected, let actual) = error {
+                self.saveConflictHandler.withLock { $0 }?(expected, actual)
+            } else {
+                self.saveFailureHandler.withLock { $0 }?(error.localizedDescription)
+            }
+        }, onSettled: { [weak self] in self?.publishIfNewerProjectFile() })
         startProjectWatcher()
     }
 
@@ -83,8 +93,9 @@ public final class ProjectSession: @unchecked Sendable {
     }
 
     private func publishIfNewerProjectFile() {
-        guard let file = try? bundle.load(), let revision = file.revision,
-              revision > currentProjectRevision else { return }
+        guard !saveCoordinator.isWriting,
+              let file = try? bundle.load(), let revision = file.revision,
+              !saveCoordinator.isWriting, revision > currentProjectRevision else { return }
         projectChangeHandler.withLock { $0 }?(file)
     }
 
@@ -111,33 +122,25 @@ public final class ProjectSession: @unchecked Sendable {
     public func setSaveConflictHandler(_ handler: @escaping @Sendable (Int, Int) -> Void) {
         saveConflictHandler.withLock { $0 = handler }
     }
+    public func setSaveFailureHandler(_ handler: @escaping @Sendable (String) -> Void) {
+        saveFailureHandler.withLock { $0 = handler }
+    }
     // AGENT: an accepted disk timeline is applied on the main actor before its revision becomes the editor's save base.
     public func setProjectChangeHandler(_ handler: @escaping @Sendable (ProjectFile) -> Void) {
         projectChangeHandler.withLock { $0 = handler }
     }
     // AGENT: update the editor's compare-and-swap base after its in-memory timeline is replaced.
-    public func adoptExternalRevision(_ revision: Int) {
-        projectRevision.withLock { $0 = max($0, revision) }
-    }
-    public func save(_ tl: Timeline) {
-        saveQueue.async { [self] in
-            let expected = projectRevision.withLock { $0 }
-            do {
-                let revision = try bundle.save(ProjectFile(meta: meta, timeline: tl), expectingRevision: expected)
-                projectRevision.withLock { $0 = revision }
-            } catch ProjectError.conflict(let expected, let actual) {
-                saveConflictHandler.withLock { $0 }?(expected, actual)
-            } catch {
-                // AGENT: failed saves are no longer allowed to overwrite a newer project revision.
-            }
-        }
-    }
-    // AGENT: one-shot CLI edits must perform the same revision compare-and-swap as background editor saves.
-    public func saveImmediately(_ timeline: Timeline) throws {
-        let expected = projectRevision.withLock { $0 }
-        let revision = try bundle.save(ProjectFile(meta: meta, timeline: timeline), expectingRevision: expected)
-        projectRevision.withLock { $0 = revision }
-    }
+    public func adoptExternalRevision(_ revision: Int) { saveCoordinator.adopt(revision: revision) }
+
+    public func save(_ tl: Timeline) { saveCoordinator.enqueue(tl) }
+
+    /// Serialize explicit saves with the same writer and reject stale tickets.
+    public func saveImmediately(_ timeline: Timeline) throws { try saveCoordinator.saveImmediately(timeline) }
+
+    /// Flush an acknowledged edit before an explicit project lifecycle action.
+    /// Call off the UI actor; a failed write is never silently acknowledged.
+    public func flushPendingSave() throws { try saveCoordinator.flushPending() }
+
     public func updateTranscript(_ transcript: Transcript) {
         inputState.withLock { $0.transcript = transcript }
     }
