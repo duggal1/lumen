@@ -158,7 +158,7 @@ enum Motion {
     static let menuHighlight = Animation.smooth(duration: 0.18)
     static let floatingHighlight = Animation.smooth(duration: 0.28)
     static let floatingTransition = Animation.smooth(duration: 0.32)
-    static let toggle = Animation.snappy(duration: 0.22)
+    static let toggle = Animation.smooth(duration: 0.22, extraBounce: 0)
     static let settle = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.28)
 }
 

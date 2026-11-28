@@ -11,7 +11,7 @@ enum StudioInk {
     static let text = Color(hex: 0xF5F5F5), secondary = Color(hex: 0xA3A3A3)
     static let blue = Color(hex: 0x1688FF), orange = Color(hex: 0x1688FF), violet = Color(hex: 0xA7DFFF)
     static let cyan = Color(hex: 0xA7DFFF), pink = Color(hex: 0xA7DFFF), green = Color(hex: 0x1688FF), rose = Color(hex: 0xA7DFFF)
-    static func ease(_ duration: Double) -> Animation { .timingCurve(0.2, 0.8, 0.2, 1, duration: duration) }
+    static func ease(_ duration: Double) -> Animation { .smooth(duration: duration, extraBounce: 0) }
 }
 private struct StudioHueKey: EnvironmentKey { static let defaultValue = StudioInk.orange }
 extension EnvironmentValues { var studioHue: Color { get { self[StudioHueKey.self] } set { self[StudioHueKey.self] = newValue } } }
@@ -85,7 +85,8 @@ struct StudioControlStyle: ButtonStyle {
                 .opacity(enabled ? 1 : 0.45)
                 .onHover { hover = $0 }
                 .animation(reduce ? nil : StudioInk.ease(0.11), value: hover)
-                .animation(reduce ? nil : StudioInk.ease(0.16), value: configuration.isPressed)
+                .animation(reduce ? nil : StudioInk.ease(configuration.isPressed ? 0.10 : 0.20), value: configuration.isPressed)
+                .animation(reduce ? nil : StudioInk.ease(0.18), value: selected)
         }
     }
 }
@@ -157,6 +158,8 @@ struct StudioSliderRow: View {
     var fmt: (Double) -> String = { String(format: "%.2f", $0) }
     var live = false
     @GestureState private var drag: Double?
+    @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduce
     @Environment(\.studioHue) private var hue
     var body: some View {
         let shown = drag ?? v
@@ -176,8 +179,13 @@ struct StudioSliderRow: View {
                         c.fill(Path(CGRect(x: CGFloat(i)*4, y: (size.height-height)/2, width: 2, height: height)), with: .color(i < filled ? hue : StudioInk.pressed), style: FillStyle(antialiased: false))
                     }
                     let x = CGFloat(unit.isFinite ? unit : 0) * max(size.width-2, 0)
-                    c.fill(Path(CGRect(x: x.rounded(), y: 2, width: 2, height: size.height-4)), with: .color(StudioInk.text))
+                    c.fill(Path(CGRect(x: x, y: 2, width: 2, height: size.height-4)), with: .color(StudioInk.text))
                 }.contentShape(Rectangle())
+                    .background(RoundedRectangle(cornerRadius: 5).fill(hovering || drag != nil ? StudioInk.hover : .clear))
+                    .onHover { hovering = $0 }
+                    .pointerStyle(drag != nil ? .grabActive : .grabIdle)
+                    .animation(reduce ? nil : StudioInk.ease(0.14), value: hovering)
+                    .animation(reduce ? nil : StudioInk.ease(0.14), value: drag != nil)
                     .gesture(DragGesture(minimumDistance: 0).updating($drag) { event, state, _ in
                         state = range.lowerBound + Double(min(max(event.location.x / max(g.size.width, 1), 0), 1)) * (range.upperBound-range.lowerBound)
                     }.onChanged { event in

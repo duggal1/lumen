@@ -171,6 +171,7 @@ enum TimelineSelection: Equatable {
     private var windowTask: Task<Void, Never>?
     private var transportGeneration = 0
     private var wantsPlayback = false
+    private var resumeAfterScrub: Bool?
     /// True from the moment Play asks for audio until the clock and the audio
     /// start together. The transport shows it in the readout line; the clock
     /// stays stopped, so a silent start is never presented as success.
@@ -542,8 +543,41 @@ enum TimelineSelection: Equatable {
         preparingPlayback = false
     }
 
+    /// Interactive seeks stop the transport once, keep the visible clock exact,
+    /// and resume only after the final requested position. Never mix audio on
+    /// every pointer delta.
+    func beginScrub() {
+        guard resumeAfterScrub == nil else { return }
+        resumeAfterScrub = wantsPlayback
+        wantsPlayback = false
+        cancelWindowRequests()
+        clock.pause(at: HostClock.now())
+        player.stop()
+        isPlaying = false
+    }
+
+    func scrub(to t: Double) {
+        guard t.isFinite else { return }
+        if resumeAfterScrub == nil { beginScrub() }
+        let c = min(max(t, 0), duration)
+        guard c != playhead || c != clock.time(at: HostClock.now()) else { return }
+        clock.seek(c)
+        playhead = c; published = c
+    }
+
+    func endScrub() {
+        guard let resume = resumeAfterScrub else { return }
+        resumeAfterScrub = nil
+        wantsPlayback = resume
+        if resume {
+            if audioReady(at: playhead) { startPlayback(playhead) }
+            else { startWhenAudioReady(playhead) }
+        } else { scheduleIdleMaster() }
+    }
+
     func seek(_ t: Double) {
         guard t.isFinite else { return }
+        if resumeAfterScrub != nil { scrub(to: t); return }
         cancelWindowRequests()
         let c = min(max(t, 0), duration)
         clock.pause(at: HostClock.now()); player.stop(); clock.seek(c)
@@ -555,6 +589,7 @@ enum TimelineSelection: Equatable {
     }
 
     func play() {
+        if resumeAfterScrub != nil { resumeAfterScrub = true; endScrub(); return }
         if clock.playing || preparingPlayback { return }
         wantsPlayback = true
         yieldMasterToTransport()
@@ -565,6 +600,7 @@ enum TimelineSelection: Equatable {
     }
 
     func pause() {
+        resumeAfterScrub = nil
         wantsPlayback = false
         cancelWindowRequests()
         clock.pause(at: HostClock.now()); player.stop()

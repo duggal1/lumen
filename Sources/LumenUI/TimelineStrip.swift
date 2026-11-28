@@ -72,17 +72,18 @@ struct TimelineStrip: View {
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { change($0, width) }
-                .onEnded { _ in
+                .onEnded { value in
+                    if drag?.kind == .pan, abs(value.translation.width) < 3, abs(value.translation.height) < 3 {
+                        model.seek(viewport(width: width).t(atX: value.location.x))
+                    }
+                    if drag?.kind == .seek { model.endScrub() }
                     if let kind = drag?.kind,
                        kind == .pendingStart || kind == .pendingEnd || kind == .pendingBody {
                         model.commitPendingCut()
                     }
                     drag = nil
                 })
-            .simultaneousGesture(MagnifyGesture().onChanged { value in
-                zoomBy(1 + CGFloat(value.magnification - 1) * 2,
-                       anchorX: value.startLocation.x, width: width)
-            })
+            .onDisappear { if drag?.kind == .seek { model.endScrub() } }
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let point): setHover(at: point, width: width)
@@ -237,8 +238,9 @@ struct TimelineStrip: View {
     /// expects over a timeline.
     func scroll(dx: CGFloat, dy: CGFloat, command: Bool, width: CGFloat) {
         let vp = viewport(width: width)
+        guard drag == nil, dx.isFinite, dy.isFinite else { return }
         if command {
-            zoomBy(1 - dy * 0.012, anchorX: width / 2, width: width)
+            zoomBy(exp(-dy * 0.012), anchorX: width / 2, width: width)
             return
         }
         let delta = abs(dx) >= abs(dy) ? dx : dy
@@ -247,12 +249,14 @@ struct TimelineStrip: View {
     }
 
     func zoomBy(_ factor: CGFloat, anchorX: CGFloat, width: CGFloat) {
+        guard factor.isFinite, factor > 0, anchorX.isFinite, drag == nil else { return }
         let before = viewport(width: width)
-        let anchorTime = before.t(atX: min(max(anchorX, before.lattice.x0), width - Lattice.inset))
+        let anchor = min(max(anchorX, before.lattice.x0), before.lattice.x0 + before.span)
+        let anchorTime = before.t(atX: anchor)
         let lo = minZoom(width: width)
         zoom = min(max(zoom * factor, lo), 12)
         let after = viewport(width: width)
-        let o = anchorTime - Double((anchorX - after.lattice.x0) / after.pps)
+        let o = anchorTime - Double((anchor - after.lattice.x0) / after.pps)
         applyOrigin(o, width: width)
     }
 
