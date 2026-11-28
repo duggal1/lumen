@@ -7,11 +7,16 @@ public struct ContentLayout {
     public var contentRect: SIMD4<Float>       // canvas px: x, y, w, h
     public var radii: SIMD4<Float>             // tl, tr, br, bl
     public var srcSize: SIMD2<Float>
-    public init(canvas: SIMD2<Int32>, contentRect: SIMD4<Float>, radii: SIMD4<Float>, srcSize: SIMD2<Float>) {
+    /// The same zoom-1 source view used by contentFS, after browser/area crop.
+    /// nil retains the full-source geometry for standalone callers.
+    public var sampledBaseSize: SIMD2<Float>?
+    public init(canvas: SIMD2<Int32>, contentRect: SIMD4<Float>, radii: SIMD4<Float>,
+                srcSize: SIMD2<Float>, sampledBaseSize: SIMD2<Float>? = nil) {
         self.canvas = canvas; self.contentRect = contentRect; self.radii = radii; self.srcSize = srcSize
+        self.sampledBaseSize = sampledBaseSize
     }
-    /// Canvas px per source px at zoom 1.
-    public var baseMagnification: Float { contentRect.z / srcSize.x }
+    /// Canvas px per sampled source px at zoom 1 (not per recording pixel).
+    public var baseMagnification: Float { contentRect.z / (sampledBaseSize?.x ?? srcSize.x) }
 }
 
 /// Camera-transformed content over the cached backdrop, rounded per corner, with optional upscaled sampling.
@@ -28,7 +33,8 @@ public final class ContentPass {
         let m = Double(zoom * L.baseMagnification)
         let blend = Upscaler.blend(forMagnification: m, p)
         guard blend > 0 else { return nil }
-        let view = SIMD2<Double>(Double(L.contentRect.z), Double(L.contentRect.w)) / m
+        let view = L.sampledBaseSize.map { SIMD2<Double>(Double($0.x), Double($0.y)) / Double(zoom) }
+            ?? SIMD2<Double>(Double(L.contentRect.z), Double(L.contentRect.w)) / m
         // SMOOTHNESS: the crop is snapped to a coarse grid so the upscaled
         // texture is reused while the camera drifts.
         let region = Upscaler.quantize(
