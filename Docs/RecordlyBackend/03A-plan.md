@@ -1,0 +1,3 @@
+# Backend 03A — sparse timing parity prototype
+Pinned base 39d43046b4638768ef38e6b0f72cd774daf85575. Part 3 of RECORDLY_BACKEND_PLAN.md.
+Implement a sparse timing index against the current 240 Hz midpoint integration semantics. Binary-search source/output queries, constant-rate spans, sampled knots only across variable-speed fades, right-continuous cut seams. Test dense oracle for overlap, short ramps, trims and two-hour storage. Keep production TimeMap unchanged until CI, numerical seam validation and repeated hardware measurements prove it is safe. No imported-clip retiming or schema migration in this PR. Those require coordinated audio, render, UI, MCP, serialization and undo semantics; remain open. No runtime speedup claim.
