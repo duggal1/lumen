@@ -107,6 +107,18 @@ public struct KeySoundLibrary: Sendable {
             guard required.isSubset(of: Set(exactDown.keys)) else { continue }
             library.exactDown = exactDown
             library.exactUp = convert(TypingPackLoader.releaseBuffers(in: dir), phase: .up)
+            // Keep an explicit private pack. Replace mapped default presses
+            // only; unrecorded extended keys retain the licensed legacy sounds.
+            // Classic contains no independently verified key-up recordings.
+            if dir.lastPathComponent == TypingPackLoader.defaultPackID {
+                let classic = convert(TypingPackLoader.classicPressBuffers(), phase: .down)
+                if classic.count == 61, required.isSubset(of: Set(classic.keys)) {
+                    for (code, take) in classic {
+                        library.exactDown[code] = KeyTake(id: "sound-library-classic/\(code)/down", samples: take.samples)
+                        library.exactUp.removeValue(forKey: code)
+                    }
+                }
+            }
             break
         }
         // Missing key or phase is silence, never a random recording or synth.

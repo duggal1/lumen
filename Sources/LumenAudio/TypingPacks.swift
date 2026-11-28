@@ -146,6 +146,25 @@ public enum TypingPackLoader {
         return v1Buffers(pack, in: packDir)
     }
 
+    /// Imported Classic takes are partitioned into five bounded sprites.
+    /// The collection is all-or-nothing; a damaged or incomplete installation
+    /// must leave the licensed legacy keyboard untouched.
+    public static func classicPressBuffers() -> [Int: AVAudioPCMBuffer] {
+        guard let root else { return [:] }
+        let folder = root.appendingPathComponent("sound-library-classic", isDirectory: true)
+        var result: [Int: AVAudioPCMBuffer] = [:]
+        for part in 1...5 {
+            let dir = folder.appendingPathComponent(String(format: "%02d", part), isDirectory: true)
+            var takes = buffers(in: dir)
+            takes.removeValue(forKey: 63) // Fn is not a source recording in Classic.
+            guard takes.count == (part == 5 ? 13 : 12),
+                  Set(result.keys).isDisjoint(with: takes.keys),
+                  takes.values.allSatisfy({ $0.frameLength > 0 && $0.format.sampleRate == 48_000 && $0.format.channelCount == 1 }) else { return [:] }
+            result.merge(takes) { _, new in new }
+        }
+        return result.count == 61 ? result : [:]
+    }
+
     /// Legacy packs have no independent release samples; never replay a press as a release.
     public static func releaseBuffers(in packDir: URL) -> [Int: AVAudioPCMBuffer] {
         guard let data = try? Data(contentsOf: packDir.appendingPathComponent("config.json")),

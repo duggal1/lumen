@@ -102,7 +102,7 @@ struct TimelineStrip: View {
                     scroll(dx: dx, dy: dy, command: command, width: width)
                 },
                 onMagnify: { delta, x in
-                    zoomBy(1 + delta * 2, anchorX: x, width: width)
+                    zoomBy(exp(delta * 2), anchorX: x, width: width)
                 }))
     }
 
