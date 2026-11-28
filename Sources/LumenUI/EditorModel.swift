@@ -1288,9 +1288,12 @@ enum TimelineSelection: Equatable {
             guard let self, response == .OK, let url = panel.url else { return }
             Task { @MainActor in
                 do {
-                    self.session.save(self.timeline)
-                    try self.session.bundle.exportSharePackage(to: url)
-                    let link = self.session.bundle.shareLink
+                    let session = self.session, snapshot = self.timeline
+                    try await Task.detached(priority: .userInitiated) {
+                        try session.saveImmediately(snapshot)
+                        _ = try session.bundle.exportSharePackage(to: url)
+                    }.value
+                    let link = session.bundle.shareLink
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(link, forType: .string)
                     self.notice = "Shared to \(url.lastPathComponent). Project link copied."
@@ -1374,6 +1377,12 @@ enum TimelineSelection: Equatable {
                 }
             }
             do {
+                // Persist the accepted editor state before delivery, off main.
+                // A revision conflict or disk failure is a real blocker.
+                try await Task.detached(priority: .userInitiated) {
+                    try session.flushPendingSave()
+                }.value
+                try Task.checkCancellation()
                 // Freeze one evidence snapshot and derive every aspect off
                 // the UI actor. Export never consumes stale preview tracks.
                 let input = session.input

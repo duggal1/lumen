@@ -32,6 +32,7 @@ public final class ProjectSession: @unchecked Sendable {
     private let projectChangeHandler = OSAllocatedUnfairLock<(@Sendable (ProjectFile) -> Void)?>(initialState: nil)
     private var projectWatcher: DispatchSourceFileSystemObject?
     private let projectWatchQueue = DispatchQueue(label: "lumen.project.watch", qos: .utility)
+    private let deferredWatch = OSAllocatedUnfairLock(initialState: false)
     private let analysisSequence = OSAllocatedUnfairLock<Int>(initialState: 0)
     private let inputState: OSAllocatedUnfairLock<DirectorInput>
     public var input: DirectorInput { inputState.withLock { $0 } }
@@ -64,12 +65,13 @@ public final class ProjectSession: @unchecked Sendable {
         audioState.withLock { $0.waveform = waveform; $0.state = .ready }
         saveCoordinator.setCallbacks(onFailure: { [weak self] error in
             guard let self else { return }
-            if case ProjectError.conflict(let expected, let actual) = error {
+            if let failure = error as? ProjectError, case .conflict(let expected, let actual) = failure {
+                self.deferredWatch.withLock { $0 = true }
                 self.saveConflictHandler.withLock { $0 }?(expected, actual)
             } else {
                 self.saveFailureHandler.withLock { $0 }?(error.localizedDescription)
             }
-        }, onSettled: { [weak self] in self?.publishIfNewerProjectFile() })
+        }, onSettled: { [weak self] in self?.drainDeferredWatch() })
         startProjectWatcher()
     }
 
@@ -92,10 +94,29 @@ public final class ProjectSession: @unchecked Sendable {
         projectWatcher = source
     }
 
+    private func drainDeferredWatch() {
+        guard !saveCoordinator.isWriting else { return }
+        let needsCheck = deferredWatch.withLock { flag -> Bool in
+            let old = flag; flag = false; return old
+        }
+        if needsCheck {
+            projectWatchQueue.async { [weak self] in self?.publishIfNewerProjectFile() }
+        }
+    }
+
     private func publishIfNewerProjectFile() {
-        guard !saveCoordinator.isWriting,
-              let file = try? bundle.load(), let revision = file.revision,
-              !saveCoordinator.isWriting, revision > currentProjectRevision else { return }
+        if saveCoordinator.isWriting {
+            deferredWatch.withLock { $0 = true }
+            drainDeferredWatch()
+            return
+        }
+        guard let file = try? bundle.load(), let revision = file.revision else { return }
+        if saveCoordinator.isWriting {
+            deferredWatch.withLock { $0 = true }
+            drainDeferredWatch()
+            return
+        }
+        guard revision > currentProjectRevision else { return }
         projectChangeHandler.withLock { $0 }?(file)
     }
 
