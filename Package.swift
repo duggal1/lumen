@@ -4,10 +4,7 @@ import PackageDescription
 func lib(_ n: String, _ deps: [String] = [], resources: [Resource]? = nil) -> Target {
     .target(name: n, dependencies: deps.map { .byName(name: $0) }, resources: resources)
 }
-import Foundation
 let moonshineDir = Context.packageDirectory + "/Vendor/moonshine"
-let hasMoonshine = FileManager.default.fileExists(atPath: Context.packageDirectory + "/Sources/CMoonshine/include/moonshine-c-api.h")
-    && FileManager.default.fileExists(atPath: moonshineDir + "/lib/libmoonshine.dylib")
 let all = ["LumenCore", "LumenProject", "LumenDirector", "LumenCapture", "LumenRender", "LumenAudio", "LumenAnalysis", "LumenExport", "LumenSpeech"]
 
 let package = Package(
