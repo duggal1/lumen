@@ -1,0 +1,105 @@
+{
+  "id": "classic-04",
+  "name": "Classic 04",
+  "author": "unicaegames",
+  "definition_method": "single",
+  "audio_file": "classic.wav",
+  "definitions": {
+    "KeyK": {
+      "timing": [
+        [
+          0,
+          135
+        ]
+      ]
+    },
+    "KeyL": {
+      "timing": [
+        [
+          135,
+          302
+        ]
+      ]
+    },
+    "Semicolon": {
+      "timing": [
+        [
+          302,
+          447
+        ]
+      ]
+    },
+    "Quote": {
+      "timing": [
+        [
+          447,
+          592
+        ]
+      ]
+    },
+    "Enter": {
+      "timing": [
+        [
+          592,
+          699
+        ]
+      ]
+    },
+    "ShiftLeft": {
+      "timing": [
+        [
+          699,
+          798
+        ]
+      ]
+    },
+    "KeyZ": {
+      "timing": [
+        [
+          798,
+          927
+        ]
+      ]
+    },
+    "KeyX": {
+      "timing": [
+        [
+          927,
+          1076
+        ]
+      ]
+    },
+    "KeyC": {
+      "timing": [
+        [
+          1076,
+          1195
+        ]
+      ]
+    },
+    "KeyV": {
+      "timing": [
+        [
+          1195,
+          1330
+        ]
+      ]
+    },
+    "KeyB": {
+      "timing": [
+        [
+          1330,
+          1461
+        ]
+      ]
+    },
+    "KeyN": {
+      "timing": [
+        [
+          1461,
+          1600
+        ]
+      ]
+    }
+  }
+}
