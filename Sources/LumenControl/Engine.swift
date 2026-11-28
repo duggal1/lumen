@@ -753,14 +753,12 @@ public actor Engine {
                 try reporter.checkpoint(.object(["project_id": .string(projectID), "project_path": .string(session.bundle.url.path),
                     "output": .string(output.path), "staging": .string(staging.path), "stage": .string("rendering")]))
                 await MainActor.run { Renderer.primeWallpaper(Renderer.resolveWallpaperURL()) }
-                try await Exporter.run(session: session, timeline: timeline, preset: preset, to: staging,
+                let mediaProof = try await Exporter.run(session: session, timeline: timeline, preset: preset, to: staging,
                                        includeAudio: includeAudio, exportStems: exportStems) { progress in
                     reporter.progress(progress.total > 0 ? Double(progress.frame) / Double(progress.total) : 0,
                                       progress.notice)
                 }
-                let proof = try await AgentExportProof.verify(staging, expectedDuration: timeline.compositionDuration,
-                    fps: preset.fps, expectsAudio: includeAudio && session.mixer.hasProgram(timeline),
-                    expectedSize: CGSize(width: preset.width(aspect: timeline.style.aspectRatio), height: preset.height))
+                let proof = AgentExportProof.json(mediaProof)
                 try reporter.checkpoint(.object(["project_id": .string(projectID), "project_path": .string(session.bundle.url.path),
                     "output": .string(output.path), "staging": .string(staging.path), "stage": .string("publishing"), "verification": proof]))
                 let stems: [URL]
