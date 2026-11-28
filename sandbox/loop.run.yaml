@@ -1,8 +1,0 @@
-# Inferred bindings for the plan-loop. repo is read-only; only ./sandbox is edited.
-prompt: ./sandbox/prompt.md
-repo: .
-plan_file: ./sandbox/plan.md
-tasks_file: ./sandbox/tasks.json
-pr_loc: "100-400"
-sandbox_root: ./sandbox
-budget: 5

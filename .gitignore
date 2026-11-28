@@ -57,3 +57,12 @@ audio-code-all.md
 .comms/
 
 /Recordly/
+
+# Local engineering notes and generated benchmark executables
+/AGENTS_COMMS.md
+/agent-platform-code.md
+/sandbox/
+/subagent-plans/
+/runs/
+/Tools/perfprobe-debug
+/Tools/perfprobe-release
