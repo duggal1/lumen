@@ -197,6 +197,9 @@ public actor RecordingSession {
     private var journalStart = Date()
     private var stopTask: Task<Void, Error>?
     private var finalizeTask: Task<ProjectBundle, Error>?
+    private var interruptionState = CaptureInterruptionState()
+    private var interruptionTask: Task<Void, Never>?
+    public var interruption: CaptureInterruption? { interruptionState.reason }
     public private(set) var isPaused = false
     public private(set) var stage: RecordingStage = .idle
     private let logger = Logger(subsystem: "com.lumen.studio", category: "capture")
@@ -245,7 +248,10 @@ public actor RecordingSession {
     }
 
     public func prepare(_ config: RecordingConfig, library: URL) async throws {
-        stopTask = nil; finalizeTask = nil
+        // A previous terminal task owns its files until it has returned.
+        if let interruptionTask { await interruptionTask.value }
+        stopTask = nil; finalizeTask = nil; interruptionTask = nil
+        let generation = interruptionState.begin()
         MainThreadWatchdog.shared.start()
         transition(to: .preparing)
         let timeoutTask = armStageTimeout(.preparing, seconds: 15)
@@ -256,6 +262,9 @@ public actor RecordingSession {
             let b = try ProjectBundle.create(named: name, in: library)
             bundle = b
             let e = CaptureEngine(bundle: b)
+            e.setInterruptionHook { [weak self] reason in
+                Task { await self?.receiveInterruption(reason, generation: generation) }
+            }
             // Permissions, SCShareableContent, device discovery, writers,
             // Metal warm-up run concurrently off main (engine.prepare).
             try await e.prepare(config)
@@ -337,6 +346,10 @@ public actor RecordingSession {
             startJournal()
             startWatchdog()
             transition(to: .recording)
+            // A delegate callback can arrive while startCapture is suspended.
+            // Now that start succeeded, preserve the take rather than treating
+            // it as a cancelled countdown.
+            if interruptionState.reason != nil { startInterruptedFinalization() }
         } catch {
             // A start may fail after opening media. Keep its checkpoint
             // for recovery, and release the power/activity token.
@@ -416,11 +429,12 @@ public actor RecordingSession {
     /// Power loss may also discard filesystem-cached writes.
     private func startWatchdog() {
         watchdogTask?.cancel()
+        let generation = interruptionState.generation
         sleepObserver = NotificationCenter.default.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
-            Task { await self?.finalizeCleanly(reason: "sleep") }
+            Task { await self?.receiveInterruption(.init(kind: .sleep), generation: generation) }
         }
         terminateObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
-            Task { await self?.finalizeCleanly(reason: "terminate") }
+            Task { await self?.receiveInterruption(.init(kind: .termination), generation: generation) }
         }
         watchdogTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -431,7 +445,7 @@ public actor RecordingSession {
                 guard let url = bundleURL else { return }
                 if let vals = try? FileManager.default.attributesOfFileSystem(forPath: url),
                    let free = vals[.systemFreeSize] as? NSNumber, free.int64Value < 50_000_000 {
-                    await self.finalizeCleanly(reason: "disk-full")
+                    await self.receiveInterruption(.init(kind: .diskPressure), generation: generation)
                     return
                 }
             }
@@ -449,11 +463,44 @@ public actor RecordingSession {
         sleepObserver = nil; terminateObserver = nil
     }
 
-    private func finalizeCleanly(reason: String) async {
-        guard stage == .recording || stage == .paused else { return }
-        logger.info("finalizing on \(reason, privacy: .public)")
-        try? await stopCapture()
-        try? await finalize()
+    private func receiveInterruption(_ reason: CaptureInterruption, generation: UUID) {
+        guard stopTask == nil, finalizeTask == nil,
+              stage == .recording || stage == .paused || stage == .preparing || stage == .countdown,
+              interruptionState.accept(reason, generation: generation) else { return }
+        if stage == .recording || stage == .paused { startInterruptedFinalization() }
+    }
+
+    private func startInterruptedFinalization() {
+        guard interruptionTask == nil, let reason = interruptionState.reason else { return }
+        let generation = interruptionState.generation
+        // The existing stop/finalize tasks are the single owners; the UI may
+        // join them concurrently without starting a second writer finalization.
+        interruptionTask = Task { [weak self] in
+            await self?.finishInterrupted(reason, generation: generation)
+        }
+    }
+
+    private func finishInterrupted(_ reason: CaptureInterruption, generation: UUID) async {
+        guard interruptionState.generation == generation else { return }
+        logger.info("finalizing on \(reason.kind.rawValue, privacy: .public)")
+        let target = bundle?.url
+        // Preserve the original OS reason even if writer finalization fails.
+        if let target {
+            do {
+                let data = try JSONEncoder().encode(reason)
+                try data.write(to: target.appendingPathComponent("capture-interruption.json"), options: .atomic)
+            } catch {
+                logger.error("interruption receipt write failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        do {
+            try await stopCapture()
+            _ = try await finalize()
+        } catch {
+            // Existing terminal task records failed stage and retains the
+            // journal/raw tracks. Do not claim a partial movie was saved.
+            logger.error("interrupted capture finalization failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     public func stats() -> CaptureStats {
@@ -488,6 +535,7 @@ public actor RecordingSession {
             pendingJournal?.cancel()
             await pendingJournal?.value
             stopWatchdog()
+            engine.setInterruptionHook(nil)
             // Keep the capture engine paused until shutdown: resuming here
             // would record content the user explicitly hid.
             isPaused = false
@@ -552,7 +600,19 @@ public actor RecordingSession {
             guard let track = try await asset.loadTracks(withMediaType: .video).first else {
                 throw CaptureError.writer("Recording has no video track.")
             }
-            return try await track.load(.timeRange).duration.seconds
+            let duration = try await track.load(.timeRange).duration.seconds
+            // Metadata alone does not prove a recovered recording is playable.
+            let reader = try AVAssetReader(asset: asset)
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+            guard reader.canAdd(output) else { throw CaptureError.writer("Recording cannot be decoded.") }
+            reader.add(output)
+            guard reader.startReading() else { throw CaptureError.writer("Recording reader failed to start.") }
+            defer { reader.cancelReading() }
+            guard let sample = output.copyNextSampleBuffer(), CMSampleBufferGetImageBuffer(sample) != nil else {
+                throw CaptureError.writer("Recording has no decodable frame.")
+            }
+            return duration
         }.value
         guard duration.isFinite, duration > 0 else { throw CaptureError.writer("Recording has no playable duration.") }
         info.duration = duration
@@ -635,6 +695,13 @@ public actor RecordingSession {
     /// block the UI for a recording the user asked to remove.
     @discardableResult
     public func abandon() async -> String? {
+        // Explicit discard joins a terminal writer before trashing its bundle.
+        // Invalidate the delegate generation before any suspension.
+        interruptionState.invalidate()
+        engine?.setInterruptionHook(nil)
+        if let interruptionTask { await interruptionTask.value }
+        if let stopTask { _ = try? await stopTask.value }
+        if let finalizeTask { _ = try? await finalizeTask.value }
         let pendingJournal = journalTask
         journalTask = nil
         pendingJournal?.cancel()

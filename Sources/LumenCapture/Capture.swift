@@ -403,6 +403,10 @@ private struct PTSRange { var first: Double?; var last = 0.0 }
 /// Records raw screen video (native pixels, HEVC) + audio tracks. Frames go straight from the SCK queue into the writer; no actor hops.
 public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     public let bundle: ProjectBundle
+    private let interruptionHook = OSAllocatedUnfairLock<(@Sendable (CaptureInterruption) -> Void)?>(initialState: nil)
+    public func setInterruptionHook(_ hook: (@Sendable (CaptureInterruption) -> Void)?) {
+        interruptionHook.withLock { $0 = hook }
+    }
     private let liveFrameHook = OSAllocatedUnfairLock<(@Sendable (CVPixelBuffer) -> Void)?>(initialState: nil)
     public func setLiveFrameHook(_ hook: (@Sendable (CVPixelBuffer) -> Void)?) { liveFrameHook.withLock { $0 = hook } }
     private let inputScaleHook = OSAllocatedUnfairLock<(@Sendable (SIMD2<Double>) -> Void)?>(initialState: nil)
@@ -728,7 +732,13 @@ public final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @u
         @unknown default: break
         }
     }
-    public func stream(_ s: SCStream, didStopWithError error: Error) { NSLog("SCStream stopped: \(error)") }
+    public func stream(_ s: SCStream, didStopWithError error: Error) {
+        let failure = error as NSError
+        let reason = CaptureInterruption(kind: .streamStopped, domain: failure.domain, code: failure.code)
+        let hook = interruptionHook.withLock { $0 }
+        hook?(reason)
+        NSLog("SCStream stopped (%@:%ld)", failure.domain, failure.code)
+    }
 
     private func video(_ sb: CMSampleBuffer) {
         guard let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
