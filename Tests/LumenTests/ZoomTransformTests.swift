@@ -104,3 +104,21 @@ func zoomTransformRespectsCanvasComposition(_ padding: Double, _ size: Double) {
     state.cameraScale = 1
     #expect(base.framing(state).geometry.content == base.content)
 }
+
+@Test func movingCardShutterTracksPanAndReturn() {
+    let source = SIMD2<Double>(1600, 900)
+    let base = Geometry(canvas: SIMD2(1600, 900), src: source, style: Style())
+    var state = Timeline(duration: 2).evaluate(at: 0)
+    state.cameraScale = 2
+    state.cameraCenter = SIMD2(400, 450)
+    let left = base.framing(state).geometry
+    state.cameraCenter = SIMD2(1200, 450)
+    let right = base.framing(state).geometry
+    #expect(Geometry.edgeTravel(from: left, to: right) > 0)
+    #expect(Geometry.edgeTravel(from: left, to: right) == Geometry.edgeTravel(from: right, to: left))
+    #expect(Geometry.edgeTravel(from: right, to: right) == 0)
+    state.cameraScale = 1
+    let rest = base.framing(state).geometry
+    #expect(rest.content == base.content)
+    #expect(Geometry.edgeTravel(from: right, to: rest) > 0)
+}
