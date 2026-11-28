@@ -12,6 +12,7 @@ private struct Unsafe<T>: @unchecked Sendable { let v: T }
 /// so a slow GPU skips frames by time instead of building a queue.
 private struct Tick: Sendable {
     var generation: UInt64
+    var playing: Bool
     var key: FrameKey
     var timeline: Timeline
     var t: Double
@@ -159,7 +160,7 @@ private final class PreviewDriver: NSObject, @unchecked Sendable {
             || abs(t - lastKey.t) > max(0.15, interval * 4)
         let generation = mailbox.update(key, discontinuity: discontinuity)
         lastKey = key; lastPlaying = playing; lastRequestTime = now
-        feed.yield(Tick(generation: generation, key: key, timeline: tl, t: t, size: SIMD2(Int(ds.width), Int(ds.height)), present: present,
+        feed.yield(Tick(generation: generation, playing: playing, key: key, timeline: tl, t: t, size: SIMD2(Int(ds.width), Int(ds.height)), present: present,
                         fps: 1 / interval, uiTime: uiTime,
                         pointer: dither ? SIMD4(Float(pointer.x), Float(pointer.y), Float(pointer.z), 0) : .zero,
                         backingScale: backingScale, maskDirectory: maskDirectory))
@@ -233,6 +234,7 @@ struct PreviewView: NSViewRepresentable {
         let mailbox = PreviewMailbox()
         let renderer = model.renderer, session = model.session, metalLayer = Unsafe(v: ml)
         let clock = model.clock, box = model.box
+        let cadence = PreviewCadenceProbe.configured()
         let backingScale = session.meta.source.backingScale
         let maskDirectory = session.bundle.cacheURL.appendingPathComponent("analysis", isDirectory: true)
         driver = PreviewDriver(shared: sh, vsync: vc, clock: clock, box: box,
@@ -266,7 +268,9 @@ struct PreviewView: NSViewRepresentable {
                                             canvas: tick.size, fps: tick.fps, backingScale: tick.backingScale,
                                             quality: .preview, uiTime: tick.uiTime, pointer: tick.pointer,
                                             personMaskDirectory: tick.maskDirectory)
-                if renderer.draw(request, to: metalLayer.v, presentAt: present) {
+                let observation = cadence?.observer(playing: tick.playing, generation: tick.generation,
+                                                    sourceTime: tick.t, expected: 1 / max(tick.fps, 1))
+                if renderer.draw(request, to: metalLayer.v, presentAt: present, onPresented: observation) {
                     mailbox.acknowledge(tick)
                 }
             }
